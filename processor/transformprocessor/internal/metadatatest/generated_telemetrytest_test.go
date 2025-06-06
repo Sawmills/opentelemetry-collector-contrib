@@ -6,11 +6,12 @@ import (
 	"context"
 	"testing"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor/internal/metadata"
-
 	"github.com/stretchr/testify/require"
+
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata/metricdatatest"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor/internal/metadata"
 
 	"go.opentelemetry.io/collector/component/componenttest"
 )
@@ -21,11 +22,7 @@ func TestSetupTelemetry(t *testing.T) {
 	require.NoError(t, err)
 	defer tb.Shutdown()
 	tb.ProcessorTransformLogsFailed.Add(context.Background(), 1)
-	tb.ProcessorTransformLogsTransformed.Add(context.Background(), 1)
 	AssertEqualProcessorTransformLogsFailed(t, testTel,
-		[]metricdata.DataPoint[int64]{{Value: 1}},
-		metricdatatest.IgnoreTimestamp())
-	AssertEqualProcessorTransformLogsTransformed(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
 

@@ -52,11 +52,6 @@ func (s *metricsTrackingStatementSequence[K]) Execute(ctx context.Context, tCtx 
 				s.telemetrySettings.Logger.Warn("failed to execute statement", zap.Error(err))
 			}
 			// For SilentError mode, we just continue without logging
-		} else {
-			// Track successful transformation if metrics tracking is enabled
-			if s.shouldTrack {
-				s.telemetryBuilder.ProcessorTransformLogsTransformed.Add(ctx, 1)
-			}
 		}
 	}
 	return nil

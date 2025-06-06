@@ -36,19 +36,3 @@ func AssertEqualProcessorTransformLogsFailed(t *testing.T, tt *componenttest.Tel
 	require.NoError(t, err)
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }
-
-func AssertEqualProcessorTransformLogsTransformed(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
-	want := metricdata.Metrics{
-		Name:        "otelcol_processor_transform_logs_transformed",
-		Description: "Number of logs that were successfully transformed by the transform processor",
-		Unit:        "1",
-		Data: metricdata.Sum[int64]{
-			Temporality: metricdata.CumulativeTemporality,
-			IsMonotonic: true,
-			DataPoints:  dps,
-		},
-	}
-	got, err := tt.GetMetric("otelcol_processor_transform_logs_transformed")
-	require.NoError(t, err)
-	metricdatatest.AssertEqual(t, want, got, opts...)
-}

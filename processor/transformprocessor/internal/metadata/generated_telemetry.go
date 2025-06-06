@@ -23,11 +23,10 @@ func Tracer(settings component.TelemetrySettings) trace.Tracer {
 // TelemetryBuilder provides an interface for components to report telemetry
 // as defined in metadata and user config.
 type TelemetryBuilder struct {
-	meter                             metric.Meter
-	mu                                sync.Mutex
-	registrations                     []metric.Registration
-	ProcessorTransformLogsFailed      metric.Int64Counter
-	ProcessorTransformLogsTransformed metric.Int64Counter
+	meter                        metric.Meter
+	mu                           sync.Mutex
+	registrations                []metric.Registration
+	ProcessorTransformLogsFailed metric.Int64Counter
 }
 
 // TelemetryBuilderOption applies changes to default builder.
@@ -62,12 +61,6 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 	builder.ProcessorTransformLogsFailed, err = builder.meter.Int64Counter(
 		"otelcol_processor_transform_logs_failed",
 		metric.WithDescription("Number of logs that failed to be transformed by the transform processor"),
-		metric.WithUnit("1"),
-	)
-	errs = errors.Join(errs, err)
-	builder.ProcessorTransformLogsTransformed, err = builder.meter.Int64Counter(
-		"otelcol_processor_transform_logs_transformed",
-		metric.WithDescription("Number of logs that were successfully transformed by the transform processor"),
 		metric.WithUnit("1"),
 	)
 	errs = errors.Join(errs, err)
