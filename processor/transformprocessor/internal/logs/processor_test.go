@@ -1162,46 +1162,34 @@ func Test_ProcessLogs_CacheAccess(t *testing.T) {
 
 func Test_ProcessLogs_MetricsTracking(t *testing.T) {
 	tests := []struct {
-		name                     string
-		errorMode                ottl.ErrorMode
-		statements               []string
-		expectFailedMetrics      bool
-		expectTransformedMetrics bool
+		name                string
+		errorMode           ottl.ErrorMode
+		statements          []string
+		expectFailedMetrics bool
 	}{
 		{
-			name:                     "IgnoreError mode tracks failed metrics",
-			errorMode:                ottl.IgnoreError,
-			statements:               []string{`set(log.attributes["division"], 1 / 0)`}, // This will fail in log context
-			expectFailedMetrics:      true,
-			expectTransformedMetrics: false,
+			name:                "IgnoreError mode tracks failed metrics",
+			errorMode:           ottl.IgnoreError,
+			statements:          []string{`set(log.attributes["division"], 1 / 0)`}, // This will fail in log context
+			expectFailedMetrics: true,
 		},
 		{
-			name:                     "SilentError mode tracks failed metrics",
-			errorMode:                ottl.SilentError,
-			statements:               []string{`set(log.attributes["division"], 1 / 0)`}, // This will fail in log context
-			expectFailedMetrics:      true,
-			expectTransformedMetrics: false,
+			name:                "SilentError mode tracks failed metrics",
+			errorMode:           ottl.SilentError,
+			statements:          []string{`set(log.attributes["division"], 1 / 0)`}, // This will fail in log context
+			expectFailedMetrics: true,
 		},
 		{
-			name:                     "PropagateError mode does not track metrics",
-			errorMode:                ottl.PropagateError,
-			statements:               []string{`set(log.attributes["test"], "success")`}, // This will succeed
-			expectFailedMetrics:      false,
-			expectTransformedMetrics: false,
+			name:                "PropagateError mode does not track metrics",
+			errorMode:           ottl.PropagateError,
+			statements:          []string{`set(log.attributes["test"], "success")`}, // This will succeed
+			expectFailedMetrics: false,
 		},
 		{
-			name:                     "PropagateError mode with failing statement",
-			errorMode:                ottl.PropagateError,
-			statements:               []string{`set(log.attributes["division"], 1 / 0)`}, // This will fail in log context
-			expectFailedMetrics:      false,
-			expectTransformedMetrics: false,
-		},
-		{
-			name:                     "IgnoreError mode tracks successful transformations",
-			errorMode:                ottl.IgnoreError,
-			statements:               []string{`set(log.attributes["test"], "success")`}, // This will succeed
-			expectFailedMetrics:      false,
-			expectTransformedMetrics: true,
+			name:                "PropagateError mode with failing statement",
+			errorMode:           ottl.PropagateError,
+			statements:          []string{`set(log.attributes["division"], 1 / 0)`}, // This will fail in log context
+			expectFailedMetrics: false,
 		},
 	}
 
@@ -1274,22 +1262,6 @@ func Test_ProcessLogs_MetricsTracking(t *testing.T) {
 					}
 				}
 
-				// Check transformed metrics
-				transformedMetric := findMetric("otelcol_processor_transform_logs_transformed")
-				if tt.expectTransformedMetrics {
-					require.NotNil(t, transformedMetric, "Transformed metric should exist")
-					dataPoints := transformedMetric.Data.(metricdata.Sum[int64]).DataPoints
-					require.Greater(t, len(dataPoints), 0, "Should have at least one data point")
-					assert.Greater(t, dataPoints[0].Value, int64(0), "Transformed count should be greater than 0")
-				} else {
-					// Metric should either not exist or have zero value
-					if transformedMetric != nil {
-						dataPoints := transformedMetric.Data.(metricdata.Sum[int64]).DataPoints
-						if len(dataPoints) > 0 {
-							assert.Equal(t, int64(0), dataPoints[0].Value, "Transformed count should be 0")
-						}
-					}
-				}
 			}
 		})
 	}

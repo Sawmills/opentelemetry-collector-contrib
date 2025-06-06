@@ -13,11 +13,3 @@ Number of logs that failed to be transformed by the transform processor
 | Unit | Metric Type | Value Type | Monotonic |
 | ---- | ----------- | ---------- | --------- |
 | 1 | Sum | Int | true |
-
-### otelcol_processor_transform_logs_transformed
-
-Number of logs that were successfully transformed by the transform processor
-
-| Unit | Metric Type | Value Type | Monotonic |
-| ---- | ----------- | ---------- | --------- |
-| 1 | Sum | Int | true |
