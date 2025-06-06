@@ -11,3 +11,20 @@ status:
 
 tests:
   config:
+
+telemetry:
+  metrics:
+    processor_transform_logs_transformed:
+      enabled: true
+      description: Number of logs that were successfully transformed by the transform processor
+      unit: "1"
+      sum:
+        value_type: int
+        monotonic: true
+    processor_transform_logs_failed:
+      enabled: true
+      description: Number of logs that failed to be transformed by the transform processor
+      unit: "1"
+      sum:
+        value_type: int
+        monotonic: true
