@@ -15,6 +15,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/pdatautil"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor/internal/common"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor/internal/metadata"
 )
 
 type parsedContextStatements struct {
@@ -23,13 +24,19 @@ type parsedContextStatements struct {
 }
 
 type Processor struct {
-	contexts []parsedContextStatements
-	logger   *zap.Logger
-	flatMode bool
+	contexts         []parsedContextStatements
+	logger           *zap.Logger
+	flatMode         bool
+	telemetryBuilder *metadata.TelemetryBuilder
 }
 
 func NewProcessor(contextStatements []common.ContextStatements, errorMode ottl.ErrorMode, flatMode bool, settings component.TelemetrySettings) (*Processor, error) {
-	pc, err := common.NewLogParserCollection(settings, common.WithLogParser(LogFunctions()), common.WithLogErrorMode(errorMode))
+	telemetryBuilder, err := metadata.NewTelemetryBuilder(settings)
+	if err != nil {
+		return nil, err
+	}
+
+	pc, err := common.NewLogParserCollection(settings, common.WithLogParser(LogFunctions(), telemetryBuilder, errorMode), common.WithLogErrorMode(errorMode))
 	if err != nil {
 		return nil, err
 	}
@@ -49,9 +56,10 @@ func NewProcessor(contextStatements []common.ContextStatements, errorMode ottl.E
 	}
 
 	return &Processor{
-		contexts: contexts,
-		logger:   settings.Logger,
-		flatMode: flatMode,
+		contexts:         contexts,
+		logger:           settings.Logger,
+		flatMode:         flatMode,
+		telemetryBuilder: telemetryBuilder,
 	}, nil
 }
 
@@ -74,4 +82,9 @@ func (p *Processor) ProcessLogs(ctx context.Context, ld plog.Logs) (plog.Logs, e
 		}
 	}
 	return ld, nil
+}
+
+func (p *Processor) Shutdown(ctx context.Context) error {
+	p.telemetryBuilder.Shutdown()
+	return nil
 }
