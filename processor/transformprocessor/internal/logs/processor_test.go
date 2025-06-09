@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor/internal/common"
@@ -1155,6 +1156,113 @@ func Test_ProcessLogs_CacheAccess(t *testing.T) {
 			tt.want(exTd)
 
 			assert.Equal(t, exTd, td)
+		})
+	}
+}
+
+func Test_ProcessLogs_MetricsTracking(t *testing.T) {
+	tests := []struct {
+		name                string
+		errorMode           ottl.ErrorMode
+		statements          []string
+		expectFailedMetrics bool
+	}{
+		{
+			name:                "IgnoreError mode tracks failed metrics",
+			errorMode:           ottl.IgnoreError,
+			statements:          []string{`set(log.attributes["division"], 1 / 0)`}, // This will fail in log context
+			expectFailedMetrics: true,
+		},
+		{
+			name:                "SilentError mode tracks failed metrics",
+			errorMode:           ottl.SilentError,
+			statements:          []string{`set(log.attributes["division"], 1 / 0)`}, // This will fail in log context
+			expectFailedMetrics: true,
+		},
+		{
+			name:                "PropagateError mode does not track metrics",
+			errorMode:           ottl.PropagateError,
+			statements:          []string{`set(log.attributes["test"], "success")`}, // This will succeed
+			expectFailedMetrics: false,
+		},
+		{
+			name:                "PropagateError mode with failing statement",
+			errorMode:           ottl.PropagateError,
+			statements:          []string{`set(log.attributes["division"], 1 / 0)`}, // This will fail in log context
+			expectFailedMetrics: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create telemetry for testing
+			tel := componenttest.NewTelemetry()
+			defer func() { require.NoError(t, tel.Shutdown(context.Background())) }()
+
+			// Create processor with test telemetry settings
+			processor, err := NewProcessor(
+				[]common.ContextStatements{{Statements: tt.statements}},
+				tt.errorMode,
+				false,
+				tel.NewTelemetrySettings(),
+			)
+			if err != nil {
+				t.Logf("Processor creation failed: %v", err)
+				return
+			}
+			assert.NoError(t, err)
+			defer processor.Shutdown(context.Background())
+
+			// Create test logs
+			ld := constructLogs()
+
+			// Process logs
+			_, err = processor.ProcessLogs(context.Background(), ld)
+
+			// For PropagateError mode with failing statements, expect an error
+			if tt.errorMode == ottl.PropagateError && tt.statements[0] == `set(log.attributes["division"], 1 / 0)` {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+
+			// Check metrics only for non-PropagateError modes
+			if tt.errorMode != ottl.PropagateError {
+				// Collect all metrics
+				var rm metricdata.ResourceMetrics
+				require.NoError(t, tel.Reader.Collect(context.Background(), &rm))
+
+				// Helper function to find metric by name
+				findMetric := func(name string) *metricdata.Metrics {
+					for _, sm := range rm.ScopeMetrics {
+						for _, m := range sm.Metrics {
+							if m.Name == name {
+								return &m
+							}
+						}
+					}
+					return nil
+				}
+
+				// Check failed metrics
+				failedMetric := findMetric("otelcol_processor_transform_logs_failed")
+				if tt.expectFailedMetrics {
+					require.NotNil(t, failedMetric, "Failed metric should exist")
+					dataPoints := failedMetric.Data.(metricdata.Sum[int64]).DataPoints
+					require.Greater(t, len(dataPoints), 0, "Should have at least one data point")
+					assert.Greater(t, dataPoints[0].Value, int64(0), "Failed count should be greater than 0")
+				} else {
+					// Metric should either not exist or have zero value
+					if failedMetric != nil {
+						dataPoints := failedMetric.Data.(metricdata.Sum[int64]).DataPoints
+						if len(dataPoints) > 0 {
+							assert.Equal(t, int64(0), dataPoints[0].Value, "Failed count should be 0")
+						}
+					}
+				}
+
+			}
 		})
 	}
 }
