@@ -47,7 +47,6 @@ func (s *metricsTrackingStatementSequence[K]) Execute(ctx context.Context, tCtx 
 			if s.errorMode == ottl.PropagateError {
 				return fmt.Errorf("failed to execute statement: %w", err)
 			}
-			// Log the error and continue, just like OTTL does internally
 			// If we are tracking metrics, we don't want to log the error
 			if s.errorMode == ottl.IgnoreError && !s.shouldTrack {
 				s.telemetrySettings.Logger.Warn("failed to execute statement", zap.Error(err))
