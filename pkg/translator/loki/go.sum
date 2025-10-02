@@ -112,6 +112,10 @@ github.com/mwitkow/go-conntrack v0.0.0-20190716064945-2f068394615f/go.mod h1:qRW
 github.com/oklog/ulid v1.3.1 h1:EGfNDEx6MqHz8B3uNV6QAib1UR2Lm97sHi3ocA6ESJ4=
 github.com/oklog/ulid/v2 v2.1.1 h1:suPZ4ARWLOJLegGFiZZ1dFAkqzhMjL3J1TzI+5wHz8s=
 github.com/oklog/ulid/v2 v2.1.1/go.mod h1:rcEKHmBBKfef9DhnvX7y1HZBYxjXb0cP5ExxNsTT1QQ=
+github.com/open-telemetry/opentelemetry-collector-contrib/internal/common v0.136.0 h1:ofSNZonHS44OCPgi/rPoNkNxC1v8nHxPNWa5TAtK6Cs=
+github.com/open-telemetry/opentelemetry-collector-contrib/internal/common v0.136.0/go.mod h1:Loh7TRQEfeJ+N3KvPBjIE+7ewhtKtk58ac5B/eEcXhE=
+github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/prometheus v0.136.0 h1:u8SJhb+BmHukyg0DszoYMpsBLJ0ZUuRjKqLOcjnczhE=
+github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/prometheus v0.136.0/go.mod h1:HIPCM9JaZ31QUfkEUJY7SYdmfH3zWuhcNt0PoOlBWKE=
 github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c h1:+mdjkGKdHQG3305AYmdv1U2eRNDiU2ErMBj1gwrq8eQ=
 github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c/go.mod h1:7rwL4CYBLnjLxUqIJNnCWiEdr3bn6IUYi15bNlnbCCU=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
@@ -147,6 +151,8 @@ go.opentelemetry.io/collector/pdata v1.42.1-0.20250925151503-069408608b28 h1:wtu
 go.opentelemetry.io/collector/pdata v1.42.1-0.20250925151503-069408608b28/go.mod h1:nnOmgf+RI/D5xYWgFPZ5nKuhf2E0Qy9Nx/mxoTvIq3k=
 go.opentelemetry.io/collector/pdata/pprofile v0.136.1-0.20250925151503-069408608b28 h1:5ZqkczNm79ztJflJO+8oQND6CIR4QOYYST9VT5lrh74=
 go.opentelemetry.io/collector/pdata/pprofile v0.136.1-0.20250925151503-069408608b28/go.mod h1:vAvrFj+xpwlSH85QFYGKYQ4xc0Lym5pWNRh1hMUH3TY=
+go.opentelemetry.io/collector/semconv v0.128.0 h1:MzYOz7Vgb3Kf5D7b49pqqgeUhEmOCuT10bIXb/Cc+k4=
+go.opentelemetry.io/collector/semconv v0.128.0/go.mod h1:OPXer4l43X23cnjLXIZnRj/qQOjSuq4TgBLI76P9hns=
 go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0 h1:F7Jx+6hwnZ41NSFTO5q4LYDtJRXBf2PD0rNBkeB/lus=
 go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0/go.mod h1:UHB22Z8QsdRDrnAtX4PntOl36ajSxcdUMt1sF7Y6E7Q=
 go.opentelemetry.io/otel v1.38.0 h1:RkfdswUDRimDg0m2Az18RKOsnI8UDzppJAtj01/Ymk8=
