@@ -470,7 +470,7 @@ func TestLogsToLokiRequestWithoutTenant(t *testing.T) {
 							attrs = tt.attrs
 						}
 
-						if len(tt.levelAttribute) > 0 {
+						if tt.levelAttribute != "" {
 							attrs[levelAttributeName] = tt.levelAttribute
 						}
 						if val, ok := tt.hints[hintAttributes]; ok {
@@ -706,7 +706,7 @@ func TestLogToLokiEntry(t *testing.T) {
 				resource.Attributes().PutStr(k, fmt.Sprintf("%v", v))
 			}
 			lr.SetSeverityNumber(tt.severity)
-			if len(tt.levelAttribute) > 0 {
+			if tt.levelAttribute != "" {
 				lr.Attributes().PutStr(levelAttributeName, tt.levelAttribute)
 			}
 
@@ -855,7 +855,7 @@ func TestLokiEntry(t *testing.T) {
 				resource.Attributes().PutStr(k, fmt.Sprintf("%v", v))
 			}
 			lr.SetSeverityNumber(tt.severity)
-			if len(tt.levelAttribute) > 0 {
+			if tt.levelAttribute != "" {
 				lr.Attributes().PutStr(levelAttributeName, tt.levelAttribute)
 			}
 
