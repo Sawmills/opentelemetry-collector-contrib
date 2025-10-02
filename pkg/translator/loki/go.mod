@@ -61,3 +61,7 @@ retract (
 )
 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden => ../../golden
+
+replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/prometheus => ../prometheus
+
+replace github.com/open-telemetry/opentelemetry-collector-contrib/internal/common => ../../../internal/common
