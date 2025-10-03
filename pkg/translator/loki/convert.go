@@ -97,11 +97,9 @@ func convertAttributesAndMerge(
 // SAWMILLS custom function to get the names of the attributes that will be used as labels
 // and the names of the attributes that will be used as log attributes
 func filteredAttributeNames(
-	logAttrs pcommon.Map,
-	resAttrs pcommon.Map,
+	logAttrs, resAttrs pcommon.Map,
 	defaultLabelsEnabled map[string]bool,
 ) (logAttrNames, resAttrNames []string) {
-
 	// Get resource attributes, excluding maps, excluded attributes, and skip attributes
 	resAttrs.Range(func(k string, v pcommon.Value) bool {
 		if v.Type() != pcommon.ValueTypeMap &&
