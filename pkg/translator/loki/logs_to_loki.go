@@ -5,7 +5,6 @@ package loki // import "github.com/open-telemetry/opentelemetry-collector-contri
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/grafana/loki/pkg/push"
 	"github.com/prometheus/common/model"
@@ -148,11 +147,11 @@ func LogToLokiEntry(
 
 	// SAWMILLS specific code changes done to support all attributes to be converted to labels
 	// We are getting all the attributes that are to be converted to labels
-	logAttrs, resAttrs := getFilteredAttributeNames(log.Attributes(), resource.Attributes())
+	logAttrs, resAttrs := filteredAttributeNames(log.Attributes(), resource.Attributes(), defaultLabelsEnabled)
 
-	// Update the hints with the new attributes to be converted to labels
-	log.Attributes().PutStr(hintAttributes, strings.Join(logAttrs, ","))
-	resource.Attributes().PutStr(hintResources, strings.Join(resAttrs, ","))
+	// Update the hints with the new attributes to be converted to labels, merging with existing hints
+	updateHintsWithFilteredAttributes(log.Attributes(), logAttrs, hintAttributes)
+	updateHintsWithFilteredAttributes(resource.Attributes(), resAttrs, hintResources)
 
 	mergedLabels := convertAttributesAndMerge(
 		log.Attributes(),

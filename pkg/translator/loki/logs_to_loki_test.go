@@ -805,14 +805,13 @@ func TestLokiEntry(t *testing.T) {
 			expected: &PushEntry{
 				Entry: &push.Entry{
 					Timestamp: time.Unix(0, 1677592916000000000),
-					Line:      `{}`,
+					Line:      `{"attributes":{"http.status":200}}`,
 				},
 				Labels: model.LabelSet{
 					"exporter":       "OTLP",
-					"host_name":      "guarana",
-					"http_status":    "200",
 					"aws_account_id": "1234567890",
 					"aws_region":     "us-east-1",
+					"host_name":      "guarana",
 				},
 			},
 			err: nil,

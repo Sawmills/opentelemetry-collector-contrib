@@ -516,7 +516,11 @@ func TestGetFilteredAttributeNames(t *testing.T) {
 				insertValue(resMap, k, v)
 			}
 
-			gotLogNames, gotResNames := getFilteredAttributeNames(logMap, resMap)
+			// Use default settings for testing
+			defaultLabelsEnabled := map[string]bool{
+				levelLabel: true,
+			}
+			gotLogNames, gotResNames := filteredAttributeNames(logMap, resMap, defaultLabelsEnabled)
 
 			// Initialize empty slices if nil to match expected empty slices
 			if gotLogNames == nil {
