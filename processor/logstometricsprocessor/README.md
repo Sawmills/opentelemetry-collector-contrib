@@ -8,7 +8,7 @@ This processor is designed to convert log data into metrics, enabling you to:
 - Extract metrics from log records using flexible OTTL expressions
 - Support multiple metric types: Sum, Gauge, Histogram, and Exponential Histogram
 - Optionally forward or drop logs after metric extraction
-- Send extracted metrics to a separate metrics pipeline via a configured metrics exporter
+- Send extracted metrics to a separate metrics pipeline via a configured metrics connector
 
 ## Configuration
 
@@ -17,8 +17,8 @@ The processor requires the following configuration:
 ```yaml
 processors:
   logstometricsprocessor:
-    # Required: Component ID of the metrics exporter to send extracted metrics to
-    metrics_exporter: otlp/metrics
+    # Required: Component ID of the metrics connector to send extracted metrics to
+    metrics_connector: my_connector
     
     # Optional: Whether to drop logs after processing (default: false)
     drop_logs: false
@@ -35,7 +35,7 @@ processors:
 
 | Field | Type | Description | Required |
 |-------|------|-------------|----------|
-| `metrics_exporter` | string | Component ID of the metrics exporter to send extracted metrics to | Yes |
+| `metrics_connector` | string | Component ID of the metrics connector to send extracted metrics to | Yes |
 | `drop_logs` | bool | Whether to drop logs after processing. If `false`, logs are forwarded to the next consumer. Default: `false` | No |
 | `logs` | array | List of metric definitions to extract from logs | Yes |
 
@@ -97,7 +97,7 @@ exponential_histogram:
 ```yaml
 processors:
   logstometricsprocessor:
-    metrics_exporter: otlp/metrics
+    metrics_connector: my_connector
     drop_logs: false
     logs:
       - name: logrecord.count
@@ -111,7 +111,7 @@ processors:
 ```yaml
 processors:
   logstometricsprocessor:
-    metrics_exporter: otlp/metrics
+    metrics_connector: my_connector
     drop_logs: false
     logs:
       - name: error.log.count
@@ -132,7 +132,7 @@ processors:
 ```yaml
 processors:
   logstometricsprocessor:
-    metrics_exporter: otlp/metrics
+    metrics_connector: my_connector
     drop_logs: true  # Drop logs after extracting metrics
     logs:
       - name: logrecord.count
@@ -146,7 +146,7 @@ processors:
 ```yaml
 processors:
   logstometricsprocessor:
-    metrics_exporter: otlp/metrics
+    metrics_connector: my_connector
     drop_logs: false
     logs:
       - name: log.count.by.service
@@ -162,7 +162,7 @@ processors:
 ```yaml
 processors:
   logstometricsprocessor:
-    metrics_exporter: otlp/metrics
+    metrics_connector: my_connector
     drop_logs: false
     logs:
       - name: memory.usage.mb
@@ -173,35 +173,33 @@ processors:
 
 ## Pipeline Configuration
 
-The processor must be configured with a metrics exporter that exists in the same collector configuration:
+The processor must be configured with a metrics connector that exists in the same collector configuration. The connector routes extracted metrics to a metrics pipeline:
 
 ```yaml
-exporters:
-  otlp/metrics:
-    endpoint: localhost:4317
-    tls:
-      insecure: true
-
-processors:
-  logstometricsprocessor:
-    metrics_exporter: otlp/metrics
-    drop_logs: false
-    logs:
-      - name: logrecord.count
-        description: "Count of log records"
-        sum:
-          value: "1"
+connectors:
+  my_connector:
+    # Configure your connector here (e.g., routingconnector, sumconnector, etc.)
 
 service:
   pipelines:
     logs:
       receivers: [otlp]
       processors: [logstometricsprocessor]
-      exporters: [otlp/logs]
+      exporters: [nop]
     metrics:
-      receivers: []
-      processors: []
-      exporters: [otlp/metrics]  # Metrics extracted by the processor are sent here
+      receivers: [my_connector]
+      processors: [batch]
+      exporters: [otlp/metrics]
+
+processors:
+  logstometricsprocessor:
+    metrics_connector: my_connector
+    drop_logs: false
+    logs:
+      - name: logrecord.count
+        description: "Count of log records"
+        sum:
+          value: "1"
 ```
 
 ## Telemetry
@@ -224,7 +222,7 @@ The processor reports the following internal metrics:
 ## Limitations
 
 - Only supports log records (not traces, metrics, or profiles)
-- Metrics exporter must be available at processor startup
+- Metrics connector must be available at processor startup
 - Metrics are sent immediately after extraction (no batching)
 
 ## See Also

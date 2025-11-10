@@ -10,7 +10,7 @@ status:
 
 tests:
   config:
-    metrics_exporter: otlp/metrics
+    metrics_connector: test_connector
     drop_logs: false
     logs:
       - name: logrecord.count

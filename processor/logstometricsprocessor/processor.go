@@ -9,26 +9,27 @@ import (
 	"time"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/connector"
 	"go.opentelemetry.io/collector/consumer"
-	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pipeline"
 	"go.opentelemetry.io/collector/processor"
 	"go.opentelemetry.io/collector/processor/processorhelper"
 	"go.uber.org/zap"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottllog"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/config"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/aggregator"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/customottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/metadata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/model"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottllog"
 )
 
 type logsToMetricsProcessor struct {
 	config           *config.Config
 	nextLogsConsumer consumer.Logs
-	metricsExporter  exporter.Metrics
+	metricsConsumer  consumer.Metrics
 	logger           *zap.Logger
 	telemetryBuilder *metadata.TelemetryBuilder
 	collectorInfo    model.CollectorInstanceInfo
@@ -82,34 +83,42 @@ const (
 	DataTypeMetrics DataType = iota
 )
 
-// exporterHost is an interface for accessing exporters from component.Host
-type exporterHost interface {
-	GetExporters() map[DataType]map[component.ID]component.Component
+// connectorHost is an interface for accessing connectors from component.Host
+type connectorHost interface {
+	GetConnectors() map[component.ID]component.Component
 }
 
 func (p *logsToMetricsProcessor) Start(ctx context.Context, host component.Host) error {
-	eh, ok := host.(exporterHost)
+	ch, ok := host.(connectorHost)
 	if !ok {
-		return fmt.Errorf("host does not support GetExporters() method")
+		return fmt.Errorf("host does not support GetConnectors() method")
 	}
 
-	exporters := eh.GetExporters()
-	metricsExporters, ok := exporters[DataTypeMetrics]
+	connectors := ch.GetConnectors()
+	conn, ok := connectors[p.config.MetricsConnector]
 	if !ok {
-		return fmt.Errorf("no metrics exporters available")
+		return fmt.Errorf("metrics connector %s not found", p.config.MetricsConnector)
 	}
 
-	exp, ok := metricsExporters[p.config.MetricsExporter]
+	metricsConnector, ok := conn.(connector.Metrics)
 	if !ok {
-		return fmt.Errorf("metrics exporter %s not found", p.config.MetricsExporter)
+		return fmt.Errorf("connector %s is not a metrics connector", p.config.MetricsConnector)
 	}
 
-	metricsExporter, ok := exp.(exporter.Metrics)
+	// Get the router interface to access consumers for pipelines
+	router, ok := metricsConnector.(connector.MetricsRouterAndConsumer)
 	if !ok {
-		return fmt.Errorf("exporter %s is not a metrics exporter", p.config.MetricsExporter)
+		return fmt.Errorf("connector %s does not support MetricsRouterAndConsumer interface", p.config.MetricsConnector)
 	}
 
-	p.metricsExporter = metricsExporter
+	// Get the consumer for the metrics pipeline
+	pipelineID := pipeline.NewID(pipeline.SignalMetrics)
+	metricsConsumer, err := router.Consumer(pipelineID)
+	if err != nil {
+		return fmt.Errorf("failed to get consumer for metrics pipeline from connector %s: %w", p.config.MetricsConnector, err)
+	}
+
+	p.metricsConsumer = metricsConsumer
 	return nil
 }
 
@@ -198,12 +207,12 @@ func (p *logsToMetricsProcessor) ConsumeLogs(ctx context.Context, logs plog.Logs
 	}
 	agg.Finalize(p.logMetricDefs)
 
-	// Send metrics to exporter
+	// Send metrics to connector (which routes to metrics pipeline)
 	if processedMetrics.ResourceMetrics().Len() > 0 {
-		if err := p.metricsExporter.ConsumeMetrics(ctx, processedMetrics); err != nil {
-			p.logger.Error("Failed to export metrics", zap.Error(err))
+		if err := p.metricsConsumer.ConsumeMetrics(ctx, processedMetrics); err != nil {
+			p.logger.Error("Failed to send metrics to connector", zap.Error(err))
 			errorCount++
-			// Continue processing logs even if metrics export fails
+			// Continue processing logs even if metrics send fails
 		}
 	}
 
@@ -225,4 +234,3 @@ func (p *logsToMetricsProcessor) ConsumeLogs(ctx context.Context, logs plog.Logs
 	}
 	return nil
 }
-

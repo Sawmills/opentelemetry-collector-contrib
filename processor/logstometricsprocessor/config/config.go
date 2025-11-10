@@ -16,9 +16,9 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/customottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottllog"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/customottl"
 )
 
 const (
@@ -42,8 +42,8 @@ var _ confmap.Unmarshaler = (*Config)(nil)
 
 // Config for the processor. Only logs configuration is supported.
 type Config struct {
-	// MetricsExporter is the component ID of the metrics exporter to send extracted metrics to
-	MetricsExporter component.ID `mapstructure:"metrics_exporter"`
+	// MetricsConnector is the component ID of the connector to send extracted metrics to
+	MetricsConnector component.ID `mapstructure:"metrics_connector"`
 	// DropLogs controls whether logs are forwarded to the next consumer after processing.
 	// If true, logs are dropped after metrics are extracted. Default: false
 	DropLogs bool `mapstructure:"drop_logs"`
@@ -57,8 +57,8 @@ func (c *Config) Validate() error {
 	if len(c.Logs) == 0 {
 		return errors.New("no logs configuration provided, at least one log metric definition must be specified")
 	}
-	if c.MetricsExporter == (component.ID{}) {
-		return errors.New("metrics_exporter must be specified")
+	if c.MetricsConnector == (component.ID{}) {
+		return errors.New("metrics_connector must be specified")
 	}
 
 	var multiError error
@@ -299,4 +299,3 @@ func validateMetricInfo[K any](mi *MetricInfo, parser ottl.Parser[K]) error {
 	}
 	return nil
 }
-

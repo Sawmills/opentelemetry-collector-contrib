@@ -1,5 +1,5 @@
 logstometricsprocessor:
-  metrics_exporter: test_metrics
+  metrics_connector: test_connector
   drop_logs: false
   logs:
     - name: metric.log.duration
