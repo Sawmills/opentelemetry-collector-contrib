@@ -49,6 +49,10 @@ type Config struct {
 	DropLogs bool `mapstructure:"drop_logs"`
 	// Logs defines the metrics to produce from log records
 	Logs []MetricInfo `mapstructure:"logs"`
+	// ExporterID is an optional identifier to be added as a label to telemetry metrics
+	ExporterID string `mapstructure:"exporter_id"`
+	// PipelineID is an optional pipeline identifier to be added as a label to telemetry metrics
+	PipelineID string `mapstructure:"pipeline_id"`
 	// prevent unkeyed literal initialization
 	_ struct{}
 }

@@ -22,7 +22,6 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/config"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/aggregator"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/customottl"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/metadata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/model"
 )
 
@@ -31,7 +30,7 @@ type logsToMetricsProcessor struct {
 	nextLogsConsumer consumer.Logs
 	metricsConsumer  consumer.Metrics
 	logger           *zap.Logger
-	telemetryBuilder *metadata.TelemetryBuilder
+	telemetry        *logsToMetricsTelemetry
 	collectorInfo    model.CollectorInstanceInfo
 	logMetricDefs    []model.MetricDef[ottllog.TransformContext]
 	dropLogs         bool
@@ -42,9 +41,9 @@ func newProcessor(
 	nextLogsConsumer consumer.Logs,
 	settings processor.Settings,
 ) (*logsToMetricsProcessor, error) {
-	telemetryBuilder, err := metadata.NewTelemetryBuilder(settings.TelemetrySettings)
+	telemetry, err := newLogsToMetricsTelemetry(settings, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create telemetry builder: %w", err)
+		return nil, fmt.Errorf("failed to create telemetry: %w", err)
 	}
 
 	parser, err := ottllog.NewParser(customottl.LogFuncs(), settings.TelemetrySettings)
@@ -63,9 +62,9 @@ func newProcessor(
 	}
 
 	return &logsToMetricsProcessor{
-		config:           cfg,
-		logger:           settings.Logger,
-		telemetryBuilder: telemetryBuilder,
+		config:    cfg,
+		logger:    settings.Logger,
+		telemetry: telemetry,
 		collectorInfo: model.NewCollectorInstanceInfo(
 			settings.TelemetrySettings,
 		),
@@ -123,8 +122,8 @@ func (p *logsToMetricsProcessor) Start(ctx context.Context, host component.Host)
 }
 
 func (p *logsToMetricsProcessor) Shutdown(context.Context) error {
-	if p.telemetryBuilder != nil {
-		p.telemetryBuilder.Shutdown()
+	if p.telemetry != nil {
+		p.telemetry.shutdown()
 	}
 	return nil
 }
@@ -150,13 +149,17 @@ func (p *logsToMetricsProcessor) processLogs(ctx context.Context, logs plog.Logs
 func (p *logsToMetricsProcessor) ConsumeLogs(ctx context.Context, logs plog.Logs) error {
 	startTime := time.Now()
 	logCount := logs.LogRecordCount()
-	var errorCount int64
-	var metricsExtracted int64
+
+	// Track per-metric statistics
+	metricErrors := make(map[string]int64)
+	metricExtracted := make(map[string]int64)
+	var totalErrorCount int64
+	var totalMetricsExtracted int64
 
 	if len(p.logMetricDefs) == 0 {
 		// No metric definitions, just record telemetry
 		if p.dropLogs {
-			p.telemetryBuilder.RecordProcessorLogstometricsLogsDropped(ctx, int64(logCount))
+			p.telemetry.recordLogsDropped(ctx, int64(logCount))
 		}
 		return nil
 	}
@@ -174,6 +177,7 @@ func (p *logsToMetricsProcessor) ConsumeLogs(ctx context.Context, logs plog.Logs
 				log := scopeLog.LogRecords().At(k)
 				logAttrs := log.Attributes()
 				for _, md := range p.logMetricDefs {
+					metricName := md.Key.Name
 					filteredLogAttrs, ok := md.FilterAttributes(logAttrs)
 					if !ok {
 						continue
@@ -185,22 +189,25 @@ func (p *logsToMetricsProcessor) ConsumeLogs(ctx context.Context, logs plog.Logs
 					if md.Conditions != nil {
 						match, err := md.Conditions.Eval(ctx, tCtx)
 						if err != nil {
-							p.logger.Debug("condition evaluation error", zap.String("name", md.Key.Name), zap.Error(err))
-							errorCount++
+							p.logger.Debug("condition evaluation error", zap.String("name", metricName), zap.Error(err))
+							metricErrors[metricName]++
+							totalErrorCount++
 							continue
 						}
 						if !match {
-							p.logger.Debug("condition not matched, skipping", zap.String("name", md.Key.Name))
+							p.logger.Debug("condition not matched, skipping", zap.String("name", metricName))
 							continue
 						}
 					}
 					filteredResAttrs := md.FilterResourceAttributes(resourceAttrs, p.collectorInfo)
 					if err := agg.Aggregate(ctx, tCtx, md, filteredResAttrs, filteredLogAttrs, 1); err != nil {
-						p.logger.Debug("aggregation error", zap.String("name", md.Key.Name), zap.Error(err))
-						errorCount++
+						p.logger.Debug("aggregation error", zap.String("name", metricName), zap.Error(err))
+						metricErrors[metricName]++
+						totalErrorCount++
 						continue
 					}
-					metricsExtracted++
+					metricExtracted[metricName]++
+					totalMetricsExtracted++
 				}
 			}
 		}
@@ -211,26 +218,44 @@ func (p *logsToMetricsProcessor) ConsumeLogs(ctx context.Context, logs plog.Logs
 	if processedMetrics.ResourceMetrics().Len() > 0 {
 		if err := p.metricsConsumer.ConsumeMetrics(ctx, processedMetrics); err != nil {
 			p.logger.Error("Failed to send metrics to connector", zap.Error(err))
-			errorCount++
+			totalErrorCount++
 			// Continue processing logs even if metrics send fails
 		}
 	}
 
-	// Record telemetry
-	p.telemetryBuilder.RecordProcessorLogstometricsLogsProcessed(ctx, int64(logCount))
-	p.telemetryBuilder.RecordProcessorLogstometricsMetricsExtracted(ctx, metricsExtracted)
-	if errorCount > 0 {
-		p.telemetryBuilder.RecordProcessorLogstometricsErrors(ctx, errorCount)
+	// Record processor-level telemetry
+	p.telemetry.recordLogsProcessed(ctx, int64(logCount))
+
+	// Record per-metric telemetry
+	for metricName, count := range metricExtracted {
+		if count > 0 {
+			p.telemetry.recordMetricsExtracted(ctx, count, metricName)
+		}
+	}
+	// Also record total without metric_name for backward compatibility
+	if totalMetricsExtracted > 0 {
+		p.telemetry.recordMetricsExtracted(ctx, totalMetricsExtracted, "")
 	}
 
-	// Record processing duration
+	// Record per-metric errors
+	for metricName, count := range metricErrors {
+		if count > 0 {
+			p.telemetry.recordError(ctx, count, metricName)
+		}
+	}
+	// Also record total errors without metric_name for backward compatibility
+	if totalErrorCount > 0 {
+		p.telemetry.recordError(ctx, totalErrorCount, "")
+	}
+
+	// Record processing duration (processor-level, not per-metric to avoid cardinality explosion)
 	duration := time.Since(startTime)
-	p.telemetryBuilder.RecordProcessorLogstometricsProcessingDuration(ctx, duration.Milliseconds())
+	p.telemetry.recordProcessingDuration(ctx, duration.Milliseconds(), "")
 
 	// Don't forward logs here - processLogs will handle forwarding/dropping
 	// Just record telemetry for dropped logs
 	if p.dropLogs {
-		p.telemetryBuilder.RecordProcessorLogstometricsLogsDropped(ctx, int64(logCount))
+		p.telemetry.recordLogsDropped(ctx, int64(logCount))
 	}
 	return nil
 }
