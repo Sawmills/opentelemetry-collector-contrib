@@ -38,6 +38,7 @@ components:
         - file
         - googlecloud
         - googlecloudpubsub
+        - googlecloudstorage
         - googlemanagedprometheus
         - honeycombmarker
         - influxdb
@@ -77,7 +78,6 @@ components:
         - db_storage
         - docker_observer
         - ecs_observer
-        - ecs_task_observer
         - file_storage
         - googleclientauth
         - googlecloudlogentry_encoding
@@ -166,6 +166,7 @@ components:
         - flinkmetrics
         - fluentforward
         - github
+        - gitlab
         - googlecloudmonitoring
         - googlecloudpubsub
         - googlecloudspanner
