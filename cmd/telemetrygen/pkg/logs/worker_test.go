@@ -14,15 +14,19 @@ import (
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/internal/common"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/internal/config"
 	types "github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/pkg"
 )
 
 const (
-	telemetryAttrKeyOne   = "k1"
-	telemetryAttrKeyTwo   = "k2"
-	telemetryAttrValueOne = "v1"
-	telemetryAttrValueTwo = "v2"
+	telemetryAttrKeyOne       = "k1"
+	telemetryAttrKeyTwo       = "k2"
+	telemetryAttrValueOne     = "v1"
+	telemetryAttrValueTwo     = "v2"
+	telemetryAttrIntKeyOne    = "intKey1"
+	telemetryAttrIntValueOne  = 1
+	telemetryAttrBoolKeyOne   = "boolKey1"
+	telemetryAttrBoolValueOne = true
 )
 
 type mockExporter struct {
@@ -44,7 +48,7 @@ func (*mockExporter) ForceFlush(context.Context) error {
 
 func TestFixedNumberOfLogs(t *testing.T) {
 	cfg := &Config{
-		Config: common.Config{
+		Config: config.Config{
 			WorkerCount: 1,
 		},
 		NumLogs:        5,
@@ -69,7 +73,7 @@ func TestFixedNumberOfLogs(t *testing.T) {
 
 func TestDurationInf(t *testing.T) {
 	cfg := &Config{
-		Config: common.Config{
+		Config: config.Config{
 			TotalDuration: types.DurationWithInf(-1),
 		},
 		SeverityText:   "Info",
@@ -86,7 +90,7 @@ func TestDurationInf(t *testing.T) {
 
 func TestRateOfLogs(t *testing.T) {
 	cfg := &Config{
-		Config: common.Config{
+		Config: config.Config{
 			Rate:          10,
 			TotalDuration: types.DurationWithInf(time.Second / 2),
 			WorkerCount:   1,
@@ -111,7 +115,7 @@ func TestRateOfLogs(t *testing.T) {
 
 func TestUnthrottled(t *testing.T) {
 	cfg := &Config{
-		Config: common.Config{
+		Config: config.Config{
 			TotalDuration: types.DurationWithInf(1 * time.Second),
 			WorkerCount:   1,
 		},
@@ -134,7 +138,7 @@ func TestCustomBody(t *testing.T) {
 	cfg := &Config{
 		Body:    "custom body",
 		NumLogs: 1,
-		Config: common.Config{
+		Config: config.Config{
 			WorkerCount: 1,
 		},
 		SeverityText:   "Info",
@@ -220,7 +224,22 @@ func TestLogsWithMultipleTelemetryAttributes(t *testing.T) {
 	// verify
 	require.Len(t, m.logs, qty)
 	for _, l := range m.logs {
-		assert.Equal(t, 3, l.AttributesLen(), "shouldn't have less than 3 attributes")
+		assert.Equal(t, 5, l.AttributesLen(), "it must have multiple attributes here")
+		l.WalkAttributes(func(attr log.KeyValue) bool {
+			if attr.Key == telemetryAttrKeyOne {
+				assert.Equal(t, telemetryAttrValueOne, attr.Value.AsString())
+			}
+			if attr.Key == telemetryAttrKeyTwo {
+				assert.Equal(t, telemetryAttrValueTwo, attr.Value.AsString())
+			}
+			if attr.Key == telemetryAttrIntKeyOne {
+				assert.Equal(t, int64(telemetryAttrIntValueOne), attr.Value.AsInt64())
+			}
+			if attr.Key == telemetryAttrBoolKeyOne {
+				assert.Equal(t, telemetryAttrBoolValueOne, attr.Value.AsBool())
+			}
+			return true
+		})
 	}
 }
 
@@ -256,7 +275,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "No duration, NumLogs",
 			cfg: &Config{
-				Config: common.Config{
+				Config: config.Config{
 					WorkerCount: 1,
 				},
 				TraceID: "123",
@@ -266,7 +285,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "TraceID invalid",
 			cfg: &Config{
-				Config: common.Config{
+				Config: config.Config{
 					WorkerCount: 1,
 				},
 				NumLogs: 5,
@@ -277,7 +296,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "SpanID invalid",
 			cfg: &Config{
-				Config: common.Config{
+				Config: config.Config{
 					WorkerCount: 1,
 				},
 				NumLogs: 5,
@@ -289,7 +308,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "LoadSize negative",
 			cfg: &Config{
-				Config: common.Config{
+				Config: config.Config{
 					WorkerCount: 1,
 					LoadSize:    -1,
 				},
@@ -314,7 +333,7 @@ func configWithNoAttributes(qty int, body string) *Config {
 	return &Config{
 		Body:    body,
 		NumLogs: qty,
-		Config: common.Config{
+		Config: config.Config{
 			WorkerCount:         1,
 			TelemetryAttributes: nil,
 		},
@@ -327,9 +346,9 @@ func configWithOneAttribute(qty int, body string) *Config {
 	return &Config{
 		Body:    body,
 		NumLogs: qty,
-		Config: common.Config{
+		Config: config.Config{
 			WorkerCount:         1,
-			TelemetryAttributes: common.KeyValue{telemetryAttrKeyOne: telemetryAttrValueOne},
+			TelemetryAttributes: config.KeyValue{telemetryAttrKeyOne: telemetryAttrValueOne},
 		},
 		SeverityText:   "Info",
 		SeverityNumber: 9,
@@ -337,11 +356,16 @@ func configWithOneAttribute(qty int, body string) *Config {
 }
 
 func configWithMultipleAttributes(qty int, body string) *Config {
-	kvs := common.KeyValue{telemetryAttrKeyOne: telemetryAttrValueOne, telemetryAttrKeyTwo: telemetryAttrValueTwo}
+	kvs := config.KeyValue{
+		telemetryAttrKeyOne:     telemetryAttrValueOne,
+		telemetryAttrKeyTwo:     telemetryAttrValueTwo,
+		telemetryAttrIntKeyOne:  telemetryAttrIntValueOne,
+		telemetryAttrBoolKeyOne: telemetryAttrBoolValueOne,
+	}
 	return &Config{
 		Body:    body,
 		NumLogs: qty,
-		Config: common.Config{
+		Config: config.Config{
 			WorkerCount:         1,
 			TelemetryAttributes: kvs,
 		},
@@ -353,7 +377,7 @@ func configWithMultipleAttributes(qty int, body string) *Config {
 func TestLogsWithLoadSize(t *testing.T) {
 	// arrange
 	cfg := &Config{
-		Config: common.Config{
+		Config: config.Config{
 			WorkerCount: 1,
 			LoadSize:    2, // 2MB of load data
 		},
@@ -385,11 +409,11 @@ func TestLogsWithLoadSize(t *testing.T) {
 	logRecord.WalkAttributes(func(attr log.KeyValue) bool {
 		if attr.Key == "load-0" {
 			load0Found = true
-			assert.Len(t, attr.Value.AsString(), common.CharactersPerMB, "load-0 should have 1MB of data")
+			assert.Len(t, attr.Value.AsString(), config.CharactersPerMB, "load-0 should have 1MB of data")
 		}
 		if attr.Key == "load-1" {
 			load1Found = true
-			assert.Len(t, attr.Value.AsString(), common.CharactersPerMB, "load-1 should have 1MB of data")
+			assert.Len(t, attr.Value.AsString(), config.CharactersPerMB, "load-1 should have 1MB of data")
 		}
 		return true
 	})
@@ -427,7 +451,7 @@ func TestLogsWithDefaultLoadSize(t *testing.T) {
 func TestLogsWithZeroLoadSize(t *testing.T) {
 	// arrange
 	cfg := &Config{
-		Config: common.Config{
+		Config: config.Config{
 			WorkerCount: 1,
 			LoadSize:    0, // Disable load size
 		},

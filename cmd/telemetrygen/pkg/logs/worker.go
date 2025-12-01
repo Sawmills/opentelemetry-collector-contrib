@@ -20,7 +20,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/time/rate"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/internal/common"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/internal/config"
 	types "github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/pkg"
 )
 
@@ -61,14 +61,14 @@ func (w worker) simulateLogs(res *resource.Resource, exporter sdklog.Exporter, t
 		}
 
 		attrs := []log.KeyValue{log.String("app", "server")}
-		for i, attr := range telemetryAttributes {
-			attrs = append(attrs, log.String(string(attr.Key), telemetryAttributes[i].Value.AsString()))
+		for _, attr := range telemetryAttributes {
+			attrs = append(attrs, log.KeyValueFromAttribute(attr))
 		}
 
 		// Add load size attributes if specified
 		if w.loadSize > 0 {
 			for j := 0; j < w.loadSize; j++ {
-				attrs = append(attrs, log.String(fmt.Sprintf("load-%v", j), string(make([]byte, common.CharactersPerMB))))
+				attrs = append(attrs, log.String(fmt.Sprintf("load-%v", j), string(make([]byte, config.CharactersPerMB))))
 			}
 		}
 
