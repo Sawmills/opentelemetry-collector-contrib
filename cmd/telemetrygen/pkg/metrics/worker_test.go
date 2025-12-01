@@ -19,15 +19,19 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/time/rate"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/internal/common"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/internal/config"
 	types "github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen/pkg"
 )
 
 const (
-	telemetryAttrKeyOne   = "key1"
-	telemetryAttrKeyTwo   = "key2"
-	telemetryAttrValueOne = "value1"
-	telemetryAttrValueTwo = "value2"
+	telemetryAttrKeyOne       = "key1"
+	telemetryAttrKeyTwo       = "key2"
+	telemetryAttrValueOne     = "value1"
+	telemetryAttrValueTwo     = "value2"
+	telemetryAttrIntKeyOne    = "intKey1"
+	telemetryAttrIntValueOne  = 1
+	telemetryAttrBoolKeyOne   = "boolKey1"
+	telemetryAttrBoolValueOne = true
 )
 
 type mockExporter struct {
@@ -73,7 +77,7 @@ func checkMetricTemporality(t *testing.T, ms metricdata.Metrics, metricType Metr
 func TestFixedNumberOfMetrics(t *testing.T) {
 	// arrange
 	cfg := &Config{
-		Config: common.Config{
+		Config: config.Config{
 			WorkerCount: 1,
 		},
 		NumMetrics: 5,
@@ -95,7 +99,7 @@ func TestFixedNumberOfMetrics(t *testing.T) {
 
 func TestDurationInf(t *testing.T) {
 	cfg := &Config{
-		Config: common.Config{
+		Config: config.Config{
 			TotalDuration: types.DurationWithInf(-1),
 		},
 		MetricType: MetricTypeSum,
@@ -112,7 +116,7 @@ func TestDurationInf(t *testing.T) {
 func TestRateOfMetrics(t *testing.T) {
 	// arrange
 	cfg := &Config{
-		Config: common.Config{
+		Config: config.Config{
 			Rate:          10,
 			TotalDuration: types.DurationWithInf(time.Second / 2),
 			WorkerCount:   1,
@@ -171,7 +175,7 @@ func TestMetricsWithTemporality(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// arrange
 			cfg := &Config{
-				Config: common.Config{
+				Config: config.Config{
 					WorkerCount: 1,
 				},
 				NumMetrics:             1,
@@ -203,7 +207,7 @@ func TestMetricsWithTemporality(t *testing.T) {
 func TestUnthrottled(t *testing.T) {
 	// arrange
 	cfg := &Config{
-		Config: common.Config{
+		Config: config.Config{
 			TotalDuration: types.DurationWithInf(1 * time.Second),
 			WorkerCount:   1,
 		},
@@ -241,7 +245,7 @@ func TestSumNoTelemetryAttrs(t *testing.T) {
 	require.Len(t, m.rms, qty)
 
 	rms := m.rms
-	for i := 0; i < qty; i++ {
+	for i := range qty {
 		ms := rms[i].ScopeMetrics[0].Metrics[0]
 		assert.Equal(t, "test", ms.Name)
 		// @note update when telemetrygen allow other metric types
@@ -269,7 +273,7 @@ func TestGaugeNoTelemetryAttrs(t *testing.T) {
 	require.Len(t, m.rms, qty)
 
 	rms := m.rms
-	for i := 0; i < qty; i++ {
+	for i := range qty {
 		ms := rms[i].ScopeMetrics[0].Metrics[0]
 		assert.Equal(t, "test", ms.Name)
 		// @note update when telemetrygen allow other metric types
@@ -297,7 +301,7 @@ func TestSumSingleTelemetryAttr(t *testing.T) {
 	require.Len(t, m.rms, qty)
 
 	rms := m.rms
-	for i := 0; i < qty; i++ {
+	for i := range qty {
 		ms := rms[i].ScopeMetrics[0].Metrics[0]
 		assert.Equal(t, "test", ms.Name)
 		// @note update when telemetrygen allow other metric types
@@ -327,7 +331,7 @@ func TestGaugeSingleTelemetryAttr(t *testing.T) {
 	require.Len(t, m.rms, qty)
 
 	rms := m.rms
-	for i := 0; i < qty; i++ {
+	for i := range qty {
 		ms := rms[i].ScopeMetrics[0].Metrics[0]
 		assert.Equal(t, "test", ms.Name)
 		// @note update when telemetrygen allow other metric types
@@ -358,15 +362,19 @@ func TestSumMultipleTelemetryAttr(t *testing.T) {
 
 	rms := m.rms
 	var actualValue attribute.Value
-	for i := 0; i < qty; i++ {
+	for i := range qty {
 		ms := rms[i].ScopeMetrics[0].Metrics[0]
 		// @note update when telemetrygen allow other metric types
 		attr := ms.Data.(metricdata.Sum[int64]).DataPoints[0].Attributes
-		assert.Equal(t, 2, attr.Len(), "it must have multiple attributes here")
+		assert.Equal(t, 4, attr.Len(), "it must have multiple attributes here")
 		actualValue, _ = attr.Value(telemetryAttrKeyOne)
-		assert.Equal(t, telemetryAttrValueOne, actualValue.AsString(), "it should be "+telemetryAttrValueOne)
+		assert.Equal(t, telemetryAttrValueOne, actualValue.AsString(), "it should be %s", telemetryAttrValueOne)
 		actualValue, _ = attr.Value(telemetryAttrKeyTwo)
-		assert.Equal(t, telemetryAttrValueTwo, actualValue.AsString(), "it should be "+telemetryAttrValueTwo)
+		assert.Equal(t, telemetryAttrValueTwo, actualValue.AsString(), "it should be %s", telemetryAttrValueTwo)
+		actualValue, _ = attr.Value(telemetryAttrIntKeyOne)
+		assert.Equal(t, int64(telemetryAttrIntValueOne), actualValue.AsInt64(), "it should be %d", telemetryAttrIntValueOne)
+		actualValue, _ = attr.Value(telemetryAttrBoolKeyOne)
+		assert.Equal(t, telemetryAttrBoolValueOne, actualValue.AsBool(), "it should be %t", telemetryAttrBoolValueOne)
 	}
 }
 
@@ -390,15 +398,19 @@ func TestGaugeMultipleTelemetryAttr(t *testing.T) {
 
 	rms := m.rms
 	var actualValue attribute.Value
-	for i := 0; i < qty; i++ {
+	for i := range qty {
 		ms := rms[i].ScopeMetrics[0].Metrics[0]
 		// @note update when telemetrygen allow other metric types
 		attr := ms.Data.(metricdata.Gauge[int64]).DataPoints[0].Attributes
-		assert.Equal(t, 2, attr.Len(), "it must have multiple attributes here")
+		assert.Equal(t, 4, attr.Len(), "it must have multiple attributes here")
 		actualValue, _ = attr.Value(telemetryAttrKeyOne)
 		assert.Equal(t, telemetryAttrValueOne, actualValue.AsString(), "it should be "+telemetryAttrValueOne)
 		actualValue, _ = attr.Value(telemetryAttrKeyTwo)
 		assert.Equal(t, telemetryAttrValueTwo, actualValue.AsString(), "it should be "+telemetryAttrValueTwo)
+		actualValue, _ = attr.Value(telemetryAttrIntKeyOne)
+		assert.Equal(t, int64(telemetryAttrIntValueOne), actualValue.AsInt64(), "it should be %d", telemetryAttrIntValueOne)
+		actualValue, _ = attr.Value(telemetryAttrBoolKeyOne)
+		assert.Equal(t, telemetryAttrBoolValueOne, actualValue.AsBool(), "it should be %t", telemetryAttrBoolValueOne)
 	}
 }
 
@@ -411,7 +423,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "No duration, NumMetrics, or Continuous",
 			cfg: &Config{
-				Config: common.Config{
+				Config: config.Config{
 					WorkerCount: 1,
 				},
 				MetricType: MetricTypeSum,
@@ -422,7 +434,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "TraceID invalid",
 			cfg: &Config{
-				Config: common.Config{
+				Config: config.Config{
 					WorkerCount: 1,
 				},
 				NumMetrics: 5,
@@ -434,7 +446,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "SpanID invalid",
 			cfg: &Config{
-				Config: common.Config{
+				Config: config.Config{
 					WorkerCount: 1,
 				},
 				NumMetrics: 5,
@@ -447,7 +459,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "LoadSize negative",
 			cfg: &Config{
-				Config: common.Config{
+				Config: config.Config{
 					WorkerCount: 1,
 					LoadSize:    -1,
 				},
@@ -471,7 +483,7 @@ func TestValidate(t *testing.T) {
 
 func configWithNoAttributes(metric MetricType, qty int) *Config {
 	return &Config{
-		Config: common.Config{
+		Config: config.Config{
 			WorkerCount:         1,
 			TelemetryAttributes: nil,
 		},
@@ -483,9 +495,9 @@ func configWithNoAttributes(metric MetricType, qty int) *Config {
 
 func configWithOneAttribute(metric MetricType, qty int) *Config {
 	return &Config{
-		Config: common.Config{
+		Config: config.Config{
 			WorkerCount:         1,
-			TelemetryAttributes: common.KeyValue{telemetryAttrKeyOne: telemetryAttrValueOne},
+			TelemetryAttributes: config.KeyValue{telemetryAttrKeyOne: telemetryAttrValueOne},
 		},
 		NumMetrics: qty,
 		MetricName: "test",
@@ -494,9 +506,14 @@ func configWithOneAttribute(metric MetricType, qty int) *Config {
 }
 
 func configWithMultipleAttributes(metric MetricType, qty int) *Config {
-	kvs := common.KeyValue{telemetryAttrKeyOne: telemetryAttrValueOne, telemetryAttrKeyTwo: telemetryAttrValueTwo}
+	kvs := config.KeyValue{
+		telemetryAttrKeyOne:     telemetryAttrValueOne,
+		telemetryAttrKeyTwo:     telemetryAttrValueTwo,
+		telemetryAttrIntKeyOne:  telemetryAttrIntValueOne,
+		telemetryAttrBoolKeyOne: telemetryAttrBoolValueOne,
+	}
 	return &Config{
-		Config: common.Config{
+		Config: config.Config{
 			WorkerCount:         1,
 			TelemetryAttributes: kvs,
 		},
@@ -507,7 +524,7 @@ func configWithMultipleAttributes(metric MetricType, qty int) *Config {
 
 func configWithEnabledUnique(metric MetricType, qty int) *Config {
 	return &Config{
-		Config: common.Config{
+		Config: config.Config{
 			WorkerCount:         1,
 			TelemetryAttributes: nil,
 		},
@@ -619,7 +636,7 @@ func TestUniqueSumTimeseries(t *testing.T) {
 	rms := m.rms
 	var actualValue attribute.Value
 	var exist bool
-	for i := 0; i < qty; i++ {
+	for i := range qty {
 		ms := rms[i].ScopeMetrics[0].Metrics[0]
 		// @note update when telemetrygen allow other metric types
 		attr := ms.Data.(metricdata.Sum[int64]).DataPoints[0].Attributes
@@ -633,7 +650,7 @@ func TestUniqueSumTimeseries(t *testing.T) {
 func TestMetricsWithLoadSize(t *testing.T) {
 	// arrange
 	cfg := &Config{
-		Config: common.Config{
+		Config: config.Config{
 			WorkerCount: 1,
 			LoadSize:    2, // 2MB of load data
 		},
@@ -663,11 +680,11 @@ func TestMetricsWithLoadSize(t *testing.T) {
 	// Check that load attributes exist and have the expected size
 	load0Value, exists := attr.Value("load-0")
 	assert.True(t, exists, "should have load-0 attribute")
-	assert.Len(t, load0Value.AsString(), common.CharactersPerMB, "load-0 should have 1MB of data")
+	assert.Len(t, load0Value.AsString(), config.CharactersPerMB, "load-0 should have 1MB of data")
 
 	load1Value, exists := attr.Value("load-1")
 	assert.True(t, exists, "should have load-1 attribute")
-	assert.Len(t, load1Value.AsString(), common.CharactersPerMB, "load-1 should have 1MB of data")
+	assert.Len(t, load1Value.AsString(), config.CharactersPerMB, "load-1 should have 1MB of data")
 }
 
 func TestMetricsWithDefaultLoadSize(t *testing.T) {
@@ -703,7 +720,7 @@ func TestExponentialHistogramMetricGeneration(t *testing.T) {
 	// arrange
 	m := &mockExporter{}
 	cfg := Config{
-		Config: common.Config{
+		Config: config.Config{
 			WorkerCount: 1,
 		},
 		NumMetrics: 1,

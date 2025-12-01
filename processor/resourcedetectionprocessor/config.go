@@ -24,9 +24,11 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/k8snode"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/kubeadm"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/openshift"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/openstack/nova"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/oraclecloud"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/scaleway"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/system"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/upcloud"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/vultr"
 )
 
@@ -45,6 +47,7 @@ type Config struct {
 	confighttp.ClientConfig `mapstructure:",squash"`
 	// Attributes is an allowlist of attributes to add.
 	// If a supplied attribute is not a valid attribute of a supplied detector it will be ignored.
+	//
 	// Deprecated: Please use detector's resource_attributes config instead
 	Attributes []string `mapstructure:"attributes"`
 }
@@ -96,6 +99,9 @@ type DetectorConfig struct {
 	// OpenShift contains user-specified configurations for the OpenShift detector
 	OpenShiftConfig openshift.Config `mapstructure:"openshift"`
 
+	// OpenShift contains user-specified configurations for the OpenShift detector
+	OpenStackNovaConfig nova.Config `mapstructure:"nova"`
+
 	// OracleCloud contains user-specified configurations for the OracleCloud detector
 	OracleCloudConfig oraclecloud.Config `mapstructure:"oraclecloud"`
 
@@ -110,6 +116,9 @@ type DetectorConfig struct {
 
 	// ScalewayConfig contains user-specified configurations for the akamai detector
 	ScalewayConfig scaleway.Config `mapstructure:"scaleway"`
+
+	// UpcloudConfig contains user-specified configurations for the upcloud detector
+	UpcloudConfig upcloud.Config `mapstructure:"upcloud"`
 
 	// VultrConfig contains user-specified configurations for the vultr detector
 	VultrConfig vultr.Config `mapstructure:"vultr"`
@@ -132,11 +141,13 @@ func detectorCreateDefaultConfig() DetectorConfig {
 		HetznerConfig:          hetzner.CreateDefaultConfig(),
 		SystemConfig:           system.CreateDefaultConfig(),
 		OpenShiftConfig:        openshift.CreateDefaultConfig(),
+		OpenStackNovaConfig:    nova.CreateDefaultConfig(),
 		OracleCloudConfig:      oraclecloud.CreateDefaultConfig(),
 		K8SNodeConfig:          k8snode.CreateDefaultConfig(),
 		KubeadmConfig:          kubeadm.CreateDefaultConfig(),
 		AkamaiConfig:           akamai.CreateDefaultConfig(),
 		ScalewayConfig:         scaleway.CreateDefaultConfig(),
+		UpcloudConfig:          upcloud.CreateDefaultConfig(),
 		VultrConfig:            vultr.CreateDefaultConfig(),
 	}
 }
@@ -173,6 +184,8 @@ func (d *DetectorConfig) GetConfigFromType(detectorType internal.DetectorType) i
 		return d.SystemConfig
 	case openshift.TypeStr:
 		return d.OpenShiftConfig
+	case nova.TypeStr:
+		return d.OpenStackNovaConfig
 	case oraclecloud.TypeStr:
 		return d.OracleCloudConfig
 	case k8snode.TypeStr:
@@ -183,6 +196,8 @@ func (d *DetectorConfig) GetConfigFromType(detectorType internal.DetectorType) i
 		return d.AkamaiConfig
 	case scaleway.TypeStr:
 		return d.ScalewayConfig
+	case upcloud.TypeStr:
+		return d.UpcloudConfig
 	case vultr.TypeStr:
 		return d.VultrConfig
 	default:
