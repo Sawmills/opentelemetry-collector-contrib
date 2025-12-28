@@ -5,6 +5,7 @@ package ottl // import "github.com/open-telemetry/opentelemetry-collector-contri
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
@@ -84,6 +85,16 @@ func (p *Parser[K]) compileMicroComparisonVM(cmp *comparison) (*microProgram[K],
 		parser:      p,
 		constIndex:  map[constKey]uint32{},
 		getterIndex: map[string]uint32{},
+	}
+	if folded, ok, err := foldComparisonConst(cmp); err != nil {
+		return nil, err
+	} else if ok {
+		c.emitLoadConst(folded)
+		return &microProgram[K]{
+			program: &vm.Program{Code: c.code, Consts: c.consts, GasLimit: vmGasLimitFor(p)},
+			getters: c.getters,
+			stack:   c.maxStack,
+		}, nil
 	}
 	if err := c.emitValue(cmp.Left); err != nil {
 		return nil, err
@@ -358,7 +369,311 @@ func mergeKinds(a, b valueKind) (valueKind, error) {
 	return a, nil
 }
 
+type foldedNumber struct {
+	kind  valueKind
+	int64 int64
+	float float64
+}
+
+func foldValueConst(val value) (ir.Value, bool, error) {
+	switch {
+	case val.Bool != nil:
+		return ir.BoolValue(bool(*val.Bool)), true, nil
+	case val.String != nil:
+		return ir.StringValue(*val.String), true, nil
+	case val.Literal != nil:
+		return foldMathExprLiteralConst(val.Literal)
+	case val.MathExpression != nil:
+		return foldMathExpressionConst(val.MathExpression)
+	default:
+		return ir.Value{}, false, nil
+	}
+}
+
+func foldMathExprLiteralConst(lit *mathExprLiteral) (ir.Value, bool, error) {
+	if lit == nil {
+		return ir.Value{}, false, nil
+	}
+	switch {
+	case lit.Int != nil:
+		return ir.Int64Value(*lit.Int), true, nil
+	case lit.Float != nil:
+		return ir.Float64Value(*lit.Float), true, nil
+	default:
+		return ir.Value{}, false, nil
+	}
+}
+
+func foldMathExpressionConst(expr *mathExpression) (ir.Value, bool, error) {
+	num, ok, err := foldMathExpressionNumber(expr)
+	if !ok || err != nil {
+		return ir.Value{}, ok, err
+	}
+	switch num.kind {
+	case kindInt:
+		return ir.Int64Value(num.int64), true, nil
+	case kindFloat:
+		return ir.Float64Value(num.float), true, nil
+	default:
+		return ir.Value{}, false, nil
+	}
+}
+
+func foldMathExpressionNumber(expr *mathExpression) (foldedNumber, bool, error) {
+	if expr == nil {
+		return foldedNumber{}, false, nil
+	}
+	left, ok, err := foldAddSubTermNumber(expr.Left)
+	if !ok || err != nil {
+		return foldedNumber{}, ok, err
+	}
+	for _, rhs := range expr.Right {
+		if rhs == nil || rhs.Term == nil {
+			return foldedNumber{}, false, fmt.Errorf("invalid add/sub term")
+		}
+		right, ok, err := foldAddSubTermNumber(rhs.Term)
+		if !ok || err != nil {
+			return foldedNumber{}, ok, err
+		}
+		left, ok, err = applyMathOp(rhs.Operator, left, right)
+		if !ok || err != nil {
+			return foldedNumber{}, ok, err
+		}
+	}
+	return left, true, nil
+}
+
+func foldAddSubTermNumber(term *addSubTerm) (foldedNumber, bool, error) {
+	if term == nil || term.Left == nil {
+		return foldedNumber{}, false, nil
+	}
+	left, ok, err := foldMathValueNumber(term.Left)
+	if !ok || err != nil {
+		return foldedNumber{}, ok, err
+	}
+	for _, rhs := range term.Right {
+		if rhs == nil || rhs.Value == nil {
+			return foldedNumber{}, false, fmt.Errorf("invalid mult/div value")
+		}
+		right, ok, err := foldMathValueNumber(rhs.Value)
+		if !ok || err != nil {
+			return foldedNumber{}, ok, err
+		}
+		left, ok, err = applyMathOp(rhs.Operator, left, right)
+		if !ok || err != nil {
+			return foldedNumber{}, ok, err
+		}
+	}
+	return left, true, nil
+}
+
+func foldMathValueNumber(val *mathValue) (foldedNumber, bool, error) {
+	switch {
+	case val == nil:
+		return foldedNumber{}, false, nil
+	case val.Literal != nil:
+		return foldMathLiteralNumber(val.Literal)
+	case val.SubExpression != nil:
+		return foldMathExpressionNumber(val.SubExpression)
+	default:
+		return foldedNumber{}, false, nil
+	}
+}
+
+func foldMathLiteralNumber(lit *mathExprLiteral) (foldedNumber, bool, error) {
+	if lit == nil {
+		return foldedNumber{}, false, nil
+	}
+	switch {
+	case lit.Int != nil:
+		return foldedNumber{kind: kindInt, int64: *lit.Int}, true, nil
+	case lit.Float != nil:
+		return foldedNumber{kind: kindFloat, float: *lit.Float}, true, nil
+	default:
+		return foldedNumber{}, false, nil
+	}
+}
+
+func applyMathOp(op mathOp, left, right foldedNumber) (foldedNumber, bool, error) {
+	if left.kind != right.kind {
+		if left.kind == kindUnknown || right.kind == kindUnknown {
+			return foldedNumber{}, false, nil
+		}
+		return foldedNumber{}, false, fmt.Errorf("mixed numeric types unsupported in micro compiler")
+	}
+	switch left.kind {
+	case kindInt:
+		switch op {
+		case add:
+			return foldedNumber{kind: kindInt, int64: left.int64 + right.int64}, true, nil
+		case sub:
+			return foldedNumber{kind: kindInt, int64: left.int64 - right.int64}, true, nil
+		case mult:
+			return foldedNumber{kind: kindInt, int64: left.int64 * right.int64}, true, nil
+		case div:
+			if right.int64 == 0 {
+				return foldedNumber{}, false, nil
+			}
+			return foldedNumber{kind: kindInt, int64: left.int64 / right.int64}, true, nil
+		default:
+			return foldedNumber{}, false, fmt.Errorf("unsupported math op")
+		}
+	case kindFloat:
+		switch op {
+		case add:
+			return foldedNumber{kind: kindFloat, float: left.float + right.float}, true, nil
+		case sub:
+			return foldedNumber{kind: kindFloat, float: left.float - right.float}, true, nil
+		case mult:
+			return foldedNumber{kind: kindFloat, float: left.float * right.float}, true, nil
+		case div:
+			return foldedNumber{kind: kindFloat, float: left.float / right.float}, true, nil
+		default:
+			return foldedNumber{}, false, fmt.Errorf("unsupported math op")
+		}
+	default:
+		return foldedNumber{}, false, nil
+	}
+}
+
+func foldComparisonConst(cmp *comparison) (ir.Value, bool, error) {
+	if cmp == nil {
+		return ir.Value{}, false, nil
+	}
+	left, ok, err := foldValueConst(cmp.Left)
+	if !ok || err != nil {
+		return ir.Value{}, ok, err
+	}
+	right, ok, err := foldValueConst(cmp.Right)
+	if !ok || err != nil {
+		return ir.Value{}, ok, err
+	}
+	leftKind := kindFromValue(left)
+	rightKind := kindFromValue(right)
+	if !supportsComparison(cmp.Op, leftKind, rightKind) {
+		return ir.Value{}, false, fmt.Errorf("unsupported comparison op/type combination")
+	}
+	result, err := compareConst(cmp.Op, left, right)
+	if err != nil {
+		return ir.Value{}, false, err
+	}
+	return result, true, nil
+}
+
+func kindFromValue(val ir.Value) valueKind {
+	switch val.Type {
+	case ir.TypeInt:
+		return kindInt
+	case ir.TypeFloat:
+		return kindFloat
+	case ir.TypeBool:
+		return kindBool
+	case ir.TypeString:
+		return kindString
+	default:
+		return kindUnknown
+	}
+}
+
+func compareConst(op compareOp, left, right ir.Value) (ir.Value, error) {
+	switch {
+	case (left.Type == ir.TypeInt || left.Type == ir.TypeFloat) && (right.Type == ir.TypeInt || right.Type == ir.TypeFloat):
+		if left.Type == ir.TypeFloat || right.Type == ir.TypeFloat {
+			lf := math.Float64frombits(left.Num)
+			if left.Type == ir.TypeInt {
+				lf = float64(int64(left.Num))
+			}
+			rf := math.Float64frombits(right.Num)
+			if right.Type == ir.TypeInt {
+				rf = float64(int64(right.Num))
+			}
+			return compareFloatConst(op, lf, rf)
+		}
+		return compareIntConst(op, int64(left.Num), int64(right.Num))
+	case left.Type == ir.TypeBool && right.Type == ir.TypeBool:
+		return compareBoolConst(op, left.Num != 0, right.Num != 0)
+	case left.Type == ir.TypeString && right.Type == ir.TypeString:
+		ls, ok := left.String()
+		if !ok {
+			return ir.Value{}, fmt.Errorf("invalid string constant")
+		}
+		rs, ok := right.String()
+		if !ok {
+			return ir.Value{}, fmt.Errorf("invalid string constant")
+		}
+		return compareStringConst(op, ls, rs)
+	default:
+		return ir.Value{}, fmt.Errorf("unsupported comparison types")
+	}
+}
+
+func compareIntConst(op compareOp, a, b int64) (ir.Value, error) {
+	switch op {
+	case eq:
+		return ir.BoolValue(a == b), nil
+	case ne:
+		return ir.BoolValue(a != b), nil
+	case lt:
+		return ir.BoolValue(a < b), nil
+	case lte:
+		return ir.BoolValue(a <= b), nil
+	case gt:
+		return ir.BoolValue(a > b), nil
+	case gte:
+		return ir.BoolValue(a >= b), nil
+	default:
+		return ir.Value{}, fmt.Errorf("unsupported comparison op")
+	}
+}
+
+func compareFloatConst(op compareOp, a, b float64) (ir.Value, error) {
+	switch op {
+	case eq:
+		return ir.BoolValue(a == b), nil
+	case ne:
+		return ir.BoolValue(a != b), nil
+	case lt:
+		return ir.BoolValue(a < b), nil
+	case lte:
+		return ir.BoolValue(a <= b), nil
+	case gt:
+		return ir.BoolValue(a > b), nil
+	case gte:
+		return ir.BoolValue(a >= b), nil
+	default:
+		return ir.Value{}, fmt.Errorf("unsupported comparison op")
+	}
+}
+
+func compareBoolConst(op compareOp, a, b bool) (ir.Value, error) {
+	switch op {
+	case eq:
+		return ir.BoolValue(a == b), nil
+	case ne:
+		return ir.BoolValue(a != b), nil
+	default:
+		return ir.Value{}, fmt.Errorf("unsupported comparison op")
+	}
+}
+
+func compareStringConst(op compareOp, a, b string) (ir.Value, error) {
+	switch op {
+	case eq:
+		return ir.BoolValue(a == b), nil
+	case ne:
+		return ir.BoolValue(a != b), nil
+	default:
+		return ir.Value{}, fmt.Errorf("unsupported comparison op")
+	}
+}
+
 func (c *microCompiler[K]) emitValue(val value) error {
+	if folded, ok, err := foldValueConst(val); err != nil {
+		return err
+	} else if ok {
+		c.emitLoadConst(folded)
+		return nil
+	}
 	switch {
 	case val.Literal != nil && val.Literal.Path != nil:
 		return c.emitPath(val.Literal.Path)
@@ -474,6 +789,12 @@ func (c *microCompiler[K]) emitComparison(cmp *comparison) error {
 	if !supportsComparison(cmp.Op, leftKind, rightKind) {
 		return fmt.Errorf("unsupported comparison op/type combination")
 	}
+	if folded, ok, err := foldComparisonConst(cmp); err != nil {
+		return err
+	} else if ok {
+		c.emitLoadConst(folded)
+		return nil
+	}
 	if err := c.emitValue(cmp.Left); err != nil {
 		return err
 	}
@@ -517,6 +838,12 @@ func (c *microCompiler[K]) emitPath(path *path) error {
 func (c *microCompiler[K]) emitMathExpression(expr *mathExpression) error {
 	if expr == nil {
 		return fmt.Errorf("math expression is nil")
+	}
+	if folded, ok, err := foldMathExpressionConst(expr); err != nil {
+		return err
+	} else if ok {
+		c.emitLoadConst(folded)
+		return nil
 	}
 
 	// Infer overall expression type for specialized opcodes
