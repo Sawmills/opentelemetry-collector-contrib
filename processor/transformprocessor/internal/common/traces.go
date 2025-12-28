@@ -97,7 +97,7 @@ type TraceParserCollectionOption ottl.ParserCollectionOption[TracesConsumer]
 
 func WithSpanParser(functions map[string]ottl.Factory[ottlspan.TransformContext]) TraceParserCollectionOption {
 	return func(pc *ottl.ParserCollection[TracesConsumer]) error {
-		parser, err := ottlspan.NewParser(functions, pc.Settings, ottlspan.EnablePathContextNames())
+		parser, err := ottlspan.NewParser(functions, pc.Settings, ottlspan.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottlspan.TransformContext]())
 		if err != nil {
 			return err
 		}
@@ -107,7 +107,7 @@ func WithSpanParser(functions map[string]ottl.Factory[ottlspan.TransformContext]
 
 func WithSpanEventParser(functions map[string]ottl.Factory[ottlspanevent.TransformContext]) TraceParserCollectionOption {
 	return func(pc *ottl.ParserCollection[TracesConsumer]) error {
-		parser, err := ottlspanevent.NewParser(functions, pc.Settings, ottlspanevent.EnablePathContextNames())
+		parser, err := ottlspanevent.NewParser(functions, pc.Settings, ottlspanevent.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottlspanevent.TransformContext]())
 		if err != nil {
 			return err
 		}

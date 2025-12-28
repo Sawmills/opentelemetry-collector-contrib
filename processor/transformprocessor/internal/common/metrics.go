@@ -169,7 +169,7 @@ type MetricParserCollectionOption ottl.ParserCollectionOption[MetricsConsumer]
 
 func WithMetricParser(functions map[string]ottl.Factory[ottlmetric.TransformContext]) MetricParserCollectionOption {
 	return func(pc *ottl.ParserCollection[MetricsConsumer]) error {
-		metricParser, err := ottlmetric.NewParser(functions, pc.Settings, ottlmetric.EnablePathContextNames())
+		metricParser, err := ottlmetric.NewParser(functions, pc.Settings, ottlmetric.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottlmetric.TransformContext]())
 		if err != nil {
 			return err
 		}
@@ -179,7 +179,7 @@ func WithMetricParser(functions map[string]ottl.Factory[ottlmetric.TransformCont
 
 func WithDataPointParser(functions map[string]ottl.Factory[ottldatapoint.TransformContext]) MetricParserCollectionOption {
 	return func(pc *ottl.ParserCollection[MetricsConsumer]) error {
-		dataPointParser, err := ottldatapoint.NewParser(functions, pc.Settings, ottldatapoint.EnablePathContextNames())
+		dataPointParser, err := ottldatapoint.NewParser(functions, pc.Settings, ottldatapoint.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottldatapoint.TransformContext]())
 		if err != nil {
 			return err
 		}

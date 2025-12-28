@@ -57,7 +57,7 @@ type ProfileParserCollectionOption ottl.ParserCollectionOption[ProfilesConsumer]
 
 func WithProfileParser(functions map[string]ottl.Factory[ottlprofile.TransformContext]) ProfileParserCollectionOption {
 	return func(pc *ottl.ParserCollection[ProfilesConsumer]) error {
-		profileParser, err := ottlprofile.NewParser(functions, pc.Settings, ottlprofile.EnablePathContextNames())
+		profileParser, err := ottlprofile.NewParser(functions, pc.Settings, ottlprofile.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottlprofile.TransformContext]())
 		if err != nil {
 			return err
 		}

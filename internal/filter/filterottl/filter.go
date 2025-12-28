@@ -26,6 +26,7 @@ func NewBoolExprForSpan(conditions []string, functions map[string]ottl.Factory[o
 
 // NewBoolExprForSpanWithOptions is like NewBoolExprForSpan, but with additional options.
 func NewBoolExprForSpanWithOptions(conditions []string, functions map[string]ottl.Factory[ottlspan.TransformContext], errorMode ottl.ErrorMode, set component.TelemetrySettings, parserOptions []ottl.Option[ottlspan.TransformContext]) (*ottl.ConditionSequence[ottlspan.TransformContext], error) {
+	parserOptions = append(parserOptions, ottl.WithVMEnabledFromEnv[ottlspan.TransformContext]())
 	parser, err := ottlspan.NewParser(functions, set, parserOptions...)
 	if err != nil {
 		return nil, err
@@ -47,6 +48,7 @@ func NewBoolExprForSpanEvent(conditions []string, functions map[string]ottl.Fact
 
 // NewBoolExprForSpanEventWithOptions is like NewBoolExprForSpanEvent, but with additional options.
 func NewBoolExprForSpanEventWithOptions(conditions []string, functions map[string]ottl.Factory[ottlspanevent.TransformContext], errorMode ottl.ErrorMode, set component.TelemetrySettings, parserOptions []ottl.Option[ottlspanevent.TransformContext]) (*ottl.ConditionSequence[ottlspanevent.TransformContext], error) {
+	parserOptions = append(parserOptions, ottl.WithVMEnabledFromEnv[ottlspanevent.TransformContext]())
 	parser, err := ottlspanevent.NewParser(functions, set, parserOptions...)
 	if err != nil {
 		return nil, err
@@ -68,6 +70,7 @@ func NewBoolExprForMetric(conditions []string, functions map[string]ottl.Factory
 
 // NewBoolExprForMetricWithOptions is like NewBoolExprForMetric, but with additional options.
 func NewBoolExprForMetricWithOptions(conditions []string, functions map[string]ottl.Factory[ottlmetric.TransformContext], errorMode ottl.ErrorMode, set component.TelemetrySettings, parserOptions []ottl.Option[ottlmetric.TransformContext]) (*ottl.ConditionSequence[ottlmetric.TransformContext], error) {
+	parserOptions = append(parserOptions, ottl.WithVMEnabledFromEnv[ottlmetric.TransformContext]())
 	parser, err := ottlmetric.NewParser(functions, set, parserOptions...)
 	if err != nil {
 		return nil, err
@@ -89,6 +92,7 @@ func NewBoolExprForDataPoint(conditions []string, functions map[string]ottl.Fact
 
 // NewBoolExprForDataPointWithOptions is like NewBoolExprForDataPoint, but with additional options.
 func NewBoolExprForDataPointWithOptions(conditions []string, functions map[string]ottl.Factory[ottldatapoint.TransformContext], errorMode ottl.ErrorMode, set component.TelemetrySettings, parserOptions []ottl.Option[ottldatapoint.TransformContext]) (*ottl.ConditionSequence[ottldatapoint.TransformContext], error) {
+	parserOptions = append(parserOptions, ottl.WithVMEnabledFromEnv[ottldatapoint.TransformContext]())
 	parser, err := ottldatapoint.NewParser(functions, set, parserOptions...)
 	if err != nil {
 		return nil, err
@@ -110,6 +114,7 @@ func NewBoolExprForLog(conditions []string, functions map[string]ottl.Factory[ot
 
 // NewBoolExprForLogWithOptions is like NewBoolExprForLog, but with additional options.
 func NewBoolExprForLogWithOptions(conditions []string, functions map[string]ottl.Factory[ottllog.TransformContext], errorMode ottl.ErrorMode, set component.TelemetrySettings, parserOptions []ottl.Option[ottllog.TransformContext]) (*ottl.ConditionSequence[ottllog.TransformContext], error) {
+	parserOptions = append(parserOptions, ottl.WithVMEnabledFromEnv[ottllog.TransformContext]())
 	parser, err := ottllog.NewParser(functions, set, parserOptions...)
 	if err != nil {
 		return nil, err
@@ -131,6 +136,7 @@ func NewBoolExprForProfile(conditions []string, functions map[string]ottl.Factor
 
 // NewBoolExprForProfileWithOptions is like NewBoolExprForProfile, but with additional options.
 func NewBoolExprForProfileWithOptions(conditions []string, functions map[string]ottl.Factory[ottlprofile.TransformContext], errorMode ottl.ErrorMode, set component.TelemetrySettings, parserOptions []ottl.Option[ottlprofile.TransformContext]) (*ottl.ConditionSequence[ottlprofile.TransformContext], error) {
+	parserOptions = append(parserOptions, ottl.WithVMEnabledFromEnv[ottlprofile.TransformContext]())
 	parser, err := ottlprofile.NewParser(functions, set, parserOptions...)
 	if err != nil {
 		return nil, err
@@ -152,6 +158,7 @@ func NewBoolExprForResource(conditions []string, functions map[string]ottl.Facto
 
 // NewBoolExprForResourceWithOptions is like NewBoolExprForResource, but with additional options.
 func NewBoolExprForResourceWithOptions(conditions []string, functions map[string]ottl.Factory[ottlresource.TransformContext], errorMode ottl.ErrorMode, set component.TelemetrySettings, parserOptions []ottl.Option[ottlresource.TransformContext]) (*ottl.ConditionSequence[ottlresource.TransformContext], error) {
+	parserOptions = append(parserOptions, ottl.WithVMEnabledFromEnv[ottlresource.TransformContext]())
 	parser, err := ottlresource.NewParser(functions, set, parserOptions...)
 	if err != nil {
 		return nil, err
@@ -173,6 +180,7 @@ func NewBoolExprForScope(conditions []string, functions map[string]ottl.Factory[
 
 // NewBoolExprForScopeWithOptions is like NewBoolExprForScope, but with additional options.
 func NewBoolExprForScopeWithOptions(conditions []string, functions map[string]ottl.Factory[ottlscope.TransformContext], errorMode ottl.ErrorMode, set component.TelemetrySettings, parserOptions []ottl.Option[ottlscope.TransformContext]) (*ottl.ConditionSequence[ottlscope.TransformContext], error) {
+	parserOptions = append(parserOptions, ottl.WithVMEnabledFromEnv[ottlscope.TransformContext]())
 	parser, err := ottlscope.NewParser(functions, set, parserOptions...)
 	if err != nil {
 		return nil, err

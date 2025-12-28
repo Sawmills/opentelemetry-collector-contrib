@@ -20,12 +20,18 @@ import (
 // Generic over K to eliminate interface{} conversions entirely.
 type PathAccessor[K any] func(ctx context.Context, tCtx K) (ir.Value, error)
 
+// PathSetter is a pre-compiled setter that writes a value to an attribute.
+// This is the write counterpart to PathAccessor for attribute mutations.
+// Generic over K to eliminate interface{} conversions entirely.
+type PathSetter[K any] func(ctx context.Context, tCtx K, val ir.Value) error
+
 // Program is a minimal bytecode program for the micro-VM.
 // Generic over K to support typed path accessors without interface{} overhead.
 type Program[K any] struct {
 	Code      []ir.Instruction
 	Consts    []ir.Value
 	Accessors []PathAccessor[K] // cached attribute accessors for OpLoadAttrCached
+	Setters   []PathSetter[K]   // cached attribute setters for OpSetAttrCached
 	GasLimit  uint64
 }
 
@@ -39,6 +45,7 @@ var (
 	ErrInvalidConst   = errors.New("invalid const index")
 	ErrInvalidGetter   = errors.New("invalid getter index")
 	ErrInvalidAccessor = errors.New("invalid accessor index")
+	ErrInvalidSetter   = errors.New("invalid setter index")
 	ErrInvalidJump    = errors.New("invalid jump target")
 	ErrTypeMismatch   = errors.New("type mismatch")
 	ErrEmptyStack     = errors.New("empty stack")
@@ -759,6 +766,24 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			stack[sp] = val
 			sp++
 
+		case ir.OpSetAttrCached:
+			idx := inst.Arg()
+			if int(idx) >= len(p.Setters) {
+				return ir.Value{}, ErrInvalidSetter
+			}
+			setter := p.Setters[idx]
+			if setter == nil {
+				return ir.Value{}, ErrInvalidSetter
+			}
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			val := stack[sp]
+			if err := setter(ctx, tCtx, val); err != nil {
+				return ir.Value{}, err
+			}
+
 		case ir.OpAddInt:
 			if sp < 2 {
 				return ir.Value{}, ErrStackUnderflow
@@ -1065,6 +1090,11 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 				return ir.Value{}, ErrStackUnderflow
 			}
 			stack[sp-1].Num = stack[sp-1].Num ^ (1 << 63)
+
+		// Direct field access opcodes - placeholder implementations
+		// These will be wired up when the compiler emits them
+		case ir.OpGetBody, ir.OpSetBody, ir.OpGetSeverity, ir.OpSetSeverity, ir.OpGetTimestamp, ir.OpSetTimestamp:
+			return ir.Value{}, ErrInvalidOpcode
 
 		default:
 			return ir.Value{}, ErrInvalidOpcode
