@@ -1,0 +1,347 @@
+# OTTL Bytecode VM (OVM) Implementation Plan
+
+Status: Draft
+Owner: Sawmills.ai / OTel Collector Contrib
+Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-alloc hot loop, safe execution bounds.
+
+## 1. Goals
+
+- **2x-10x throughput** for complex OTTL logic
+- **0 allocs/op** for arithmetic/logic/compare operations
+- **Deterministic safety** via gas metering
+- **Semantic parity** with legacy interpreter
+
+## 2. Non-Goals (Initial)
+
+- Full rewrite of pdata model
+- Perfect performance for all stdlib functions (phase-in)
+- Removal of legacy interpreter (kept for dual-run + fallback)
+- Register-based VM or JIT (future consideration)
+
+## 3. Architecture Decisions
+
+### 3.1 Execution Model
+
+- Stack-based VM, linear bytecode array
+- Pre-allocated stack (`sync.Pool` reuse)
+- Constant pool for string/numeric literals
+- Gas metering in VM loop
+
+### 3.2 Value Struct (Tagged Union)
+
+24-byte struct to avoid Go interface boxing in hot loop. Trades size for simplicity—no bit-packing, direct field access.
+
+```go
+// ir/value.go
+type Type uint8
+
+const (
+    TypeNone Type = iota
+    TypeInt
+    TypeFloat
+    TypeBool
+    TypeString // Ptr → *string in StringPool
+    TypeBytes  // Ptr → []byte in ConstPool
+    TypePMap   // Ptr → pdata.Map
+    TypePSlice // Ptr → pdata.Slice
+)
+
+type Value struct {
+    Type Type   // 1 byte
+    _    [7]byte// padding
+    Num  uint64 // int64, float64 (via math.Float64bits), bool (0/1)
+    Ptr  unsafe.Pointer // non-nil only for pointer types
+}
+```
+
+**Size:** 24 bytes (1 + 7 padding + 8 + 8). Larger than 16B but avoids union complexity.
+
+**String representation:**
+- Strings live in `Program.Strings []string` (interned, immutable)
+- `Value.Ptr` points to the `string` header in that slice
+- No length field needed; Go string carries its own length
+
+**Invariants:**
+- `Ptr` is non-nil only when `Type ∈ {TypeString, TypeBytes, TypePMap, TypePSlice}`
+- `Ptr` only points to:
+  - `Program.Strings` entries (compile-time, immutable)
+  - pdata handles (request-scoped, outlives VM execution)
+- Helper methods (`AsInt()`, `AsFloat()`, `AsString()`, `AsPMap()`) validate `Type` before access
+- GC-safe: pointers reference long-lived data only
+
+### 3.3 Instruction Format
+
+32-bit fixed-width instructions for alignment and fast decoding:
+
+```go
+type Opcode uint8
+
+type Instruction uint32
+
+// Encoding: [opcode:8][arg:24] — big-endian layout
+// Max arg value: 16,777,215 (2^24 - 1)
+
+func (i Instruction) Op() Opcode   { return Opcode(i >> 24) }
+func (i Instruction) Arg() uint32  { return uint32(i) & 0x00FFFFFF }
+
+func Encode(op Opcode, arg uint32) Instruction {
+    return Instruction(uint32(op)<<24 | (arg & 0x00FFFFFF))
+}
+```
+
+**Arg usage by opcode:**
+- `LOAD_CONST`: index into `Program.NumConsts` or `Program.Strings`
+- `JUMP*`: absolute instruction offset
+- `LOAD_ATTR_CACHED`: index into `Program.Accessors`
+
+### 3.4 Program Structure
+
+```go
+type Program struct {
+    Code      []Instruction   // bytecode
+    NumConsts []uint64        // numeric constants (int64/float64 bits)
+    Strings   []string        // interned string literals (immutable)
+    Accessors []PathAccessor  // pre-compiled pdata accessors
+    GasLimit  uint64          // default gas budget
+}
+```
+
+**Constant loading:**
+- `LOAD_CONST_NUM <idx>`: push `Value{Type: TypeInt/Float, Num: NumConsts[idx]}`
+- `LOAD_CONST_STR <idx>`: push `Value{Type: TypeString, Ptr: &Strings[idx]}`
+
+**Concurrency:**
+- `Program` is immutable after compilation; safe for concurrent use
+- `PathAccessor` instances are read-only closures; goroutine-safe
+
+## 4. Phases & Work Items
+
+### Phase 0: Foundation + Micro-VM Benchmark
+
+**Deliverable:** Proof of speed + no allocs
+
+| Task | Description |
+|------|-------------|
+| Create `ir` package | `Opcode` (uint8), `Instruction`, `Value` tagged union |
+| Implement micro-VM | `LOAD_CONST`, `ADD`, `EQ` only; simple stack |
+| Benchmark | Legacy `Eval` vs micro-VM for `1 + 2 == 3` |
+
+**Exit Criteria:** ≥2x speedup, 0 allocs/op
+
+## Benchmarks (Local, 2025-12-28, Apple M3 Max)
+
+- OTTL add/eq: interpreter 11.33 ns/op (0 allocs), VM 30.78 ns/op (0 allocs), microVM 15.73 ns/op (0 allocs)
+- OTTL float mul/eq: interpreter 17.49 ns/op (1 alloc, 8 B), VM 32.12 ns/op (0 allocs), microVM 17.87 ns/op (0 allocs)
+- OTTL path eq (`attributes["foo"] == 7`): interpreter 7.295 ns/op (0 allocs), VM 32.35 ns/op (0 allocs)
+- ctxutil mixed literal key path (map→slice→map): 62.38 ns/op (2 allocs, 112 B)
+
+### Phase 1: Core VM Runtime
+
+**Deliverable:** Executes arithmetic/logic/compare + control flow
+
+| Task | Description |
+|------|-------------|
+| VM loop | `switch` dispatch, instruction pointer, stack pointer |
+| Stack | Fixed-size `[]Value`, bounds checks, `sync.Pool` reuse |
+| Math ops | `ADD`, `SUB`, `MUL`, `DIV` |
+| Logic ops | `AND`, `OR`, `NOT` |
+| Compare ops | `EQ`, `NEQ`, `LT`, `LTE`, `GT`, `GTE` |
+| Control flow | `JUMP`, `JUMP_IF_FALSE`, `JUMP_IF_TRUE` |
+| Gas metering | See §6 for detailed rules |
+| Error model | See §5 |
+
+### Phase 2: Compiler + Tooling
+
+**Deliverable:** AST → bytecode + disassembler
+
+| Task | Description |
+|------|-------------|
+| `ottlc` package | `Compile(ast) (*Program, error)` |
+| Flatten AST | Recursive tree → linear instruction list |
+| Jump patching | Label resolution for conditionals/loops |
+| Constant pool | String interning + numeric literals table |
+| Disassembler | `Disassemble(*Program) string` → human-readable dump |
+
+**Example output:**
+```
+000 LOAD_CONST    0    ; "http.method"
+001 GET_ATTR      1
+002 LOAD_CONST    2    ; "GET"
+003 EQ
+004 JUMP_IF_FALSE 008
+...
+```
+
+### Phase 3: pdata Bridge (Critical Perf)
+
+**Deliverable:** Fast field access + transform integration
+
+The slowest part of OTTL is `attributes["key"]` lookups. We optimize via path compilation.
+
+| Task | Description |
+|------|-------------|
+| Path compilation | Pre-hash keys at compile time |
+| PathAccessor table | `[]PathAccessor` in `Program`, stable indices |
+| Accessor struct | Closure/struct capturing how to read/write a path |
+| pdata opcodes | `LOAD_ATTR_CACHED <id>`, `SET_ATTR_CACHED <id>` |
+| Field opcodes | `GET_BODY`, `SET_BODY`, resource/span/log/metric fields |
+| Integration | Connect VM context to transform processor |
+
+**Concurrency model:**
+- `Program` and accessors are read-only, safe across goroutines
+- VM instances are per-evaluation, not shared
+
+### Phase 4: Stdlib + Native Ops
+
+**Deliverable:** Support existing OTTL function library
+
+| Task | Description |
+|------|-------------|
+| Function registry adapter | Unpack `Value` → `interface{}` only at boundary |
+| Native opcodes | `INT`, `IS_NIL`, `IS_MATCH` as fast-path instructions |
+| Gradual migration | Only perf-critical functions become native ops |
+
+**Adapter pattern:**
+```go
+func wrapLegacyFunc(fn OTTLFunc) VMFunc {
+    return func(vm *VM, args []Value) (Value, error) {
+        ifaces := make([]any, len(args))
+        for i, v := range args {
+            ifaces[i] = v.ToInterface() // only here
+        }
+        result, err := fn(ifaces...)
+        return ValueFrom(result), err
+    }
+}
+```
+
+### Phase 5: Verification + Rollout
+
+**Deliverable:** Semantic parity + safe rollout
+
+| Task | Description |
+|------|-------------|
+| Differential fuzzing | Legacy vs VM parity; Go fuzz harness |
+| CI gate | N CPU-hours (suggest 24h) with zero divergences |
+| Dual-run mode | Shadow execute both engines; log divergences |
+| Feature flag | `OTELCOL_OTTL_VM=true` (default false) |
+| Gradual default | Read-only processors first, then mutation |
+| Metrics | Divergence count, gas exhaustion rate, ns/op |
+
+## 5. Error Model
+
+VM returns structured errors (not panics) for:
+
+| Error | Trigger |
+|-------|---------|
+| `ErrTypeMismatch` | Opcode expects int, got string |
+| `ErrDivideByZero` | `DIV` with zero divisor |
+| `ErrStackUnderflow` | Pop from empty stack |
+| `ErrStackOverflow` | Push exceeds max depth |
+| `ErrInvalidOpcode` | Unknown opcode byte |
+| `ErrGasExhausted` | Gas counter hits zero |
+| `ErrInvalidPath` | Accessor ID out of bounds |
+
+**Behavior on error:**
+- Rule execution stops; error returned to processor
+- Processor logs at debug/info level
+- Span/log is NOT dropped (configurable per-processor)
+- Metric incremented: `ottl_vm_errors_total{type="..."}`
+
+## 6. Gas Metering
+
+**Metering strategy:** Hybrid (per-instruction baseline + backward-jump penalty)
+
+```go
+// In VM loop:
+gas--
+if gas == 0 {
+    return ErrGasExhausted
+}
+if isBackwardJump(inst) {
+    gas -= backwardJumpCost
+}
+```
+
+| Parameter | Default | Configurable |
+|-----------|---------|--------------|
+| `GasLimit` | 10,000 | Yes, per-program or global cap |
+| Base cost | 1 per instruction | Fixed |
+| Backward jump penalty | +9 (total 10) | Fixed |
+
+**Rationale:** Backward jumps indicate loops; penalizing them bounds iteration count without complex analysis.
+
+**Exhaustion handling:**
+- Returns `ErrGasExhausted` (deterministic, not panic)
+- Logs warning with rule identifier
+- Increments `ottl_vm_gas_exhausted_total`
+
+## 7. Test Plan
+
+| Test Type | Scope |
+|-----------|-------|
+| Micro-VM benchmark | Phase 0 exit gate |
+| Unit tests | VM ops, stack, gas, error paths |
+| Compiler tests | AST → bytecode snapshots |
+| Disassembler golden tests | Human-readable output stability |
+| pdata access tests | Accessor correctness + perf |
+| Fuzz tests | Legacy parity (semantic equivalence) |
+| Integration tests | Real-world OTTL rules from existing configs |
+
+## 8. Performance Plan
+
+| Metric | Tracking |
+|--------|----------|
+| `ns/op` | Benchmark per phase; interpreter vs VM |
+| `allocs/op` | Must be 0 for core ops |
+| pdata access | Cached accessors vs runtime lookup |
+| Regression guard | CI fails if perf degrades >10% |
+
+**Benchmarks:**
+- Simple arithmetic: `1 + 2 == 3`
+- Complex logic: `a > 0 and b < 100 or c == "foo"`
+- pdata heavy: `attributes["http.method"] == "GET"`
+- Real rules: representative transform processor configs
+
+## 9. Risks & Mitigations
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| pdata lookup dominates runtime | VM gains erased | Path compilation + cached accessors (Phase 3) |
+| GC pressure from Value slices | Latency spikes | Stack reuse via `sync.Pool`; Ptr only to long-lived data |
+| Debuggability of bytecode | Hard to troubleshoot | Disassembler required; tracing mode (future) |
+| Semantic drift | Silent bugs | Differential fuzzing gate; dual-run shadow mode |
+| Gas config abuse | DoS via huge limits | Global cap; warn on excessive values |
+
+## 10. Artifacts
+
+| Artifact | Description |
+|----------|-------------|
+| `ir` package | Opcodes, Value, Program, Instruction |
+| `vm` package | Runtime execution loop |
+| `ottlc` package | Compiler (AST → bytecode) |
+| `ottl-disasm` | CLI disassembler |
+| Fuzz harness | Differential fuzzing infrastructure |
+| Feature flag | `OTELCOL_OTTL_VM` environment variable |
+| Shadow mode | Dual-run with divergence logging |
+| Docs update | User guide for VM mode |
+
+## 11. Success Criteria
+
+| Milestone | Criteria |
+|-----------|----------|
+| Phase 0 complete | ≥2x speedup, 0 allocs on micro-benchmark |
+| Phase 1 complete | All core ops pass unit tests; gas works |
+| Phase 2 complete | Compiler handles 100% of parser test cases |
+| Phase 3 complete | pdata access matches interpreter; no extra allocs |
+| Phase 4 complete | All stdlib functions callable from VM |
+| Phase 5 complete | 24h fuzz with 0 divergences; shadow mode in prod |
+| GA ready | Default on for read-only processors |
+
+## 12. Future Considerations
+
+Revisit if profiling shows bottlenecks:
+- **Compact Value union** (Plan B style) if GC scanning is hot
+- **Register-based VM** if stack overhead significant
+- **JIT compilation** for ultra-hot programs
+- **Bytecode tracing** for debugging complex rules
