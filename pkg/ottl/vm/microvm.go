@@ -158,7 +158,6 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			stack[sp] = val
 			sp++
 
-		// === SPECIALIZED INT64 OPS (inlined, no type check) ===
 		case ir.OpAddInt:
 			if sp < 2 {
 				return ir.Value{}, ErrStackUnderflow
@@ -256,7 +255,6 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
 			}
 
-		// === SPECIALIZED FLOAT64 OPS (inlined, no type check) ===
 		case ir.OpAddFloat:
 			if sp < 2 {
 				return ir.Value{}, ErrStackUnderflow
@@ -370,7 +368,6 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
 			}
 
-		// === GENERIC OPS (with type dispatch, for mixed types) ===
 		case ir.OpAdd, ir.OpSub, ir.OpMul, ir.OpDiv:
 			if sp < 2 {
 				return ir.Value{}, ErrStackUnderflow
