@@ -64,6 +64,46 @@ func opcodeName(op ir.Opcode) string {
 		return "GT"
 	case ir.OpGte:
 		return "GTE"
+	case ir.OpAddInt:
+		return "ADD_INT"
+	case ir.OpSubInt:
+		return "SUB_INT"
+	case ir.OpMulInt:
+		return "MUL_INT"
+	case ir.OpDivInt:
+		return "DIV_INT"
+	case ir.OpEqInt:
+		return "EQ_INT"
+	case ir.OpNeInt:
+		return "NE_INT"
+	case ir.OpLtInt:
+		return "LT_INT"
+	case ir.OpLteInt:
+		return "LTE_INT"
+	case ir.OpGtInt:
+		return "GT_INT"
+	case ir.OpGteInt:
+		return "GTE_INT"
+	case ir.OpAddFloat:
+		return "ADD_FLOAT"
+	case ir.OpSubFloat:
+		return "SUB_FLOAT"
+	case ir.OpMulFloat:
+		return "MUL_FLOAT"
+	case ir.OpDivFloat:
+		return "DIV_FLOAT"
+	case ir.OpEqFloat:
+		return "EQ_FLOAT"
+	case ir.OpNeFloat:
+		return "NE_FLOAT"
+	case ir.OpLtFloat:
+		return "LT_FLOAT"
+	case ir.OpLteFloat:
+		return "LTE_FLOAT"
+	case ir.OpGtFloat:
+		return "GT_FLOAT"
+	case ir.OpGteFloat:
+		return "GTE_FLOAT"
 	case ir.OpJump:
 		return "JUMP"
 	case ir.OpJumpIfTrue:

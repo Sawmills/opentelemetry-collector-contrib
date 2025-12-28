@@ -549,3 +549,396 @@ func BenchmarkOTTLComparisonComplexWhere_VM(b *testing.B) {
 		benchBoolSink = result
 	}
 }
+
+// Deep arithmetic: ((((1+2)*3)-4)/2)+5 == 6
+func BenchmarkOTTLInterpreterDeepArithmetic(b *testing.B) {
+	p, err := newBenchParser(false)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	// Build: ((((1+2)*3)-4)/2)+5
+	innerAdd := &mathExpression{
+		Left: &addSubTerm{Left: &mathValue{Literal: &mathExprLiteral{Int: int64p(1)}}},
+		Right: []*opAddSubTerm{{
+			Operator: add,
+			Term:     &addSubTerm{Left: &mathValue{Literal: &mathExprLiteral{Int: int64p(2)}}},
+		}},
+	}
+	mulBy3 := &mathExpression{
+		Left: &addSubTerm{
+			Left:  &mathValue{SubExpression: innerAdd},
+			Right: []*opMultDivValue{{Operator: mult, Value: &mathValue{Literal: &mathExprLiteral{Int: int64p(3)}}}},
+		},
+	}
+	sub4 := &mathExpression{
+		Left: &addSubTerm{Left: &mathValue{SubExpression: mulBy3}},
+		Right: []*opAddSubTerm{{
+			Operator: sub,
+			Term:     &addSubTerm{Left: &mathValue{Literal: &mathExprLiteral{Int: int64p(4)}}},
+		}},
+	}
+	div2 := &mathExpression{
+		Left: &addSubTerm{
+			Left:  &mathValue{SubExpression: sub4},
+			Right: []*opMultDivValue{{Operator: div, Value: &mathValue{Literal: &mathExprLiteral{Int: int64p(2)}}}},
+		},
+	}
+	add5 := &mathExpression{
+		Left: &addSubTerm{Left: &mathValue{SubExpression: div2}},
+		Right: []*opAddSubTerm{{
+			Operator: add,
+			Term:     &addSubTerm{Left: &mathValue{Literal: &mathExprLiteral{Int: int64p(5)}}},
+		}},
+	}
+
+	cmp := &comparison{
+		Left:  value{MathExpression: add5},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(7)}}, // ((((1+2)*3)-4)/2)+5 = 7
+	}
+
+	evaluator, err := p.newComparisonEvaluator(cmp)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonDeepArithmetic_VM(b *testing.B) {
+	p, err := newBenchParser(true)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	innerAdd := &mathExpression{
+		Left: &addSubTerm{Left: &mathValue{Literal: &mathExprLiteral{Int: int64p(1)}}},
+		Right: []*opAddSubTerm{{
+			Operator: add,
+			Term:     &addSubTerm{Left: &mathValue{Literal: &mathExprLiteral{Int: int64p(2)}}},
+		}},
+	}
+	mulBy3 := &mathExpression{
+		Left: &addSubTerm{
+			Left:  &mathValue{SubExpression: innerAdd},
+			Right: []*opMultDivValue{{Operator: mult, Value: &mathValue{Literal: &mathExprLiteral{Int: int64p(3)}}}},
+		},
+	}
+	sub4 := &mathExpression{
+		Left: &addSubTerm{Left: &mathValue{SubExpression: mulBy3}},
+		Right: []*opAddSubTerm{{
+			Operator: sub,
+			Term:     &addSubTerm{Left: &mathValue{Literal: &mathExprLiteral{Int: int64p(4)}}},
+		}},
+	}
+	div2 := &mathExpression{
+		Left: &addSubTerm{
+			Left:  &mathValue{SubExpression: sub4},
+			Right: []*opMultDivValue{{Operator: div, Value: &mathValue{Literal: &mathExprLiteral{Int: int64p(2)}}}},
+		},
+	}
+	add5 := &mathExpression{
+		Left: &addSubTerm{Left: &mathValue{SubExpression: div2}},
+		Right: []*opAddSubTerm{{
+			Operator: add,
+			Term:     &addSubTerm{Left: &mathValue{Literal: &mathExprLiteral{Int: int64p(5)}}},
+		}},
+	}
+
+	cmp := &comparison{
+		Left:  value{MathExpression: add5},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(7)}},
+	}
+
+	evaluator, err := p.newComparisonEvaluator(cmp)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLMicroVMDeepArithmetic(b *testing.B) {
+	// ((((1+2)*3)-4)/2)+5 == 7
+	program := &vm.Program{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0), // 1
+			ir.Encode(ir.OpLoadConst, 1), // 2
+			ir.Encode(ir.OpAdd, 0),       // 3
+			ir.Encode(ir.OpLoadConst, 2), // 3
+			ir.Encode(ir.OpMul, 0),       // 9
+			ir.Encode(ir.OpLoadConst, 3), // 4
+			ir.Encode(ir.OpSub, 0),       // 5
+			ir.Encode(ir.OpLoadConst, 1), // 2
+			ir.Encode(ir.OpDiv, 0),       // 2
+			ir.Encode(ir.OpLoadConst, 4), // 5
+			ir.Encode(ir.OpAdd, 0),       // 7
+			ir.Encode(ir.OpLoadConst, 5), // 7
+			ir.Encode(ir.OpEq, 0),        // true
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(1),
+			ir.Int64Value(2),
+			ir.Int64Value(3),
+			ir.Int64Value(4),
+			ir.Int64Value(5),
+			ir.Int64Value(7),
+		},
+	}
+
+	machine := vm.NewMicroVM(8)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		val, err := machine.Run(program)
+		if err != nil {
+			b.Fatal(err)
+		}
+		result, ok := val.Bool()
+		if !ok {
+			b.Fatal("result is not bool")
+		}
+		benchBoolSink = result
+	}
+}
+
+// Many comparisons: a==1 and b==2 and c==3 and d==4 and e==5
+func BenchmarkOTTLInterpreterManyComparisons(b *testing.B) {
+	p, err := newBenchParser(false)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	buildCmp := func(left, right int64) *comparison {
+		return &comparison{
+			Left:  value{Literal: &mathExprLiteral{Int: int64p(left)}},
+			Op:    eq,
+			Right: value{Literal: &mathExprLiteral{Int: int64p(right)}},
+		}
+	}
+
+	boolExpr := &booleanExpression{
+		Left: &term{
+			Left: &booleanValue{Comparison: buildCmp(1, 1)},
+			Right: []*opAndBooleanValue{
+				{Operator: "and", Value: &booleanValue{Comparison: buildCmp(2, 2)}},
+				{Operator: "and", Value: &booleanValue{Comparison: buildCmp(3, 3)}},
+				{Operator: "and", Value: &booleanValue{Comparison: buildCmp(4, 4)}},
+				{Operator: "and", Value: &booleanValue{Comparison: buildCmp(5, 5)}},
+			},
+		},
+	}
+
+	evaluator, err := p.newBoolExpr(boolExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonManyComparisons_VM(b *testing.B) {
+	p, err := newBenchParser(true)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	buildCmp := func(left, right int64) *comparison {
+		return &comparison{
+			Left:  value{Literal: &mathExprLiteral{Int: int64p(left)}},
+			Op:    eq,
+			Right: value{Literal: &mathExprLiteral{Int: int64p(right)}},
+		}
+	}
+
+	boolExpr := &booleanExpression{
+		Left: &term{
+			Left: &booleanValue{Comparison: buildCmp(1, 1)},
+			Right: []*opAndBooleanValue{
+				{Operator: "and", Value: &booleanValue{Comparison: buildCmp(2, 2)}},
+				{Operator: "and", Value: &booleanValue{Comparison: buildCmp(3, 3)}},
+				{Operator: "and", Value: &booleanValue{Comparison: buildCmp(4, 4)}},
+				{Operator: "and", Value: &booleanValue{Comparison: buildCmp(5, 5)}},
+			},
+		},
+	}
+
+	evaluator, err := p.newBoolExpr(boolExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLMicroVMManyComparisons(b *testing.B) {
+	// 1==1 and 2==2 and 3==3 and 4==4 and 5==5
+	program := &vm.Program{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0), // 1
+			ir.Encode(ir.OpLoadConst, 0), // 1
+			ir.Encode(ir.OpEq, 0),        // true
+			ir.Encode(ir.OpJumpIfFalse, 20),
+			ir.Encode(ir.OpPop, 0),
+			ir.Encode(ir.OpLoadConst, 1), // 2
+			ir.Encode(ir.OpLoadConst, 1), // 2
+			ir.Encode(ir.OpEq, 0),        // true
+			ir.Encode(ir.OpJumpIfFalse, 20),
+			ir.Encode(ir.OpPop, 0),
+			ir.Encode(ir.OpLoadConst, 2), // 3
+			ir.Encode(ir.OpLoadConst, 2), // 3
+			ir.Encode(ir.OpEq, 0),        // true
+			ir.Encode(ir.OpJumpIfFalse, 20),
+			ir.Encode(ir.OpPop, 0),
+			ir.Encode(ir.OpLoadConst, 3), // 4
+			ir.Encode(ir.OpLoadConst, 3), // 4
+			ir.Encode(ir.OpEq, 0),        // true
+			ir.Encode(ir.OpJumpIfFalse, 20),
+			ir.Encode(ir.OpPop, 0),
+			ir.Encode(ir.OpLoadConst, 4), // 5
+			ir.Encode(ir.OpLoadConst, 4), // 5
+			ir.Encode(ir.OpEq, 0),        // true
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(1),
+			ir.Int64Value(2),
+			ir.Int64Value(3),
+			ir.Int64Value(4),
+			ir.Int64Value(5),
+		},
+	}
+
+	machine := vm.NewMicroVM(8)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		val, err := machine.Run(program)
+		if err != nil {
+			b.Fatal(err)
+		}
+		result, ok := val.Bool()
+		if !ok {
+			b.Fatal("result is not bool")
+		}
+		benchBoolSink = result
+	}
+}
+
+// Specialized opcodes benchmark: ((((1+2)*3)-4)/2)+5 == 7 using OpAddInt, OpMulInt, etc.
+func BenchmarkOTTLMicroVMDeepArithmeticSpecialized(b *testing.B) {
+	program := &vm.Program{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0), // 1
+			ir.Encode(ir.OpLoadConst, 1), // 2
+			ir.Encode(ir.OpAddInt, 0),    // 3
+			ir.Encode(ir.OpLoadConst, 2), // 3
+			ir.Encode(ir.OpMulInt, 0),    // 9
+			ir.Encode(ir.OpLoadConst, 3), // 4
+			ir.Encode(ir.OpSubInt, 0),    // 5
+			ir.Encode(ir.OpLoadConst, 1), // 2
+			ir.Encode(ir.OpDivInt, 0),    // 2
+			ir.Encode(ir.OpLoadConst, 4), // 5
+			ir.Encode(ir.OpAddInt, 0),    // 7
+			ir.Encode(ir.OpLoadConst, 5), // 7
+			ir.Encode(ir.OpEqInt, 0),     // true
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(1),
+			ir.Int64Value(2),
+			ir.Int64Value(3),
+			ir.Int64Value(4),
+			ir.Int64Value(5),
+			ir.Int64Value(7),
+		},
+	}
+
+	machine := vm.NewMicroVM(8)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		val, err := machine.Run(program)
+		if err != nil {
+			b.Fatal(err)
+		}
+		result, ok := val.Bool()
+		if !ok {
+			b.Fatal("result is not bool")
+		}
+		benchBoolSink = result
+	}
+}
+
+// Simple add/eq with specialized opcodes
+func BenchmarkOTTLMicroVMAddEqSpecialized(b *testing.B) {
+	program := &vm.Program{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+			ir.Encode(ir.OpAddInt, 0),
+			ir.Encode(ir.OpLoadConst, 2),
+			ir.Encode(ir.OpEqInt, 0),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(1),
+			ir.Int64Value(2),
+			ir.Int64Value(3),
+		},
+	}
+
+	machine := vm.NewMicroVM(8)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		val, err := machine.Run(program)
+		if err != nil {
+			b.Fatal(err)
+		}
+		result, ok := val.Bool()
+		if !ok {
+			b.Fatal("result is not bool")
+		}
+		benchBoolSink = result
+	}
+}

@@ -108,19 +108,26 @@ func RunWithStackAndLoader(stack []ir.Value, p *Program, loader func(uint32) (ir
 
 func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, error)) (ir.Value, error) {
 	sp := 0
-	for ip := 0; ip < len(p.Code); ip++ {
-		inst := p.Code[ip]
-		switch inst.Op() {
+	code := p.Code
+	consts := p.Consts
+	codeLen := len(code)
+
+	for ip := 0; ip < codeLen; ip++ {
+		inst := code[ip]
+		op := inst.Op()
+
+		switch op {
 		case ir.OpLoadConst:
 			idx := inst.Arg()
-			if int(idx) >= len(p.Consts) {
+			if int(idx) >= len(consts) {
 				return ir.Value{}, ErrInvalidConst
 			}
 			if sp >= len(stack) {
 				return ir.Value{}, ErrStackOverflow
 			}
-			stack[sp] = p.Consts[idx]
+			stack[sp] = consts[idx]
 			sp++
+
 		case ir.OpLoadGetter:
 			if loader == nil {
 				return ir.Value{}, ErrInvalidGetter
@@ -135,6 +142,220 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			}
 			stack[sp] = val
 			sp++
+
+		// === SPECIALIZED INT64 OPS (inlined, no type check) ===
+		case ir.OpAddInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			stack[sp-1].Num = uint64(int64(stack[sp-1].Num) + int64(stack[sp].Num))
+
+		case ir.OpSubInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			stack[sp-1].Num = uint64(int64(stack[sp-1].Num) - int64(stack[sp].Num))
+
+		case ir.OpMulInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			stack[sp-1].Num = uint64(int64(stack[sp-1].Num) * int64(stack[sp].Num))
+
+		case ir.OpDivInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			if stack[sp-1].Num == 0 {
+				return ir.Value{}, ErrDivideByZero
+			}
+			sp--
+			stack[sp-1].Num = uint64(int64(stack[sp-1].Num) / int64(stack[sp].Num))
+
+		case ir.OpEqInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if int64(stack[sp-1].Num) == int64(stack[sp].Num) {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+			} else {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+			}
+
+		case ir.OpNeInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if int64(stack[sp-1].Num) != int64(stack[sp].Num) {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+			} else {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+			}
+
+		case ir.OpLtInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if int64(stack[sp-1].Num) < int64(stack[sp].Num) {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+			} else {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+			}
+
+		case ir.OpLteInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if int64(stack[sp-1].Num) <= int64(stack[sp].Num) {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+			} else {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+			}
+
+		case ir.OpGtInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if int64(stack[sp-1].Num) > int64(stack[sp].Num) {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+			} else {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+			}
+
+		case ir.OpGteInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if int64(stack[sp-1].Num) >= int64(stack[sp].Num) {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+			} else {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+			}
+
+		// === SPECIALIZED FLOAT64 OPS (inlined, no type check) ===
+		case ir.OpAddFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			b := math.Float64frombits(stack[sp].Num)
+			stack[sp-1].Num = math.Float64bits(a + b)
+
+		case ir.OpSubFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			b := math.Float64frombits(stack[sp].Num)
+			stack[sp-1].Num = math.Float64bits(a - b)
+
+		case ir.OpMulFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			b := math.Float64frombits(stack[sp].Num)
+			stack[sp-1].Num = math.Float64bits(a * b)
+
+		case ir.OpDivFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			if stack[sp-1].Num == 0 {
+				return ir.Value{}, ErrDivideByZero
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			b := math.Float64frombits(stack[sp].Num)
+			stack[sp-1].Num = math.Float64bits(a / b)
+
+		case ir.OpEqFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if stack[sp-1].Num == stack[sp].Num {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+			} else {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+			}
+
+		case ir.OpNeFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if stack[sp-1].Num != stack[sp].Num {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+			} else {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+			}
+
+		case ir.OpLtFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			b := math.Float64frombits(stack[sp].Num)
+			if a < b {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+			} else {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+			}
+
+		case ir.OpLteFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			b := math.Float64frombits(stack[sp].Num)
+			if a <= b {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+			} else {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+			}
+
+		case ir.OpGtFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			b := math.Float64frombits(stack[sp].Num)
+			if a > b {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+			} else {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+			}
+
+		case ir.OpGteFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			b := math.Float64frombits(stack[sp].Num)
+			if a >= b {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+			} else {
+				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+			}
+
+		// === GENERIC OPS (with type dispatch, for mixed types) ===
 		case ir.OpAdd, ir.OpSub, ir.OpMul, ir.OpDiv:
 			if sp < 2 {
 				return ir.Value{}, ErrStackUnderflow
@@ -142,15 +363,13 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			b := stack[sp-1]
 			a := stack[sp-2]
 			sp -= 2
-			result, err := mathOp(inst.Op(), a, b)
+			result, err := mathOp(op, a, b)
 			if err != nil {
 				return ir.Value{}, err
 			}
-			if sp >= len(stack) {
-				return ir.Value{}, ErrStackOverflow
-			}
 			stack[sp] = result
 			sp++
+
 		case ir.OpEq, ir.OpNe, ir.OpLt, ir.OpLte, ir.OpGt, ir.OpGte:
 			if sp < 2 {
 				return ir.Value{}, ErrStackUnderflow
@@ -159,7 +378,8 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			a := stack[sp-2]
 			sp -= 2
 
-			if inst.Op() == ir.OpEq {
+			// Fast path for common cases
+			if op == ir.OpEq {
 				switch {
 				case a.Type == ir.TypeInt && b.Type == ir.TypeInt:
 					stack[sp] = ir.BoolValue(int64(a.Num) == int64(b.Num))
@@ -172,17 +392,19 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 				}
 			}
 
-			result, err := compareOp(inst.Op(), a, b)
+			result, err := compareOp(op, a, b)
 			if err != nil {
 				return ir.Value{}, err
 			}
 			stack[sp] = result
 			sp++
+
 		case ir.OpPop:
 			if sp < 1 {
 				return ir.Value{}, ErrStackUnderflow
 			}
 			sp--
+
 		case ir.OpNot:
 			if sp < 1 {
 				return ir.Value{}, ErrStackUnderflow
@@ -192,13 +414,15 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 				return ir.Value{}, ErrTypeMismatch
 			}
 			stack[sp-1] = ir.BoolValue(val.Num == 0)
+
 		case ir.OpJump:
 			target := int(inst.Arg())
-			if target < 0 || target > len(p.Code) {
+			if target < 0 || target > codeLen {
 				return ir.Value{}, ErrInvalidJump
 			}
 			ip = target - 1
-		case ir.OpJumpIfTrue, ir.OpJumpIfFalse:
+
+		case ir.OpJumpIfTrue:
 			if sp < 1 {
 				return ir.Value{}, ErrStackUnderflow
 			}
@@ -206,18 +430,30 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			if val.Type != ir.TypeBool {
 				return ir.Value{}, ErrTypeMismatch
 			}
-			cond := val.Num != 0
-			shouldJump := inst.Op() == ir.OpJumpIfTrue && cond
-			if inst.Op() == ir.OpJumpIfFalse && !cond {
-				shouldJump = true
-			}
-			if shouldJump {
+			if val.Num != 0 {
 				target := int(inst.Arg())
-				if target < 0 || target > len(p.Code) {
+				if target < 0 || target > codeLen {
 					return ir.Value{}, ErrInvalidJump
 				}
 				ip = target - 1
 			}
+
+		case ir.OpJumpIfFalse:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			val := stack[sp-1]
+			if val.Type != ir.TypeBool {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if val.Num == 0 {
+				target := int(inst.Arg())
+				if target < 0 || target > codeLen {
+					return ir.Value{}, ErrInvalidJump
+				}
+				ip = target - 1
+			}
+
 		default:
 			return ir.Value{}, ErrInvalidOpcode
 		}
