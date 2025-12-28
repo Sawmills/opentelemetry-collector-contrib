@@ -6,6 +6,9 @@ package ottl // import "github.com/open-telemetry/opentelemetry-collector-contri
 import (
 	"context"
 	"fmt"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 )
 
 // boolExpressionEvaluator is a function that returns the result.
@@ -75,6 +78,46 @@ func (p *Parser[K]) newComparisonEvaluator(comparison *comparison) (BoolExpr[K],
 	if comparison == nil {
 		return BoolExpr[K]{alwaysTrue[K]}, nil
 	}
+
+	if p.vmEnabled {
+		if p.vmStackPool == nil {
+			p.vmStackPool = vm.NewStackPool(defaultMicroVMStackSize)
+		}
+		program, err := p.getOrCompileVMProgram(comparison)
+		if err == nil {
+			return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
+				var (
+					val ir.Value
+					err error
+				)
+				var stackArr [defaultMicroVMStackSize]ir.Value
+				stack := stackArr[:]
+				if len(program.getters) == 0 {
+					val, err = vm.RunWithStack(stack, program.program)
+				} else {
+					val, err = vm.RunWithStackAndLoader(stack, program.program, func(idx uint32) (ir.Value, error) {
+						if int(idx) >= len(program.getters) {
+							return ir.Value{}, vm.ErrInvalidGetter
+						}
+						raw, err := program.getters[idx].Get(ctx, tCtx)
+						if err != nil {
+							return ir.Value{}, err
+						}
+						return valueToVM(raw)
+					})
+				}
+				if err != nil {
+					return false, err
+				}
+				result, ok := val.Bool()
+				if !ok {
+					return false, fmt.Errorf("vm result is not bool")
+				}
+				return result, nil
+			}}, nil
+		}
+	}
+
 	left, err := p.newGetter(comparison.Left)
 	if err != nil {
 		return BoolExpr[K]{}, err
@@ -102,6 +145,45 @@ func (p *Parser[K]) newComparisonEvaluator(comparison *comparison) (BoolExpr[K],
 func (p *Parser[K]) newBoolExpr(expr *booleanExpression) (BoolExpr[K], error) {
 	if expr == nil {
 		return BoolExpr[K]{alwaysTrue[K]}, nil
+	}
+
+	if p.vmEnabled {
+		if p.vmStackPool == nil {
+			p.vmStackPool = vm.NewStackPool(defaultMicroVMStackSize)
+		}
+		program, err := p.getOrCompileVMBoolProgram(expr)
+		if err == nil {
+			return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
+				var (
+					val ir.Value
+					err error
+				)
+				var stackArr [defaultMicroVMStackSize]ir.Value
+				stack := stackArr[:]
+				if len(program.getters) == 0 {
+					val, err = vm.RunWithStack(stack, program.program)
+				} else {
+					val, err = vm.RunWithStackAndLoader(stack, program.program, func(idx uint32) (ir.Value, error) {
+						if int(idx) >= len(program.getters) {
+							return ir.Value{}, vm.ErrInvalidGetter
+						}
+						raw, err := program.getters[idx].Get(ctx, tCtx)
+						if err != nil {
+							return ir.Value{}, err
+						}
+						return valueToVM(raw)
+					})
+				}
+				if err != nil {
+					return false, err
+				}
+				result, ok := val.Bool()
+				if !ok {
+					return false, fmt.Errorf("vm result is not bool")
+				}
+				return result, nil
+			}}, nil
+		}
 	}
 	f, err := p.newBooleanTermEvaluator(expr.Left)
 	if err != nil {

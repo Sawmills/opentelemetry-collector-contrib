@@ -18,6 +18,14 @@ func GetMapValue[K any](ctx context.Context, tCtx K, m pcommon.Map, keys []ottl.
 		return nil, errors.New("cannot get map value without keys")
 	}
 
+	if literalKeys, ok := literalKeysFrom(keys); ok && literalKeys[0].kind == literalKeyString {
+		val, ok := m.Get(literalKeys[0].s)
+		if !ok {
+			return nil, nil
+		}
+		return getIndexableValueLiteralKeys(val, literalKeys[1:])
+	}
+
 	s, err := GetMapKeyName(ctx, tCtx, keys[0])
 	if err != nil {
 		return nil, fmt.Errorf("cannot get map value: %w", err)
@@ -34,6 +42,14 @@ func GetMapValue[K any](ctx context.Context, tCtx K, m pcommon.Map, keys []ottl.
 func SetMapValue[K any](ctx context.Context, tCtx K, m pcommon.Map, keys []ottl.Key[K], val any) error {
 	if len(keys) == 0 {
 		return errors.New("cannot set map value without keys")
+	}
+
+	if literalKeys, ok := literalKeysFrom(keys); ok && literalKeys[0].kind == literalKeyString {
+		currentValue, ok := m.Get(literalKeys[0].s)
+		if !ok {
+			currentValue = m.PutEmpty(literalKeys[0].s)
+		}
+		return setIndexableValueLiteralKeys(currentValue, val, literalKeys[1:])
 	}
 
 	s, err := GetMapKeyName(ctx, tCtx, keys[0])

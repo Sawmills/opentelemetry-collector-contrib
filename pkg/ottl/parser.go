@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/alecthomas/participle/v2"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.uber.org/zap"
@@ -64,11 +65,16 @@ func (c *Condition[K]) Eval(ctx context.Context, tCtx K) (bool, error) {
 // Parser provides the means to parse OTTL StatementSequence and Conditions given a specific set of functions,
 // a PathExpressionParser, and an EnumParser.
 type Parser[K any] struct {
-	functions         map[string]Factory[K]
-	pathParser        PathExpressionParser[K]
-	enumParser        EnumParser
-	telemetrySettings component.TelemetrySettings
-	pathContextNames  map[string]struct{}
+	functions          map[string]Factory[K]
+	pathParser         PathExpressionParser[K]
+	enumParser         EnumParser
+	telemetrySettings  component.TelemetrySettings
+	pathContextNames   map[string]struct{}
+	vmEnabled          bool
+	vmStackPool        *vm.StackPool
+	vmProgramCache     map[*comparison]*microProgram[K]
+	vmBoolProgramCache map[*booleanExpression]*microProgram[K]
+	vmProgramCacheMu   sync.Mutex
 }
 
 // NewParser creates a new Parser

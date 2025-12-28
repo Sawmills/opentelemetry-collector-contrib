@@ -117,6 +117,70 @@ func getIndexableValue[K any](ctx context.Context, tCtx K, value pcommon.Value, 
 	return ottlcommon.GetValue(val), nil
 }
 
+type literalKeyKind uint8
+
+const (
+	literalKeyString literalKeyKind = iota
+	literalKeyInt
+)
+
+type literalKey struct {
+	kind literalKeyKind
+	s    string
+	i    int64
+}
+
+func literalKeysFrom[K any](keys []ottl.Key[K]) ([]literalKey, bool) {
+	if len(keys) == 0 {
+		return nil, false
+	}
+	literals := make([]literalKey, len(keys))
+	for i, key := range keys {
+		if literal, ok := key.(ottl.LiteralStringKey); ok {
+			if s, ok := literal.LiteralString(); ok {
+				literals[i] = literalKey{kind: literalKeyString, s: s}
+				continue
+			}
+		}
+		if literal, ok := key.(ottl.LiteralIntKey); ok {
+			if v, ok := literal.LiteralInt(); ok {
+				literals[i] = literalKey{kind: literalKeyInt, i: v}
+				continue
+			}
+		}
+		return nil, false
+	}
+	return literals, true
+}
+
+func getIndexableValueLiteralKeys(value pcommon.Value, keys []literalKey) (any, error) {
+	val := value
+	var ok bool
+	for _, key := range keys {
+		switch val.Type() {
+		case pcommon.ValueTypeMap:
+			if key.kind != literalKeyString {
+				return nil, fmt.Errorf("type %v does not support string indexing", val.Type())
+			}
+			val, ok = val.Map().Get(key.s)
+			if !ok {
+				return nil, nil
+			}
+		case pcommon.ValueTypeSlice:
+			if key.kind != literalKeyInt {
+				return nil, fmt.Errorf("type %v does not support string indexing", val.Type())
+			}
+			if int(key.i) >= val.Slice().Len() || int(key.i) < 0 {
+				return nil, fmt.Errorf("index %v out of bounds", key.i)
+			}
+			val = val.Slice().At(int(key.i))
+		default:
+			return nil, fmt.Errorf("type %v does not support string indexing", val.Type())
+		}
+	}
+	return ottlcommon.GetValue(val), nil
+}
+
 func SetIndexableValue[K any](ctx context.Context, tCtx K, currentValue pcommon.Value, val any, keys []ottl.Key[K]) error {
 	for index := range keys {
 		switch currentValue.Type() {
@@ -186,5 +250,46 @@ func SetIndexableValue[K any](ctx context.Context, tCtx K, currentValue pcommon.
 		}
 	}
 
+	return SetValue(currentValue, val)
+}
+
+func setIndexableValueLiteralKeys(currentValue pcommon.Value, val any, keys []literalKey) error {
+	for _, key := range keys {
+		switch currentValue.Type() {
+		case pcommon.ValueTypeMap:
+			if key.kind != literalKeyString {
+				return fmt.Errorf("type %v does not support string indexing", currentValue.Type())
+			}
+			potentialValue, ok := currentValue.Map().Get(key.s)
+			if !ok {
+				currentValue = currentValue.Map().PutEmpty(key.s)
+			} else {
+				currentValue = potentialValue
+			}
+		case pcommon.ValueTypeSlice:
+			if key.kind != literalKeyInt {
+				return fmt.Errorf("type %v does not support string indexing", currentValue.Type())
+			}
+			if int(key.i) >= currentValue.Slice().Len() || int(key.i) < 0 {
+				return fmt.Errorf("index %v out of bounds", key.i)
+			}
+			currentValue = currentValue.Slice().At(int(key.i))
+		case pcommon.ValueTypeEmpty:
+			switch key.kind {
+			case literalKeyString:
+				currentValue = currentValue.SetEmptyMap().PutEmpty(key.s)
+			case literalKeyInt:
+				currentValue.SetEmptySlice()
+				for i := 0; i < int(key.i); i++ {
+					currentValue.Slice().AppendEmpty()
+				}
+				currentValue = currentValue.Slice().AppendEmpty()
+			default:
+				return errors.New("neither a string nor an int index was given, this is an error in the OTTL")
+			}
+		default:
+			return fmt.Errorf("type %v does not support string indexing", currentValue.Type())
+		}
+	}
 	return SetValue(currentValue, val)
 }

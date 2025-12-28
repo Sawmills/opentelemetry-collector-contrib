@@ -282,6 +282,16 @@ type Key[K any] interface {
 	ExpressionGetter(context.Context, K) (Getter[K], error)
 }
 
+// LiteralStringKey provides fast access to literal string keys.
+type LiteralStringKey interface {
+	LiteralString() (string, bool)
+}
+
+// LiteralIntKey provides fast access to literal int keys.
+type LiteralIntKey interface {
+	LiteralInt() (int64, bool)
+}
+
 var _ Key[any] = &baseKey[any]{}
 
 type baseKey[K any] struct {
@@ -300,6 +310,20 @@ func (k *baseKey[K]) Int(_ context.Context, _ K) (*int64, error) {
 
 func (k *baseKey[K]) ExpressionGetter(_ context.Context, _ K) (Getter[K], error) {
 	return k.g, nil
+}
+
+func (k *baseKey[K]) LiteralString() (string, bool) {
+	if k.s == nil {
+		return "", false
+	}
+	return *k.s, true
+}
+
+func (k *baseKey[K]) LiteralInt() (int64, bool) {
+	if k.i == nil {
+		return 0, false
+	}
+	return *k.i, true
 }
 
 func (p *Parser[K]) parsePath(ip *basePath[K]) (GetSetter[K], error) {
