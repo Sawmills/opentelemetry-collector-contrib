@@ -64,6 +64,9 @@ func compileMicroMathExpression(expr *mathExpression) (*vm.ProgramAny, error) {
 	if err := c.emitMathExpression(expr); err != nil {
 		return nil, err
 	}
+	if len(c.getters) > 0 {
+		return nil, fmt.Errorf("math expression contains paths, use parser.compileMicroMathExpression")
+	}
 	return &vm.ProgramAny{Code: c.code, Consts: c.consts, GasLimit: vm.DefaultGasLimit}, nil
 }
 

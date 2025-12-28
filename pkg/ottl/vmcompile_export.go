@@ -28,9 +28,14 @@ func (v *VMProgram[K]) Run(ctx context.Context, tCtx K) (bool, error) {
 		return false, fmt.Errorf("program is nil")
 	}
 
-	// Use stack-allocated array instead of sync.Pool to avoid alloc overhead
-	var stackArr [defaultMicroVMStackSize]ir.Value
-	stack := stackArr[:v.Stack]
+	// Use stack-allocated array for common case; fall back to heap for large stacks
+	var stack []ir.Value
+	if v.Stack > defaultMicroVMStackSize {
+		stack = make([]ir.Value, v.Stack)
+	} else {
+		var stackArr [defaultMicroVMStackSize]ir.Value
+		stack = stackArr[:v.Stack]
+	}
 
 	// Use context-aware runner with pre-compiled accessors
 	val, err := vm.RunWithStackAndContext(stack, v.Program, ctx, tCtx)
