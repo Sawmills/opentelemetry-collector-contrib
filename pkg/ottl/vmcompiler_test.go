@@ -249,16 +249,8 @@ func TestCompileMicroBooleanExpression_ShortCircuitOr(t *testing.T) {
 	}
 
 	var stack [defaultMicroVMStackSize]ir.Value
-	val, err := vm.RunWithStackAndLoader(stack[:], program.program, func(idx uint32) (ir.Value, error) {
-		if int(idx) >= len(program.getters) {
-			return ir.Value{}, vm.ErrInvalidGetter
-		}
-		raw, err := program.getters[idx].Get(context.Background(), nil)
-		if err != nil {
-			return ir.Value{}, err
-		}
-		return valueToVM(raw)
-	})
+	// Use context-aware runner since we now emit OpLoadAttrCached
+	val, err := vm.RunWithStackAndContext(stack[:], program.program, context.Background(), nil)
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -333,16 +325,8 @@ func TestCompileMicroBooleanExpression_ShortCircuitAnd(t *testing.T) {
 	}
 
 	var stack [defaultMicroVMStackSize]ir.Value
-	val, err := vm.RunWithStackAndLoader(stack[:], program.program, func(idx uint32) (ir.Value, error) {
-		if int(idx) >= len(program.getters) {
-			return ir.Value{}, vm.ErrInvalidGetter
-		}
-		raw, err := program.getters[idx].Get(context.Background(), nil)
-		if err != nil {
-			return ir.Value{}, err
-		}
-		return valueToVM(raw)
-	})
+	// Use context-aware runner since we now emit OpLoadAttrCached
+	val, err := vm.RunWithStackAndContext(stack[:], program.program, context.Background(), nil)
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}

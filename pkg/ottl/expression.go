@@ -19,6 +19,7 @@ import (
 	"golang.org/x/exp/constraints"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/internal/ottlcommon"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 )
 
 // ExprFunc is a function in OTTL
@@ -38,6 +39,23 @@ func (e Expr[K]) Eval(ctx context.Context, tCtx K) (any, error) {
 type Getter[K any] interface {
 	// Get retrieves a value of type 'Any' and returns an error if there are any issues during retrieval.
 	Get(ctx context.Context, tCtx K) (any, error)
+}
+
+// VMGetter retrieves a value as a VM-native type.
+type VMGetter[K any] interface {
+	GetVM(ctx context.Context, tCtx K) (ir.Value, error)
+}
+
+// VMGetterFunc is a function adapter for VMGetter.
+type VMGetterFunc[K any] func(ctx context.Context, tCtx K) (ir.Value, error)
+
+func (f VMGetterFunc[K]) GetVM(ctx context.Context, tCtx K) (ir.Value, error) {
+	return f(ctx, tCtx)
+}
+
+// VMGetterProvider exposes a VMGetter for optimized VM execution.
+type VMGetterProvider[K any] interface {
+	VMGetter() VMGetter[K]
 }
 
 // Setter allows setting an untyped value on a predefined field within some data at runtime.
@@ -65,6 +83,16 @@ func (path StandardGetSetter[K]) Get(ctx context.Context, tCtx K) (any, error) {
 
 func (path StandardGetSetter[K]) Set(ctx context.Context, tCtx K, val any) error {
 	return path.Setter(ctx, tCtx, val)
+}
+
+// StandardVMGetSetter augments StandardGetSetter with a VM-optimized getter.
+type StandardVMGetSetter[K any] struct {
+	StandardGetSetter[K]
+	VMGetterFunc VMGetterFunc[K]
+}
+
+func (s StandardVMGetSetter[K]) VMGetter() VMGetter[K] {
+	return s.VMGetterFunc
 }
 
 type exprGetter[K any] struct {

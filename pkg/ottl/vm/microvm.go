@@ -4,6 +4,7 @@
 package vm // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 
 import (
+	"context"
 	"errors"
 	"math"
 	"strings"
@@ -12,19 +13,32 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 )
 
+// PathAccessor is a pre-compiled accessor that retrieves a value directly as ir.Value.
+// This avoids the overhead of Go interface{} boxing in the hot path.
+// The accessor is compiled once per program and receives ctx/tCtx as arguments
+// to avoid per-run closure allocations.
+// Generic over K to eliminate interface{} conversions entirely.
+type PathAccessor[K any] func(ctx context.Context, tCtx K) (ir.Value, error)
+
 // Program is a minimal bytecode program for the micro-VM.
-type Program struct {
-	Code     []ir.Instruction
-	Consts   []ir.Value
-	GasLimit uint64
+// Generic over K to support typed path accessors without interface{} overhead.
+type Program[K any] struct {
+	Code      []ir.Instruction
+	Consts    []ir.Value
+	Accessors []PathAccessor[K] // cached attribute accessors for OpLoadAttrCached
+	GasLimit  uint64
 }
+
+// ProgramAny is an alias for Program[any] for backward compatibility.
+type ProgramAny = Program[any]
 
 var (
 	ErrStackUnderflow = errors.New("stack underflow")
 	ErrStackOverflow  = errors.New("stack overflow")
 	ErrInvalidOpcode  = errors.New("invalid opcode")
 	ErrInvalidConst   = errors.New("invalid const index")
-	ErrInvalidGetter  = errors.New("invalid getter index")
+	ErrInvalidGetter   = errors.New("invalid getter index")
+	ErrInvalidAccessor = errors.New("invalid accessor index")
 	ErrInvalidJump    = errors.New("invalid jump target")
 	ErrTypeMismatch   = errors.New("type mismatch")
 	ErrEmptyStack     = errors.New("empty stack")
@@ -69,6 +83,7 @@ func (p *StackPool) Put(stack []ir.Value) {
 }
 
 // MicroVM executes a tiny subset of the OTTL bytecode for benchmarking.
+// For performance-critical paths, use RunWithStackAndContext directly with stack-allocated arrays.
 type MicroVM struct {
 	stack []ir.Value
 	pool  *StackPool
@@ -94,26 +109,44 @@ func (m *MicroVM) Release() {
 }
 
 // Run executes the program and returns the top value on the stack.
-func (m *MicroVM) Run(p *Program) (ir.Value, error) {
+// Note: This method only works with Program[any] for backward compatibility.
+func (m *MicroVM) Run(p *ProgramAny) (ir.Value, error) {
 	return runProgram(m.stack, p, nil)
 }
 
 // RunWithLoader executes the program and uses loader for OpLoadGetter.
-func (m *MicroVM) RunWithLoader(p *Program, loader func(uint32) (ir.Value, error)) (ir.Value, error) {
+// Note: This method only works with Program[any] for backward compatibility.
+func (m *MicroVM) RunWithLoader(p *ProgramAny, loader func(uint32) (ir.Value, error)) (ir.Value, error) {
 	return runProgram(m.stack, p, loader)
 }
 
 // RunWithStack executes a program using the provided stack.
-func RunWithStack(stack []ir.Value, p *Program) (ir.Value, error) {
+// Note: This function only works with Program[any] for backward compatibility.
+func RunWithStack(stack []ir.Value, p *ProgramAny) (ir.Value, error) {
+	return runProgram(stack, p, nil)
+}
+
+// RunWithStackGeneric executes a generic program using the provided stack.
+// For const-only programs (no accessors), this avoids the need for context.
+func RunWithStackGeneric[K any](stack []ir.Value, p *Program[K]) (ir.Value, error) {
 	return runProgram(stack, p, nil)
 }
 
 // RunWithStackAndLoader executes a program using the provided stack and loader.
-func RunWithStackAndLoader(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, error)) (ir.Value, error) {
+// Note: This function only works with Program[any] for backward compatibility.
+func RunWithStackAndLoader(stack []ir.Value, p *ProgramAny, loader func(uint32) (ir.Value, error)) (ir.Value, error) {
 	return runProgram(stack, p, loader)
 }
 
-func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, error)) (ir.Value, error) {
+// RunWithStackAndContext executes a program using the provided stack, ctx and tCtx.
+// This is the fastest execution path for programs with path accessors - no loader closure needed.
+// Accessors are called with ctx/tCtx directly, avoiding per-run allocations.
+// Generic over K to eliminate interface{} conversions entirely.
+func RunWithStackAndContext[K any](stack []ir.Value, p *Program[K], ctx context.Context, tCtx K) (ir.Value, error) {
+	return runProgramWithContext(stack, p, ctx, tCtx)
+}
+
+func runProgram[K any](stack []ir.Value, p *Program[K], loader func(uint32) (ir.Value, error)) (ir.Value, error) {
 	gas := p.GasLimit
 	if gas == 0 {
 		gas = DefaultGasLimit
@@ -506,6 +539,10 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			}
 			stack[sp-1].Num = stack[sp-1].Num ^ (1 << 63) // flip sign bit
 
+		case ir.OpLoadAttrCached:
+			// OpLoadAttrCached requires context; use RunWithStackAndContext instead
+			return ir.Value{}, ErrInvalidOpcode
+
 		default:
 			return ir.Value{}, ErrInvalidOpcode
 		}
@@ -668,4 +705,373 @@ func compareStrings(op ir.Opcode, a, b ir.Value) (ir.Value, error) {
 	default:
 		return ir.Value{}, ErrInvalidOpcode
 	}
+}
+
+// runProgramWithContext executes the program with ctx/tCtx for OpLoadAttrCached.
+// This is the fast path for programs with path accessors.
+// Generic over K to eliminate interface{} conversions entirely.
+func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.Context, tCtx K) (ir.Value, error) {
+	gas := p.GasLimit
+	if gas == 0 {
+		gas = DefaultGasLimit
+	}
+	sp := 0
+	code := p.Code
+	consts := p.Consts
+	codeLen := len(code)
+
+	for ip := 0; ip < codeLen; ip++ {
+		if gas == 0 {
+			return ir.Value{}, ErrGasExhausted
+		}
+		gas--
+		inst := code[ip]
+		op := inst.Op()
+
+		switch op {
+		case ir.OpLoadConst:
+			idx := inst.Arg()
+			if int(idx) >= len(consts) {
+				return ir.Value{}, ErrInvalidConst
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = consts[idx]
+			sp++
+
+		case ir.OpLoadAttrCached:
+			idx := inst.Arg()
+			if int(idx) >= len(p.Accessors) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			accessor := p.Accessors[idx]
+			if accessor == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			val, err := accessor(ctx, tCtx)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = val
+			sp++
+
+		case ir.OpAddInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			stack[sp-1].Num = uint64(int64(stack[sp-1].Num) + int64(stack[sp].Num))
+
+		case ir.OpSubInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			stack[sp-1].Num = uint64(int64(stack[sp-1].Num) - int64(stack[sp].Num))
+
+		case ir.OpMulInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			stack[sp-1].Num = uint64(int64(stack[sp-1].Num) * int64(stack[sp].Num))
+
+		case ir.OpDivInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			if stack[sp-1].Num == 0 {
+				return ir.Value{}, ErrDivideByZero
+			}
+			sp--
+			stack[sp-1].Num = uint64(int64(stack[sp-1].Num) / int64(stack[sp].Num))
+
+		case ir.OpEqInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if int64(stack[sp-1].Num) == int64(stack[sp].Num) {
+				stack[sp-1] = ir.BoolValue(true)
+			} else {
+				stack[sp-1] = ir.BoolValue(false)
+			}
+
+		case ir.OpNeInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if int64(stack[sp-1].Num) != int64(stack[sp].Num) {
+				stack[sp-1] = ir.BoolValue(true)
+			} else {
+				stack[sp-1] = ir.BoolValue(false)
+			}
+
+		case ir.OpLtInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if int64(stack[sp-1].Num) < int64(stack[sp].Num) {
+				stack[sp-1] = ir.BoolValue(true)
+			} else {
+				stack[sp-1] = ir.BoolValue(false)
+			}
+
+		case ir.OpLteInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if int64(stack[sp-1].Num) <= int64(stack[sp].Num) {
+				stack[sp-1] = ir.BoolValue(true)
+			} else {
+				stack[sp-1] = ir.BoolValue(false)
+			}
+
+		case ir.OpGtInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if int64(stack[sp-1].Num) > int64(stack[sp].Num) {
+				stack[sp-1] = ir.BoolValue(true)
+			} else {
+				stack[sp-1] = ir.BoolValue(false)
+			}
+
+		case ir.OpGteInt:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if int64(stack[sp-1].Num) >= int64(stack[sp].Num) {
+				stack[sp-1] = ir.BoolValue(true)
+			} else {
+				stack[sp-1] = ir.BoolValue(false)
+			}
+
+		case ir.OpAddFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			b := math.Float64frombits(stack[sp].Num)
+			stack[sp-1].Num = math.Float64bits(a + b)
+
+		case ir.OpSubFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			b := math.Float64frombits(stack[sp].Num)
+			stack[sp-1].Num = math.Float64bits(a - b)
+
+		case ir.OpMulFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			b := math.Float64frombits(stack[sp].Num)
+			stack[sp-1].Num = math.Float64bits(a * b)
+
+		case ir.OpDivFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			b := math.Float64frombits(stack[sp-1].Num)
+			if b == 0 {
+				return ir.Value{}, ErrDivideByZero
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			stack[sp-1].Num = math.Float64bits(a / b)
+
+		case ir.OpEqFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			b := math.Float64frombits(stack[sp].Num)
+			stack[sp-1] = ir.BoolValue(a == b)
+
+		case ir.OpNeFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			b := math.Float64frombits(stack[sp].Num)
+			stack[sp-1] = ir.BoolValue(a != b)
+
+		case ir.OpLtFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			b := math.Float64frombits(stack[sp].Num)
+			stack[sp-1] = ir.BoolValue(a < b)
+
+		case ir.OpLteFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			b := math.Float64frombits(stack[sp].Num)
+			stack[sp-1] = ir.BoolValue(a <= b)
+
+		case ir.OpGtFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			b := math.Float64frombits(stack[sp].Num)
+			stack[sp-1] = ir.BoolValue(a > b)
+
+		case ir.OpGteFloat:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			a := math.Float64frombits(stack[sp-1].Num)
+			b := math.Float64frombits(stack[sp].Num)
+			stack[sp-1] = ir.BoolValue(a >= b)
+
+		case ir.OpAdd, ir.OpSub, ir.OpMul, ir.OpDiv:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			result, err := mathOp(op, stack[sp-1], stack[sp])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			stack[sp-1] = result
+
+		case ir.OpEq, ir.OpNe, ir.OpLt, ir.OpLte, ir.OpGt, ir.OpGte:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			result, err := compareOp(op, stack[sp-1], stack[sp])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			stack[sp-1] = result
+
+		case ir.OpPop:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+
+		case ir.OpNot:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			val := stack[sp-1]
+			if val.Type != ir.TypeBool {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			stack[sp-1] = ir.BoolValue(val.Num == 0)
+
+		case ir.OpJump:
+			target := int(inst.Arg())
+			if target < 0 || target > codeLen {
+				return ir.Value{}, ErrInvalidJump
+			}
+			if target <= ip {
+				if gas <= BackwardJumpPenaltyGas {
+					return ir.Value{}, ErrGasExhausted
+				}
+				gas -= BackwardJumpPenaltyGas
+			}
+			ip = target - 1
+
+		case ir.OpJumpIfTrue:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			val := stack[sp-1]
+			if val.Type != ir.TypeBool {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if val.Num != 0 {
+				target := int(inst.Arg())
+				if target < 0 || target > codeLen {
+					return ir.Value{}, ErrInvalidJump
+				}
+				if target <= ip {
+					if gas <= BackwardJumpPenaltyGas {
+						return ir.Value{}, ErrGasExhausted
+					}
+					gas -= BackwardJumpPenaltyGas
+				}
+				ip = target - 1
+			}
+
+		case ir.OpJumpIfFalse:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			val := stack[sp-1]
+			if val.Type != ir.TypeBool {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if val.Num == 0 {
+				target := int(inst.Arg())
+				if target < 0 || target > codeLen {
+					return ir.Value{}, ErrInvalidJump
+				}
+				if target <= ip {
+					if gas <= BackwardJumpPenaltyGas {
+						return ir.Value{}, ErrGasExhausted
+					}
+					gas -= BackwardJumpPenaltyGas
+				}
+				ip = target - 1
+			}
+
+		case ir.OpDup:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = stack[sp-1]
+			sp++
+
+		case ir.OpNegInt:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			stack[sp-1].Num = uint64(-int64(stack[sp-1].Num))
+
+		case ir.OpNegFloat:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			stack[sp-1].Num = stack[sp-1].Num ^ (1 << 63)
+
+		default:
+			return ir.Value{}, ErrInvalidOpcode
+		}
+	}
+	if sp == 0 {
+		return ir.Value{}, ErrEmptyStack
+	}
+	return stack[sp-1], nil
 }

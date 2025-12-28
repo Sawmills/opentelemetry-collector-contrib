@@ -229,8 +229,8 @@ func accessAttributes[K Context]() ottl.StandardGetSetter[K] {
 	}
 }
 
-func accessAttributesKey[K Context](key []ottl.Key[K]) ottl.StandardGetSetter[K] {
-	return ottl.StandardGetSetter[K]{
+func accessAttributesKey[K Context](key []ottl.Key[K]) ottl.GetSetter[K] {
+	getSetter := ottl.StandardGetSetter[K]{
 		Getter: func(ctx context.Context, tCtx K) (any, error) {
 			return ctxutil.GetMapValue[K](ctx, tCtx, tCtx.GetLogRecord().Attributes(), key)
 		},
@@ -238,6 +238,12 @@ func accessAttributesKey[K Context](key []ottl.Key[K]) ottl.StandardGetSetter[K]
 			return ctxutil.SetMapValue[K](ctx, tCtx, tCtx.GetLogRecord().Attributes(), key, val)
 		},
 	}
+	if vmGetter, ok := ctxutil.VMGetterForMapLiteralKey(key, func(tCtx K) pcommon.Map {
+		return tCtx.GetLogRecord().Attributes()
+	}); ok {
+		return ottl.StandardVMGetSetter[K]{StandardGetSetter: getSetter, VMGetterFunc: vmGetter}
+	}
+	return getSetter
 }
 
 func accessDroppedAttributesCount[K Context]() ottl.StandardGetSetter[K] {

@@ -159,6 +159,9 @@ const (
 	// Unary ops
 	OpNegInt   // Negate int64
 	OpNegFloat // Negate float64
+
+	// Cached attribute access (Phase 3)
+	OpLoadAttrCached // Load attribute via cached accessor; arg = accessor index
 )
 
 // Instruction is a 32-bit fixed-width instruction.

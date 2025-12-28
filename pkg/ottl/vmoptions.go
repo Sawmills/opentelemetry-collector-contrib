@@ -6,8 +6,6 @@ package ottl // import "github.com/open-telemetry/opentelemetry-collector-contri
 import (
 	"os"
 	"strings"
-
-	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 )
 
 const defaultMicroVMStackSize = 32
@@ -17,9 +15,6 @@ const vmEnvVar = "OTELCOL_OTTL_VM"
 func WithVMEnabled[K any]() Option[K] {
 	return func(p *Parser[K]) {
 		p.vmEnabled = true
-		if p.vmStackPool == nil {
-			p.vmStackPool = vm.NewStackPool(defaultMicroVMStackSize)
-		}
 		if p.vmProgramCache == nil {
 			p.vmProgramCache = map[*comparison]*microProgram[K]{}
 		}
