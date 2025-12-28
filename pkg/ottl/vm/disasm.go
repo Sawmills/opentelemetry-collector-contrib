@@ -114,6 +114,12 @@ func opcodeName(op ir.Opcode) string {
 		return "POP"
 	case ir.OpNot:
 		return "NOT"
+	case ir.OpDup:
+		return "DUP"
+	case ir.OpNegInt:
+		return "NEG_INT"
+	case ir.OpNegFloat:
+		return "NEG_FLOAT"
 	default:
 		return fmt.Sprintf("OP_%d", op)
 	}
