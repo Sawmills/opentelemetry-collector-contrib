@@ -20,7 +20,10 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxscope"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxspan"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxspanevent"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxutil"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/logging"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 )
 
 // ContextName is the name of the context for span events.
@@ -185,12 +188,17 @@ func NewParser(
 	telemetrySettings component.TelemetrySettings,
 	options ...ottl.Option[TransformContext],
 ) (ottl.Parser[TransformContext], error) {
+	opts := append([]ottl.Option[TransformContext]{
+		ottl.WithVMAttrGetter[TransformContext](spanEventAttrGetter),
+		ottl.WithVMAttrSetter[TransformContext](spanEventAttrSetter),
+		ottl.WithVMAttrContextNames[TransformContext]([]string{ctxspanevent.Name}),
+	}, options...)
 	return ctxcommon.NewParser(
 		functions,
 		telemetrySettings,
 		pathExpressionParser(getCache),
 		parseEnum,
-		options...,
+		opts...,
 	)
 }
 
@@ -206,6 +214,29 @@ func parseEnum(val *ottl.EnumSymbol) (*ottl.Enum, error) {
 
 func getCache(tCtx TransformContext) pcommon.Map {
 	return tCtx.cache
+}
+
+func spanEventAttrGetter(tCtx TransformContext, key string) (ir.Value, error) {
+	val, ok := tCtx.GetSpanEvent().Attributes().Get(key)
+	if !ok {
+		return ir.Value{}, vm.ErrTypeMismatch
+	}
+	switch val.Type() {
+	case pcommon.ValueTypeInt:
+		return ir.Int64Value(val.Int()), nil
+	case pcommon.ValueTypeDouble:
+		return ir.Float64Value(val.Double()), nil
+	case pcommon.ValueTypeBool:
+		return ir.BoolValue(val.Bool()), nil
+	case pcommon.ValueTypeStr:
+		return ir.StringValue(val.Str()), nil
+	default:
+		return ir.Value{}, vm.ErrTypeMismatch
+	}
+}
+
+func spanEventAttrSetter(tCtx TransformContext, key string, val ir.Value) error {
+	return ctxutil.SetMapValueFromVM(tCtx.GetSpanEvent().Attributes(), key, val)
 }
 
 func pathExpressionParser(cacheGetter ctxcache.Getter[TransformContext]) ottl.PathExpressionParser[TransformContext] {

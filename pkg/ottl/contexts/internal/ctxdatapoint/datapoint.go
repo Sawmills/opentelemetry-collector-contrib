@@ -13,6 +13,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxerror"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxutil"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 )
 
 func PathGetSetter[K Context](path ottl.Path[K]) (ottl.GetSetter[K], error) {
@@ -160,9 +161,39 @@ func accessAttributesKey[K Context](key []ottl.Key[K]) ottl.GetSetter[K] {
 			return pcommon.NewMap()
 		}
 	}); ok {
-		return ottl.StandardVMGetSetter[K]{StandardGetSetter: getSetter, VMGetterFunc: vmGetter}
+		literalKey, ok := literalStringKeyFromKeys(key)
+		return ottl.StandardVMGetSetter[K]{
+			StandardGetSetter: getSetter,
+			VMGetterFunc:      vmGetter,
+			VMAttrKeyValue:    literalKey,
+			VMAttrKeySet:      ok,
+			VMAttrSetterFunc: func(tCtx K, key string, val ir.Value) error {
+				switch dp := tCtx.GetDataPoint().(type) {
+				case pmetric.NumberDataPoint:
+					return ctxutil.SetMapValueFromVM(dp.Attributes(), key, val)
+				case pmetric.HistogramDataPoint:
+					return ctxutil.SetMapValueFromVM(dp.Attributes(), key, val)
+				case pmetric.ExponentialHistogramDataPoint:
+					return ctxutil.SetMapValueFromVM(dp.Attributes(), key, val)
+				case pmetric.SummaryDataPoint:
+					return ctxutil.SetMapValueFromVM(dp.Attributes(), key, val)
+				}
+				return nil
+			},
+		}
 	}
 	return getSetter
+}
+
+func literalStringKeyFromKeys[K any](keys []ottl.Key[K]) (string, bool) {
+	if len(keys) != 1 {
+		return "", false
+	}
+	literal, ok := keys[0].(ottl.LiteralStringKey)
+	if !ok {
+		return "", false
+	}
+	return literal.LiteralString()
 }
 
 func accessStartTimeUnixNano[K Context]() ottl.StandardGetSetter[K] {
