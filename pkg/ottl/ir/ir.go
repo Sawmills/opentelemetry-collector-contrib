@@ -181,6 +181,14 @@ const (
 	OpLteConst // Compare top of stack with const; arg = const index
 	OpGtConst  // Compare top of stack with const; arg = const index
 	OpGteConst // Compare top of stack with const; arg = const index
+
+	// Direct span field access
+	OpGetSpanName      // Get span name; pushes string to stack
+	OpSetSpanName      // Set span name; pops string from stack
+	OpGetSpanStartTime // Get span start time (UnixNano); pushes int to stack
+	OpSetSpanStartTime // Set span start time (UnixNano); pops int from stack
+	OpGetSpanEndTime   // Get span end time (UnixNano); pushes int to stack
+	OpSetSpanEndTime   // Set span end time (UnixNano); pops int from stack
 )
 
 // Instruction is a 32-bit fixed-width instruction.

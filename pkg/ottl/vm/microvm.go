@@ -13,6 +13,7 @@ import (
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/ptrace"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 )
@@ -34,6 +35,11 @@ type AttrSetter[K any] func(tCtx K, key string, val ir.Value) error
 // LogRecordContext exposes a log record for direct field opcodes.
 type LogRecordContext interface {
 	GetLogRecord() plog.LogRecord
+}
+
+// SpanContext exposes a span for direct field opcodes.
+type SpanContext interface {
+	GetSpan() ptrace.Span
 }
 
 // Program is a minimal bytecode program for the micro-VM.
@@ -1395,6 +1401,84 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 				return ir.Value{}, ErrTypeMismatch
 			}
 			logCtx.GetLogRecord().SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, int64(stack[sp].Num))))
+
+		case ir.OpGetSpanName:
+			spanCtx, ok := any(tCtx).(SpanContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.StringValue(spanCtx.GetSpan().Name())
+			sp++
+
+		case ir.OpSetSpanName:
+			spanCtx, ok := any(tCtx).(SpanContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			name, ok := stack[sp].String()
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			spanCtx.GetSpan().SetName(name)
+
+		case ir.OpGetSpanStartTime:
+			spanCtx, ok := any(tCtx).(SpanContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			ts := spanCtx.GetSpan().StartTimestamp().AsTime().UnixNano()
+			stack[sp] = ir.Int64Value(ts)
+			sp++
+
+		case ir.OpSetSpanStartTime:
+			spanCtx, ok := any(tCtx).(SpanContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if stack[sp].Type != ir.TypeInt {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			spanCtx.GetSpan().SetStartTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, int64(stack[sp].Num))))
+
+		case ir.OpGetSpanEndTime:
+			spanCtx, ok := any(tCtx).(SpanContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			ts := spanCtx.GetSpan().EndTimestamp().AsTime().UnixNano()
+			stack[sp] = ir.Int64Value(ts)
+			sp++
+
+		case ir.OpSetSpanEndTime:
+			spanCtx, ok := any(tCtx).(SpanContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if stack[sp].Type != ir.TypeInt {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			spanCtx.GetSpan().SetEndTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, int64(stack[sp].Num))))
 
 		default:
 			return ir.Value{}, ErrInvalidOpcode
