@@ -382,3 +382,38 @@ func TestMicroVMRun_InvalidJump(t *testing.T) {
 		t.Fatalf("expected ErrInvalidJump, got %v", err)
 	}
 }
+
+func TestMicroVMRun_GasExhausted(t *testing.T) {
+	program := &Program{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(1),
+			ir.Int64Value(2),
+		},
+		GasLimit: 1,
+	}
+
+	vm := NewMicroVM(4)
+	_, err := vm.Run(program)
+	if err != ErrGasExhausted {
+		t.Fatalf("expected ErrGasExhausted, got %v", err)
+	}
+}
+
+func TestMicroVMRun_BackwardJumpGasExhausted(t *testing.T) {
+	program := &Program{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpJump, 0),
+		},
+		GasLimit: 5,
+	}
+
+	vm := NewMicroVM(1)
+	_, err := vm.Run(program)
+	if err != ErrGasExhausted {
+		t.Fatalf("expected ErrGasExhausted, got %v", err)
+	}
+}
