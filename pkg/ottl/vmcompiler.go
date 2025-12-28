@@ -53,7 +53,7 @@ func compileMicroMathExpression(expr *mathExpression) (*vm.Program, error) {
 	if err := c.emitMathExpression(expr); err != nil {
 		return nil, err
 	}
-	return &vm.Program{Code: c.code, Consts: c.consts}, nil
+	return &vm.Program{Code: c.code, Consts: c.consts, GasLimit: vm.DefaultGasLimit}, nil
 }
 
 func (p *Parser[K]) compileMicroComparisonVM(cmp *comparison) (*microProgram[K], error) {
@@ -95,7 +95,7 @@ func (p *Parser[K]) compileMicroComparisonVM(cmp *comparison) (*microProgram[K],
 		return nil, fmt.Errorf("vm stack depth %d exceeds max %d", c.maxStack, defaultMicroVMStackSize)
 	}
 	return &microProgram[K]{
-		program: &vm.Program{Code: c.code, Consts: c.consts},
+		program: &vm.Program{Code: c.code, Consts: c.consts, GasLimit: vm.DefaultGasLimit},
 		getters: c.getters,
 		stack:   c.maxStack,
 	}, nil
@@ -117,7 +117,7 @@ func (p *Parser[K]) compileMicroBoolExpression(expr *booleanExpression) (*microP
 		return nil, fmt.Errorf("vm stack depth %d exceeds max %d", c.maxStack, defaultMicroVMStackSize)
 	}
 	return &microProgram[K]{
-		program: &vm.Program{Code: c.code, Consts: c.consts},
+		program: &vm.Program{Code: c.code, Consts: c.consts, GasLimit: vm.DefaultGasLimit},
 		getters: c.getters,
 		stack:   c.maxStack,
 	}, nil

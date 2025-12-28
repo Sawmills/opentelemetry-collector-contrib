@@ -14,8 +14,9 @@ import (
 
 // Program is a minimal bytecode program for the micro-VM.
 type Program struct {
-	Code   []ir.Instruction
-	Consts []ir.Value
+	Code     []ir.Instruction
+	Consts   []ir.Value
+	GasLimit uint64
 }
 
 var (
@@ -28,6 +29,12 @@ var (
 	ErrTypeMismatch   = errors.New("type mismatch")
 	ErrEmptyStack     = errors.New("empty stack")
 	ErrDivideByZero   = errors.New("divide by zero")
+	ErrGasExhausted   = errors.New("gas exhausted")
+)
+
+const (
+	DefaultGasLimit        uint64 = 10_000
+	BackwardJumpPenaltyGas uint64 = 9
 )
 
 // StackPool reuses operand stacks across VM executions.
@@ -107,12 +114,20 @@ func RunWithStackAndLoader(stack []ir.Value, p *Program, loader func(uint32) (ir
 }
 
 func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, error)) (ir.Value, error) {
+	gas := p.GasLimit
+	if gas == 0 {
+		gas = DefaultGasLimit
+	}
 	sp := 0
 	code := p.Code
 	consts := p.Consts
 	codeLen := len(code)
 
 	for ip := 0; ip < codeLen; ip++ {
+		if gas == 0 {
+			return ir.Value{}, ErrGasExhausted
+		}
+		gas--
 		inst := code[ip]
 		op := inst.Op()
 
@@ -420,6 +435,12 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			if target < 0 || target > codeLen {
 				return ir.Value{}, ErrInvalidJump
 			}
+			if target <= ip {
+				if gas <= BackwardJumpPenaltyGas {
+					return ir.Value{}, ErrGasExhausted
+				}
+				gas -= BackwardJumpPenaltyGas
+			}
 			ip = target - 1
 
 		case ir.OpJumpIfTrue:
@@ -434,6 +455,12 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 				target := int(inst.Arg())
 				if target < 0 || target > codeLen {
 					return ir.Value{}, ErrInvalidJump
+				}
+				if target <= ip {
+					if gas <= BackwardJumpPenaltyGas {
+						return ir.Value{}, ErrGasExhausted
+					}
+					gas -= BackwardJumpPenaltyGas
 				}
 				ip = target - 1
 			}
@@ -450,6 +477,12 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 				target := int(inst.Arg())
 				if target < 0 || target > codeLen {
 					return ir.Value{}, ErrInvalidJump
+				}
+				if target <= ip {
+					if gas <= BackwardJumpPenaltyGas {
+						return ir.Value{}, ErrGasExhausted
+					}
+					gas -= BackwardJumpPenaltyGas
 				}
 				ip = target - 1
 			}
