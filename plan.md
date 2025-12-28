@@ -155,6 +155,8 @@ type Program struct {
 
 **Deliverable:** AST → bytecode + disassembler
 
+Status: `pkg/ottl/ottlc` exposes compiler helpers; `pkg/ottl/vm` provides disassembly.
+
 | Task | Description |
 |------|-------------|
 | `ottlc` package | `Compile(ast) (*Program, error)` |

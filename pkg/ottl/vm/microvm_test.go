@@ -511,3 +511,97 @@ func TestMicroVMRun_SpecializedFloatOps(t *testing.T) {
 		t.Fatalf("expected 2.5, got %v", got)
 	}
 }
+
+func TestMicroVMRun_Dup(t *testing.T) {
+	program := &Program{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpDup, 0),
+			ir.Encode(ir.OpAddInt, 0),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(21),
+		},
+	}
+
+	vm := NewMicroVM(4)
+	val, err := vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Int64()
+	if !ok {
+		t.Fatalf("expected int result")
+	}
+	if got != 42 {
+		t.Fatalf("expected 42, got %d", got)
+	}
+}
+
+func TestMicroVMRun_DupStackOverflow(t *testing.T) {
+	program := &Program{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpDup, 0),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(1),
+		},
+	}
+
+	vm := NewMicroVM(1)
+	_, err := vm.Run(program)
+	if err != ErrStackOverflow {
+		t.Fatalf("expected ErrStackOverflow, got %v", err)
+	}
+}
+
+func TestMicroVMRun_NegInt(t *testing.T) {
+	program := &Program{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpNegInt, 0),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(42),
+		},
+	}
+
+	vm := NewMicroVM(2)
+	val, err := vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Int64()
+	if !ok {
+		t.Fatalf("expected int result")
+	}
+	if got != -42 {
+		t.Fatalf("expected -42, got %d", got)
+	}
+}
+
+func TestMicroVMRun_NegFloat(t *testing.T) {
+	program := &Program{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpNegFloat, 0),
+		},
+		Consts: []ir.Value{
+			ir.Float64Value(3.14),
+		},
+	}
+
+	vm := NewMicroVM(2)
+	val, err := vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Float64()
+	if !ok {
+		t.Fatalf("expected float result")
+	}
+	if got != -3.14 {
+		t.Fatalf("expected -3.14, got %v", got)
+	}
+}
