@@ -16,9 +16,8 @@ import (
 	"go.uber.org/zap"
 )
 
-func boolp(v bool) *boolean {
-	b := boolean(v)
-	return &b
+func stringpTest(v string) *string {
+	return &v
 }
 
 func newTestParser(t *testing.T, withVM bool) Parser[any] {
@@ -175,9 +174,9 @@ func TestCompileMicroComparison_Unsupported(t *testing.T) {
 func TestCompileMicroComparison_StringLtUnsupported(t *testing.T) {
 	p := newTestParser(t, false)
 	cmp := &comparison{
-		Left:  value{String: stringp("a")},
+		Left:  value{String: stringpTest("a")},
 		Op:    lt,
-		Right: value{String: stringp("b")},
+		Right: value{String: stringpTest("b")},
 	}
 
 	_, err := p.compileMicroComparisonVM(cmp)
@@ -221,12 +220,12 @@ func TestCompileMicroBooleanExpression_ShortCircuitOr(t *testing.T) {
 	}
 
 	cmpOK := &comparison{
-		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "attributes", Keys: []key{{String: stringp("ok")}}}}}}},
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "attributes", Keys: []key{{String: stringpTest("ok")}}}}}}},
 		Op:    eq,
 		Right: value{Literal: &mathExprLiteral{Int: int64p(1)}},
 	}
 	cmpBoom := &comparison{
-		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "attributes", Keys: []key{{String: stringp("boom")}}}}}}},
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "attributes", Keys: []key{{String: stringpTest("boom")}}}}}}},
 		Op:    eq,
 		Right: value{Literal: &mathExprLiteral{Int: int64p(2)}},
 	}
@@ -310,12 +309,12 @@ func TestCompileMicroBooleanExpression_ShortCircuitAnd(t *testing.T) {
 	}
 
 	cmpFalse := &comparison{
-		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "attributes", Keys: []key{{String: stringp("ok")}}}}}}},
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "attributes", Keys: []key{{String: stringpTest("ok")}}}}}}},
 		Op:    eq,
 		Right: value{Literal: &mathExprLiteral{Int: int64p(2)}},
 	}
 	cmpBoom := &comparison{
-		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "attributes", Keys: []key{{String: stringp("boom")}}}}}}},
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "attributes", Keys: []key{{String: stringpTest("boom")}}}}}}},
 		Op:    eq,
 		Right: value{Literal: &mathExprLiteral{Int: int64p(2)}},
 	}
