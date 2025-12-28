@@ -124,6 +124,10 @@ func opcodeName(op ir.Opcode) string {
 		return "LOAD_ATTR_CACHED"
 	case ir.OpSetAttrCached:
 		return "SET_ATTR_CACHED"
+	case ir.OpLoadAttrFast:
+		return "LOAD_ATTR_FAST"
+	case ir.OpSetAttrFast:
+		return "SET_ATTR_FAST"
 	case ir.OpGetBody:
 		return "GET_BODY"
 	case ir.OpSetBody:
@@ -136,6 +140,18 @@ func opcodeName(op ir.Opcode) string {
 		return "GET_TIMESTAMP"
 	case ir.OpSetTimestamp:
 		return "SET_TIMESTAMP"
+	case ir.OpEqConst:
+		return "EQ_CONST"
+	case ir.OpNeConst:
+		return "NE_CONST"
+	case ir.OpLtConst:
+		return "LT_CONST"
+	case ir.OpLteConst:
+		return "LTE_CONST"
+	case ir.OpGtConst:
+		return "GT_CONST"
+	case ir.OpGteConst:
+		return "GTE_CONST"
 	default:
 		return fmt.Sprintf("OP_%d", op)
 	}

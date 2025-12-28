@@ -20,6 +20,7 @@ import (
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/internal/ottlcommon"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 )
 
 // ExprFunc is a function in OTTL
@@ -58,6 +59,12 @@ type VMGetterProvider[K any] interface {
 	VMGetter() VMGetter[K]
 }
 
+// VMAttrSetterProvider exposes fast attribute setters for literal keys.
+type VMAttrSetterProvider[K any] interface {
+	VMAttrKey() (string, bool)
+	VMAttrSetter() vm.AttrSetter[K]
+}
+
 // Setter allows setting an untyped value on a predefined field within some data at runtime.
 type Setter[K any] interface {
 	// Set sets a value of type 'Any' and returns an error if there are any issues during the setting process.
@@ -88,11 +95,22 @@ func (path StandardGetSetter[K]) Set(ctx context.Context, tCtx K, val any) error
 // StandardVMGetSetter augments StandardGetSetter with a VM-optimized getter.
 type StandardVMGetSetter[K any] struct {
 	StandardGetSetter[K]
-	VMGetterFunc VMGetterFunc[K]
+	VMGetterFunc     VMGetterFunc[K]
+	VMAttrKeyValue   string
+	VMAttrKeySet     bool
+	VMAttrSetterFunc vm.AttrSetter[K]
 }
 
 func (s StandardVMGetSetter[K]) VMGetter() VMGetter[K] {
 	return s.VMGetterFunc
+}
+
+func (s StandardVMGetSetter[K]) VMAttrKey() (string, bool) {
+	return s.VMAttrKeyValue, s.VMAttrKeySet
+}
+
+func (s StandardVMGetSetter[K]) VMAttrSetter() vm.AttrSetter[K] {
+	return s.VMAttrSetterFunc
 }
 
 type exprGetter[K any] struct {

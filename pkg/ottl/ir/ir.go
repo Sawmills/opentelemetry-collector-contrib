@@ -163,6 +163,8 @@ const (
 	// Cached attribute access (Phase 3)
 	OpLoadAttrCached // Load attribute via cached accessor; arg = accessor index
 	OpSetAttrCached  // Set attribute via cached setter; arg = setter index
+	OpLoadAttrFast   // Load attribute via fast path; arg = key index
+	OpSetAttrFast    // Set attribute via fast path; arg = key index
 
 	// Direct field access opcodes (Phase 4)
 	OpGetBody      // Get log body; pushes value to stack
@@ -171,6 +173,14 @@ const (
 	OpSetSeverity  // Set severity number; pops int from stack
 	OpGetTimestamp // Get timestamp; pushes int (UnixNano) to stack
 	OpSetTimestamp // Set timestamp; pops int (UnixNano) from stack
+
+	// Compare against const (Phase 4)
+	OpEqConst  // Compare top of stack with const; arg = const index
+	OpNeConst  // Compare top of stack with const; arg = const index
+	OpLtConst  // Compare top of stack with const; arg = const index
+	OpLteConst // Compare top of stack with const; arg = const index
+	OpGtConst  // Compare top of stack with const; arg = const index
+	OpGteConst // Compare top of stack with const; arg = const index
 )
 
 // Instruction is a 32-bit fixed-width instruction.

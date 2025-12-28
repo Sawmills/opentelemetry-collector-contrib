@@ -4,10 +4,23 @@
 package vm
 
 import (
+	"context"
 	"testing"
+	"time"
+
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/plog"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 )
+
+type logCtx struct {
+	lr plog.LogRecord
+}
+
+func (c logCtx) GetLogRecord() plog.LogRecord {
+	return c.lr
+}
 
 func TestMicroVMRun_AddEq(t *testing.T) {
 	program := &ProgramAny{
@@ -36,6 +49,257 @@ func TestMicroVMRun_AddEq(t *testing.T) {
 	}
 	if !got {
 		t.Fatalf("expected true, got false")
+	}
+}
+
+func TestMicroVMRun_EqConst(t *testing.T) {
+	program := &ProgramAny{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpEqConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(7),
+			ir.Int64Value(7),
+		},
+	}
+
+	vm := NewMicroVM(2)
+	val, err := vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Bool()
+	if !ok || !got {
+		t.Fatalf("expected true, got %v", val)
+	}
+}
+
+func TestMicroVMRun_LtConst(t *testing.T) {
+	program := &ProgramAny{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpLtConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(5),
+			ir.Int64Value(7),
+		},
+	}
+
+	vm := NewMicroVM(2)
+	val, err := vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Bool()
+	if !ok || !got {
+		t.Fatalf("expected true, got %v", val)
+	}
+}
+
+func TestRunWithStackAndContext_LoadAttrFast(t *testing.T) {
+	lr := plog.NewLogRecord()
+	lr.Attributes().PutInt("foo", 7)
+	ctx := logCtx{lr: lr}
+
+	program := &Program[logCtx]{
+		Code:     []ir.Instruction{ir.Encode(ir.OpLoadAttrFast, 0)},
+		AttrKeys: []string{"foo"},
+		AttrGetter: func(tCtx logCtx, key string) (ir.Value, error) {
+			val, ok := tCtx.GetLogRecord().Attributes().Get(key)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			switch val.Type() {
+			case pcommon.ValueTypeInt:
+				return ir.Int64Value(val.Int()), nil
+			case pcommon.ValueTypeDouble:
+				return ir.Float64Value(val.Double()), nil
+			case pcommon.ValueTypeBool:
+				return ir.BoolValue(val.Bool()), nil
+			case pcommon.ValueTypeStr:
+				return ir.StringValue(val.Str()), nil
+			default:
+				return ir.Value{}, ErrTypeMismatch
+			}
+		},
+	}
+
+	var stack [4]ir.Value
+	val, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Int64()
+	if !ok || got != 7 {
+		t.Fatalf("unexpected attr value: %v", val)
+	}
+}
+
+func TestRunWithStackAndContext_SetAttrFast(t *testing.T) {
+	lr := plog.NewLogRecord()
+	ctx := logCtx{lr: lr}
+
+	program := &Program[logCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetAttrFast, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+		},
+		Consts:   []ir.Value{ir.Int64Value(9), ir.BoolValue(true)},
+		AttrKeys: []string{"foo"},
+		AttrSetter: func(tCtx logCtx, key string, val ir.Value) error {
+			switch val.Type {
+			case ir.TypeInt:
+				tCtx.GetLogRecord().Attributes().PutInt(key, int64(val.Num))
+				return nil
+			default:
+				return ErrTypeMismatch
+			}
+		},
+	}
+
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := lr.Attributes().Get("foo")
+	if !ok || got.Type() != pcommon.ValueTypeInt || got.Int() != 9 {
+		t.Fatalf("unexpected attr value: %v", got)
+	}
+}
+
+func TestRunWithStackAndContext_GetBody(t *testing.T) {
+	lr := plog.NewLogRecord()
+	lr.Body().SetStr("hello")
+	ctx := logCtx{lr: lr}
+
+	program := &Program[logCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpGetBody, 0),
+		},
+	}
+
+	var stack [4]ir.Value
+	val, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.String()
+	if !ok || got != "hello" {
+		t.Fatalf("unexpected body: %v", val)
+	}
+}
+
+func TestRunWithStackAndContext_SetBody(t *testing.T) {
+	lr := plog.NewLogRecord()
+	ctx := logCtx{lr: lr}
+
+	program := &Program[logCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetBody, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.StringValue("updated"),
+			ir.BoolValue(true),
+		},
+	}
+
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got := lr.Body().AsString(); got != "updated" {
+		t.Fatalf("unexpected body: %q", got)
+	}
+}
+
+func TestRunWithStackAndContext_GetSeverity(t *testing.T) {
+	lr := plog.NewLogRecord()
+	lr.SetSeverityNumber(plog.SeverityNumber(13))
+	ctx := logCtx{lr: lr}
+
+	program := &Program[logCtx]{Code: []ir.Instruction{ir.Encode(ir.OpGetSeverity, 0)}}
+	var stack [4]ir.Value
+	val, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Int64()
+	if !ok || got != 13 {
+		t.Fatalf("unexpected severity: %v", val)
+	}
+}
+
+func TestRunWithStackAndContext_SetSeverity(t *testing.T) {
+	lr := plog.NewLogRecord()
+	ctx := logCtx{lr: lr}
+
+	program := &Program[logCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetSeverity, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(9),
+			ir.BoolValue(true),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got := lr.SeverityNumber(); got != plog.SeverityNumber(9) {
+		t.Fatalf("unexpected severity: %v", got)
+	}
+}
+
+func TestRunWithStackAndContext_GetTimestamp(t *testing.T) {
+	lr := plog.NewLogRecord()
+	lr.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, 42)))
+	ctx := logCtx{lr: lr}
+
+	program := &Program[logCtx]{Code: []ir.Instruction{ir.Encode(ir.OpGetTimestamp, 0)}}
+	var stack [4]ir.Value
+	val, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Int64()
+	if !ok || got != 42 {
+		t.Fatalf("unexpected timestamp: %v", val)
+	}
+}
+
+func TestRunWithStackAndContext_SetTimestamp(t *testing.T) {
+	lr := plog.NewLogRecord()
+	ctx := logCtx{lr: lr}
+
+	program := &Program[logCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetTimestamp, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(99),
+			ir.BoolValue(true),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got := lr.Timestamp().AsTime().UnixNano(); got != 99 {
+		t.Fatalf("unexpected timestamp: %d", got)
 	}
 }
 
