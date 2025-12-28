@@ -4,6 +4,7 @@
 package ottl // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 
 import (
+	"context"
 	"fmt"
 	"math"
 
@@ -30,9 +31,10 @@ const (
 const maxInstructionArg = 0x00FFFFFF
 
 type microProgram[K any] struct {
-	program *vm.Program
-	getters []Getter[K]
-	stack   int
+	program   *vm.Program[K]
+	getters   []Getter[K]
+	vmGetters []VMGetter[K]
+	stack     int
 }
 
 type microCompiler[K any] struct {
@@ -42,6 +44,7 @@ type microCompiler[K any] struct {
 	constIndex  map[constKey]uint32
 	getterIndex map[string]uint32
 	getters     []Getter[K]
+	vmGetters   []VMGetter[K]
 	stackDepth  int
 	maxStack    int
 }
@@ -53,7 +56,7 @@ func vmGasLimitFor[K any](p *Parser[K]) uint64 {
 	return vm.DefaultGasLimit
 }
 
-func compileMicroMathExpression(expr *mathExpression) (*vm.Program, error) {
+func compileMicroMathExpression(expr *mathExpression) (*vm.ProgramAny, error) {
 	if _, err := inferMathExpressionKind(expr); err != nil {
 		return nil, err
 	}
@@ -61,7 +64,7 @@ func compileMicroMathExpression(expr *mathExpression) (*vm.Program, error) {
 	if err := c.emitMathExpression(expr); err != nil {
 		return nil, err
 	}
-	return &vm.Program{Code: c.code, Consts: c.consts, GasLimit: vm.DefaultGasLimit}, nil
+	return &vm.ProgramAny{Code: c.code, Consts: c.consts, GasLimit: vm.DefaultGasLimit}, nil
 }
 
 func (p *Parser[K]) compileMicroComparisonVM(cmp *comparison) (*microProgram[K], error) {
@@ -91,9 +94,15 @@ func (p *Parser[K]) compileMicroComparisonVM(cmp *comparison) (*microProgram[K],
 	} else if ok {
 		c.emitLoadConst(folded)
 		return &microProgram[K]{
-			program: &vm.Program{Code: c.code, Consts: c.consts, GasLimit: vmGasLimitFor(p)},
-			getters: c.getters,
-			stack:   c.maxStack,
+			program: &vm.Program[K]{
+				Code:      c.code,
+				Consts:    c.consts,
+				Accessors: c.buildAccessors(),
+				GasLimit:  vmGasLimitFor(p),
+			},
+			getters:   c.getters,
+			vmGetters: c.vmGetters,
+			stack:     c.maxStack,
 		}, nil
 	}
 	if err := c.emitValue(cmp.Left); err != nil {
@@ -113,9 +122,15 @@ func (p *Parser[K]) compileMicroComparisonVM(cmp *comparison) (*microProgram[K],
 		return nil, fmt.Errorf("vm stack depth %d exceeds max %d", c.maxStack, defaultMicroVMStackSize)
 	}
 	return &microProgram[K]{
-		program: &vm.Program{Code: c.code, Consts: c.consts, GasLimit: vmGasLimitFor(p)},
-		getters: c.getters,
-		stack:   c.maxStack,
+		program: &vm.Program[K]{
+			Code:      c.code,
+			Consts:    c.consts,
+			Accessors: c.buildAccessors(),
+			GasLimit:  vmGasLimitFor(p),
+		},
+		getters:   c.getters,
+		vmGetters: c.vmGetters,
+		stack:     c.maxStack,
 	}, nil
 }
 
@@ -135,9 +150,15 @@ func (p *Parser[K]) compileMicroBoolExpression(expr *booleanExpression) (*microP
 		return nil, fmt.Errorf("vm stack depth %d exceeds max %d", c.maxStack, defaultMicroVMStackSize)
 	}
 	return &microProgram[K]{
-		program: &vm.Program{Code: c.code, Consts: c.consts, GasLimit: vmGasLimitFor(p)},
-		getters: c.getters,
-		stack:   c.maxStack,
+		program: &vm.Program[K]{
+			Code:      c.code,
+			Consts:    c.consts,
+			Accessors: c.buildAccessors(),
+			GasLimit:  vmGasLimitFor(p),
+		},
+		getters:   c.getters,
+		vmGetters: c.vmGetters,
+		stack:     c.maxStack,
 	}, nil
 }
 
@@ -829,8 +850,13 @@ func (c *microCompiler[K]) emitPath(path *path) error {
 	if err != nil {
 		return err
 	}
-	idx := c.addGetter(buildOriginalText(path), gs)
-	c.code = append(c.code, ir.Encode(ir.OpLoadGetter, idx))
+	var vmGetter VMGetter[K]
+	if provider, ok := gs.(VMGetterProvider[K]); ok {
+		vmGetter = provider.VMGetter()
+	}
+	idx := c.addGetter(buildOriginalText(path), gs, vmGetter)
+	// Emit OpLoadAttrCached for context-aware execution path
+	c.code = append(c.code, ir.Encode(ir.OpLoadAttrCached, idx))
 	c.onPush()
 	return nil
 }
@@ -973,12 +999,16 @@ func (c *microCompiler[K]) addConst(val ir.Value) uint32 {
 	return idx
 }
 
-func (c *microCompiler[K]) addGetter(key string, getter Getter[K]) uint32 {
+func (c *microCompiler[K]) addGetter(key string, getter Getter[K], vmGetter VMGetter[K]) uint32 {
 	if idx, ok := c.getterIndex[key]; ok {
+		if vmGetter != nil && int(idx) < len(c.vmGetters) && c.vmGetters[idx] == nil {
+			c.vmGetters[idx] = vmGetter
+		}
 		return idx
 	}
 	idx := uint32(len(c.getters))
 	c.getters = append(c.getters, getter)
+	c.vmGetters = append(c.vmGetters, vmGetter)
 	c.getterIndex[key] = idx
 	return idx
 }
@@ -1000,4 +1030,37 @@ func (c *microCompiler[K]) onPop() {
 	if c.stackDepth >= 1 {
 		c.stackDepth--
 	}
+}
+
+// buildAccessors creates PathAccessors from the compiled getters.
+// These accessors are compiled once and stored in Program.Accessors,
+// receiving ctx/tCtx as arguments to avoid per-run closure allocations.
+// Generic over K to eliminate interface{} conversions entirely.
+func (c *microCompiler[K]) buildAccessors() []vm.PathAccessor[K] {
+	if len(c.getters) == 0 {
+		return nil
+	}
+	accessors := make([]vm.PathAccessor[K], len(c.getters))
+	for i := range c.getters {
+		getter := c.getters[i]
+		var vmGetter VMGetter[K]
+		if i < len(c.vmGetters) {
+			vmGetter = c.vmGetters[i]
+		}
+		// No type assertion needed - K is concrete at compile time
+		if vmGetter != nil {
+			accessors[i] = func(ctx context.Context, tCtx K) (ir.Value, error) {
+				return vmGetter.GetVM(ctx, tCtx)
+			}
+		} else {
+			accessors[i] = func(ctx context.Context, tCtx K) (ir.Value, error) {
+				raw, err := getter.Get(ctx, tCtx)
+				if err != nil {
+					return ir.Value{}, err
+				}
+				return valueToVM(raw)
+			}
+		}
+	}
+	return accessors
 }

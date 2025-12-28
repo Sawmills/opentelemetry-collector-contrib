@@ -117,8 +117,8 @@ func accessAttributes[K Context]() ottl.StandardGetSetter[K] {
 	}
 }
 
-func accessAttributesKey[K Context](key []ottl.Key[K]) ottl.StandardGetSetter[K] {
-	return ottl.StandardGetSetter[K]{
+func accessAttributesKey[K Context](key []ottl.Key[K]) ottl.GetSetter[K] {
+	getSetter := ottl.StandardGetSetter[K]{
 		Getter: func(ctx context.Context, tCtx K) (any, error) {
 			switch dp := tCtx.GetDataPoint().(type) {
 			case pmetric.NumberDataPoint:
@@ -146,6 +146,23 @@ func accessAttributesKey[K Context](key []ottl.Key[K]) ottl.StandardGetSetter[K]
 			return nil
 		},
 	}
+	if vmGetter, ok := ctxutil.VMGetterForMapLiteralKey(key, func(tCtx K) pcommon.Map {
+		switch dp := tCtx.GetDataPoint().(type) {
+		case pmetric.NumberDataPoint:
+			return dp.Attributes()
+		case pmetric.HistogramDataPoint:
+			return dp.Attributes()
+		case pmetric.ExponentialHistogramDataPoint:
+			return dp.Attributes()
+		case pmetric.SummaryDataPoint:
+			return dp.Attributes()
+		default:
+			return pcommon.NewMap()
+		}
+	}); ok {
+		return ottl.StandardVMGetSetter[K]{StandardGetSetter: getSetter, VMGetterFunc: vmGetter}
+	}
+	return getSetter
 }
 
 func accessStartTimeUnixNano[K Context]() ottl.StandardGetSetter[K] {

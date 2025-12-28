@@ -10,7 +10,7 @@ import (
 )
 
 func TestMicroVMRun_AddEq(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpLoadConst, 1),
@@ -40,7 +40,7 @@ func TestMicroVMRun_AddEq(t *testing.T) {
 }
 
 func TestMicroVMRun_FloatMul(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpLoadConst, 1),
@@ -67,7 +67,7 @@ func TestMicroVMRun_FloatMul(t *testing.T) {
 }
 
 func TestMicroVMRun_InvalidConst(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 1),
 		},
@@ -84,7 +84,7 @@ func TestMicroVMRun_InvalidConst(t *testing.T) {
 }
 
 func TestMicroVMRun_StackUnderflow(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpAdd, 0),
 		},
@@ -98,7 +98,7 @@ func TestMicroVMRun_StackUnderflow(t *testing.T) {
 }
 
 func TestMicroVMRun_StackOverflow(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpLoadConst, 0),
@@ -116,7 +116,7 @@ func TestMicroVMRun_StackOverflow(t *testing.T) {
 }
 
 func TestMicroVMRun_TypeMismatch(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpLoadConst, 1),
@@ -136,7 +136,7 @@ func TestMicroVMRun_TypeMismatch(t *testing.T) {
 }
 
 func TestMicroVMRun_DivideByZero(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpLoadConst, 1),
@@ -156,7 +156,7 @@ func TestMicroVMRun_DivideByZero(t *testing.T) {
 }
 
 func TestMicroVMRun_InvalidOpcode(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.Opcode(99), 0),
 		},
@@ -170,7 +170,7 @@ func TestMicroVMRun_InvalidOpcode(t *testing.T) {
 }
 
 func TestMicroVMRun_EmptyStack(t *testing.T) {
-	program := &Program{}
+	program := &ProgramAny{}
 	vm := NewMicroVM(1)
 	_, err := vm.Run(program)
 	if err != ErrEmptyStack {
@@ -179,7 +179,7 @@ func TestMicroVMRun_EmptyStack(t *testing.T) {
 }
 
 func TestMicroVMRun_CompareMixedNumeric(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpLoadConst, 1),
@@ -206,7 +206,7 @@ func TestMicroVMRun_CompareMixedNumeric(t *testing.T) {
 }
 
 func TestMicroVMRun_CompareStringEq(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpLoadConst, 1),
@@ -233,7 +233,7 @@ func TestMicroVMRun_CompareStringEq(t *testing.T) {
 }
 
 func TestMicroVMRun_CompareBoolNe(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpLoadConst, 1),
@@ -260,7 +260,7 @@ func TestMicroVMRun_CompareBoolNe(t *testing.T) {
 }
 
 func TestMicroVMRun_Not(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpNot, 0),
@@ -285,7 +285,7 @@ func TestMicroVMRun_Not(t *testing.T) {
 }
 
 func TestMicroVMRun_Pop(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpPop, 0),
@@ -312,7 +312,7 @@ func TestMicroVMRun_Pop(t *testing.T) {
 }
 
 func TestMicroVMRun_JumpIfTrue(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpJumpIfTrue, 3),
@@ -341,7 +341,7 @@ func TestMicroVMRun_JumpIfTrue(t *testing.T) {
 }
 
 func TestMicroVMRun_JumpIfFalse(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpJumpIfFalse, 3),
@@ -370,7 +370,7 @@ func TestMicroVMRun_JumpIfFalse(t *testing.T) {
 }
 
 func TestMicroVMRun_InvalidJump(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpJump, 2),
 		},
@@ -384,7 +384,7 @@ func TestMicroVMRun_InvalidJump(t *testing.T) {
 }
 
 func TestMicroVMRun_GasExhausted(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpLoadConst, 1),
@@ -404,7 +404,7 @@ func TestMicroVMRun_GasExhausted(t *testing.T) {
 }
 
 func TestMicroVMRun_BackwardJumpGasExhausted(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpJump, 0),
 		},
@@ -419,7 +419,7 @@ func TestMicroVMRun_BackwardJumpGasExhausted(t *testing.T) {
 }
 
 func TestMicroVMRun_DivIntByZero(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpLoadConst, 1),
@@ -439,7 +439,7 @@ func TestMicroVMRun_DivIntByZero(t *testing.T) {
 }
 
 func TestMicroVMRun_DivFloatByZero(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpLoadConst, 1),
@@ -459,7 +459,7 @@ func TestMicroVMRun_DivFloatByZero(t *testing.T) {
 }
 
 func TestMicroVMRun_SpecializedIntOps(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0), // 10
 			ir.Encode(ir.OpLoadConst, 1), // 3
@@ -486,7 +486,7 @@ func TestMicroVMRun_SpecializedIntOps(t *testing.T) {
 }
 
 func TestMicroVMRun_SpecializedFloatOps(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0), // 10.0
 			ir.Encode(ir.OpLoadConst, 1), // 4.0
@@ -513,7 +513,7 @@ func TestMicroVMRun_SpecializedFloatOps(t *testing.T) {
 }
 
 func TestMicroVMRun_Dup(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpDup, 0),
@@ -539,7 +539,7 @@ func TestMicroVMRun_Dup(t *testing.T) {
 }
 
 func TestMicroVMRun_DupStackOverflow(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpDup, 0),
@@ -557,7 +557,7 @@ func TestMicroVMRun_DupStackOverflow(t *testing.T) {
 }
 
 func TestMicroVMRun_NegInt(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpNegInt, 0),
@@ -582,7 +582,7 @@ func TestMicroVMRun_NegInt(t *testing.T) {
 }
 
 func TestMicroVMRun_NegFloat(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpNegFloat, 0),

@@ -11,7 +11,7 @@ import (
 )
 
 func TestDisassemble(t *testing.T) {
-	program := &Program{
+	program := &ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpNot, 0),

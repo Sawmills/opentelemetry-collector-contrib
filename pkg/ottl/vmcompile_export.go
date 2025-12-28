@@ -6,7 +6,6 @@ package ottl // import "github.com/open-telemetry/opentelemetry-collector-contri
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
@@ -16,11 +15,9 @@ import (
 //
 // EXPERIMENTAL: This API is experimental and may change in future releases.
 type VMProgram[K any] struct {
-	Program  *vm.Program
-	Getters  []Getter[K]
-	Stack    int
-	pool     *vm.StackPool
-	poolOnce sync.Once
+	Program *vm.Program[K]
+	Getters []Getter[K]
+	Stack   int
 }
 
 // Run executes the compiled VM program and returns the boolean result.
@@ -31,24 +28,12 @@ func (v *VMProgram[K]) Run(ctx context.Context, tCtx K) (bool, error) {
 		return false, fmt.Errorf("program is nil")
 	}
 
-	var stack []ir.Value
-	if pool := v.stackPool(); pool != nil {
-		stack = pool.Get()
-		defer pool.Put(stack)
-		stack = stack[:v.Stack]
-	} else {
-		stack = make([]ir.Value, v.Stack)
-	}
-	val, err := vm.RunWithStackAndLoader(stack, v.Program, func(idx uint32) (ir.Value, error) {
-		if int(idx) >= len(v.Getters) {
-			return ir.Value{}, vm.ErrInvalidGetter
-		}
-		raw, getErr := v.Getters[idx].Get(ctx, tCtx)
-		if getErr != nil {
-			return ir.Value{}, getErr
-		}
-		return valueToVM(raw)
-	})
+	// Use stack-allocated array instead of sync.Pool to avoid alloc overhead
+	var stackArr [defaultMicroVMStackSize]ir.Value
+	stack := stackArr[:v.Stack]
+
+	// Use context-aware runner with pre-compiled accessors
+	val, err := vm.RunWithStackAndContext(stack, v.Program, ctx, tCtx)
 	if err != nil {
 		return false, err
 	}
@@ -58,16 +43,6 @@ func (v *VMProgram[K]) Run(ctx context.Context, tCtx K) (bool, error) {
 		return false, fmt.Errorf("vm result is not bool")
 	}
 	return result, nil
-}
-
-func (v *VMProgram[K]) stackPool() *vm.StackPool {
-	if v == nil || v.Stack <= 0 {
-		return nil
-	}
-	v.poolOnce.Do(func() {
-		v.pool = vm.NewStackPool(v.Stack)
-	})
-	return v.pool
 }
 
 // CompileConditionVM parses a condition string and compiles it into VM bytecode.

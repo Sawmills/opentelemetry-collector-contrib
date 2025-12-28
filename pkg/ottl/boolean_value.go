@@ -78,7 +78,7 @@ func orFuncs[K any](funcs []BoolExpr[K]) BoolExpr[K] {
 
 func runBoolVMConstOnly[K any](program *microProgram[K]) (bool, error) {
 	var stackArr [defaultMicroVMStackSize]ir.Value
-	val, err := vm.RunWithStack(stackArr[:program.stack], program.program)
+	val, err := vm.RunWithStackGeneric(stackArr[:program.stack], program.program)
 	if err != nil {
 		return false, err
 	}
@@ -90,21 +90,12 @@ func runBoolVMConstOnly[K any](program *microProgram[K]) (bool, error) {
 }
 
 func (p *Parser[K]) runBoolVM(ctx context.Context, tCtx K, program *microProgram[K]) (bool, error) {
-	stack := p.vmStackPool.Get()
-	stack = stack[:program.stack]
+	// Use stack-allocated array instead of sync.Pool to avoid 24B/1 alloc overhead
+	var stackArr [defaultMicroVMStackSize]ir.Value
+	stack := stackArr[:program.stack]
 
-	val, err := vm.RunWithStackAndLoader(stack, program.program, func(idx uint32) (ir.Value, error) {
-		if int(idx) >= len(program.getters) {
-			return ir.Value{}, vm.ErrInvalidGetter
-		}
-		raw, getErr := program.getters[idx].Get(ctx, tCtx)
-		if getErr != nil {
-			return ir.Value{}, getErr
-		}
-		return valueToVM(raw)
-	})
-
-	p.vmStackPool.Put(stack)
+	// Use context-aware runner with pre-compiled accessors - no per-run closure allocation
+	val, err := vm.RunWithStackAndContext(stack, program.program, ctx, tCtx)
 
 	if err != nil {
 		p.logVMError(err)
@@ -135,12 +126,15 @@ func (p *Parser[K]) newComparisonEvaluator(comparison *comparison) (BoolExpr[K],
 					return result, nil
 				}}, nil
 			}
-			if p.vmStackPool == nil {
-				p.vmStackPool = vm.NewStackPool(defaultMicroVMStackSize)
+			// For simple path==const comparisons (1 getter, simple op), the direct
+			// interpreter is faster than VM dispatch overhead. Fall through to use
+			// the direct path for these trivial cases.
+			if !isTrivialComparison(comparison, program) {
+				return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
+					return p.runBoolVM(ctx, tCtx, program)
+				}}, nil
 			}
-			return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
-				return p.runBoolVM(ctx, tCtx, program)
-			}}, nil
+			// Fall through to direct interpreter for trivial comparisons
 		}
 	}
 
@@ -168,6 +162,22 @@ func (p *Parser[K]) newComparisonEvaluator(comparison *comparison) (BoolExpr[K],
 	}}, nil
 }
 
+// isTrivialComparison returns true for simple path==const patterns where
+// the direct interpreter is faster than VM dispatch overhead.
+func isTrivialComparison[K any](cmp *comparison, program *microProgram[K]) bool {
+	// Trivial: exactly 1 getter (path) and simple equality/inequality
+	if len(program.getters) != 1 {
+		return false
+	}
+	// Only optimize eq/ne - relational ops may benefit from VM's typed opcodes
+	switch cmp.Op {
+	case eq, ne:
+		return true
+	default:
+		return false
+	}
+}
+
 func (p *Parser[K]) newBoolExpr(expr *booleanExpression) (BoolExpr[K], error) {
 	if expr == nil {
 		return BoolExpr[K]{alwaysTrue[K]}, nil
@@ -185,9 +195,6 @@ func (p *Parser[K]) newBoolExpr(expr *booleanExpression) (BoolExpr[K], error) {
 					}
 					return result, nil
 				}}, nil
-			}
-			if p.vmStackPool == nil {
-				p.vmStackPool = vm.NewStackPool(defaultMicroVMStackSize)
 			}
 			return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
 				return p.runBoolVM(ctx, tCtx, program)

@@ -11,7 +11,7 @@ import (
 )
 
 // Disassemble renders bytecode into a human-readable format.
-func Disassemble(p *Program) string {
+func Disassemble[K any](p *Program[K]) string {
 	if p == nil {
 		return ""
 	}

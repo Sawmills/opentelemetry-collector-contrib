@@ -182,7 +182,7 @@ func BenchmarkOTTLComparisonAddEq_VM(b *testing.B) {
 }
 
 func BenchmarkOTTLMicroVMAddEq(b *testing.B) {
-	program := &vm.Program{
+	program := &vm.ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpLoadConst, 1),
@@ -297,7 +297,7 @@ func BenchmarkOTTLComparisonFloatMulEq_VM(b *testing.B) {
 }
 
 func BenchmarkOTTLMicroVMFloatMulEq(b *testing.B) {
-	program := &vm.Program{
+	program := &vm.ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpLoadConst, 1),
@@ -680,7 +680,7 @@ func BenchmarkOTTLComparisonDeepArithmetic_VM(b *testing.B) {
 }
 
 func BenchmarkOTTLMicroVMDeepArithmetic(b *testing.B) {
-	program := &vm.Program{
+	program := &vm.ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpLoadConst, 1),
@@ -810,7 +810,7 @@ func BenchmarkOTTLComparisonManyComparisons_VM(b *testing.B) {
 }
 
 func BenchmarkOTTLMicroVMManyComparisons(b *testing.B) {
-	program := &vm.Program{
+	program := &vm.ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpLoadConst, 0),
@@ -863,7 +863,7 @@ func BenchmarkOTTLMicroVMManyComparisons(b *testing.B) {
 }
 
 func BenchmarkOTTLMicroVMDeepArithmeticSpecialized(b *testing.B) {
-	program := &vm.Program{
+	program := &vm.ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpLoadConst, 1),
@@ -907,7 +907,7 @@ func BenchmarkOTTLMicroVMDeepArithmeticSpecialized(b *testing.B) {
 }
 
 func BenchmarkOTTLMicroVMAddEqSpecialized(b *testing.B) {
-	program := &vm.Program{
+	program := &vm.ProgramAny{
 		Code: []ir.Instruction{
 			ir.Encode(ir.OpLoadConst, 0),
 			ir.Encode(ir.OpLoadConst, 1),
