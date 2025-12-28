@@ -1038,29 +1038,59 @@ func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
 	if path == nil || len(path.Fields) != 1 {
 		return false, nil
 	}
-	if path.Context != "" && path.Context != "log" {
-		return false, nil
-	}
 	field := path.Fields[0]
 	if len(field.Keys) != 0 {
 		return false, nil
 	}
-	switch field.Name {
-	case "body":
-		c.code = append(c.code, ir.Encode(ir.OpGetBody, 0))
-		c.onPush()
-		return true, nil
-	case "severity_number":
-		c.code = append(c.code, ir.Encode(ir.OpGetSeverity, 0))
-		c.onPush()
-		return true, nil
-	case "time_unix_nano":
-		c.code = append(c.code, ir.Encode(ir.OpGetTimestamp, 0))
-		c.onPush()
-		return true, nil
-	default:
-		return false, nil
+	switch path.Context {
+	case "", "log":
+		switch field.Name {
+		case "body":
+			c.code = append(c.code, ir.Encode(ir.OpGetBody, 0))
+			c.onPush()
+			return true, nil
+		case "severity_number":
+			c.code = append(c.code, ir.Encode(ir.OpGetSeverity, 0))
+			c.onPush()
+			return true, nil
+		case "time_unix_nano":
+			c.code = append(c.code, ir.Encode(ir.OpGetTimestamp, 0))
+			c.onPush()
+			return true, nil
+		}
+	case "span":
+		switch field.Name {
+		case "name":
+			c.code = append(c.code, ir.Encode(ir.OpGetSpanName, 0))
+			c.onPush()
+			return true, nil
+		case "start_time_unix_nano":
+			c.code = append(c.code, ir.Encode(ir.OpGetSpanStartTime, 0))
+			c.onPush()
+			return true, nil
+		case "end_time_unix_nano":
+			c.code = append(c.code, ir.Encode(ir.OpGetSpanEndTime, 0))
+			c.onPush()
+			return true, nil
+		}
 	}
+	if path.Context == "" {
+		switch field.Name {
+		case "name":
+			c.code = append(c.code, ir.Encode(ir.OpGetSpanName, 0))
+			c.onPush()
+			return true, nil
+		case "start_time_unix_nano":
+			c.code = append(c.code, ir.Encode(ir.OpGetSpanStartTime, 0))
+			c.onPush()
+			return true, nil
+		case "end_time_unix_nano":
+			c.code = append(c.code, ir.Encode(ir.OpGetSpanEndTime, 0))
+			c.onPush()
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (c *microCompiler[K]) emitMathExpression(expr *mathExpression) error {

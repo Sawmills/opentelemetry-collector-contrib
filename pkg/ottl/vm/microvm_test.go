@@ -10,6 +10,7 @@ import (
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/ptrace"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 )
@@ -20,6 +21,14 @@ type logCtx struct {
 
 func (c logCtx) GetLogRecord() plog.LogRecord {
 	return c.lr
+}
+
+type spanCtx struct {
+	span ptrace.Span
+}
+
+func (c spanCtx) GetSpan() ptrace.Span {
+	return c.span
 }
 
 func TestMicroVMRun_AddEq(t *testing.T) {
@@ -300,6 +309,104 @@ func TestRunWithStackAndContext_SetTimestamp(t *testing.T) {
 	}
 	if got := lr.Timestamp().AsTime().UnixNano(); got != 99 {
 		t.Fatalf("unexpected timestamp: %d", got)
+	}
+}
+
+func TestRunWithStackAndContext_GetSpanName(t *testing.T) {
+	span := ptrace.NewSpan()
+	span.SetName("root")
+	ctx := spanCtx{span: span}
+
+	program := &Program[spanCtx]{Code: []ir.Instruction{ir.Encode(ir.OpGetSpanName, 0)}}
+	var stack [4]ir.Value
+	val, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.String()
+	if !ok || got != "root" {
+		t.Fatalf("unexpected span name: %v", val)
+	}
+}
+
+func TestRunWithStackAndContext_SetSpanName(t *testing.T) {
+	span := ptrace.NewSpan()
+	ctx := spanCtx{span: span}
+
+	program := &Program[spanCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetSpanName, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.StringValue("updated"),
+			ir.BoolValue(true),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got := span.Name(); got != "updated" {
+		t.Fatalf("unexpected span name: %q", got)
+	}
+}
+
+func TestRunWithStackAndContext_GetSpanStartEnd(t *testing.T) {
+	span := ptrace.NewSpan()
+	span.SetStartTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, 7)))
+	span.SetEndTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, 9)))
+	ctx := spanCtx{span: span}
+
+	program := &Program[spanCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpGetSpanStartTime, 0),
+			ir.Encode(ir.OpGetSpanEndTime, 0),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got := stack[0]; got.Type != ir.TypeInt || int64(got.Num) != 7 {
+		t.Fatalf("unexpected span start time: %v", got)
+	}
+	if got := stack[1]; got.Type != ir.TypeInt || int64(got.Num) != 9 {
+		t.Fatalf("unexpected span end time: %v", got)
+	}
+}
+
+func TestRunWithStackAndContext_SetSpanStartEnd(t *testing.T) {
+	span := ptrace.NewSpan()
+	ctx := spanCtx{span: span}
+
+	program := &Program[spanCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetSpanStartTime, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+			ir.Encode(ir.OpSetSpanEndTime, 0),
+			ir.Encode(ir.OpLoadConst, 2),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(11),
+			ir.Int64Value(13),
+			ir.BoolValue(true),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got := span.StartTimestamp().AsTime().UnixNano(); got != 11 {
+		t.Fatalf("unexpected span start time: %d", got)
+	}
+	if got := span.EndTimestamp().AsTime().UnixNano(); got != 13 {
+		t.Fatalf("unexpected span end time: %d", got)
 	}
 }
 

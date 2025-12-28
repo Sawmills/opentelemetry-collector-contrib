@@ -443,6 +443,75 @@ func TestCompileMicroComparison_DirectFieldTimestampOpcode(t *testing.T) {
 	}
 }
 
+func TestCompileMicroComparison_DirectFieldSpanNameOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "span", Fields: []field{{Name: "name"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("root")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetSpanName {
+		t.Fatalf("expected GET_SPAN_NAME, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldSpanStartTimeOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "span", Fields: []field{{Name: "start_time_unix_nano"}}}}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(7)}},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetSpanStartTime {
+		t.Fatalf("expected GET_SPAN_START_TIME, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldSpanEndTimeOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "span", Fields: []field{{Name: "end_time_unix_nano"}}}}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(9)}},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetSpanEndTime {
+		t.Fatalf("expected GET_SPAN_END_TIME, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
 func TestCompileMicroComparison_Unsupported(t *testing.T) {
 	p := newTestParser(t, false)
 	n := isNil(true)

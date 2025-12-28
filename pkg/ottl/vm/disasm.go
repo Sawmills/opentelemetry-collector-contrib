@@ -152,6 +152,18 @@ func opcodeName(op ir.Opcode) string {
 		return "GT_CONST"
 	case ir.OpGteConst:
 		return "GTE_CONST"
+	case ir.OpGetSpanName:
+		return "GET_SPAN_NAME"
+	case ir.OpSetSpanName:
+		return "SET_SPAN_NAME"
+	case ir.OpGetSpanStartTime:
+		return "GET_SPAN_START_TIME"
+	case ir.OpSetSpanStartTime:
+		return "SET_SPAN_START_TIME"
+	case ir.OpGetSpanEndTime:
+		return "GET_SPAN_END_TIME"
+	case ir.OpSetSpanEndTime:
+		return "SET_SPAN_END_TIME"
 	default:
 		return fmt.Sprintf("OP_%d", op)
 	}
