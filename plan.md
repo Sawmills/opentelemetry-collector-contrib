@@ -130,9 +130,10 @@ type Program struct {
 
 ## Benchmarks (Local, 2025-12-28, Apple M3 Max)
 
-- OTTL add/eq: interpreter 11.33 ns/op (0 allocs), VM 30.78 ns/op (0 allocs), microVM 15.73 ns/op (0 allocs)
-- OTTL float mul/eq: interpreter 17.49 ns/op (1 alloc, 8 B), VM 32.12 ns/op (0 allocs), microVM 17.87 ns/op (0 allocs)
-- OTTL path eq (`attributes["foo"] == 7`): interpreter 7.295 ns/op (0 allocs), VM 32.35 ns/op (0 allocs)
+- OTTL add/eq: interpreter 11.39 ns/op (0 allocs), VM 32.47 ns/op (0 allocs), microVM 16.03 ns/op (0 allocs)
+- OTTL float mul/eq: interpreter 17.94 ns/op (1 alloc, 8 B), VM 32.34 ns/op (0 allocs), microVM 17.98 ns/op (0 allocs)
+- OTTL path eq (`attributes["foo"] == 7`): interpreter 7.187 ns/op (0 allocs), VM 32.32 ns/op (0 allocs)
+- OTTL complex where (two attr compares + math): interpreter 23.36 ns/op (0 allocs), VM 46.97 ns/op (0 allocs)
 - ctxutil mixed literal key path (map→slice→map): 62.38 ns/op (2 allocs, 112 B)
 
 ### Phase 1: Core VM Runtime

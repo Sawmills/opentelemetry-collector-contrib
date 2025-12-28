@@ -31,6 +31,9 @@ type Value struct {
 	Ptr  unsafe.Pointer
 }
 
+// Compile-time size assertion: Value must be exactly 24 bytes.
+var _ [24]byte = [unsafe.Sizeof(Value{})]byte{}
+
 // Int64Value constructs an int Value.
 func Int64Value(v int64) Value {
 	return Value{Type: TypeInt, Num: uint64(v)}
@@ -50,8 +53,14 @@ func BoolValue(v bool) Value {
 }
 
 // StringValue constructs a string Value.
+//
+// Implementation note: store the string data pointer in Ptr and the length in Num
+// to keep Value at 24 bytes and avoid per-call heap allocation.
 func StringValue(v string) Value {
-	return Value{Type: TypeString, Ptr: unsafe.Pointer(&v)}
+	if len(v) == 0 {
+		return Value{Type: TypeString}
+	}
+	return Value{Type: TypeString, Num: uint64(len(v)), Ptr: unsafe.Pointer(unsafe.StringData(v))}
 }
 
 // Int64 returns the int64 payload when TypeInt.
@@ -72,10 +81,16 @@ func (v Value) Float64() (float64, bool) {
 
 // String returns the string payload when TypeString.
 func (v Value) String() (string, bool) {
-	if v.Type != TypeString || v.Ptr == nil {
+	if v.Type != TypeString {
 		return "", false
 	}
-	return *(*string)(v.Ptr), true
+	if v.Num == 0 {
+		return "", true
+	}
+	if v.Ptr == nil {
+		return "", false
+	}
+	return unsafe.String((*byte)(v.Ptr), int(v.Num)), true
 }
 
 // Bool returns the bool payload when TypeBool.
