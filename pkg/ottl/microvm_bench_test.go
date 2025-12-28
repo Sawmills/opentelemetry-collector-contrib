@@ -61,6 +61,37 @@ func newBenchParserWithPath(withVM bool, getter func() any) (Parser[any], error)
 	)
 }
 
+func newBenchParserWithPaths(withVM bool, getter func(pathName, key string) any) (Parser[any], error) {
+	options := []Option[any]{}
+	if withVM {
+		options = append(options, WithVMEnabled[any]())
+	}
+	return NewParser[any](
+		map[string]Factory[any]{},
+		func(path Path[any]) (GetSetter[any], error) {
+			keys := path.Keys()
+			var key string
+			if len(keys) > 0 {
+				s, err := keys[0].String(context.Background(), nil)
+				if err != nil {
+					return nil, err
+				}
+				if s != nil {
+					key = *s
+				}
+			}
+			return StandardGetSetter[any]{
+				Getter: func(context.Context, any) (any, error) {
+					return getter(path.Name(), key), nil
+				},
+				Setter: func(context.Context, any, any) error { return nil },
+			}, nil
+		},
+		component.TelemetrySettings{Logger: zap.NewNop()},
+		options...,
+	)
+}
+
 func BenchmarkOTTLInterpreterAddEq(b *testing.B) {
 	p, err := newBenchParser(false)
 	if err != nil {
@@ -347,6 +378,162 @@ func BenchmarkOTTLComparisonPathEq_VM(b *testing.B) {
 	}
 
 	evaluator, err := p.newComparisonEvaluator(cmp)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLInterpreterComplexWhere(b *testing.B) {
+	p, err := newBenchParserWithPaths(false, func(_ string, key string) any {
+		switch key {
+		case "foo":
+			return int64(7)
+		case "bar":
+			return int64(9)
+		default:
+			return int64(0)
+		}
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	cmpFoo := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "attributes", Keys: []key{{String: stringp("foo")}}}}}}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(7)}},
+	}
+	cmpBar := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "attributes", Keys: []key{{String: stringp("bar")}}}}}}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(9)}},
+	}
+	expr := &mathExpression{
+		Left: &addSubTerm{
+			Left: &mathValue{Literal: &mathExprLiteral{Int: int64p(1)}},
+		},
+		Right: []*opAddSubTerm{
+			{
+				Operator: add,
+				Term: &addSubTerm{
+					Left: &mathValue{Literal: &mathExprLiteral{Int: int64p(2)}},
+				},
+			},
+		},
+	}
+	cmpMath := &comparison{
+		Left:  value{MathExpression: expr},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(3)}},
+	}
+
+	boolExpr := &booleanExpression{
+		Left: &term{
+			Left: &booleanValue{Comparison: cmpFoo},
+			Right: []*opAndBooleanValue{
+				{Operator: "and", Value: &booleanValue{Comparison: cmpBar}},
+			},
+		},
+		Right: []*opOrTerm{
+			{
+				Operator: "or",
+				Term: &term{
+					Left: &booleanValue{Comparison: cmpMath},
+				},
+			},
+		},
+	}
+
+	evaluator, err := p.newBoolExpr(boolExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonComplexWhere_VM(b *testing.B) {
+	p, err := newBenchParserWithPaths(true, func(_ string, key string) any {
+		switch key {
+		case "foo":
+			return int64(7)
+		case "bar":
+			return int64(9)
+		default:
+			return int64(0)
+		}
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	cmpFoo := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "attributes", Keys: []key{{String: stringp("foo")}}}}}}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(7)}},
+	}
+	cmpBar := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "attributes", Keys: []key{{String: stringp("bar")}}}}}}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(9)}},
+	}
+	expr := &mathExpression{
+		Left: &addSubTerm{
+			Left: &mathValue{Literal: &mathExprLiteral{Int: int64p(1)}},
+		},
+		Right: []*opAddSubTerm{
+			{
+				Operator: add,
+				Term: &addSubTerm{
+					Left: &mathValue{Literal: &mathExprLiteral{Int: int64p(2)}},
+				},
+			},
+		},
+	}
+	cmpMath := &comparison{
+		Left:  value{MathExpression: expr},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(3)}},
+	}
+
+	boolExpr := &booleanExpression{
+		Left: &term{
+			Left: &booleanValue{Comparison: cmpFoo},
+			Right: []*opAndBooleanValue{
+				{Operator: "and", Value: &booleanValue{Comparison: cmpBar}},
+			},
+		},
+		Right: []*opOrTerm{
+			{
+				Operator: "or",
+				Term: &term{
+					Left: &booleanValue{Comparison: cmpMath},
+				},
+			},
+		},
+	}
+
+	evaluator, err := p.newBoolExpr(boolExpr)
 	if err != nil {
 		b.Fatal(err)
 	}
