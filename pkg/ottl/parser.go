@@ -72,6 +72,7 @@ type Parser[K any] struct {
 	pathContextNames   map[string]struct{}
 	vmEnabled          bool
 	vmStackPool        *vm.StackPool
+	vmGasLimit         uint64
 	vmProgramCache     map[*comparison]*microProgram[K]
 	vmBoolProgramCache map[*booleanExpression]*microProgram[K]
 	vmProgramCacheMu   sync.Mutex
