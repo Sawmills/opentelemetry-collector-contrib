@@ -24,6 +24,10 @@ func float64p(v float64) *float64 {
 	return &v
 }
 
+func stringp(v string) *string {
+	return &v
+}
+
 func newBenchParser(withVM bool) (Parser[any], error) {
 	options := []Option[any]{}
 	if withVM {
