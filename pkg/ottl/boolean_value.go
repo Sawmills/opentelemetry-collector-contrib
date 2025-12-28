@@ -5,10 +5,12 @@ package ottl // import "github.com/open-telemetry/opentelemetry-collector-contri
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
+	"go.uber.org/zap"
 )
 
 // boolExpressionEvaluator is a function that returns the result.
@@ -105,6 +107,7 @@ func (p *Parser[K]) runBoolVM(ctx context.Context, tCtx K, program *microProgram
 	p.vmStackPool.Put(stack)
 
 	if err != nil {
+		p.logVMError(err)
 		return false, err
 	}
 	result, ok := val.Bool()
@@ -124,7 +127,12 @@ func (p *Parser[K]) newComparisonEvaluator(comparison *comparison) (BoolExpr[K],
 		if err == nil {
 			if len(program.getters) == 0 {
 				return BoolExpr[K]{func(context.Context, K) (bool, error) {
-					return runBoolVMConstOnly(program)
+					result, err := runBoolVMConstOnly(program)
+					if err != nil {
+						p.logVMError(err)
+						return false, err
+					}
+					return result, nil
 				}}, nil
 			}
 			if p.vmStackPool == nil {
@@ -170,7 +178,12 @@ func (p *Parser[K]) newBoolExpr(expr *booleanExpression) (BoolExpr[K], error) {
 		if err == nil {
 			if len(program.getters) == 0 {
 				return BoolExpr[K]{func(context.Context, K) (bool, error) {
-					return runBoolVMConstOnly(program)
+					result, err := runBoolVMConstOnly(program)
+					if err != nil {
+						p.logVMError(err)
+						return false, err
+					}
+					return result, nil
 				}}, nil
 			}
 			if p.vmStackPool == nil {
@@ -195,6 +208,14 @@ func (p *Parser[K]) newBoolExpr(expr *booleanExpression) (BoolExpr[K], error) {
 	}
 
 	return orFuncs(funcs), nil
+}
+
+func (p *Parser[K]) logVMError(err error) {
+	if errors.Is(err, vm.ErrGasExhausted) {
+		p.telemetrySettings.Logger.Warn("OTTL VM gas exhausted", zap.Error(err))
+		return
+	}
+	p.telemetrySettings.Logger.Debug("OTTL VM execution error", zap.Error(err))
 }
 
 func (p *Parser[K]) newBooleanTermEvaluator(term *term) (BoolExpr[K], error) {
