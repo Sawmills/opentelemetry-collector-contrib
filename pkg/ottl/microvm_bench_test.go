@@ -47,7 +47,6 @@ func newBenchParserWithPath(withVM bool, getter func() any) (Parser[any], error)
 	return NewParser[any](
 		map[string]Factory[any]{},
 		func(path Path[any]) (GetSetter[any], error) {
-			// Ensure keys are marked as consumed when present.
 			_ = path.Keys()
 			return StandardGetSetter[any]{
 				Getter: func(context.Context, any) (any, error) {
@@ -550,14 +549,12 @@ func BenchmarkOTTLComparisonComplexWhere_VM(b *testing.B) {
 	}
 }
 
-// Deep arithmetic: ((((1+2)*3)-4)/2)+5 == 6
 func BenchmarkOTTLInterpreterDeepArithmetic(b *testing.B) {
 	p, err := newBenchParser(false)
 	if err != nil {
 		b.Fatal(err)
 	}
 
-	// Build: ((((1+2)*3)-4)/2)+5
 	innerAdd := &mathExpression{
 		Left: &addSubTerm{Left: &mathValue{Literal: &mathExprLiteral{Int: int64p(1)}}},
 		Right: []*opAddSubTerm{{
@@ -595,7 +592,7 @@ func BenchmarkOTTLInterpreterDeepArithmetic(b *testing.B) {
 	cmp := &comparison{
 		Left:  value{MathExpression: add5},
 		Op:    eq,
-		Right: value{Literal: &mathExprLiteral{Int: int64p(7)}}, // ((((1+2)*3)-4)/2)+5 = 7
+		Right: value{Literal: &mathExprLiteral{Int: int64p(7)}},
 	}
 
 	evaluator, err := p.newComparisonEvaluator(cmp)
@@ -679,22 +676,21 @@ func BenchmarkOTTLComparisonDeepArithmetic_VM(b *testing.B) {
 }
 
 func BenchmarkOTTLMicroVMDeepArithmetic(b *testing.B) {
-	// ((((1+2)*3)-4)/2)+5 == 7
 	program := &vm.Program{
 		Code: []ir.Instruction{
-			ir.Encode(ir.OpLoadConst, 0), // 1
-			ir.Encode(ir.OpLoadConst, 1), // 2
-			ir.Encode(ir.OpAdd, 0),       // 3
-			ir.Encode(ir.OpLoadConst, 2), // 3
-			ir.Encode(ir.OpMul, 0),       // 9
-			ir.Encode(ir.OpLoadConst, 3), // 4
-			ir.Encode(ir.OpSub, 0),       // 5
-			ir.Encode(ir.OpLoadConst, 1), // 2
-			ir.Encode(ir.OpDiv, 0),       // 2
-			ir.Encode(ir.OpLoadConst, 4), // 5
-			ir.Encode(ir.OpAdd, 0),       // 7
-			ir.Encode(ir.OpLoadConst, 5), // 7
-			ir.Encode(ir.OpEq, 0),        // true
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+			ir.Encode(ir.OpAdd, 0),
+			ir.Encode(ir.OpLoadConst, 2),
+			ir.Encode(ir.OpMul, 0),
+			ir.Encode(ir.OpLoadConst, 3),
+			ir.Encode(ir.OpSub, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+			ir.Encode(ir.OpDiv, 0),
+			ir.Encode(ir.OpLoadConst, 4),
+			ir.Encode(ir.OpAdd, 0),
+			ir.Encode(ir.OpLoadConst, 5),
+			ir.Encode(ir.OpEq, 0),
 		},
 		Consts: []ir.Value{
 			ir.Int64Value(1),
@@ -723,7 +719,6 @@ func BenchmarkOTTLMicroVMDeepArithmetic(b *testing.B) {
 	}
 }
 
-// Many comparisons: a==1 and b==2 and c==3 and d==4 and e==5
 func BenchmarkOTTLInterpreterManyComparisons(b *testing.B) {
 	p, err := newBenchParser(false)
 	if err != nil {
@@ -811,32 +806,31 @@ func BenchmarkOTTLComparisonManyComparisons_VM(b *testing.B) {
 }
 
 func BenchmarkOTTLMicroVMManyComparisons(b *testing.B) {
-	// 1==1 and 2==2 and 3==3 and 4==4 and 5==5
 	program := &vm.Program{
 		Code: []ir.Instruction{
-			ir.Encode(ir.OpLoadConst, 0), // 1
-			ir.Encode(ir.OpLoadConst, 0), // 1
-			ir.Encode(ir.OpEq, 0),        // true
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpEq, 0),
 			ir.Encode(ir.OpJumpIfFalse, 20),
 			ir.Encode(ir.OpPop, 0),
-			ir.Encode(ir.OpLoadConst, 1), // 2
-			ir.Encode(ir.OpLoadConst, 1), // 2
-			ir.Encode(ir.OpEq, 0),        // true
+			ir.Encode(ir.OpLoadConst, 1),
+			ir.Encode(ir.OpLoadConst, 1),
+			ir.Encode(ir.OpEq, 0),
 			ir.Encode(ir.OpJumpIfFalse, 20),
 			ir.Encode(ir.OpPop, 0),
-			ir.Encode(ir.OpLoadConst, 2), // 3
-			ir.Encode(ir.OpLoadConst, 2), // 3
-			ir.Encode(ir.OpEq, 0),        // true
+			ir.Encode(ir.OpLoadConst, 2),
+			ir.Encode(ir.OpLoadConst, 2),
+			ir.Encode(ir.OpEq, 0),
 			ir.Encode(ir.OpJumpIfFalse, 20),
 			ir.Encode(ir.OpPop, 0),
-			ir.Encode(ir.OpLoadConst, 3), // 4
-			ir.Encode(ir.OpLoadConst, 3), // 4
-			ir.Encode(ir.OpEq, 0),        // true
+			ir.Encode(ir.OpLoadConst, 3),
+			ir.Encode(ir.OpLoadConst, 3),
+			ir.Encode(ir.OpEq, 0),
 			ir.Encode(ir.OpJumpIfFalse, 20),
 			ir.Encode(ir.OpPop, 0),
-			ir.Encode(ir.OpLoadConst, 4), // 5
-			ir.Encode(ir.OpLoadConst, 4), // 5
-			ir.Encode(ir.OpEq, 0),        // true
+			ir.Encode(ir.OpLoadConst, 4),
+			ir.Encode(ir.OpLoadConst, 4),
+			ir.Encode(ir.OpEq, 0),
 		},
 		Consts: []ir.Value{
 			ir.Int64Value(1),
@@ -864,23 +858,22 @@ func BenchmarkOTTLMicroVMManyComparisons(b *testing.B) {
 	}
 }
 
-// Specialized opcodes benchmark: ((((1+2)*3)-4)/2)+5 == 7 using OpAddInt, OpMulInt, etc.
 func BenchmarkOTTLMicroVMDeepArithmeticSpecialized(b *testing.B) {
 	program := &vm.Program{
 		Code: []ir.Instruction{
-			ir.Encode(ir.OpLoadConst, 0), // 1
-			ir.Encode(ir.OpLoadConst, 1), // 2
-			ir.Encode(ir.OpAddInt, 0),    // 3
-			ir.Encode(ir.OpLoadConst, 2), // 3
-			ir.Encode(ir.OpMulInt, 0),    // 9
-			ir.Encode(ir.OpLoadConst, 3), // 4
-			ir.Encode(ir.OpSubInt, 0),    // 5
-			ir.Encode(ir.OpLoadConst, 1), // 2
-			ir.Encode(ir.OpDivInt, 0),    // 2
-			ir.Encode(ir.OpLoadConst, 4), // 5
-			ir.Encode(ir.OpAddInt, 0),    // 7
-			ir.Encode(ir.OpLoadConst, 5), // 7
-			ir.Encode(ir.OpEqInt, 0),     // true
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+			ir.Encode(ir.OpAddInt, 0),
+			ir.Encode(ir.OpLoadConst, 2),
+			ir.Encode(ir.OpMulInt, 0),
+			ir.Encode(ir.OpLoadConst, 3),
+			ir.Encode(ir.OpSubInt, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+			ir.Encode(ir.OpDivInt, 0),
+			ir.Encode(ir.OpLoadConst, 4),
+			ir.Encode(ir.OpAddInt, 0),
+			ir.Encode(ir.OpLoadConst, 5),
+			ir.Encode(ir.OpEqInt, 0),
 		},
 		Consts: []ir.Value{
 			ir.Int64Value(1),
@@ -909,7 +902,6 @@ func BenchmarkOTTLMicroVMDeepArithmeticSpecialized(b *testing.B) {
 	}
 }
 
-// Simple add/eq with specialized opcodes
 func BenchmarkOTTLMicroVMAddEqSpecialized(b *testing.B) {
 	program := &vm.Program{
 		Code: []ir.Instruction{
