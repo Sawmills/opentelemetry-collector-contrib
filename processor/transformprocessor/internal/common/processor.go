@@ -194,11 +194,11 @@ type baseContext interface {
 
 func withCommonContextParsers[R any]() ottl.ParserCollectionOption[R] {
 	return func(pc *ottl.ParserCollection[R]) error {
-		rp, err := ottlresource.NewParser(ResourceFunctions(), pc.Settings, ottlresource.EnablePathContextNames())
+		rp, err := ottlresource.NewParser(ResourceFunctions(), pc.Settings, ottlresource.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottlresource.TransformContext]())
 		if err != nil {
 			return err
 		}
-		sp, err := ottlscope.NewParser(ScopeFunctions(), pc.Settings, ottlscope.EnablePathContextNames())
+		sp, err := ottlscope.NewParser(ScopeFunctions(), pc.Settings, ottlscope.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottlscope.TransformContext]())
 		if err != nil {
 			return err
 		}

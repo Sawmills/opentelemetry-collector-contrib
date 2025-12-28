@@ -120,6 +120,22 @@ func opcodeName(op ir.Opcode) string {
 		return "NEG_INT"
 	case ir.OpNegFloat:
 		return "NEG_FLOAT"
+	case ir.OpLoadAttrCached:
+		return "LOAD_ATTR_CACHED"
+	case ir.OpSetAttrCached:
+		return "SET_ATTR_CACHED"
+	case ir.OpGetBody:
+		return "GET_BODY"
+	case ir.OpSetBody:
+		return "SET_BODY"
+	case ir.OpGetSeverity:
+		return "GET_SEVERITY"
+	case ir.OpSetSeverity:
+		return "SET_SEVERITY"
+	case ir.OpGetTimestamp:
+		return "GET_TIMESTAMP"
+	case ir.OpSetTimestamp:
+		return "SET_TIMESTAMP"
 	default:
 		return fmt.Sprintf("OP_%d", op)
 	}

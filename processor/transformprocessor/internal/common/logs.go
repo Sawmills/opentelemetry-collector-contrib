@@ -59,7 +59,7 @@ type LogParserCollectionOption ottl.ParserCollectionOption[LogsConsumer]
 
 func WithLogParser(functions map[string]ottl.Factory[ottllog.TransformContext]) LogParserCollectionOption {
 	return func(pc *ottl.ParserCollection[LogsConsumer]) error {
-		logParser, err := ottllog.NewParser(functions, pc.Settings, ottllog.EnablePathContextNames())
+		logParser, err := ottllog.NewParser(functions, pc.Settings, ottllog.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottllog.TransformContext]())
 		if err != nil {
 			return err
 		}
