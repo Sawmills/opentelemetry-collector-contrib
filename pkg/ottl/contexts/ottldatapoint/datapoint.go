@@ -19,7 +19,10 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxmetric"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxresource"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxscope"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxutil"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/logging"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 )
 
 // ContextName is the name of the context for datapoints.
@@ -180,12 +183,17 @@ func NewParser(
 	telemetrySettings component.TelemetrySettings,
 	options ...ottl.Option[TransformContext],
 ) (ottl.Parser[TransformContext], error) {
+	opts := append([]ottl.Option[TransformContext]{
+		ottl.WithVMAttrGetter[TransformContext](datapointAttrGetter),
+		ottl.WithVMAttrSetter[TransformContext](datapointAttrSetter),
+		ottl.WithVMAttrContextNames[TransformContext]([]string{ctxdatapoint.Name}),
+	}, options...)
 	return ctxcommon.NewParser(
 		functions,
 		telemetrySettings,
 		pathExpressionParser(getCache),
 		parseEnum,
-		options...,
+		opts...,
 	)
 }
 
@@ -201,6 +209,53 @@ func parseEnum(val *ottl.EnumSymbol) (*ottl.Enum, error) {
 
 func getCache(tCtx TransformContext) pcommon.Map {
 	return tCtx.cache
+}
+
+func datapointAttrGetter(tCtx TransformContext, key string) (ir.Value, error) {
+	switch dp := tCtx.GetDataPoint().(type) {
+	case pmetric.NumberDataPoint:
+		return mapValueToVM(dp.Attributes(), key)
+	case pmetric.HistogramDataPoint:
+		return mapValueToVM(dp.Attributes(), key)
+	case pmetric.ExponentialHistogramDataPoint:
+		return mapValueToVM(dp.Attributes(), key)
+	case pmetric.SummaryDataPoint:
+		return mapValueToVM(dp.Attributes(), key)
+	}
+	return ir.Value{}, vm.ErrTypeMismatch
+}
+
+func datapointAttrSetter(tCtx TransformContext, key string, val ir.Value) error {
+	switch dp := tCtx.GetDataPoint().(type) {
+	case pmetric.NumberDataPoint:
+		return ctxutil.SetMapValueFromVM(dp.Attributes(), key, val)
+	case pmetric.HistogramDataPoint:
+		return ctxutil.SetMapValueFromVM(dp.Attributes(), key, val)
+	case pmetric.ExponentialHistogramDataPoint:
+		return ctxutil.SetMapValueFromVM(dp.Attributes(), key, val)
+	case pmetric.SummaryDataPoint:
+		return ctxutil.SetMapValueFromVM(dp.Attributes(), key, val)
+	}
+	return vm.ErrTypeMismatch
+}
+
+func mapValueToVM(m pcommon.Map, key string) (ir.Value, error) {
+	val, ok := m.Get(key)
+	if !ok {
+		return ir.Value{}, vm.ErrTypeMismatch
+	}
+	switch val.Type() {
+	case pcommon.ValueTypeInt:
+		return ir.Int64Value(val.Int()), nil
+	case pcommon.ValueTypeDouble:
+		return ir.Float64Value(val.Double()), nil
+	case pcommon.ValueTypeBool:
+		return ir.BoolValue(val.Bool()), nil
+	case pcommon.ValueTypeStr:
+		return ir.StringValue(val.Str()), nil
+	default:
+		return ir.Value{}, vm.ErrTypeMismatch
+	}
 }
 
 func pathExpressionParser(cacheGetter ctxcache.Getter[TransformContext]) ottl.PathExpressionParser[TransformContext] {
