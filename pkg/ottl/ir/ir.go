@@ -34,6 +34,11 @@ type Value struct {
 // Compile-time size assertion: Value must be exactly 24 bytes.
 var _ [24]byte = [unsafe.Sizeof(Value{})]byte{}
 
+var (
+	trueValue  = Value{Type: TypeBool, Num: 1}
+	falseValue = Value{Type: TypeBool, Num: 0}
+)
+
 // Int64Value constructs an int Value.
 func Int64Value(v int64) Value {
 	return Value{Type: TypeInt, Num: uint64(v)}
@@ -47,9 +52,9 @@ func Float64Value(v float64) Value {
 // BoolValue constructs a bool Value.
 func BoolValue(v bool) Value {
 	if v {
-		return Value{Type: TypeBool, Num: 1}
+		return trueValue
 	}
-	return Value{Type: TypeBool}
+	return falseValue
 }
 
 // StringValue constructs a string Value without heap allocation.
@@ -147,6 +152,13 @@ const (
 	OpJumpIfFalse
 	OpPop
 	OpNot
+
+	// Stack manipulation
+	OpDup // Duplicate top of stack
+
+	// Unary ops
+	OpNegInt   // Negate int64
+	OpNegFloat // Negate float64
 )
 
 // Instruction is a 32-bit fixed-width instruction.

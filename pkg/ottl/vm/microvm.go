@@ -195,9 +195,9 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			}
 			sp--
 			if int64(stack[sp-1].Num) == int64(stack[sp].Num) {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+				stack[sp-1] = ir.BoolValue(true)
 			} else {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+				stack[sp-1] = ir.BoolValue(false)
 			}
 
 		case ir.OpNeInt:
@@ -206,9 +206,9 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			}
 			sp--
 			if int64(stack[sp-1].Num) != int64(stack[sp].Num) {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+				stack[sp-1] = ir.BoolValue(true)
 			} else {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+				stack[sp-1] = ir.BoolValue(false)
 			}
 
 		case ir.OpLtInt:
@@ -217,9 +217,9 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			}
 			sp--
 			if int64(stack[sp-1].Num) < int64(stack[sp].Num) {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+				stack[sp-1] = ir.BoolValue(true)
 			} else {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+				stack[sp-1] = ir.BoolValue(false)
 			}
 
 		case ir.OpLteInt:
@@ -228,9 +228,9 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			}
 			sp--
 			if int64(stack[sp-1].Num) <= int64(stack[sp].Num) {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+				stack[sp-1] = ir.BoolValue(true)
 			} else {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+				stack[sp-1] = ir.BoolValue(false)
 			}
 
 		case ir.OpGtInt:
@@ -239,9 +239,9 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			}
 			sp--
 			if int64(stack[sp-1].Num) > int64(stack[sp].Num) {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+				stack[sp-1] = ir.BoolValue(true)
 			} else {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+				stack[sp-1] = ir.BoolValue(false)
 			}
 
 		case ir.OpGteInt:
@@ -250,9 +250,9 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			}
 			sp--
 			if int64(stack[sp-1].Num) >= int64(stack[sp].Num) {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+				stack[sp-1] = ir.BoolValue(true)
 			} else {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+				stack[sp-1] = ir.BoolValue(false)
 			}
 
 		case ir.OpAddFloat:
@@ -300,9 +300,9 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			}
 			sp--
 			if stack[sp-1].Num == stack[sp].Num {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+				stack[sp-1] = ir.BoolValue(true)
 			} else {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+				stack[sp-1] = ir.BoolValue(false)
 			}
 
 		case ir.OpNeFloat:
@@ -311,9 +311,9 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			}
 			sp--
 			if stack[sp-1].Num != stack[sp].Num {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+				stack[sp-1] = ir.BoolValue(true)
 			} else {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+				stack[sp-1] = ir.BoolValue(false)
 			}
 
 		case ir.OpLtFloat:
@@ -324,9 +324,9 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			a := math.Float64frombits(stack[sp-1].Num)
 			b := math.Float64frombits(stack[sp].Num)
 			if a < b {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+				stack[sp-1] = ir.BoolValue(true)
 			} else {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+				stack[sp-1] = ir.BoolValue(false)
 			}
 
 		case ir.OpLteFloat:
@@ -337,9 +337,9 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			a := math.Float64frombits(stack[sp-1].Num)
 			b := math.Float64frombits(stack[sp].Num)
 			if a <= b {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+				stack[sp-1] = ir.BoolValue(true)
 			} else {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+				stack[sp-1] = ir.BoolValue(false)
 			}
 
 		case ir.OpGtFloat:
@@ -350,9 +350,9 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			a := math.Float64frombits(stack[sp-1].Num)
 			b := math.Float64frombits(stack[sp].Num)
 			if a > b {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+				stack[sp-1] = ir.BoolValue(true)
 			} else {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+				stack[sp-1] = ir.BoolValue(false)
 			}
 
 		case ir.OpGteFloat:
@@ -363,9 +363,9 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			a := math.Float64frombits(stack[sp-1].Num)
 			b := math.Float64frombits(stack[sp].Num)
 			if a >= b {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 1}
+				stack[sp-1] = ir.BoolValue(true)
 			} else {
-				stack[sp-1] = ir.Value{Type: ir.TypeBool, Num: 0}
+				stack[sp-1] = ir.BoolValue(false)
 			}
 
 		case ir.OpAdd, ir.OpSub, ir.OpMul, ir.OpDiv:
@@ -483,6 +483,28 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 				}
 				ip = target - 1
 			}
+
+		case ir.OpDup:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = stack[sp-1]
+			sp++
+
+		case ir.OpNegInt:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			stack[sp-1].Num = uint64(-int64(stack[sp-1].Num))
+
+		case ir.OpNegFloat:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			stack[sp-1].Num = stack[sp-1].Num ^ (1 << 63) // flip sign bit
 
 		default:
 			return ir.Value{}, ErrInvalidOpcode
