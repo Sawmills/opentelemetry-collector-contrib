@@ -74,8 +74,6 @@ func orFuncs[K any](funcs []BoolExpr[K]) BoolExpr[K] {
 	}}
 }
 
-// runBoolVMConstOnly executes a constant-only VM program (no getters) using
-// a stack-allocated array for zero allocations.
 func runBoolVMConstOnly[K any](program *microProgram[K]) (bool, error) {
 	var stackArr [defaultMicroVMStackSize]ir.Value
 	val, err := vm.RunWithStack(stackArr[:program.stack], program.program)
@@ -89,13 +87,8 @@ func runBoolVMConstOnly[K any](program *microProgram[K]) (bool, error) {
 	return result, nil
 }
 
-// runBoolVM executes a compiled VM program and returns the boolean result.
-// Uses the parser's stack pool for efficient stack reuse across evaluations.
 func (p *Parser[K]) runBoolVM(ctx context.Context, tCtx K, program *microProgram[K]) (bool, error) {
 	stack := p.vmStackPool.Get()
-	if cap(stack) < program.stack {
-		stack = make([]ir.Value, program.stack)
-	}
 	stack = stack[:program.stack]
 
 	val, err := vm.RunWithStackAndLoader(stack, program.program, func(idx uint32) (ir.Value, error) {

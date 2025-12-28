@@ -52,10 +52,7 @@ func BoolValue(v bool) Value {
 	return Value{Type: TypeBool}
 }
 
-// StringValue constructs a string Value.
-//
-// Implementation note: store the string data pointer in Ptr and the length in Num
-// to keep Value at 24 bytes and avoid per-call heap allocation.
+// StringValue constructs a string Value without heap allocation.
 func StringValue(v string) Value {
 	if len(v) == 0 {
 		return Value{Type: TypeString}
