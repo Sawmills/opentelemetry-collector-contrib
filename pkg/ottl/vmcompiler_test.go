@@ -566,3 +566,32 @@ func TestCompileMicroBooleanExpression_ShortCircuitAnd(t *testing.T) {
 		t.Fatalf("expected boom getter to be skipped, got %d calls", boomCalls)
 	}
 }
+
+func TestCompileMicroComparison_GasLimitOption(t *testing.T) {
+	p, err := NewParser[any](
+		map[string]Factory[any]{},
+		func(Path[any]) (GetSetter[any], error) {
+			return nil, errors.New("path parsing not supported in test")
+		},
+		component.TelemetrySettings{Logger: zap.NewNop()},
+		WithVMEnabled[any](),
+		WithVMGasLimit[any](123),
+	)
+	if err != nil {
+		t.Fatalf("parser init failed: %v", err)
+	}
+
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Int: int64p(1)}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(1)}},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if program.program.GasLimit != 123 {
+		t.Fatalf("expected gas limit 123, got %d", program.program.GasLimit)
+	}
+}

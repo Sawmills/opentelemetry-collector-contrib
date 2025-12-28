@@ -45,6 +45,13 @@ type microCompiler[K any] struct {
 	maxStack    int
 }
 
+func vmGasLimitFor[K any](p *Parser[K]) uint64 {
+	if p != nil && p.vmGasLimit > 0 {
+		return p.vmGasLimit
+	}
+	return vm.DefaultGasLimit
+}
+
 func compileMicroMathExpression(expr *mathExpression) (*vm.Program, error) {
 	if _, err := inferMathExpressionKind(expr); err != nil {
 		return nil, err
@@ -95,7 +102,7 @@ func (p *Parser[K]) compileMicroComparisonVM(cmp *comparison) (*microProgram[K],
 		return nil, fmt.Errorf("vm stack depth %d exceeds max %d", c.maxStack, defaultMicroVMStackSize)
 	}
 	return &microProgram[K]{
-		program: &vm.Program{Code: c.code, Consts: c.consts, GasLimit: vm.DefaultGasLimit},
+		program: &vm.Program{Code: c.code, Consts: c.consts, GasLimit: vmGasLimitFor(p)},
 		getters: c.getters,
 		stack:   c.maxStack,
 	}, nil
@@ -117,7 +124,7 @@ func (p *Parser[K]) compileMicroBoolExpression(expr *booleanExpression) (*microP
 		return nil, fmt.Errorf("vm stack depth %d exceeds max %d", c.maxStack, defaultMicroVMStackSize)
 	}
 	return &microProgram[K]{
-		program: &vm.Program{Code: c.code, Consts: c.consts, GasLimit: vm.DefaultGasLimit},
+		program: &vm.Program{Code: c.code, Consts: c.consts, GasLimit: vmGasLimitFor(p)},
 		getters: c.getters,
 		stack:   c.maxStack,
 	}, nil
