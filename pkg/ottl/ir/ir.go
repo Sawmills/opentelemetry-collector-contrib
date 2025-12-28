@@ -107,6 +107,8 @@ type Opcode uint8
 const (
 	OpLoadConst Opcode = iota
 	OpLoadGetter
+
+	// Generic math/compare (with runtime type dispatch)
 	OpAdd
 	OpSub
 	OpMul
@@ -117,6 +119,32 @@ const (
 	OpLte
 	OpGt
 	OpGte
+
+	// Specialized int64 ops (no type check, inlined)
+	OpAddInt
+	OpSubInt
+	OpMulInt
+	OpDivInt
+	OpEqInt
+	OpNeInt
+	OpLtInt
+	OpLteInt
+	OpGtInt
+	OpGteInt
+
+	// Specialized float64 ops (no type check, inlined)
+	OpAddFloat
+	OpSubFloat
+	OpMulFloat
+	OpDivFloat
+	OpEqFloat
+	OpNeFloat
+	OpLtFloat
+	OpLteFloat
+	OpGtFloat
+	OpGteFloat
+
+	// Control flow
 	OpJump
 	OpJumpIfTrue
 	OpJumpIfFalse

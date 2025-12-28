@@ -142,6 +142,85 @@ func compareOpcode(op compareOp) (ir.Opcode, error) {
 	}
 }
 
+// compareOpcodeTyped returns a specialized comparison opcode when both operands have the same known type.
+func compareOpcodeTyped(op compareOp, kind valueKind) (ir.Opcode, error) {
+	switch kind {
+	case kindInt:
+		switch op {
+		case eq:
+			return ir.OpEqInt, nil
+		case ne:
+			return ir.OpNeInt, nil
+		case lt:
+			return ir.OpLtInt, nil
+		case lte:
+			return ir.OpLteInt, nil
+		case gt:
+			return ir.OpGtInt, nil
+		case gte:
+			return ir.OpGteInt, nil
+		}
+	case kindFloat:
+		switch op {
+		case eq:
+			return ir.OpEqFloat, nil
+		case ne:
+			return ir.OpNeFloat, nil
+		case lt:
+			return ir.OpLtFloat, nil
+		case lte:
+			return ir.OpLteFloat, nil
+		case gt:
+			return ir.OpGtFloat, nil
+		case gte:
+			return ir.OpGteFloat, nil
+		}
+	}
+	// Fall back to generic opcode
+	return compareOpcode(op)
+}
+
+// mathOpcodeTyped returns a specialized math opcode when both operands have the same known type.
+func mathOpcodeTyped(op mathOp, kind valueKind) ir.Opcode {
+	switch kind {
+	case kindInt:
+		switch op {
+		case add:
+			return ir.OpAddInt
+		case sub:
+			return ir.OpSubInt
+		case mult:
+			return ir.OpMulInt
+		case div:
+			return ir.OpDivInt
+		}
+	case kindFloat:
+		switch op {
+		case add:
+			return ir.OpAddFloat
+		case sub:
+			return ir.OpSubFloat
+		case mult:
+			return ir.OpMulFloat
+		case div:
+			return ir.OpDivFloat
+		}
+	}
+	// Fall back to generic opcode
+	switch op {
+	case add:
+		return ir.OpAdd
+	case sub:
+		return ir.OpSub
+	case mult:
+		return ir.OpMul
+	case div:
+		return ir.OpDiv
+	default:
+		return ir.OpAdd // should not happen
+	}
+}
+
 func supportsComparison(op compareOp, left, right valueKind) bool {
 	if left == kindUnknown || right == kindUnknown {
 		return op == eq || op == ne
@@ -394,7 +473,14 @@ func (c *microCompiler[K]) emitComparison(cmp *comparison) error {
 	if err := c.emitValue(cmp.Right); err != nil {
 		return err
 	}
-	op, err := compareOpcode(cmp.Op)
+
+	// Use specialized opcode when both operands have the same known numeric type
+	var op ir.Opcode
+	if leftKind == rightKind && (leftKind == kindInt || leftKind == kindFloat) {
+		op, err = compareOpcodeTyped(cmp.Op, leftKind)
+	} else {
+		op, err = compareOpcode(cmp.Op)
+	}
 	if err != nil {
 		return err
 	}
@@ -425,31 +511,32 @@ func (c *microCompiler[K]) emitMathExpression(expr *mathExpression) error {
 	if expr == nil {
 		return fmt.Errorf("math expression is nil")
 	}
-	if err := c.emitAddSubTerm(expr.Left); err != nil {
+
+	// Infer overall expression type for specialized opcodes
+	exprKind, _ := inferMathExpressionKind(expr)
+
+	if err := c.emitAddSubTermTyped(expr.Left, exprKind); err != nil {
 		return err
 	}
 	for _, rhs := range expr.Right {
 		if rhs == nil || rhs.Term == nil {
 			return fmt.Errorf("invalid add/sub term")
 		}
-		if err := c.emitAddSubTerm(rhs.Term); err != nil {
+		if err := c.emitAddSubTermTyped(rhs.Term, exprKind); err != nil {
 			return err
 		}
-		switch rhs.Operator {
-		case add:
-			c.code = append(c.code, ir.Encode(ir.OpAdd, 0))
-			c.onBinaryOp()
-		case sub:
-			c.code = append(c.code, ir.Encode(ir.OpSub, 0))
-			c.onBinaryOp()
-		default:
-			return fmt.Errorf("unsupported add/sub operator: %v", rhs.Operator)
-		}
+		op := mathOpcodeTyped(rhs.Operator, exprKind)
+		c.code = append(c.code, ir.Encode(op, 0))
+		c.onBinaryOp()
 	}
 	return nil
 }
 
 func (c *microCompiler[K]) emitAddSubTerm(term *addSubTerm) error {
+	return c.emitAddSubTermTyped(term, kindUnknown)
+}
+
+func (c *microCompiler[K]) emitAddSubTermTyped(term *addSubTerm, kind valueKind) error {
 	if term == nil {
 		return fmt.Errorf("add/sub term is nil")
 	}
@@ -463,16 +550,9 @@ func (c *microCompiler[K]) emitAddSubTerm(term *addSubTerm) error {
 		if err := c.emitMathValue(rhs.Value); err != nil {
 			return err
 		}
-		switch rhs.Operator {
-		case mult:
-			c.code = append(c.code, ir.Encode(ir.OpMul, 0))
-			c.onBinaryOp()
-		case div:
-			c.code = append(c.code, ir.Encode(ir.OpDiv, 0))
-			c.onBinaryOp()
-		default:
-			return fmt.Errorf("unsupported mult/div operator: %v", rhs.Operator)
-		}
+		op := mathOpcodeTyped(rhs.Operator, kind)
+		c.code = append(c.code, ir.Encode(op, 0))
+		c.onBinaryOp()
 	}
 	return nil
 }

@@ -74,46 +74,71 @@ func orFuncs[K any](funcs []BoolExpr[K]) BoolExpr[K] {
 	}}
 }
 
+// runBoolVMConstOnly executes a constant-only VM program (no getters) using
+// a stack-allocated array for zero allocations.
+func runBoolVMConstOnly[K any](program *microProgram[K]) (bool, error) {
+	var stackArr [defaultMicroVMStackSize]ir.Value
+	val, err := vm.RunWithStack(stackArr[:program.stack], program.program)
+	if err != nil {
+		return false, err
+	}
+	result, ok := val.Bool()
+	if !ok {
+		return false, fmt.Errorf("vm result is not bool")
+	}
+	return result, nil
+}
+
+// runBoolVM executes a compiled VM program and returns the boolean result.
+// Uses the parser's stack pool for efficient stack reuse across evaluations.
+func (p *Parser[K]) runBoolVM(ctx context.Context, tCtx K, program *microProgram[K]) (bool, error) {
+	stack := p.vmStackPool.Get()
+	if cap(stack) < program.stack {
+		stack = make([]ir.Value, program.stack)
+	}
+	stack = stack[:program.stack]
+
+	val, err := vm.RunWithStackAndLoader(stack, program.program, func(idx uint32) (ir.Value, error) {
+		if int(idx) >= len(program.getters) {
+			return ir.Value{}, vm.ErrInvalidGetter
+		}
+		raw, getErr := program.getters[idx].Get(ctx, tCtx)
+		if getErr != nil {
+			return ir.Value{}, getErr
+		}
+		return valueToVM(raw)
+	})
+
+	p.vmStackPool.Put(stack)
+
+	if err != nil {
+		return false, err
+	}
+	result, ok := val.Bool()
+	if !ok {
+		return false, fmt.Errorf("vm result is not bool")
+	}
+	return result, nil
+}
+
 func (p *Parser[K]) newComparisonEvaluator(comparison *comparison) (BoolExpr[K], error) {
 	if comparison == nil {
 		return BoolExpr[K]{alwaysTrue[K]}, nil
 	}
 
 	if p.vmEnabled {
-		if p.vmStackPool == nil {
-			p.vmStackPool = vm.NewStackPool(defaultMicroVMStackSize)
-		}
 		program, err := p.getOrCompileVMProgram(comparison)
 		if err == nil {
+			if len(program.getters) == 0 {
+				return BoolExpr[K]{func(context.Context, K) (bool, error) {
+					return runBoolVMConstOnly(program)
+				}}, nil
+			}
+			if p.vmStackPool == nil {
+				p.vmStackPool = vm.NewStackPool(defaultMicroVMStackSize)
+			}
 			return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
-				var (
-					val ir.Value
-					err error
-				)
-				var stackArr [defaultMicroVMStackSize]ir.Value
-				stack := stackArr[:]
-				if len(program.getters) == 0 {
-					val, err = vm.RunWithStack(stack, program.program)
-				} else {
-					val, err = vm.RunWithStackAndLoader(stack, program.program, func(idx uint32) (ir.Value, error) {
-						if int(idx) >= len(program.getters) {
-							return ir.Value{}, vm.ErrInvalidGetter
-						}
-						raw, err := program.getters[idx].Get(ctx, tCtx)
-						if err != nil {
-							return ir.Value{}, err
-						}
-						return valueToVM(raw)
-					})
-				}
-				if err != nil {
-					return false, err
-				}
-				result, ok := val.Bool()
-				if !ok {
-					return false, fmt.Errorf("vm result is not bool")
-				}
-				return result, nil
+				return p.runBoolVM(ctx, tCtx, program)
 			}}, nil
 		}
 	}
@@ -148,40 +173,18 @@ func (p *Parser[K]) newBoolExpr(expr *booleanExpression) (BoolExpr[K], error) {
 	}
 
 	if p.vmEnabled {
-		if p.vmStackPool == nil {
-			p.vmStackPool = vm.NewStackPool(defaultMicroVMStackSize)
-		}
 		program, err := p.getOrCompileVMBoolProgram(expr)
 		if err == nil {
+			if len(program.getters) == 0 {
+				return BoolExpr[K]{func(context.Context, K) (bool, error) {
+					return runBoolVMConstOnly(program)
+				}}, nil
+			}
+			if p.vmStackPool == nil {
+				p.vmStackPool = vm.NewStackPool(defaultMicroVMStackSize)
+			}
 			return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
-				var (
-					val ir.Value
-					err error
-				)
-				var stackArr [defaultMicroVMStackSize]ir.Value
-				stack := stackArr[:]
-				if len(program.getters) == 0 {
-					val, err = vm.RunWithStack(stack, program.program)
-				} else {
-					val, err = vm.RunWithStackAndLoader(stack, program.program, func(idx uint32) (ir.Value, error) {
-						if int(idx) >= len(program.getters) {
-							return ir.Value{}, vm.ErrInvalidGetter
-						}
-						raw, err := program.getters[idx].Get(ctx, tCtx)
-						if err != nil {
-							return ir.Value{}, err
-						}
-						return valueToVM(raw)
-					})
-				}
-				if err != nil {
-					return false, err
-				}
-				result, ok := val.Bool()
-				if !ok {
-					return false, fmt.Errorf("vm result is not bool")
-				}
-				return result, nil
+				return p.runBoolVM(ctx, tCtx, program)
 			}}, nil
 		}
 	}
