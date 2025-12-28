@@ -9,6 +9,10 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"time"
+
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/plog"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 )
@@ -24,33 +28,43 @@ type PathAccessor[K any] func(ctx context.Context, tCtx K) (ir.Value, error)
 // This is the write counterpart to PathAccessor for attribute mutations.
 // Generic over K to eliminate interface{} conversions entirely.
 type PathSetter[K any] func(ctx context.Context, tCtx K, val ir.Value) error
+type AttrGetter[K any] func(tCtx K, key string) (ir.Value, error)
+type AttrSetter[K any] func(tCtx K, key string, val ir.Value) error
+
+// LogRecordContext exposes a log record for direct field opcodes.
+type LogRecordContext interface {
+	GetLogRecord() plog.LogRecord
+}
 
 // Program is a minimal bytecode program for the micro-VM.
 // Generic over K to support typed path accessors without interface{} overhead.
 type Program[K any] struct {
-	Code      []ir.Instruction
-	Consts    []ir.Value
-	Accessors []PathAccessor[K] // cached attribute accessors for OpLoadAttrCached
-	Setters   []PathSetter[K]   // cached attribute setters for OpSetAttrCached
-	GasLimit  uint64
+	Code       []ir.Instruction
+	Consts     []ir.Value
+	Accessors  []PathAccessor[K] // cached attribute accessors for OpLoadAttrCached
+	Setters    []PathSetter[K]   // cached attribute setters for OpSetAttrCached
+	AttrKeys   []string          // fast attribute keys for OpLoadAttrFast
+	AttrGetter AttrGetter[K]     // fast attribute getter for OpLoadAttrFast
+	AttrSetter AttrSetter[K]     // fast attribute setter for OpSetAttrFast
+	GasLimit   uint64
 }
 
 // ProgramAny is an alias for Program[any] for backward compatibility.
 type ProgramAny = Program[any]
 
 var (
-	ErrStackUnderflow = errors.New("stack underflow")
-	ErrStackOverflow  = errors.New("stack overflow")
-	ErrInvalidOpcode  = errors.New("invalid opcode")
-	ErrInvalidConst   = errors.New("invalid const index")
+	ErrStackUnderflow  = errors.New("stack underflow")
+	ErrStackOverflow   = errors.New("stack overflow")
+	ErrInvalidOpcode   = errors.New("invalid opcode")
+	ErrInvalidConst    = errors.New("invalid const index")
 	ErrInvalidGetter   = errors.New("invalid getter index")
 	ErrInvalidAccessor = errors.New("invalid accessor index")
 	ErrInvalidSetter   = errors.New("invalid setter index")
-	ErrInvalidJump    = errors.New("invalid jump target")
-	ErrTypeMismatch   = errors.New("type mismatch")
-	ErrEmptyStack     = errors.New("empty stack")
-	ErrDivideByZero   = errors.New("divide by zero")
-	ErrGasExhausted   = errors.New("gas exhausted")
+	ErrInvalidJump     = errors.New("invalid jump target")
+	ErrTypeMismatch    = errors.New("type mismatch")
+	ErrEmptyStack      = errors.New("empty stack")
+	ErrDivideByZero    = errors.New("divide by zero")
+	ErrGasExhausted    = errors.New("gas exhausted")
 )
 
 const (
@@ -182,6 +196,72 @@ func runProgram[K any](stack []ir.Value, p *Program[K], loader func(uint32) (ir.
 			}
 			stack[sp] = consts[idx]
 			sp++
+
+		case ir.OpEqConst, ir.OpNeConst, ir.OpLtConst, ir.OpLteConst, ir.OpGtConst, ir.OpGteConst:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			idx := inst.Arg()
+			if int(idx) >= len(consts) {
+				return ir.Value{}, ErrInvalidConst
+			}
+			var cmpOp ir.Opcode
+			switch op {
+			case ir.OpEqConst:
+				cmpOp = ir.OpEq
+			case ir.OpNeConst:
+				cmpOp = ir.OpNe
+			case ir.OpLtConst:
+				cmpOp = ir.OpLt
+			case ir.OpLteConst:
+				cmpOp = ir.OpLte
+			case ir.OpGtConst:
+				cmpOp = ir.OpGt
+			case ir.OpGteConst:
+				cmpOp = ir.OpGte
+			default:
+				return ir.Value{}, ErrInvalidOpcode
+			}
+			// Inline const compare to avoid compareOp dispatch overhead.
+			constVal := consts[idx]
+			var result ir.Value
+			var err error
+			switch constVal.Type {
+			case ir.TypeInt:
+				switch stack[sp-1].Type {
+				case ir.TypeInt:
+					result, err = compareInts(cmpOp, int64(stack[sp-1].Num), int64(constVal.Num))
+				case ir.TypeFloat:
+					result, err = compareFloats(cmpOp, math.Float64frombits(stack[sp-1].Num), float64(int64(constVal.Num)))
+				default:
+					return ir.Value{}, ErrTypeMismatch
+				}
+			case ir.TypeFloat:
+				switch stack[sp-1].Type {
+				case ir.TypeFloat:
+					result, err = compareFloats(cmpOp, math.Float64frombits(stack[sp-1].Num), math.Float64frombits(constVal.Num))
+				case ir.TypeInt:
+					result, err = compareFloats(cmpOp, float64(int64(stack[sp-1].Num)), math.Float64frombits(constVal.Num))
+				default:
+					return ir.Value{}, ErrTypeMismatch
+				}
+			case ir.TypeBool:
+				if stack[sp-1].Type != ir.TypeBool {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				result, err = compareBools(cmpOp, stack[sp-1].Num != 0, constVal.Num != 0)
+			case ir.TypeString:
+				if stack[sp-1].Type != ir.TypeString {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				result, err = compareStrings(cmpOp, stack[sp-1], constVal)
+			default:
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if err != nil {
+				return ir.Value{}, err
+			}
+			stack[sp-1] = result
 
 		case ir.OpLoadGetter:
 			if loader == nil {
@@ -549,6 +629,12 @@ func runProgram[K any](stack []ir.Value, p *Program[K], loader func(uint32) (ir.
 		case ir.OpLoadAttrCached:
 			// OpLoadAttrCached requires context; use RunWithStackAndContext instead
 			return ir.Value{}, ErrInvalidOpcode
+		case ir.OpLoadAttrFast:
+			// OpLoadAttrFast requires context; use RunWithStackAndContext instead
+			return ir.Value{}, ErrInvalidOpcode
+		case ir.OpSetAttrFast:
+			// OpSetAttrFast requires context; use RunWithStackAndContext instead
+			return ir.Value{}, ErrInvalidOpcode
 
 		default:
 			return ir.Value{}, ErrInvalidOpcode
@@ -714,6 +800,45 @@ func compareStrings(op ir.Opcode, a, b ir.Value) (ir.Value, error) {
 	}
 }
 
+func pcommonValueToVM(val pcommon.Value) (ir.Value, error) {
+	switch val.Type() {
+	case pcommon.ValueTypeInt:
+		return ir.Int64Value(val.Int()), nil
+	case pcommon.ValueTypeDouble:
+		return ir.Float64Value(val.Double()), nil
+	case pcommon.ValueTypeBool:
+		return ir.BoolValue(val.Bool()), nil
+	case pcommon.ValueTypeStr:
+		return ir.StringValue(val.Str()), nil
+	default:
+		return ir.Value{}, ErrTypeMismatch
+	}
+}
+
+func setLogBodyFromVM(lr plog.LogRecord, val ir.Value) error {
+	body := lr.Body()
+	switch val.Type {
+	case ir.TypeInt:
+		body.SetInt(int64(val.Num))
+		return nil
+	case ir.TypeFloat:
+		body.SetDouble(math.Float64frombits(val.Num))
+		return nil
+	case ir.TypeBool:
+		body.SetBool(val.Num != 0)
+		return nil
+	case ir.TypeString:
+		s, ok := val.String()
+		if !ok {
+			return ErrTypeMismatch
+		}
+		body.SetStr(s)
+		return nil
+	default:
+		return ErrTypeMismatch
+	}
+}
+
 // runProgramWithContext executes the program with ctx/tCtx for OpLoadAttrCached.
 // This is the fast path for programs with path accessors.
 // Generic over K to eliminate interface{} conversions entirely.
@@ -747,6 +872,72 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			stack[sp] = consts[idx]
 			sp++
 
+		case ir.OpEqConst, ir.OpNeConst, ir.OpLtConst, ir.OpLteConst, ir.OpGtConst, ir.OpGteConst:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			idx := inst.Arg()
+			if int(idx) >= len(consts) {
+				return ir.Value{}, ErrInvalidConst
+			}
+			var cmpOp ir.Opcode
+			switch op {
+			case ir.OpEqConst:
+				cmpOp = ir.OpEq
+			case ir.OpNeConst:
+				cmpOp = ir.OpNe
+			case ir.OpLtConst:
+				cmpOp = ir.OpLt
+			case ir.OpLteConst:
+				cmpOp = ir.OpLte
+			case ir.OpGtConst:
+				cmpOp = ir.OpGt
+			case ir.OpGteConst:
+				cmpOp = ir.OpGte
+			default:
+				return ir.Value{}, ErrInvalidOpcode
+			}
+			// Inline const compare to avoid compareOp dispatch overhead.
+			constVal := consts[idx]
+			var result ir.Value
+			var err error
+			switch constVal.Type {
+			case ir.TypeInt:
+				switch stack[sp-1].Type {
+				case ir.TypeInt:
+					result, err = compareInts(cmpOp, int64(stack[sp-1].Num), int64(constVal.Num))
+				case ir.TypeFloat:
+					result, err = compareFloats(cmpOp, math.Float64frombits(stack[sp-1].Num), float64(int64(constVal.Num)))
+				default:
+					return ir.Value{}, ErrTypeMismatch
+				}
+			case ir.TypeFloat:
+				switch stack[sp-1].Type {
+				case ir.TypeFloat:
+					result, err = compareFloats(cmpOp, math.Float64frombits(stack[sp-1].Num), math.Float64frombits(constVal.Num))
+				case ir.TypeInt:
+					result, err = compareFloats(cmpOp, float64(int64(stack[sp-1].Num)), math.Float64frombits(constVal.Num))
+				default:
+					return ir.Value{}, ErrTypeMismatch
+				}
+			case ir.TypeBool:
+				if stack[sp-1].Type != ir.TypeBool {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				result, err = compareBools(cmpOp, stack[sp-1].Num != 0, constVal.Num != 0)
+			case ir.TypeString:
+				if stack[sp-1].Type != ir.TypeString {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				result, err = compareStrings(cmpOp, stack[sp-1], constVal)
+			default:
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if err != nil {
+				return ir.Value{}, err
+			}
+			stack[sp-1] = result
+
 		case ir.OpLoadAttrCached:
 			idx := inst.Arg()
 			if int(idx) >= len(p.Accessors) {
@@ -765,6 +956,41 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			}
 			stack[sp] = val
 			sp++
+
+		case ir.OpLoadAttrFast:
+			idx := inst.Arg()
+			if int(idx) >= len(p.AttrKeys) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			if p.AttrGetter == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			vmVal, err := p.AttrGetter(tCtx, p.AttrKeys[idx])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = vmVal
+			sp++
+
+		case ir.OpSetAttrFast:
+			idx := inst.Arg()
+			if int(idx) >= len(p.AttrKeys) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			if p.AttrSetter == nil {
+				return ir.Value{}, ErrInvalidSetter
+			}
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			val := stack[sp]
+			if err := p.AttrSetter(tCtx, p.AttrKeys[idx], val); err != nil {
+				return ir.Value{}, err
+			}
 
 		case ir.OpSetAttrCached:
 			idx := inst.Arg()
@@ -1091,10 +1317,84 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			}
 			stack[sp-1].Num = stack[sp-1].Num ^ (1 << 63)
 
-		// Direct field access opcodes - placeholder implementations
-		// These will be wired up when the compiler emits them
-		case ir.OpGetBody, ir.OpSetBody, ir.OpGetSeverity, ir.OpSetSeverity, ir.OpGetTimestamp, ir.OpSetTimestamp:
-			return ir.Value{}, ErrInvalidOpcode
+		case ir.OpGetBody:
+			logCtx, ok := any(tCtx).(LogRecordContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			val, err := pcommonValueToVM(logCtx.GetLogRecord().Body())
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = val
+			sp++
+
+		case ir.OpSetBody:
+			logCtx, ok := any(tCtx).(LogRecordContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if err := setLogBodyFromVM(logCtx.GetLogRecord(), stack[sp]); err != nil {
+				return ir.Value{}, err
+			}
+
+		case ir.OpGetSeverity:
+			logCtx, ok := any(tCtx).(LogRecordContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.Int64Value(int64(logCtx.GetLogRecord().SeverityNumber()))
+			sp++
+
+		case ir.OpSetSeverity:
+			logCtx, ok := any(tCtx).(LogRecordContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if stack[sp].Type != ir.TypeInt {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			logCtx.GetLogRecord().SetSeverityNumber(plog.SeverityNumber(int64(stack[sp].Num)))
+
+		case ir.OpGetTimestamp:
+			logCtx, ok := any(tCtx).(LogRecordContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			ts := logCtx.GetLogRecord().Timestamp().AsTime().UnixNano()
+			stack[sp] = ir.Int64Value(ts)
+			sp++
+
+		case ir.OpSetTimestamp:
+			logCtx, ok := any(tCtx).(LogRecordContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if stack[sp].Type != ir.TypeInt {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			logCtx.GetLogRecord().SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, int64(stack[sp].Num))))
 
 		default:
 			return ir.Value{}, ErrInvalidOpcode

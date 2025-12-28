@@ -127,7 +127,7 @@ func (p *Parser[K]) newComparisonEvaluator(comparison *comparison) (BoolExpr[K],
 	if p.vmEnabled {
 		program, err := p.getOrCompileVMProgram(comparison)
 		if err == nil {
-			if len(program.getters) == 0 {
+			if len(program.getters) == 0 && len(program.program.AttrKeys) == 0 {
 				return BoolExpr[K]{func(context.Context, K) (bool, error) {
 					result, err := runBoolVMConstOnly(program)
 					if err != nil {
@@ -174,7 +174,7 @@ func (p *Parser[K]) newBoolExpr(expr *booleanExpression) (BoolExpr[K], error) {
 	if p.vmEnabled {
 		program, err := p.getOrCompileVMBoolProgram(expr)
 		if err == nil {
-			if len(program.getters) == 0 {
+			if len(program.getters) == 0 && len(program.program.AttrKeys) == 0 {
 				return BoolExpr[K]{func(context.Context, K) (bool, error) {
 					result, err := runBoolVMConstOnly(program)
 					if err != nil {

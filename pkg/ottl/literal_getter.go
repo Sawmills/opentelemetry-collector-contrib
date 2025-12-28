@@ -7,11 +7,13 @@ import (
 	"context"
 )
 
-// literalGetter is an optional interface that allows Getter implementations to indicate
+// LiteralGetter is an optional interface that allows Getter implementations to indicate
 // if they support literal values retrieval.
-type literalGetter interface {
+type LiteralGetter interface {
 	isLiteral()
 }
+
+type literalGetter = LiteralGetter
 
 type literal[K any, T any] struct {
 	value T

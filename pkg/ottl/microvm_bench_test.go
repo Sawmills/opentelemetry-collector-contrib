@@ -64,10 +64,50 @@ func newBenchParserWithPath(withVM bool, getter func() any) (Parser[any], error)
 	)
 }
 
-func newBenchParserWithPaths(withVM bool, getter func(pathName, key string) any) (Parser[any], error) {
+func newBenchParserWithPathVMGetter(withVM bool, getter func() int64) (Parser[any], error) {
 	options := []Option[any]{}
 	if withVM {
 		options = append(options, WithVMEnabled[any]())
+	}
+	return NewParser[any](
+		map[string]Factory[any]{},
+		func(path Path[any]) (GetSetter[any], error) {
+			_ = path.Keys()
+			base := StandardGetSetter[any]{
+				Getter: func(context.Context, any) (any, error) {
+					return getter(), nil
+				},
+				Setter: func(context.Context, any, any) error { return nil },
+			}
+			return StandardVMGetSetter[any]{
+				StandardGetSetter: base,
+				VMGetterFunc: VMGetterFunc[any](func(context.Context, any) (ir.Value, error) {
+					return ir.Int64Value(getter()), nil
+				}),
+			}, nil
+		},
+		component.TelemetrySettings{Logger: zap.NewNop()},
+		options...,
+	)
+}
+
+func newBenchParserWithPaths(withVM bool, getter func(pathName, key string) any) (Parser[any], error) {
+	options := []Option[any]{}
+	if withVM {
+		options = append(options,
+			WithVMEnabled[any](),
+			WithVMAttrGetter[any](func(_ any, key string) (ir.Value, error) {
+				switch key {
+				case "foo":
+					return ir.Int64Value(7), nil
+				case "bar":
+					return ir.Int64Value(9), nil
+				default:
+					return ir.Int64Value(0), nil
+				}
+			}),
+			WithVMAttrContextNames[any]([]string{""}),
+		)
 	}
 	return NewParser[any](
 		map[string]Factory[any]{},
@@ -365,6 +405,40 @@ func BenchmarkOTTLInterpreterPathEq(b *testing.B) {
 
 func BenchmarkOTTLComparisonPathEq_VM(b *testing.B) {
 	p, err := newBenchParserWithPath(true, func() any { return int64(7) })
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	pathExpr := &mathExprLiteral{
+		Path: &path{
+			Fields: []field{{Name: "attributes", Keys: []key{{String: stringp("foo")}}}},
+		},
+	}
+	cmp := &comparison{
+		Left:  value{Literal: pathExpr},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(7)}},
+	}
+
+	evaluator, err := p.newComparisonEvaluator(cmp)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonPathEq_VMGetter(b *testing.B) {
+	p, err := newBenchParserWithPathVMGetter(true, func() int64 { return 7 })
 	if err != nil {
 		b.Fatal(err)
 	}

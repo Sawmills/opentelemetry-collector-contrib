@@ -11,6 +11,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxerror"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxutil"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 )
 
 func PathGetSetter[K Context](path ottl.Path[K]) (ottl.GetSetter[K], error) {
@@ -55,9 +56,29 @@ func accessResourceAttributesKey[K Context](keys []ottl.Key[K]) ottl.GetSetter[K
 	if vmGetter, ok := ctxutil.VMGetterForMapLiteralKey(keys, func(tCtx K) pcommon.Map {
 		return tCtx.GetResource().Attributes()
 	}); ok {
-		return ottl.StandardVMGetSetter[K]{StandardGetSetter: getSetter, VMGetterFunc: vmGetter}
+		literalKey, ok := literalStringKeyFromKeys(keys)
+		return ottl.StandardVMGetSetter[K]{
+			StandardGetSetter: getSetter,
+			VMGetterFunc:      vmGetter,
+			VMAttrKeyValue:    literalKey,
+			VMAttrKeySet:      ok,
+			VMAttrSetterFunc: func(tCtx K, key string, val ir.Value) error {
+				return ctxutil.SetMapValueFromVM(tCtx.GetResource().Attributes(), key, val)
+			},
+		}
 	}
 	return getSetter
+}
+
+func literalStringKeyFromKeys[K any](keys []ottl.Key[K]) (string, bool) {
+	if len(keys) != 1 {
+		return "", false
+	}
+	literal, ok := keys[0].(ottl.LiteralStringKey)
+	if !ok {
+		return "", false
+	}
+	return literal.LiteralString()
 }
 
 func accessResourceDroppedAttributesCount[K Context]() ottl.StandardGetSetter[K] {

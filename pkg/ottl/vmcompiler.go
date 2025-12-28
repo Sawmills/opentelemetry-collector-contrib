@@ -38,15 +38,19 @@ type microProgram[K any] struct {
 }
 
 type microCompiler[K any] struct {
-	parser      *Parser[K]
-	code        []ir.Instruction
-	consts      []ir.Value
-	constIndex  map[constKey]uint32
-	getterIndex map[string]uint32
-	getters     []Getter[K]
-	vmGetters   []VMGetter[K]
-	stackDepth  int
-	maxStack    int
+	parser       *Parser[K]
+	code         []ir.Instruction
+	consts       []ir.Value
+	constIndex   map[constKey]uint32
+	getterIndex  map[string]uint32
+	getters      []Getter[K]
+	vmGetters    []VMGetter[K]
+	attrKeys     []string
+	attrKeyIndex map[string]uint32
+	attrGetter   vm.AttrGetter[K]
+	attrSetter   vm.AttrSetter[K]
+	stackDepth   int
+	maxStack     int
 }
 
 func vmGasLimitFor[K any](p *Parser[K]) uint64 {
@@ -88,48 +92,28 @@ func (p *Parser[K]) compileMicroComparisonVM(cmp *comparison) (*microProgram[K],
 	}
 
 	c := &microCompiler[K]{
-		parser:      p,
-		constIndex:  map[constKey]uint32{},
-		getterIndex: map[string]uint32{},
+		parser:       p,
+		constIndex:   map[constKey]uint32{},
+		getterIndex:  map[string]uint32{},
+		attrKeyIndex: map[string]uint32{},
+		attrGetter:   p.vmAttrGetter,
+		attrSetter:   p.vmAttrSetter,
 	}
-	if folded, ok, err := foldComparisonConst(cmp); err != nil {
-		return nil, err
-	} else if ok {
-		c.emitLoadConst(folded)
-		return &microProgram[K]{
-			program: &vm.Program[K]{
-				Code:      c.code,
-				Consts:    c.consts,
-				Accessors: c.buildAccessors(),
-				GasLimit:  vmGasLimitFor(p),
-			},
-			getters:   c.getters,
-			vmGetters: c.vmGetters,
-			stack:     c.maxStack,
-		}, nil
-	}
-	if err := c.emitValue(cmp.Left); err != nil {
+	if err := c.emitComparison(cmp); err != nil {
 		return nil, err
 	}
-	if err := c.emitValue(cmp.Right); err != nil {
-		return nil, err
-	}
-
-	op, err := compareOpcode(cmp.Op)
-	if err != nil {
-		return nil, err
-	}
-	c.code = append(c.code, ir.Encode(op, 0))
-	c.onBinaryOp()
 	if c.maxStack > defaultMicroVMStackSize {
 		return nil, fmt.Errorf("vm stack depth %d exceeds max %d", c.maxStack, defaultMicroVMStackSize)
 	}
 	return &microProgram[K]{
 		program: &vm.Program[K]{
-			Code:      c.code,
-			Consts:    c.consts,
-			Accessors: c.buildAccessors(),
-			GasLimit:  vmGasLimitFor(p),
+			Code:       c.code,
+			Consts:     c.consts,
+			Accessors:  c.buildAccessors(),
+			AttrKeys:   c.attrKeys,
+			AttrGetter: c.attrGetter,
+			AttrSetter: c.attrSetter,
+			GasLimit:   vmGasLimitFor(p),
 		},
 		getters:   c.getters,
 		vmGetters: c.vmGetters,
@@ -142,9 +126,12 @@ func (p *Parser[K]) compileMicroBoolExpression(expr *booleanExpression) (*microP
 		return nil, fmt.Errorf("boolean expression is nil")
 	}
 	c := &microCompiler[K]{
-		parser:      p,
-		constIndex:  map[constKey]uint32{},
-		getterIndex: map[string]uint32{},
+		parser:       p,
+		constIndex:   map[constKey]uint32{},
+		getterIndex:  map[string]uint32{},
+		attrKeyIndex: map[string]uint32{},
+		attrGetter:   p.vmAttrGetter,
+		attrSetter:   p.vmAttrSetter,
 	}
 	if err := c.emitBooleanExpression(expr); err != nil {
 		return nil, err
@@ -154,10 +141,13 @@ func (p *Parser[K]) compileMicroBoolExpression(expr *booleanExpression) (*microP
 	}
 	return &microProgram[K]{
 		program: &vm.Program[K]{
-			Code:      c.code,
-			Consts:    c.consts,
-			Accessors: c.buildAccessors(),
-			GasLimit:  vmGasLimitFor(p),
+			Code:       c.code,
+			Consts:     c.consts,
+			Accessors:  c.buildAccessors(),
+			AttrKeys:   c.attrKeys,
+			AttrGetter: c.attrGetter,
+			AttrSetter: c.attrSetter,
+			GasLimit:   vmGasLimitFor(p),
 		},
 		getters:   c.getters,
 		vmGetters: c.vmGetters,
@@ -691,6 +681,91 @@ func compareStringConst(op compareOp, a, b string) (ir.Value, error) {
 	}
 }
 
+func foldBooleanExpressionConst(expr *booleanExpression) (bool, bool, error) {
+	if expr == nil || expr.Left == nil {
+		return false, false, nil
+	}
+	left, ok, err := foldTermConst(expr.Left)
+	if !ok || err != nil {
+		return false, ok, err
+	}
+	result := left
+	for _, rhs := range expr.Right {
+		if rhs == nil || rhs.Term == nil {
+			return false, false, fmt.Errorf("invalid or term")
+		}
+		val, ok, err := foldTermConst(rhs.Term)
+		if !ok || err != nil {
+			return false, ok, err
+		}
+		result = result || val
+	}
+	return result, true, nil
+}
+
+func foldTermConst(term *term) (bool, bool, error) {
+	if term == nil || term.Left == nil {
+		return false, false, nil
+	}
+	left, ok, err := foldBooleanValueConst(term.Left)
+	if !ok || err != nil {
+		return false, ok, err
+	}
+	result := left
+	for _, rhs := range term.Right {
+		if rhs == nil || rhs.Value == nil {
+			return false, false, fmt.Errorf("invalid and term")
+		}
+		val, ok, err := foldBooleanValueConst(rhs.Value)
+		if !ok || err != nil {
+			return false, ok, err
+		}
+		result = result && val
+	}
+	return result, true, nil
+}
+
+func foldBooleanValueConst(val *booleanValue) (bool, bool, error) {
+	if val == nil {
+		return false, false, nil
+	}
+	var (
+		result bool
+		ok     bool
+		err    error
+	)
+	switch {
+	case val.Comparison != nil:
+		var folded ir.Value
+		folded, ok, err = foldComparisonConst(val.Comparison)
+		if !ok || err != nil {
+			return false, ok, err
+		}
+		var boolOk bool
+		result, boolOk = folded.Bool()
+		if !boolOk {
+			return false, false, nil
+		}
+	case val.ConstExpr != nil:
+		if val.ConstExpr.Boolean == nil {
+			return false, false, fmt.Errorf("boolean converter unsupported in micro compiler")
+		}
+		result = bool(*val.ConstExpr.Boolean)
+		ok = true
+	case val.SubExpr != nil:
+		result, ok, err = foldBooleanExpressionConst(val.SubExpr)
+		if !ok || err != nil {
+			return false, ok, err
+		}
+	default:
+		return false, false, nil
+	}
+	if val.Negation != nil {
+		result = !result
+	}
+	return result, ok, nil
+}
+
 func (c *microCompiler[K]) emitValue(val value) error {
 	if folded, ok, err := foldValueConst(val); err != nil {
 		return err
@@ -729,6 +804,12 @@ func (c *microCompiler[K]) emitValue(val value) error {
 func (c *microCompiler[K]) emitBooleanExpression(expr *booleanExpression) error {
 	if expr == nil || expr.Left == nil {
 		return fmt.Errorf("boolean expression is nil")
+	}
+	if folded, ok, err := foldBooleanExpressionConst(expr); err != nil {
+		return err
+	} else if ok {
+		c.emitLoadConst(ir.BoolValue(folded))
+		return nil
 	}
 	if err := c.emitTerm(expr.Left); err != nil {
 		return err
@@ -819,6 +900,14 @@ func (c *microCompiler[K]) emitComparison(cmp *comparison) error {
 		c.emitLoadConst(folded)
 		return nil
 	}
+	if ok, err := c.emitCompareConst(cmp.Left, cmp.Right, cmp.Op); ok || err != nil {
+		return err
+	}
+	if swapOp, ok := invertCompareOpForSwap(cmp.Op); ok {
+		if ok, err := c.emitCompareConst(cmp.Right, cmp.Left, swapOp); ok || err != nil {
+			return err
+		}
+	}
 	if err := c.emitValue(cmp.Left); err != nil {
 		return err
 	}
@@ -841,9 +930,65 @@ func (c *microCompiler[K]) emitComparison(cmp *comparison) error {
 	return nil
 }
 
+func invertCompareOpForSwap(op compareOp) (compareOp, bool) {
+	switch op {
+	case eq, ne:
+		return op, true
+	case lt:
+		return gt, true
+	case lte:
+		return gte, true
+	case gt:
+		return lt, true
+	case gte:
+		return lte, true
+	default:
+		return 0, false
+	}
+}
+
+func (c *microCompiler[K]) emitCompareConst(left value, constVal value, op compareOp) (bool, error) {
+	var opcode ir.Opcode
+	switch op {
+	case eq:
+		opcode = ir.OpEqConst
+	case ne:
+		opcode = ir.OpNeConst
+	case lt:
+		opcode = ir.OpLtConst
+	case lte:
+		opcode = ir.OpLteConst
+	case gt:
+		opcode = ir.OpGtConst
+	case gte:
+		opcode = ir.OpGteConst
+	default:
+		return false, nil
+	}
+	parsed, ok, err := foldValueConst(constVal)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+	if err := c.emitValue(left); err != nil {
+		return false, err
+	}
+	idx := c.addConst(parsed)
+	c.code = append(c.code, ir.Encode(opcode, idx))
+	return true, nil
+}
+
 func (c *microCompiler[K]) emitPath(path *path) error {
 	if c.parser == nil {
 		return fmt.Errorf("path literals unsupported in micro compiler")
+	}
+	if ok, err := c.emitFastAttr(path); ok || err != nil {
+		return err
+	}
+	if ok, err := c.emitDirectField(path); ok || err != nil {
+		return err
 	}
 	bp, err := c.parser.newPath(path)
 	if err != nil {
@@ -862,6 +1007,60 @@ func (c *microCompiler[K]) emitPath(path *path) error {
 	c.code = append(c.code, ir.Encode(ir.OpLoadAttrCached, idx))
 	c.onPush()
 	return nil
+}
+
+func (c *microCompiler[K]) emitFastAttr(path *path) (bool, error) {
+	if path == nil || len(path.Fields) != 1 {
+		return false, nil
+	}
+	if c.attrGetter == nil {
+		return false, nil
+	}
+	if c.parser != nil && len(c.parser.vmAttrContextNames) > 0 {
+		if _, ok := c.parser.vmAttrContextNames[path.Context]; !ok {
+			return false, nil
+		}
+	}
+	field := path.Fields[0]
+	if field.Name != "attributes" || len(field.Keys) != 1 {
+		return false, nil
+	}
+	if field.Keys[0].String == nil {
+		return false, nil
+	}
+	idx := c.addAttrKey(*field.Keys[0].String)
+	c.code = append(c.code, ir.Encode(ir.OpLoadAttrFast, idx))
+	c.onPush()
+	return true, nil
+}
+
+func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
+	if path == nil || len(path.Fields) != 1 {
+		return false, nil
+	}
+	if path.Context != "" && path.Context != "log" {
+		return false, nil
+	}
+	field := path.Fields[0]
+	if len(field.Keys) != 0 {
+		return false, nil
+	}
+	switch field.Name {
+	case "body":
+		c.code = append(c.code, ir.Encode(ir.OpGetBody, 0))
+		c.onPush()
+		return true, nil
+	case "severity_number":
+		c.code = append(c.code, ir.Encode(ir.OpGetSeverity, 0))
+		c.onPush()
+		return true, nil
+	case "time_unix_nano":
+		c.code = append(c.code, ir.Encode(ir.OpGetTimestamp, 0))
+		c.onPush()
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 func (c *microCompiler[K]) emitMathExpression(expr *mathExpression) error {
@@ -1013,6 +1212,16 @@ func (c *microCompiler[K]) addGetter(key string, getter Getter[K], vmGetter VMGe
 	c.getters = append(c.getters, getter)
 	c.vmGetters = append(c.vmGetters, vmGetter)
 	c.getterIndex[key] = idx
+	return idx
+}
+
+func (c *microCompiler[K]) addAttrKey(key string) uint32 {
+	if idx, ok := c.attrKeyIndex[key]; ok {
+		return idx
+	}
+	idx := uint32(len(c.attrKeys))
+	c.attrKeys = append(c.attrKeys, key)
+	c.attrKeyIndex[key] = idx
 	return idx
 }
 

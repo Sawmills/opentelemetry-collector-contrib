@@ -13,6 +13,8 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/plog"
 	"go.uber.org/zap"
 )
 
@@ -37,6 +39,14 @@ func newTestParser(t *testing.T, withVM bool) Parser[any] {
 		t.Fatalf("parser init failed: %v", err)
 	}
 	return p
+}
+
+type logTestCtx struct {
+	lr plog.LogRecord
+}
+
+func (c logTestCtx) GetLogRecord() plog.LogRecord {
+	return c.lr
 }
 
 // --- Constant Folding Tests ---
@@ -73,6 +83,76 @@ func TestCompileBoolExpressionConstFold(t *testing.T) {
 	got, ok := val.Bool()
 	if !ok || !got {
 		t.Fatalf("expected true constant, got %v", val)
+	}
+}
+
+func TestCompileBoolExpressionConstFold_Multi(t *testing.T) {
+	parser, err := NewParser[struct{}](
+		map[string]Factory[struct{}]{},
+		func(Path[struct{}]) (GetSetter[struct{}], error) {
+			return nil, fmt.Errorf("path parsing not supported")
+		},
+		componenttest.NewNopTelemetrySettings(),
+	)
+	if err != nil {
+		t.Fatalf("parser setup failed: %v", err)
+	}
+
+	expr, err := parseCondition("1 == 1 and 2 == 3 or 4 == 4")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	program, err := parser.compileMicroBoolExpression(expr)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	if len(program.program.Code) != 1 {
+		t.Fatalf("expected 1 instruction, got %d", len(program.program.Code))
+	}
+	inst := program.program.Code[0]
+	if inst.Op() != ir.OpLoadConst {
+		t.Fatalf("expected LOAD_CONST, got %v", inst.Op())
+	}
+	val := program.program.Consts[inst.Arg()]
+	got, ok := val.Bool()
+	if !ok || !got {
+		t.Fatalf("expected true constant, got %v", val)
+	}
+}
+
+func TestCompileBoolExpressionConstFold_AllFalse(t *testing.T) {
+	parser, err := NewParser[struct{}](
+		map[string]Factory[struct{}]{},
+		func(Path[struct{}]) (GetSetter[struct{}], error) {
+			return nil, fmt.Errorf("path parsing not supported")
+		},
+		componenttest.NewNopTelemetrySettings(),
+	)
+	if err != nil {
+		t.Fatalf("parser setup failed: %v", err)
+	}
+
+	expr, err := parseCondition("1 == 2 or 3 == 4")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	program, err := parser.compileMicroBoolExpression(expr)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+
+	if len(program.program.Code) != 1 {
+		t.Fatalf("expected 1 instruction, got %d", len(program.program.Code))
+	}
+	inst := program.program.Code[0]
+	if inst.Op() != ir.OpLoadConst {
+		t.Fatalf("expected LOAD_CONST, got %v", inst.Op())
+	}
+	val := program.program.Consts[inst.Arg()]
+	got, ok := val.Bool()
+	if !ok || got {
+		t.Fatalf("expected false constant, got %v", val)
 	}
 }
 
@@ -153,6 +233,213 @@ func TestCompileMicroComparison_PathGetter(t *testing.T) {
 	}
 	if !got {
 		t.Fatalf("expected true, got false")
+	}
+}
+
+func TestCompileMicroComparison_PathEqConstOpcode(t *testing.T) {
+	getterParser, err := NewParser[any](
+		map[string]Factory[any]{},
+		func(Path[any]) (GetSetter[any], error) {
+			return StandardGetSetter[any]{
+				Getter: func(context.Context, any) (any, error) {
+					return int64(7), nil
+				},
+				Setter: func(context.Context, any, any) error {
+					return nil
+				},
+			}, nil
+		},
+		component.TelemetrySettings{Logger: zap.NewNop()},
+		WithVMEnabled[any](),
+	)
+	if err != nil {
+		t.Fatalf("parser init failed: %v", err)
+	}
+
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "foo"}}}}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(7)}},
+	}
+
+	program, err := getterParser.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpLoadAttrCached {
+		t.Fatalf("expected LOAD_ATTR_CACHED, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_PathEqConstSwapOpcode(t *testing.T) {
+	getterParser, err := NewParser[any](
+		map[string]Factory[any]{},
+		func(Path[any]) (GetSetter[any], error) {
+			return StandardGetSetter[any]{
+				Getter: func(context.Context, any) (any, error) {
+					return int64(7), nil
+				},
+				Setter: func(context.Context, any, any) error {
+					return nil
+				},
+			}, nil
+		},
+		component.TelemetrySettings{Logger: zap.NewNop()},
+		WithVMEnabled[any](),
+	)
+	if err != nil {
+		t.Fatalf("parser init failed: %v", err)
+	}
+
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Int: int64p(7)}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "foo"}}}}},
+	}
+
+	program, err := getterParser.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpLoadAttrCached {
+		t.Fatalf("expected LOAD_ATTR_CACHED, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_AttrFastOpcode(t *testing.T) {
+	p, err := NewParser[logTestCtx](
+		map[string]Factory[logTestCtx]{},
+		func(Path[logTestCtx]) (GetSetter[logTestCtx], error) {
+			return nil, errors.New("path parsing not supported in test")
+		},
+		component.TelemetrySettings{Logger: zap.NewNop()},
+		WithVMEnabled[logTestCtx](),
+		WithVMAttrGetter[logTestCtx](func(tCtx logTestCtx, key string) (ir.Value, error) {
+			val, ok := tCtx.GetLogRecord().Attributes().Get(key)
+			if !ok {
+				return ir.Value{}, vm.ErrTypeMismatch
+			}
+			switch val.Type() {
+			case pcommon.ValueTypeInt:
+				return ir.Int64Value(val.Int()), nil
+			case pcommon.ValueTypeDouble:
+				return ir.Float64Value(val.Double()), nil
+			case pcommon.ValueTypeBool:
+				return ir.BoolValue(val.Bool()), nil
+			case pcommon.ValueTypeStr:
+				return ir.StringValue(val.Str()), nil
+			default:
+				return ir.Value{}, vm.ErrTypeMismatch
+			}
+		}),
+	)
+	if err != nil {
+		t.Fatalf("parser init failed: %v", err)
+	}
+	cmp := &comparison{
+		Left: value{Literal: &mathExprLiteral{Path: &path{
+			Fields: []field{{Name: "attributes", Keys: []key{{String: stringpTest("foo")}}}},
+		}}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(7)}},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpLoadAttrFast {
+		t.Fatalf("expected LOAD_ATTR_FAST, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+	if len(program.program.AttrKeys) != 1 || program.program.AttrKeys[0] != "foo" {
+		t.Fatalf("unexpected attr keys: %v", program.program.AttrKeys)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldBodyOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "body"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("hello")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetBody {
+		t.Fatalf("expected GET_BODY, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldSeverityOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "severity_number"}}}}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(13)}},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetSeverity {
+		t.Fatalf("expected GET_SEVERITY, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldTimestampOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "time_unix_nano"}}}}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(42)}},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetTimestamp {
+		t.Fatalf("expected GET_TIMESTAMP, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
 	}
 }
 

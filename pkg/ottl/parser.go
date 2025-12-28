@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/alecthomas/participle/v2"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.uber.org/zap"
@@ -71,6 +72,9 @@ type Parser[K any] struct {
 	pathContextNames   map[string]struct{}
 	vmEnabled          bool
 	vmGasLimit         uint64
+	vmAttrGetter       vm.AttrGetter[K]
+	vmAttrSetter       vm.AttrSetter[K]
+	vmAttrContextNames map[string]struct{}
 	vmProgramCache     map[*comparison]*microProgram[K]
 	vmBoolProgramCache map[*booleanExpression]*microProgram[K]
 	vmProgramCacheMu   sync.Mutex

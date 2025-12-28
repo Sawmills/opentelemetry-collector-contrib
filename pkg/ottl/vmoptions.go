@@ -6,6 +6,8 @@ package ottl // import "github.com/open-telemetry/opentelemetry-collector-contri
 import (
 	"os"
 	"strings"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 )
 
 const defaultMicroVMStackSize = 32
@@ -31,6 +33,35 @@ func WithVMGasLimit[K any](limit uint64) Option[K] {
 			return
 		}
 		p.vmGasLimit = limit
+	}
+}
+
+// WithVMAttrGetter sets a VM fast-path attribute getter used by OpLoadAttrFast.
+func WithVMAttrGetter[K any](getter vm.AttrGetter[K]) Option[K] {
+	return func(p *Parser[K]) {
+		p.vmAttrGetter = getter
+	}
+}
+
+// WithVMAttrSetter sets a VM fast-path attribute setter used by OpSetAttrFast.
+func WithVMAttrSetter[K any](setter vm.AttrSetter[K]) Option[K] {
+	return func(p *Parser[K]) {
+		p.vmAttrSetter = setter
+	}
+}
+
+// WithVMAttrContextNames restricts OpLoadAttrFast to paths with these contexts.
+func WithVMAttrContextNames[K any](contexts []string) Option[K] {
+	return func(p *Parser[K]) {
+		if len(contexts) == 0 {
+			p.vmAttrContextNames = nil
+			return
+		}
+		names := make(map[string]struct{}, len(contexts))
+		for _, ctx := range contexts {
+			names[ctx] = struct{}{}
+		}
+		p.vmAttrContextNames = names
 	}
 }
 

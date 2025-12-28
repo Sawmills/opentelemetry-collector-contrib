@@ -6,6 +6,7 @@ package ctxutil // import "github.com/open-telemetry/opentelemetry-collector-con
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 
@@ -47,5 +48,29 @@ func valueToVM(val pcommon.Value) (ir.Value, error) {
 		return ir.StringValue(val.Str()), nil
 	default:
 		return ir.Value{}, fmt.Errorf("unsupported pcommon.Value type: %v", val.Type())
+	}
+}
+
+// SetMapValueFromVM writes a VM value into a pdata map for the given key.
+func SetMapValueFromVM(m pcommon.Map, key string, val ir.Value) error {
+	switch val.Type {
+	case ir.TypeInt:
+		m.PutInt(key, int64(val.Num))
+		return nil
+	case ir.TypeFloat:
+		m.PutDouble(key, math.Float64frombits(val.Num))
+		return nil
+	case ir.TypeBool:
+		m.PutBool(key, val.Num != 0)
+		return nil
+	case ir.TypeString:
+		s, ok := val.String()
+		if !ok {
+			return fmt.Errorf("invalid string value")
+		}
+		m.PutStr(key, s)
+		return nil
+	default:
+		return fmt.Errorf("unsupported VM value type: %v", val.Type)
 	}
 }
