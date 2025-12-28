@@ -288,12 +288,12 @@ func runProgram(stack []ir.Value, p *Program, loader func(uint32) (ir.Value, err
 			if sp < 2 {
 				return ir.Value{}, ErrStackUnderflow
 			}
-			if stack[sp-1].Num == 0 {
+			b := math.Float64frombits(stack[sp-1].Num)
+			if b == 0 {
 				return ir.Value{}, ErrDivideByZero
 			}
 			sp--
 			a := math.Float64frombits(stack[sp-1].Num)
-			b := math.Float64frombits(stack[sp].Num)
 			stack[sp-1].Num = math.Float64bits(a / b)
 
 		case ir.OpEqFloat:

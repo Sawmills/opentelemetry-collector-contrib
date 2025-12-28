@@ -417,3 +417,97 @@ func TestMicroVMRun_BackwardJumpGasExhausted(t *testing.T) {
 		t.Fatalf("expected ErrGasExhausted, got %v", err)
 	}
 }
+
+func TestMicroVMRun_DivIntByZero(t *testing.T) {
+	program := &Program{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+			ir.Encode(ir.OpDivInt, 0),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(10),
+			ir.Int64Value(0),
+		},
+	}
+
+	vm := NewMicroVM(4)
+	_, err := vm.Run(program)
+	if err != ErrDivideByZero {
+		t.Fatalf("expected ErrDivideByZero, got %v", err)
+	}
+}
+
+func TestMicroVMRun_DivFloatByZero(t *testing.T) {
+	program := &Program{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+			ir.Encode(ir.OpDivFloat, 0),
+		},
+		Consts: []ir.Value{
+			ir.Float64Value(10.0),
+			ir.Float64Value(0.0),
+		},
+	}
+
+	vm := NewMicroVM(4)
+	_, err := vm.Run(program)
+	if err != ErrDivideByZero {
+		t.Fatalf("expected ErrDivideByZero, got %v", err)
+	}
+}
+
+func TestMicroVMRun_SpecializedIntOps(t *testing.T) {
+	program := &Program{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0), // 10
+			ir.Encode(ir.OpLoadConst, 1), // 3
+			ir.Encode(ir.OpDivInt, 0),    // 10 / 3 = 3
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(10),
+			ir.Int64Value(3),
+		},
+	}
+
+	vm := NewMicroVM(4)
+	val, err := vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Int64()
+	if !ok {
+		t.Fatalf("expected int result")
+	}
+	if got != 3 {
+		t.Fatalf("expected 3, got %d", got)
+	}
+}
+
+func TestMicroVMRun_SpecializedFloatOps(t *testing.T) {
+	program := &Program{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0), // 10.0
+			ir.Encode(ir.OpLoadConst, 1), // 4.0
+			ir.Encode(ir.OpDivFloat, 0),  // 10.0 / 4.0 = 2.5
+		},
+		Consts: []ir.Value{
+			ir.Float64Value(10.0),
+			ir.Float64Value(4.0),
+		},
+	}
+
+	vm := NewMicroVM(4)
+	val, err := vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Float64()
+	if !ok {
+		t.Fatalf("expected float result")
+	}
+	if got != 2.5 {
+		t.Fatalf("expected 2.5, got %v", got)
+	}
+}
