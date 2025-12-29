@@ -13,6 +13,7 @@ import (
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
@@ -40,6 +41,11 @@ type LogRecordContext interface {
 // SpanContext exposes a span for direct field opcodes.
 type SpanContext interface {
 	GetSpan() ptrace.Span
+}
+
+// MetricContext exposes a metric for direct field opcodes.
+type MetricContext interface {
+	GetMetric() pmetric.Metric
 }
 
 // Program is a minimal bytecode program for the micro-VM.
@@ -1529,6 +1535,69 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 				return ir.Value{}, ErrTypeMismatch
 			}
 			spanCtx.GetSpan().Status().SetCode(ptrace.StatusCode(int64(stack[sp].Num)))
+
+		case ir.OpGetMetricName:
+			metricCtx, ok := any(tCtx).(MetricContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.StringValue(metricCtx.GetMetric().Name())
+			sp++
+
+		case ir.OpSetMetricName:
+			metricCtx, ok := any(tCtx).(MetricContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			name, ok := stack[sp].String()
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			metricCtx.GetMetric().SetName(name)
+
+		case ir.OpGetMetricUnit:
+			metricCtx, ok := any(tCtx).(MetricContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.StringValue(metricCtx.GetMetric().Unit())
+			sp++
+
+		case ir.OpSetMetricUnit:
+			metricCtx, ok := any(tCtx).(MetricContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			unit, ok := stack[sp].String()
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			metricCtx.GetMetric().SetUnit(unit)
+
+		case ir.OpGetMetricType:
+			metricCtx, ok := any(tCtx).(MetricContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.Int64Value(int64(metricCtx.GetMetric().Type()))
+			sp++
 
 		default:
 			return ir.Value{}, ErrInvalidOpcode

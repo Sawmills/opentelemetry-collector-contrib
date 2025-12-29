@@ -172,6 +172,16 @@ func opcodeName(op ir.Opcode) string {
 		return "GET_SPAN_STATUS"
 	case ir.OpSetSpanStatus:
 		return "SET_SPAN_STATUS"
+	case ir.OpGetMetricName:
+		return "GET_METRIC_NAME"
+	case ir.OpSetMetricName:
+		return "SET_METRIC_NAME"
+	case ir.OpGetMetricUnit:
+		return "GET_METRIC_UNIT"
+	case ir.OpSetMetricUnit:
+		return "SET_METRIC_UNIT"
+	case ir.OpGetMetricType:
+		return "GET_METRIC_TYPE"
 	default:
 		return fmt.Sprintf("OP_%d", op)
 	}

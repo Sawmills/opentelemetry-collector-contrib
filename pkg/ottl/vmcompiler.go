@@ -1038,14 +1038,23 @@ func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
 	if path == nil {
 		return false, nil
 	}
+	hasContext := func(name string) bool {
+		if c.parser == nil || c.parser.pathContextNames == nil {
+			return false
+		}
+		_, ok := c.parser.pathContextNames[name]
+		return ok
+	}
+	spanAllowed := path.Context == "span" || (path.Context == "" && hasContext("span") && !hasContext("metric"))
+	metricAllowed := path.Context == "metric" || (path.Context == "" && hasContext("metric") && !hasContext("span"))
+
 	switch len(path.Fields) {
 	case 1:
 		field := path.Fields[0]
 		if len(field.Keys) != 0 {
 			return false, nil
 		}
-		switch path.Context {
-		case "", "log":
+		if path.Context == "" || path.Context == "log" {
 			switch field.Name {
 			case "body":
 				c.code = append(c.code, ir.Encode(ir.OpGetBody, 0))
@@ -1060,7 +1069,8 @@ func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
 				c.onPush()
 				return true, nil
 			}
-		case "span":
+		}
+		if spanAllowed {
 			switch field.Name {
 			case "name":
 				c.code = append(c.code, ir.Encode(ir.OpGetSpanName, 0))
@@ -1080,22 +1090,18 @@ func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
 				return true, nil
 			}
 		}
-		if path.Context == "" {
+		if metricAllowed {
 			switch field.Name {
 			case "name":
-				c.code = append(c.code, ir.Encode(ir.OpGetSpanName, 0))
+				c.code = append(c.code, ir.Encode(ir.OpGetMetricName, 0))
 				c.onPush()
 				return true, nil
-			case "start_time_unix_nano":
-				c.code = append(c.code, ir.Encode(ir.OpGetSpanStartTime, 0))
+			case "unit":
+				c.code = append(c.code, ir.Encode(ir.OpGetMetricUnit, 0))
 				c.onPush()
 				return true, nil
-			case "end_time_unix_nano":
-				c.code = append(c.code, ir.Encode(ir.OpGetSpanEndTime, 0))
-				c.onPush()
-				return true, nil
-			case "kind":
-				c.code = append(c.code, ir.Encode(ir.OpGetSpanKind, 0))
+			case "type":
+				c.code = append(c.code, ir.Encode(ir.OpGetMetricType, 0))
 				c.onPush()
 				return true, nil
 			}
@@ -1106,12 +1112,10 @@ func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
 		if len(field.Keys) != 0 || len(next.Keys) != 0 {
 			return false, nil
 		}
-		if field.Name == "status" && next.Name == "code" {
-			if path.Context == "" || path.Context == "span" {
-				c.code = append(c.code, ir.Encode(ir.OpGetSpanStatus, 0))
-				c.onPush()
-				return true, nil
-			}
+		if field.Name == "status" && next.Name == "code" && spanAllowed {
+			c.code = append(c.code, ir.Encode(ir.OpGetSpanStatus, 0))
+			c.onPush()
+			return true, nil
 		}
 	}
 	return false, nil
