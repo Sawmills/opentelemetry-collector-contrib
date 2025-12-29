@@ -1112,10 +1112,17 @@ func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
 		if len(field.Keys) != 0 || len(next.Keys) != 0 {
 			return false, nil
 		}
-		if field.Name == "status" && next.Name == "code" && spanAllowed {
-			c.code = append(c.code, ir.Encode(ir.OpGetSpanStatus, 0))
-			c.onPush()
-			return true, nil
+		if field.Name == "status" && spanAllowed {
+			switch next.Name {
+			case "code":
+				c.code = append(c.code, ir.Encode(ir.OpGetSpanStatus, 0))
+				c.onPush()
+				return true, nil
+			case "message":
+				c.code = append(c.code, ir.Encode(ir.OpGetSpanStatusMsg, 0))
+				c.onPush()
+				return true, nil
+			}
 		}
 	}
 	return false, nil

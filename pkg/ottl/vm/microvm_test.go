@@ -564,6 +564,48 @@ func TestRunWithStackAndContext_SetMetricNameUnit(t *testing.T) {
 	}
 }
 
+func TestRunWithStackAndContext_GetSpanStatusMessage(t *testing.T) {
+	span := ptrace.NewSpan()
+	span.Status().SetMessage("oops")
+	ctx := spanCtx{span: span}
+
+	program := &Program[spanCtx]{Code: []ir.Instruction{ir.Encode(ir.OpGetSpanStatusMsg, 0)}}
+	var stack [4]ir.Value
+	val, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.String()
+	if !ok || got != "oops" {
+		t.Fatalf("unexpected span status message: %v", val)
+	}
+}
+
+func TestRunWithStackAndContext_SetSpanStatusMessage(t *testing.T) {
+	span := ptrace.NewSpan()
+	ctx := spanCtx{span: span}
+
+	program := &Program[spanCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetSpanStatusMsg, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.StringValue("bad"),
+			ir.BoolValue(true),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got := span.Status().Message(); got != "bad" {
+		t.Fatalf("unexpected span status message: %q", got)
+	}
+}
+
 func TestMicroVMRun_FloatMul(t *testing.T) {
 	program := &ProgramAny{
 		Code: []ir.Instruction{
