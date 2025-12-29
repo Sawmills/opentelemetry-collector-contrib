@@ -83,7 +83,7 @@ OTTL includes an experimental bytecode VM that can improve performance for compl
 **Via Environment Variable:**
 
 ```bash
-export OTEL_COL_OTTL_VM_ENABLED=true
+export OTELCOL_OTTL_VM=true
 ```
 
 **Programmatically (for component developers):**

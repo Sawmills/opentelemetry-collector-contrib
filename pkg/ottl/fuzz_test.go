@@ -136,8 +136,12 @@ func fuzzErrorsEquivalent(interpErr, vmErr error) bool {
 		return true
 	}
 
-	if interpErr != nil && vmErr != nil {
+	if interpErr == nil && isGasExhausted(vmErr) {
 		return true
+	}
+
+	if interpErr != nil && vmErr != nil {
+		return errorsHaveSameType(interpErr, vmErr)
 	}
 
 	return false
