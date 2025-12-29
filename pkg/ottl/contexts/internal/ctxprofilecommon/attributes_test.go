@@ -218,7 +218,7 @@ func TestAccessAttributesKey_Getter(t *testing.T) {
 			},
 		}
 		getSetter := AccessAttributesKey[*mockAttributeContext](path.Keys(), mockAttributeSource)
-		got, err := getSetter.Getter(t.Context(), ctx)
+		got, err := getSetter.Get(t.Context(), ctx)
 		require.NoError(t, err)
 		assert.Nil(t, got)
 	})
@@ -232,7 +232,7 @@ func TestAccessAttributesKey_Getter(t *testing.T) {
 			},
 		}
 		getSetter := AccessAttributesKey[*mockAttributeContext](path.Keys(), mockAttributeSource)
-		got, err := getSetter.Getter(t.Context(), ctx)
+		got, err := getSetter.Get(t.Context(), ctx)
 		require.NoError(t, err)
 		assert.Equal(t, "bar", got)
 	})
@@ -290,7 +290,7 @@ func TestAccessAttributesKey_Setter(t *testing.T) {
 			},
 		}
 		getSetter := AccessAttributesKey[*mockAttributeContext](path.Keys(), mockAttributeSource)
-		err := getSetter.Setter(t.Context(), ctx, "value1")
+		err := getSetter.Set(t.Context(), ctx, "value1")
 		require.NoError(t, err)
 
 		// Verify existing attributes in shared tables remain unchanged
@@ -335,7 +335,7 @@ func TestAccessAttributesKey_Setter(t *testing.T) {
 			},
 		}
 		getSetter := AccessAttributesKey[*mockAttributeContext](path.Keys(), mockAttributeSource)
-		err := getSetter.Setter(t.Context(), ctx, "bazinga")
+		err := getSetter.Set(t.Context(), ctx, "bazinga")
 		require.NoError(t, err)
 
 		// CRITICAL: Verify all original attributes in shared table remain unchanged
@@ -409,7 +409,7 @@ func TestAccessAttributesKey_Setter(t *testing.T) {
 			},
 		}
 		getSetter := AccessAttributesKey[*mockAttributeContext](path.Keys(), mockAttributeSource)
-		err := getSetter.Setter(t.Context(), ctx, 42)
+		err := getSetter.Set(t.Context(), ctx, 42)
 		require.NoError(t, err)
 
 		// Verify all original attributes in shared tables remain unchanged

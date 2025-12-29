@@ -51,6 +51,11 @@ func valueToVM(val pcommon.Value) (ir.Value, error) {
 	}
 }
 
+// ValueToVM converts a pcommon.Value to an ir.Value for VM fast paths.
+func ValueToVM(val pcommon.Value) (ir.Value, error) {
+	return valueToVM(val)
+}
+
 // SetMapValueFromVM writes a VM value into a pdata map for the given key.
 func SetMapValueFromVM(m pcommon.Map, key string, val ir.Value) error {
 	switch val.Type {
