@@ -189,6 +189,10 @@ const (
 	OpSetSpanStartTime // Set span start time (UnixNano); pops int from stack
 	OpGetSpanEndTime   // Get span end time (UnixNano); pushes int to stack
 	OpSetSpanEndTime   // Set span end time (UnixNano); pops int from stack
+	OpGetSpanKind      // Get span kind; pushes int to stack
+	OpSetSpanKind      // Set span kind; pops int from stack
+	OpGetSpanStatus    // Get span status code; pushes int to stack
+	OpSetSpanStatus    // Set span status code; pops int from stack
 )
 
 // Instruction is a 32-bit fixed-width instruction.

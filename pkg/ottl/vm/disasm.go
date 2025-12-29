@@ -164,6 +164,14 @@ func opcodeName(op ir.Opcode) string {
 		return "GET_SPAN_END_TIME"
 	case ir.OpSetSpanEndTime:
 		return "SET_SPAN_END_TIME"
+	case ir.OpGetSpanKind:
+		return "GET_SPAN_KIND"
+	case ir.OpSetSpanKind:
+		return "SET_SPAN_KIND"
+	case ir.OpGetSpanStatus:
+		return "GET_SPAN_STATUS"
+	case ir.OpSetSpanStatus:
+		return "SET_SPAN_STATUS"
 	default:
 		return fmt.Sprintf("OP_%d", op)
 	}
