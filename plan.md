@@ -237,7 +237,7 @@ Remaining (deferred to future iteration):
 
 | Task | Description |
 |------|-------------|
-| Function registry adapter | Unpack `Value` → `interface{}` only at boundary |
+| Function registry adapter | VM callsites for scalar getter args (Value → interface boundary) |
 | Native opcodes | `INT`, `IS_NIL`, `IS_MATCH` as fast-path instructions |
 | Gradual migration | Only perf-critical functions become native ops |
 

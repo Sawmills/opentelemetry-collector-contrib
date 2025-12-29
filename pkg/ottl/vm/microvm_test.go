@@ -2006,3 +2006,32 @@ func TestMicroVMRun_IsMatchDynamic(t *testing.T) {
 		t.Fatalf("expected true, got %v", val)
 	}
 }
+
+func TestMicroVMRun_Call(t *testing.T) {
+	program := &ProgramAny{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpCall, 0),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(1),
+		},
+		CallSites: []CallSite[any]{
+			{
+				ArgCount: 1,
+				Func: func(context.Context, any, []ir.Value) (ir.Value, error) {
+					return ir.BoolValue(true), nil
+				},
+			},
+		},
+	}
+	var stack [2]ir.Value
+	val, err := RunWithStackAndContext(stack[:], program, context.Background(), nil)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Bool()
+	if !ok || !got {
+		t.Fatalf("expected true, got %v", val)
+	}
+}

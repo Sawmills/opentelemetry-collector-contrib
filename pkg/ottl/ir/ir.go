@@ -275,6 +275,7 @@ const (
 	OpIsType         // Check top of stack type; arg = ir.Type
 	OpIsMatch        // Regex match for string-like target; arg = regex index
 	OpIsMatchDynamic // Regex match with dynamic pattern; pops pattern + target
+	OpCall           // Call function; arg = callsite index
 )
 
 // Instruction is a 32-bit fixed-width instruction.
