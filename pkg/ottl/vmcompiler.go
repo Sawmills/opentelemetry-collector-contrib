@@ -316,7 +316,7 @@ func inferValueKind(val value) (valueKind, error) {
 	case val.String != nil:
 		return kindString, nil
 	case val.IsNil != nil:
-		return kindUnknown, fmt.Errorf("nil literals unsupported in micro compiler")
+		return kindUnknown, nil
 	case val.Bytes != nil:
 		return kindBytes, nil
 	case val.Enum != nil:
@@ -437,6 +437,8 @@ func foldValueConst(val value) (ir.Value, bool, error) {
 		return ir.StringValue(*val.String), true, nil
 	case val.Bytes != nil:
 		return ir.BytesValue([]byte(*val.Bytes)), true, nil
+	case val.IsNil != nil:
+		return ir.Value{Type: ir.TypeNone}, true, nil
 	case val.Literal != nil:
 		return foldMathExprLiteralConst(val.Literal)
 	case val.MathExpression != nil:
@@ -634,6 +636,9 @@ func kindFromValue(val ir.Value) valueKind {
 }
 
 func compareConst(op compareOp, left, right ir.Value) (ir.Value, error) {
+	if left.Type == ir.TypeNone || right.Type == ir.TypeNone {
+		return compareNil(op, left.Type == ir.TypeNone && right.Type == ir.TypeNone)
+	}
 	switch {
 	case (left.Type == ir.TypeInt || left.Type == ir.TypeFloat) && (right.Type == ir.TypeInt || right.Type == ir.TypeFloat):
 		if left.Type == ir.TypeFloat || right.Type == ir.TypeFloat {
@@ -672,6 +677,21 @@ func compareConst(op compareOp, left, right ir.Value) (ir.Value, error) {
 		return compareBytesConst(op, ls, rs)
 	default:
 		return ir.Value{}, fmt.Errorf("unsupported comparison types")
+	}
+}
+
+func compareNil(op compareOp, bothNil bool) (ir.Value, error) {
+	switch op {
+	case eq:
+		return ir.BoolValue(bothNil), nil
+	case ne:
+		return ir.BoolValue(!bothNil), nil
+	case lt, gt:
+		return ir.BoolValue(false), nil
+	case lte, gte:
+		return ir.BoolValue(bothNil), nil
+	default:
+		return ir.Value{}, fmt.Errorf("unsupported comparison op")
 	}
 }
 
@@ -865,7 +885,8 @@ func (c *microCompiler[K]) emitValue(val value) error {
 		c.emitLoadConst(ir.StringValue(*val.String))
 		return nil
 	case val.IsNil != nil:
-		return fmt.Errorf("nil literals unsupported in micro compiler")
+		c.emitLoadConst(ir.Value{Type: ir.TypeNone})
+		return nil
 	case val.Bytes != nil:
 		c.emitLoadConst(ir.BytesValue([]byte(*val.Bytes)))
 		return nil
@@ -981,6 +1002,9 @@ func (c *microCompiler[K]) emitComparison(cmp *comparison) error {
 		c.emitLoadConst(folded)
 		return nil
 	}
+	if ok, err := c.emitNilComparison(cmp); ok || err != nil {
+		return err
+	}
 	if ok, err := c.emitCompareConst(cmp.Left, cmp.Right, cmp.Op); ok || err != nil {
 		return err
 	}
@@ -1009,6 +1033,34 @@ func (c *microCompiler[K]) emitComparison(cmp *comparison) error {
 	c.code = append(c.code, ir.Encode(op, 0))
 	c.onBinaryOp()
 	return nil
+}
+
+func (c *microCompiler[K]) emitNilComparison(cmp *comparison) (bool, error) {
+	if cmp == nil {
+		return false, nil
+	}
+	if cmp.Op != eq && cmp.Op != ne {
+		return false, nil
+	}
+	leftNil := cmp.Left.IsNil != nil
+	rightNil := cmp.Right.IsNil != nil
+	if leftNil == rightNil {
+		return false, nil
+	}
+	var other value
+	if leftNil {
+		other = cmp.Right
+	} else {
+		other = cmp.Left
+	}
+	if err := c.emitValue(other); err != nil {
+		return true, err
+	}
+	c.code = append(c.code, ir.Encode(ir.OpIsNil, 0))
+	if cmp.Op == ne {
+		c.code = append(c.code, ir.Encode(ir.OpNot, 0))
+	}
+	return true, nil
 }
 
 func invertCompareOpForSwap(op compareOp) (compareOp, bool) {

@@ -268,6 +268,8 @@ func opcodeName(op ir.Opcode) string {
 		return "SET_METRIC_IS_MONOTONIC"
 	case ir.OpInt:
 		return "INT"
+	case ir.OpIsNil:
+		return "IS_NIL"
 	case ir.OpIsMatch:
 		return "IS_MATCH"
 	default:
@@ -288,6 +290,8 @@ func formatConst(val ir.Value) string {
 			return fmt.Sprintf("%q", s)
 		}
 		return "<string>"
+	case ir.TypeNone:
+		return "nil"
 	default:
 		return "<?>"
 	}

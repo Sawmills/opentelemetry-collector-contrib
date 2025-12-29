@@ -689,6 +689,12 @@ func runProgram[K any](stack []ir.Value, p *Program[K], loader func(uint32) (ir.
 			}
 			stack[sp-1] = converted
 
+		case ir.OpIsNil:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			stack[sp-1] = ir.BoolValue(stack[sp-1].Type == ir.TypeNone)
+
 		case ir.OpIsMatch:
 			if sp < 1 {
 				return ir.Value{}, ErrStackUnderflow
@@ -1567,6 +1573,12 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 				return ir.Value{}, err
 			}
 			stack[sp-1] = converted
+
+		case ir.OpIsNil:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			stack[sp-1] = ir.BoolValue(stack[sp-1].Type == ir.TypeNone)
 
 		case ir.OpIsMatch:
 			if sp < 1 {
