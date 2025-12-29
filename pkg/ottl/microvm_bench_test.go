@@ -143,7 +143,8 @@ func newBenchParserWithPathAndFunctions(withVM bool, functions map[string]Factor
 	}
 	return NewParser[any](
 		functions,
-		func(Path[any]) (GetSetter[any], error) {
+		func(path Path[any]) (GetSetter[any], error) {
+			_ = path.Keys()
 			return StandardGetSetter[any]{
 				Getter: func(context.Context, any) (any, error) {
 					return getter(), nil
