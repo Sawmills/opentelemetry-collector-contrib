@@ -1262,7 +1262,7 @@ func BenchmarkOTTLInterpreterIsMatchDynamic(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	expr, err := parseCondition(`IsMatch("operationA", "operation[" + "AC" + "]")`)
+	expr, err := parseCondition(`IsMatch("operationA", attributes["pattern"])`)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -1290,7 +1290,7 @@ func BenchmarkOTTLComparisonIsMatchDynamic_VM(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	expr, err := parseCondition(`IsMatch("operationA", "operation[" + "AC" + "]")`)
+	expr, err := parseCondition(`IsMatch("operationA", attributes["pattern"])`)
 	if err != nil {
 		b.Fatal(err)
 	}
