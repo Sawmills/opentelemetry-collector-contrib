@@ -410,6 +410,90 @@ func TestRunWithStackAndContext_SetSpanStartEnd(t *testing.T) {
 	}
 }
 
+func TestRunWithStackAndContext_GetSpanKind(t *testing.T) {
+	span := ptrace.NewSpan()
+	span.SetKind(ptrace.SpanKindServer)
+	ctx := spanCtx{span: span}
+
+	program := &Program[spanCtx]{Code: []ir.Instruction{ir.Encode(ir.OpGetSpanKind, 0)}}
+	var stack [4]ir.Value
+	val, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Int64()
+	if !ok || got != int64(ptrace.SpanKindServer) {
+		t.Fatalf("unexpected span kind: %v", val)
+	}
+}
+
+func TestRunWithStackAndContext_SetSpanKind(t *testing.T) {
+	span := ptrace.NewSpan()
+	ctx := spanCtx{span: span}
+
+	program := &Program[spanCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetSpanKind, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(int64(ptrace.SpanKindClient)),
+			ir.BoolValue(true),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got := span.Kind(); got != ptrace.SpanKindClient {
+		t.Fatalf("unexpected span kind: %v", got)
+	}
+}
+
+func TestRunWithStackAndContext_GetSpanStatus(t *testing.T) {
+	span := ptrace.NewSpan()
+	span.Status().SetCode(ptrace.StatusCodeError)
+	ctx := spanCtx{span: span}
+
+	program := &Program[spanCtx]{Code: []ir.Instruction{ir.Encode(ir.OpGetSpanStatus, 0)}}
+	var stack [4]ir.Value
+	val, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Int64()
+	if !ok || got != int64(ptrace.StatusCodeError) {
+		t.Fatalf("unexpected span status: %v", val)
+	}
+}
+
+func TestRunWithStackAndContext_SetSpanStatus(t *testing.T) {
+	span := ptrace.NewSpan()
+	ctx := spanCtx{span: span}
+
+	program := &Program[spanCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetSpanStatus, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(int64(ptrace.StatusCodeOk)),
+			ir.BoolValue(true),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got := span.Status().Code(); got != ptrace.StatusCodeOk {
+		t.Fatalf("unexpected span status: %v", got)
+	}
+}
+
 func TestMicroVMRun_FloatMul(t *testing.T) {
 	program := &ProgramAny{
 		Code: []ir.Instruction{

@@ -1035,59 +1035,83 @@ func (c *microCompiler[K]) emitFastAttr(path *path) (bool, error) {
 }
 
 func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
-	if path == nil || len(path.Fields) != 1 {
+	if path == nil {
 		return false, nil
 	}
-	field := path.Fields[0]
-	if len(field.Keys) != 0 {
-		return false, nil
-	}
-	switch path.Context {
-	case "", "log":
-		switch field.Name {
-		case "body":
-			c.code = append(c.code, ir.Encode(ir.OpGetBody, 0))
-			c.onPush()
-			return true, nil
-		case "severity_number":
-			c.code = append(c.code, ir.Encode(ir.OpGetSeverity, 0))
-			c.onPush()
-			return true, nil
-		case "time_unix_nano":
-			c.code = append(c.code, ir.Encode(ir.OpGetTimestamp, 0))
-			c.onPush()
-			return true, nil
+	switch len(path.Fields) {
+	case 1:
+		field := path.Fields[0]
+		if len(field.Keys) != 0 {
+			return false, nil
 		}
-	case "span":
-		switch field.Name {
-		case "name":
-			c.code = append(c.code, ir.Encode(ir.OpGetSpanName, 0))
-			c.onPush()
-			return true, nil
-		case "start_time_unix_nano":
-			c.code = append(c.code, ir.Encode(ir.OpGetSpanStartTime, 0))
-			c.onPush()
-			return true, nil
-		case "end_time_unix_nano":
-			c.code = append(c.code, ir.Encode(ir.OpGetSpanEndTime, 0))
-			c.onPush()
-			return true, nil
+		switch path.Context {
+		case "", "log":
+			switch field.Name {
+			case "body":
+				c.code = append(c.code, ir.Encode(ir.OpGetBody, 0))
+				c.onPush()
+				return true, nil
+			case "severity_number":
+				c.code = append(c.code, ir.Encode(ir.OpGetSeverity, 0))
+				c.onPush()
+				return true, nil
+			case "time_unix_nano":
+				c.code = append(c.code, ir.Encode(ir.OpGetTimestamp, 0))
+				c.onPush()
+				return true, nil
+			}
+		case "span":
+			switch field.Name {
+			case "name":
+				c.code = append(c.code, ir.Encode(ir.OpGetSpanName, 0))
+				c.onPush()
+				return true, nil
+			case "start_time_unix_nano":
+				c.code = append(c.code, ir.Encode(ir.OpGetSpanStartTime, 0))
+				c.onPush()
+				return true, nil
+			case "end_time_unix_nano":
+				c.code = append(c.code, ir.Encode(ir.OpGetSpanEndTime, 0))
+				c.onPush()
+				return true, nil
+			case "kind":
+				c.code = append(c.code, ir.Encode(ir.OpGetSpanKind, 0))
+				c.onPush()
+				return true, nil
+			}
 		}
-	}
-	if path.Context == "" {
-		switch field.Name {
-		case "name":
-			c.code = append(c.code, ir.Encode(ir.OpGetSpanName, 0))
-			c.onPush()
-			return true, nil
-		case "start_time_unix_nano":
-			c.code = append(c.code, ir.Encode(ir.OpGetSpanStartTime, 0))
-			c.onPush()
-			return true, nil
-		case "end_time_unix_nano":
-			c.code = append(c.code, ir.Encode(ir.OpGetSpanEndTime, 0))
-			c.onPush()
-			return true, nil
+		if path.Context == "" {
+			switch field.Name {
+			case "name":
+				c.code = append(c.code, ir.Encode(ir.OpGetSpanName, 0))
+				c.onPush()
+				return true, nil
+			case "start_time_unix_nano":
+				c.code = append(c.code, ir.Encode(ir.OpGetSpanStartTime, 0))
+				c.onPush()
+				return true, nil
+			case "end_time_unix_nano":
+				c.code = append(c.code, ir.Encode(ir.OpGetSpanEndTime, 0))
+				c.onPush()
+				return true, nil
+			case "kind":
+				c.code = append(c.code, ir.Encode(ir.OpGetSpanKind, 0))
+				c.onPush()
+				return true, nil
+			}
+		}
+	case 2:
+		field := path.Fields[0]
+		next := path.Fields[1]
+		if len(field.Keys) != 0 || len(next.Keys) != 0 {
+			return false, nil
+		}
+		if field.Name == "status" && next.Name == "code" {
+			if path.Context == "" || path.Context == "span" {
+				c.code = append(c.code, ir.Encode(ir.OpGetSpanStatus, 0))
+				c.onPush()
+				return true, nil
+			}
 		}
 	}
 	return false, nil

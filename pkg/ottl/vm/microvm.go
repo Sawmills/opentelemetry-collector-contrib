@@ -1480,6 +1480,56 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			}
 			spanCtx.GetSpan().SetEndTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, int64(stack[sp].Num))))
 
+		case ir.OpGetSpanKind:
+			spanCtx, ok := any(tCtx).(SpanContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.Int64Value(int64(spanCtx.GetSpan().Kind()))
+			sp++
+
+		case ir.OpSetSpanKind:
+			spanCtx, ok := any(tCtx).(SpanContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if stack[sp].Type != ir.TypeInt {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			spanCtx.GetSpan().SetKind(ptrace.SpanKind(int64(stack[sp].Num)))
+
+		case ir.OpGetSpanStatus:
+			spanCtx, ok := any(tCtx).(SpanContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.Int64Value(int64(spanCtx.GetSpan().Status().Code()))
+			sp++
+
+		case ir.OpSetSpanStatus:
+			spanCtx, ok := any(tCtx).(SpanContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if stack[sp].Type != ir.TypeInt {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			spanCtx.GetSpan().Status().SetCode(ptrace.StatusCode(int64(stack[sp].Num)))
+
 		default:
 			return ir.Value{}, ErrInvalidOpcode
 		}
