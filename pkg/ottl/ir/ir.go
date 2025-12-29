@@ -37,6 +37,7 @@ var _ [24]byte = [unsafe.Sizeof(Value{})]byte{}
 var (
 	trueValue  = Value{Type: TypeBool, Num: 1}
 	falseValue = Value{Type: TypeBool, Num: 0}
+	emptyByte  byte
 )
 
 // Int64Value constructs an int Value.
@@ -67,8 +68,11 @@ func StringValue(v string) Value {
 
 // BytesValue constructs a byte slice Value without heap allocation.
 func BytesValue(v []byte) Value {
-	if len(v) == 0 {
+	if v == nil {
 		return Value{Type: TypeBytes}
+	}
+	if len(v) == 0 {
+		return Value{Type: TypeBytes, Ptr: unsafe.Pointer(&emptyByte)}
 	}
 	return Value{Type: TypeBytes, Num: uint64(len(v)), Ptr: unsafe.Pointer(unsafe.SliceData(v))}
 }

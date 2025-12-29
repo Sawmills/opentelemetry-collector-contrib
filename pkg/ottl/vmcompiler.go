@@ -291,7 +291,7 @@ func supportsComparison(op compareOp, left, right valueKind) bool {
 		return op == eq || op == ne
 	}
 	if left == kindBytes {
-		return right == kindBytes && (op == eq || op == ne)
+		return right == kindBytes
 	}
 	return false
 }
@@ -393,6 +393,12 @@ func inferMathExprLiteralKind(lit *mathExprLiteral) (valueKind, error) {
 	}
 	if lit.Float != nil {
 		return kindFloat, nil
+	}
+	if lit.Path != nil || lit.Converter != nil {
+		return kindUnknown, nil
+	}
+	if lit.Editor != nil {
+		return kindUnknown, fmt.Errorf("editor literals unsupported in micro compiler")
 	}
 	return kindUnknown, fmt.Errorf("unsupported math literal")
 }
@@ -1071,6 +1077,28 @@ func (c *microCompiler[K]) emitPath(path *path) error {
 	return nil
 }
 
+func (c *microCompiler[K]) emitConverter(conv *converter) error {
+	if conv == nil {
+		return fmt.Errorf("converter is nil")
+	}
+	if c.parser == nil {
+		return fmt.Errorf("converter literals unsupported in micro compiler")
+	}
+	gs, err := c.parser.newGetterFromConverter(*conv)
+	if err != nil {
+		return err
+	}
+	var vmGetter VMGetter[K]
+	if provider, ok := gs.(VMGetterProvider[K]); ok {
+		vmGetter = provider.VMGetter()
+	}
+	key := fmt.Sprintf("converter:%s@%p", conv.Function, conv)
+	idx := c.addGetter(key, gs, vmGetter)
+	c.code = append(c.code, ir.Encode(ir.OpLoadAttrCached, idx))
+	c.onPush()
+	return nil
+}
+
 func (c *microCompiler[K]) emitFastAttr(path *path) (bool, error) {
 	if path == nil || len(path.Fields) != 1 {
 		return false, nil
@@ -1377,6 +1405,15 @@ func (c *microCompiler[K]) emitMathValue(val *mathValue) error {
 func (c *microCompiler[K]) emitMathExprLiteral(lit *mathExprLiteral) error {
 	if lit == nil {
 		return fmt.Errorf("math literal is nil")
+	}
+	if lit.Path != nil {
+		return c.emitPath(lit.Path)
+	}
+	if lit.Converter != nil {
+		return c.emitConverter(lit.Converter)
+	}
+	if lit.Editor != nil {
+		return fmt.Errorf("editor literals unsupported in micro compiler")
 	}
 	if lit.Int != nil {
 		c.emitLoadConst(ir.Int64Value(*lit.Int))

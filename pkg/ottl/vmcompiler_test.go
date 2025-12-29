@@ -22,6 +22,15 @@ func stringpTest(v string) *string {
 	return &v
 }
 
+func bytespTest(t *testing.T, v string) *byteSlice {
+	t.Helper()
+	var b byteSlice
+	if err := b.Capture([]string{v}); err != nil {
+		t.Fatalf("invalid byte literal %q: %v", v, err)
+	}
+	return &b
+}
+
 func boolp(v bool) *boolean {
 	b := boolean(v)
 	return &b
@@ -867,7 +876,7 @@ func TestCompileMicroComparison_DirectFieldSpanTraceIDOpcode(t *testing.T) {
 	cmp := &comparison{
 		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "span", Fields: []field{{Name: "trace_id"}}}}},
 		Op:    eq,
-		Right: value{String: stringpTest("deadbeef")},
+		Right: value{Bytes: bytespTest(t, "0x01020304")},
 	}
 
 	program, err := p.compileMicroComparisonVM(cmp)
@@ -890,7 +899,7 @@ func TestCompileMicroComparison_DirectFieldSpanIDOpcode(t *testing.T) {
 	cmp := &comparison{
 		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "span", Fields: []field{{Name: "span_id"}}}}},
 		Op:    eq,
-		Right: value{String: stringpTest("deadbeef")},
+		Right: value{Bytes: bytespTest(t, "0x0a0b0c0d")},
 	}
 
 	program, err := p.compileMicroComparisonVM(cmp)
@@ -913,7 +922,7 @@ func TestCompileMicroComparison_DirectFieldSpanParentIDOpcode(t *testing.T) {
 	cmp := &comparison{
 		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "span", Fields: []field{{Name: "parent_span_id"}}}}},
 		Op:    eq,
-		Right: value{String: stringpTest("deadbeef")},
+		Right: value{Bytes: bytespTest(t, "0x11121314")},
 	}
 
 	program, err := p.compileMicroComparisonVM(cmp)
