@@ -135,6 +135,44 @@ func TestCompileBoolExpressionConstFold_Multi(t *testing.T) {
 	}
 }
 
+func TestCompileBoolExpression_Converter(t *testing.T) {
+	functions := CreateFactoryMap[any](
+		NewFactory(
+			"Foo",
+			nil,
+			func(FunctionContext, Arguments) (ExprFunc[any], error) {
+				return func(context.Context, any) (any, error) {
+					return true, nil
+				}, nil
+			},
+		),
+	)
+	parser, err := NewParser[any](
+		functions,
+		func(Path[any]) (GetSetter[any], error) {
+			return nil, fmt.Errorf("path parsing not supported")
+		},
+		componenttest.NewNopTelemetrySettings(),
+	)
+	if err != nil {
+		t.Fatalf("parser setup failed: %v", err)
+	}
+	expr, err := parseCondition("Foo()")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	program, err := parser.compileMicroBoolExpression(expr)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 1 {
+		t.Fatalf("expected 1 instruction, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpLoadAttrCached {
+		t.Fatalf("expected LOAD_ATTR_CACHED, got %v", got)
+	}
+}
+
 func TestCompileBoolExpressionConstFold_AllFalse(t *testing.T) {
 	parser, err := NewParser[struct{}](
 		map[string]Factory[struct{}]{},
