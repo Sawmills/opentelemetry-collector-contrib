@@ -12,7 +12,7 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 | Phase 1: Core VM | ✓ Complete | All ops, gas, errors, stack pool |
 | Phase 2: Compiler | ✓ Complete | AST→bytecode, folding, disasm |
 | Phase 3: pdata Bridge | ✓ Core done | Fast attrs + key direct fields; remaining fields deferred |
-| Phase 4: Stdlib | Not started | — |
+| Phase 4: Stdlib | In progress | VM literals + converter getters |
 | Phase 5: Verification | Not started | — |
 
 ## 1. Goals

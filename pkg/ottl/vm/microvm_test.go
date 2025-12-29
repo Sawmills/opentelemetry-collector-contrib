@@ -133,6 +133,29 @@ func TestMicroVMRun_LtConst(t *testing.T) {
 	}
 }
 
+func TestMicroVMRun_EqConstBytes(t *testing.T) {
+	program := &ProgramAny{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpEqConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.BytesValue([]byte{0x01, 0x02, 0x03}),
+			ir.BytesValue([]byte{0x01, 0x02, 0x03}),
+		},
+	}
+
+	vm := NewMicroVM(2)
+	val, err := vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Bool()
+	if !ok || !got {
+		t.Fatalf("expected true, got %v", val)
+	}
+}
+
 func TestMicroVMRun_NeConst(t *testing.T) {
 	program := &ProgramAny{
 		Code: []ir.Instruction{
