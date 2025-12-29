@@ -1237,7 +1237,7 @@ func TestCompileMicroComparison_DirectFieldMetricIsMonotonicOpcode(t *testing.T)
 	}
 }
 
-func TestCompileMicroComparison_Unsupported(t *testing.T) {
+func TestCompileMicroComparison_NilLiteralConst(t *testing.T) {
 	p := newTestParser(t, false)
 	n := isNil(true)
 	cmp := &comparison{
@@ -1246,9 +1246,44 @@ func TestCompileMicroComparison_Unsupported(t *testing.T) {
 		Right: value{Literal: &mathExprLiteral{Int: int64p(1)}},
 	}
 
-	_, err := p.compileMicroComparisonVM(cmp)
-	if err == nil {
-		t.Fatalf("expected error for unsupported value")
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 1 {
+		t.Fatalf("expected 1 instruction, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpLoadConst {
+		t.Fatalf("expected LOAD_CONST, got %v", got)
+	}
+	val := program.program.Consts[program.program.Code[0].Arg()]
+	got, ok := val.Bool()
+	if !ok || got {
+		t.Fatalf("expected false, got %v", val)
+	}
+}
+
+func TestCompileMicroComparison_NilComparisonOpIsNil(t *testing.T) {
+	p := newTestParser(t, false)
+	n := isNil(true)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "body"}}}}},
+		Op:    eq,
+		Right: value{IsNil: &n},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetBody {
+		t.Fatalf("expected GET_BODY, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpIsNil {
+		t.Fatalf("expected IS_NIL, got %v", got)
 	}
 }
 

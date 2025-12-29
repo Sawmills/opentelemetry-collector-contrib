@@ -271,6 +271,7 @@ const (
 	OpSetMetricIsMonotonic              // Set metric monotonicity; pops bool from stack
 
 	OpInt     // Convert top of stack to int (OTTL Int converter semantics)
+	OpIsNil   // Check top of stack for nil (TypeNone)
 	OpIsMatch // Regex match for string-like target; arg = regex index
 )
 
