@@ -78,13 +78,31 @@ func orFuncs[K any](funcs []BoolExpr[K]) BoolExpr[K] {
 
 func runBoolVMConstOnly[K any](program *microProgram[K]) (bool, error) {
 	var stack []ir.Value
-	if program.stack > defaultMicroVMStackSize {
-		stack = make([]ir.Value, program.stack)
-	} else {
-		var stackArr [defaultMicroVMStackSize]ir.Value
-		stack = stackArr[:program.stack]
+	var holder *vm.StackHolder
+	fromPool := false
+	if program.stackPool != nil {
+		holder = program.stackPool.GetHolder()
+		stack = holder.Stack
+		if program.stack > len(stack) {
+			program.stackPool.PutHolder(holder)
+			stack = nil
+			holder = nil
+		} else {
+			fromPool = true
+		}
 	}
-	val, err := vm.RunWithStackGeneric(stack, program.program)
+	if stack == nil {
+		if program.stack > defaultMicroVMStackSize {
+			stack = make([]ir.Value, program.stack)
+		} else {
+			var stackArr [defaultMicroVMStackSize]ir.Value
+			stack = stackArr[:program.stack]
+		}
+	}
+	val, err := vm.RunWithStackGeneric(stack[:program.stack], program.program)
+	if fromPool {
+		program.stackPool.PutHolder(holder)
+	}
 	if err != nil {
 		return false, err
 	}
@@ -98,15 +116,33 @@ func runBoolVMConstOnly[K any](program *microProgram[K]) (bool, error) {
 func (p *Parser[K]) runBoolVM(ctx context.Context, tCtx K, program *microProgram[K]) (bool, error) {
 	// Use stack-allocated array for common case; fall back to heap for large stacks
 	var stack []ir.Value
-	if program.stack > defaultMicroVMStackSize {
-		stack = make([]ir.Value, program.stack)
-	} else {
-		var stackArr [defaultMicroVMStackSize]ir.Value
-		stack = stackArr[:program.stack]
+	var holder *vm.StackHolder
+	fromPool := false
+	if program.stackPool != nil {
+		holder = program.stackPool.GetHolder()
+		stack = holder.Stack
+		if program.stack > len(stack) {
+			program.stackPool.PutHolder(holder)
+			stack = nil
+			holder = nil
+		} else {
+			fromPool = true
+		}
+	}
+	if stack == nil {
+		if program.stack > defaultMicroVMStackSize {
+			stack = make([]ir.Value, program.stack)
+		} else {
+			var stackArr [defaultMicroVMStackSize]ir.Value
+			stack = stackArr[:program.stack]
+		}
 	}
 
 	// Use context-aware runner with pre-compiled accessors - no per-run closure allocation
-	val, err := vm.RunWithStackAndContext(stack, program.program, ctx, tCtx)
+	val, err := vm.RunWithStackAndContext(stack[:program.stack], program.program, ctx, tCtx)
+	if fromPool {
+		program.stackPool.PutHolder(holder)
+	}
 
 	if err != nil {
 		p.logVMError(err)

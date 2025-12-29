@@ -78,6 +78,7 @@ type Parser[K any] struct {
 	vmAttrGetter              vm.AttrGetter[K]
 	vmAttrSetter              vm.AttrSetter[K]
 	vmAttrContextNames        map[string]struct{}
+	vmStackPool               *vm.StackPool
 	vmLogRecordGetter         func(K) plog.LogRecord
 	vmSpanGetter              func(K) ptrace.Span
 	vmMetricGetter            func(K) pmetric.Metric

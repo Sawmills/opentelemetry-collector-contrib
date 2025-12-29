@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/goccy/go-json"
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -78,6 +79,7 @@ type Program[K any] struct {
 	Code                    []ir.Instruction
 	Consts                  []ir.Value
 	Regexps                 []*regexp.Regexp
+	dynamicRegexps          sync.Map
 	CallSites               []CallSite[K]
 	Accessors               []PathAccessor[K] // cached attribute accessors for OpLoadAttrCached
 	Setters                 []PathSetter[K]   // cached attribute setters for OpSetAttrCached
@@ -122,6 +124,11 @@ const (
 	BackwardJumpPenaltyGas uint64 = 9
 )
 
+// StackHolder wraps a reusable stack slice.
+type StackHolder struct {
+	Stack []ir.Value
+}
+
 // StackPool reuses operand stacks across VM executions.
 type StackPool struct {
 	size int
@@ -134,15 +141,29 @@ func NewStackPool(size int) *StackPool {
 		size: size,
 		pool: sync.Pool{
 			New: func() any {
-				return make([]ir.Value, size)
+				return &StackHolder{Stack: make([]ir.Value, size)}
 			},
 		},
 	}
 }
 
+// GetHolder returns a stack holder from the pool.
+func (p *StackPool) GetHolder() *StackHolder {
+	return p.pool.Get().(*StackHolder)
+}
+
+// PutHolder returns a stack holder to the pool.
+func (p *StackPool) PutHolder(holder *StackHolder) {
+	if holder == nil || cap(holder.Stack) < p.size {
+		return
+	}
+	holder.Stack = holder.Stack[:p.size]
+	p.pool.Put(holder)
+}
+
 // Get returns a stack from the pool.
 func (p *StackPool) Get() []ir.Value {
-	return p.pool.Get().([]ir.Value)
+	return p.GetHolder().Stack
 }
 
 // Put returns a stack to the pool.
@@ -150,14 +171,15 @@ func (p *StackPool) Put(stack []ir.Value) {
 	if cap(stack) < p.size {
 		return
 	}
-	p.pool.Put(stack[:p.size])
+	p.PutHolder(&StackHolder{Stack: stack[:p.size]})
 }
 
 // MicroVM executes a tiny subset of the OTTL bytecode for benchmarking.
 // For performance-critical paths, use RunWithStackAndContext directly with stack-allocated arrays.
 type MicroVM struct {
-	stack []ir.Value
-	pool  *StackPool
+	stack     []ir.Value
+	pool      *StackPool
+	stackHold *StackHolder
 }
 
 // NewMicroVM creates a VM with a fixed-size stack.
@@ -167,7 +189,8 @@ func NewMicroVM(stackSize int) *MicroVM {
 
 // NewMicroVMFromPool creates a VM that borrows its stack from a pool.
 func NewMicroVMFromPool(pool *StackPool) *MicroVM {
-	return &MicroVM{stack: pool.Get(), pool: pool}
+	holder := pool.GetHolder()
+	return &MicroVM{stack: holder.Stack, pool: pool, stackHold: holder}
 }
 
 // Release returns the stack to the pool when constructed with NewMicroVMFromPool.
@@ -175,7 +198,12 @@ func (m *MicroVM) Release() {
 	if m.pool == nil || m.stack == nil {
 		return
 	}
-	m.pool.Put(m.stack)
+	if m.stackHold != nil {
+		m.pool.PutHolder(m.stackHold)
+		m.stackHold = nil
+	} else {
+		m.pool.Put(m.stack)
+	}
 	m.stack = nil
 }
 
@@ -741,7 +769,7 @@ func runProgram[K any](stack []ir.Value, p *Program[K], loader func(uint32) (ir.
 			if err != nil {
 				return ir.Value{}, err
 			}
-			r, err := regexp.Compile(pattern)
+			r, err := dynamicRegexp(p, pattern)
 			if err != nil {
 				return ir.Value{}, fmt.Errorf("the regex pattern supplied to IsMatch '%q' is not a valid pattern: %w", pattern, err)
 			}
@@ -849,6 +877,10 @@ func compareOp(op ir.Opcode, a, b ir.Value) (ir.Value, error) {
 		return compareStrings(op, a, b)
 	case a.Type == ir.TypeBytes && b.Type == ir.TypeBytes:
 		return compareBytes(op, a, b)
+	case a.Type == ir.TypePMap && b.Type == ir.TypePMap:
+		return comparePMaps(op, a, b)
+	case a.Type == ir.TypePSlice && b.Type == ir.TypePSlice:
+		return comparePSlices(op, a, b)
 	default:
 		return ir.Value{}, ErrTypeMismatch
 	}
@@ -988,6 +1020,44 @@ func compareBytes(op ir.Opcode, a, b ir.Value) (ir.Value, error) {
 	}
 }
 
+func comparePMaps(op ir.Opcode, a, b ir.Value) (ir.Value, error) {
+	am, ok := pMapFromValue(a)
+	if !ok {
+		return ir.Value{}, ErrTypeMismatch
+	}
+	bm, ok := pMapFromValue(b)
+	if !ok {
+		return ir.Value{}, ErrTypeMismatch
+	}
+	switch op {
+	case ir.OpEq:
+		return ir.BoolValue(am.Equal(bm)), nil
+	case ir.OpNe:
+		return ir.BoolValue(!am.Equal(bm)), nil
+	default:
+		return ir.Value{}, ErrTypeMismatch
+	}
+}
+
+func comparePSlices(op ir.Opcode, a, b ir.Value) (ir.Value, error) {
+	as, ok := pSliceFromValue(a)
+	if !ok {
+		return ir.Value{}, ErrTypeMismatch
+	}
+	bs, ok := pSliceFromValue(b)
+	if !ok {
+		return ir.Value{}, ErrTypeMismatch
+	}
+	switch op {
+	case ir.OpEq:
+		return ir.BoolValue(as.Equal(bs)), nil
+	case ir.OpNe:
+		return ir.BoolValue(!as.Equal(bs)), nil
+	default:
+		return ir.Value{}, ErrTypeMismatch
+	}
+}
+
 func intFromValue(val ir.Value) (ir.Value, error) {
 	switch val.Type {
 	case ir.TypeNone:
@@ -1086,9 +1156,59 @@ func pcommonValueToVM(val pcommon.Value) (ir.Value, error) {
 		return ir.StringValue(val.Str()), nil
 	case pcommon.ValueTypeBytes:
 		return ir.BytesValue(val.Bytes().AsRaw()), nil
+	case pcommon.ValueTypeMap:
+		return pMapValue(val.Map()), nil
+	case pcommon.ValueTypeSlice:
+		return pSliceValue(val.Slice()), nil
 	default:
 		return ir.Value{}, ErrTypeMismatch
 	}
+}
+
+func pMapValue(val pcommon.Map) ir.Value {
+	w := *(*pcommonWrapper)(unsafe.Pointer(&val))
+	return ir.Value{Type: ir.TypePMap, Num: uint64(uintptr(w.state)), Ptr: w.orig}
+}
+
+func pSliceValue(val pcommon.Slice) ir.Value {
+	w := *(*pcommonWrapper)(unsafe.Pointer(&val))
+	return ir.Value{Type: ir.TypePSlice, Num: uint64(uintptr(w.state)), Ptr: w.orig}
+}
+
+func pMapFromValue(val ir.Value) (pcommon.Map, bool) {
+	if val.Type != ir.TypePMap || val.Ptr == nil || val.Num == 0 {
+		return pcommon.Map{}, false
+	}
+	w := pcommonWrapper{orig: val.Ptr, state: unsafe.Pointer(uintptr(val.Num))}
+	return *(*pcommon.Map)(unsafe.Pointer(&w)), true
+}
+
+func pSliceFromValue(val ir.Value) (pcommon.Slice, bool) {
+	if val.Type != ir.TypePSlice || val.Ptr == nil || val.Num == 0 {
+		return pcommon.Slice{}, false
+	}
+	w := pcommonWrapper{orig: val.Ptr, state: unsafe.Pointer(uintptr(val.Num))}
+	return *(*pcommon.Slice)(unsafe.Pointer(&w)), true
+}
+
+type pcommonWrapper struct {
+	orig  unsafe.Pointer
+	state unsafe.Pointer
+}
+
+func dynamicRegexp[K any](p *Program[K], pattern string) (*regexp.Regexp, error) {
+	if p == nil {
+		return regexp.Compile(pattern)
+	}
+	if cached, ok := p.dynamicRegexps.Load(pattern); ok {
+		return cached.(*regexp.Regexp), nil
+	}
+	r, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	actual, _ := p.dynamicRegexps.LoadOrStore(pattern, r)
+	return actual.(*regexp.Regexp), nil
 }
 
 func setLogBodyFromVM(lr plog.LogRecord, val ir.Value) error {
@@ -1116,6 +1236,20 @@ func setLogBodyFromVM(lr plog.LogRecord, val ir.Value) error {
 			return ErrTypeMismatch
 		}
 		body.SetEmptyBytes().FromRaw(b)
+		return nil
+	case ir.TypePMap:
+		m, ok := pMapFromValue(val)
+		if !ok {
+			return ErrTypeMismatch
+		}
+		m.CopyTo(body.SetEmptyMap())
+		return nil
+	case ir.TypePSlice:
+		s, ok := pSliceFromValue(val)
+		if !ok {
+			return ErrTypeMismatch
+		}
+		s.CopyTo(body.SetEmptySlice())
 		return nil
 	default:
 		return ErrTypeMismatch
@@ -1674,7 +1808,7 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			if err != nil {
 				return ir.Value{}, err
 			}
-			r, err := regexp.Compile(pattern)
+			r, err := dynamicRegexp(p, pattern)
 			if err != nil {
 				return ir.Value{}, fmt.Errorf("the regex pattern supplied to IsMatch '%q' is not a valid pattern: %w", pattern, err)
 			}

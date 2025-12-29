@@ -1,6 +1,6 @@
 # OTTL Bytecode VM (OVM) Implementation Plan
 
-Status: Phase 3 Core Complete
+Status: Phase 4 In Progress (stdlib + perf parity)
 Owner: Sawmills.ai / OTel Collector Contrib
 Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-alloc hot loop, safe execution bounds.
 
@@ -12,7 +12,7 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 | Phase 1: Core VM | ✓ Complete | All ops, gas, errors, stack pool |
 | Phase 2: Compiler | ✓ Complete | AST→bytecode, folding, disasm |
 | Phase 3: pdata Bridge | ✓ Core done | Fast attrs + key direct fields; remaining fields deferred |
-| Phase 4: Stdlib | In progress | VM literals + converter getters + native Int/IsMatch/IsNil/IsType; dynamic IsMatch |
+| Phase 4: Stdlib | In progress | VM callsites (incl list args), native Int/IsMatch/IsNil/IsType/IsMap/IsList, PMap/PSlice VM values, dynamic IsMatch cache |
 | Phase 5: Verification | Not started | — |
 
 ## 1. Goals
@@ -141,11 +141,19 @@ type Program struct {
 
 ## Benchmarks (Local, 2025-12-28, Apple M3 Max)
 
-- OTTL add/eq: interpreter 11.39 ns/op (0 allocs), VM 32.47 ns/op (0 allocs), microVM 16.03 ns/op (0 allocs)
-- OTTL float mul/eq: interpreter 17.94 ns/op (1 alloc, 8 B), VM 32.34 ns/op (0 allocs), microVM 17.98 ns/op (0 allocs)
-- OTTL path eq (`attributes["foo"] == 7`): interpreter 7.187 ns/op (0 allocs), VM 32.32 ns/op (0 allocs)
-- OTTL complex where (two attr compares + math): interpreter 23.36 ns/op (0 allocs), VM 46.97 ns/op (0 allocs)
+- OTTL add/eq: interpreter 11.22 ns/op (0 allocs), VM 13.27 ns/op (0 allocs), microVM 17.01 ns/op (0 allocs)
+- OTTL float mul/eq: interpreter 17.09 ns/op (1 alloc, 8 B), VM 13.18 ns/op (0 allocs), microVM 18.61 ns/op (0 allocs)
+- OTTL path eq (`attributes["foo"] == 7`): interpreter 7.166 ns/op (0 allocs), VM 32.42 ns/op (0 allocs)
+- OTTL complex where (two attr compares + math): interpreter 23.00 ns/op (0 allocs), VM 39.01 ns/op (0 allocs)
+- OTTL deep arithmetic: interpreter 41.59 ns/op (0 allocs), VM 13.26 ns/op (0 allocs), microVM 58.50 ns/op (0 allocs), microVM specialized 28.79 ns/op (0 allocs)
+- OTTL many comparisons: interpreter 34.56 ns/op (0 allocs), VM 13.24 ns/op (0 allocs), microVM 55.16 ns/op (0 allocs)
+- OTTL microVM add/eq specialized: 13.76 ns/op (0 allocs)
 - ctxutil mixed literal key path (map→slice→map): 62.38 ns/op (2 allocs, 112 B)
+- IsMatch literal: interpreter 72.58 ns/op (0 allocs), VM 80.36 ns/op (0 allocs)
+- IsMatch dynamic: interpreter 1074 ns/op (22 allocs, 2245 B), VM 118.4 ns/op (0 allocs)
+- IsInt: interpreter 10.75 ns/op (0 allocs), VM 15.71 ns/op (0 allocs)
+- IsMap: interpreter 30.33 ns/op (1 alloc, 16 B), VM 30.34 ns/op (0 allocs)
+- IsList: interpreter 26.41 ns/op (1 alloc, 16 B), VM 30.49 ns/op (0 allocs)
 
 ### Phase 1: Core VM Runtime
 
@@ -243,7 +251,13 @@ Remaining (deferred to future iteration):
 
 **Notes:**
 - Added `IS_TYPE` and dynamic `IS_MATCH` (pattern on stack).
-- `IsMap`/`IsList` deferred until VM supports pcommon.Map/Slice values.
+- `IsMap`/`IsList` now mapped to `IS_TYPE` once pcommon.Map/Slice landed in VM.
+
+**Progress (2025-12-29):**
+- Callsite adapter supports list args (prebuilt slices; VM stack only for non-list args).
+- VM now carries pcommon.Map/Slice values without per-call heap wrapping.
+- Stack reuse via pool holders to avoid per-eval allocations.
+- Dynamic IsMatch regex cache (per-program) + native IsMap/IsList.
 
 **Adapter pattern:**
 ```go
@@ -347,7 +361,26 @@ if isBackwardJump(inst) {
 - pdata heavy: `attributes["http.method"] == "GET"`
 - Real rules: representative transform processor configs
 
-## 9. Risks & Mitigations
+## 9. Next Steps (Detailed)
+
+1. **Add real-path VM benchmarks**
+   - Implement VM bench for ctxutil map→slice→map path (same workload as existing baseline).
+   - Compare interpreter vs VM; update bench table and note any regressions.
+2. **Path fast-path validation**
+   - Ensure map literal key paths use VM getters in real contexts.
+   - Add a bench variant with real ctx parsers (log/span/resource) to confirm 0 allocs.
+3. **Phase 5 harness setup**
+   - Build a fuzz harness that runs interpreter + VM side-by-side on identical inputs.
+   - Start with a curated corpus (common OTTL rules, map/slice/bytes edge cases).
+   - Wire CI gate (short fuzz) + nightly long fuzz.
+4. **Stdlib/native opcode follow-ups**
+   - Identify top hot stdlib funcs from configs; consider native ops or inlining.
+   - Add benches before/after each native conversion.
+5. **Docs + rollout hooks**
+   - Update user docs with VM mode + known limitations.
+   - Add divergence metrics for shadow mode.
+
+## 10. Risks & Mitigations
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
@@ -357,7 +390,7 @@ if isBackwardJump(inst) {
 | Semantic drift | Silent bugs | Differential fuzzing gate; dual-run shadow mode |
 | Gas config abuse | DoS via huge limits | Global cap; warn on excessive values |
 
-## 10. Artifacts
+## 11. Artifacts
 
 | Artifact | Description |
 |----------|-------------|
@@ -370,7 +403,7 @@ if isBackwardJump(inst) {
 | Shadow mode | Dual-run with divergence logging |
 | Docs update | User guide for VM mode |
 
-## 11. Success Criteria
+## 12. Success Criteria
 
 | Milestone | Criteria |
 |-----------|----------|
@@ -382,7 +415,7 @@ if isBackwardJump(inst) {
 | Phase 5 complete | 24h fuzz with 0 divergences; shadow mode in prod |
 | GA ready | Default on for read-only processors |
 
-## 12. Future Considerations
+## 13. Future Considerations
 
 Revisit if profiling shows bottlenecks:
 - **Compact Value union** (Plan B style) if GC scanning is hot
