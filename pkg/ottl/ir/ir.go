@@ -183,23 +183,31 @@ const (
 	OpGteConst // Compare top of stack with const; arg = const index
 
 	// Direct span field access
-	OpGetSpanName      // Get span name; pushes string to stack
-	OpSetSpanName      // Set span name; pops string from stack
-	OpGetSpanStartTime // Get span start time (UnixNano); pushes int to stack
-	OpSetSpanStartTime // Set span start time (UnixNano); pops int from stack
-	OpGetSpanEndTime   // Get span end time (UnixNano); pushes int to stack
-	OpSetSpanEndTime   // Set span end time (UnixNano); pops int from stack
-	OpGetSpanKind      // Get span kind; pushes int to stack
-	OpSetSpanKind      // Set span kind; pops int from stack
-	OpGetSpanStatus    // Get span status code; pushes int to stack
-	OpSetSpanStatus    // Set span status code; pops int from stack
-	OpGetMetricName    // Get metric name; pushes string to stack
-	OpSetMetricName    // Set metric name; pops string from stack
-	OpGetMetricUnit    // Get metric unit; pushes string to stack
-	OpSetMetricUnit    // Set metric unit; pops string from stack
-	OpGetMetricType    // Get metric type; pushes int to stack
-	OpGetSpanStatusMsg // Get span status message; pushes string to stack
-	OpSetSpanStatusMsg // Set span status message; pops string from stack
+	OpGetSpanName                       // Get span name; pushes string to stack
+	OpSetSpanName                       // Set span name; pops string from stack
+	OpGetSpanStartTime                  // Get span start time (UnixNano); pushes int to stack
+	OpSetSpanStartTime                  // Set span start time (UnixNano); pops int from stack
+	OpGetSpanEndTime                    // Get span end time (UnixNano); pushes int to stack
+	OpSetSpanEndTime                    // Set span end time (UnixNano); pops int from stack
+	OpGetSpanKind                       // Get span kind; pushes int to stack
+	OpSetSpanKind                       // Set span kind; pops int from stack
+	OpGetSpanStatus                     // Get span status code; pushes int to stack
+	OpSetSpanStatus                     // Set span status code; pops int from stack
+	OpGetMetricName                     // Get metric name; pushes string to stack
+	OpSetMetricName                     // Set metric name; pops string from stack
+	OpGetMetricUnit                     // Get metric unit; pushes string to stack
+	OpSetMetricUnit                     // Set metric unit; pops string from stack
+	OpGetMetricType                     // Get metric type; pushes int to stack
+	OpGetSpanStatusMsg                  // Get span status message; pushes string to stack
+	OpSetSpanStatusMsg                  // Set span status message; pops string from stack
+	OpGetResourceDroppedAttributesCount // Get resource dropped attributes count; pushes int to stack
+	OpSetResourceDroppedAttributesCount // Set resource dropped attributes count; pops int from stack
+	OpGetScopeName                      // Get scope name; pushes string to stack
+	OpSetScopeName                      // Set scope name; pops string from stack
+	OpGetScopeVersion                   // Get scope version; pushes string to stack
+	OpSetScopeVersion                   // Set scope version; pops string from stack
+	OpGetScopeDroppedAttributesCount    // Get scope dropped attributes count; pushes int to stack
+	OpSetScopeDroppedAttributesCount    // Set scope dropped attributes count; pops int from stack
 )
 
 // Instruction is a 32-bit fixed-width instruction.

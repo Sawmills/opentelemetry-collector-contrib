@@ -80,3 +80,103 @@ func BenchmarkOTTLScopeAttributesEq_VM(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkOTTLScopeNameEq_Interpreter(b *testing.B) {
+	parser, err := newBenchScopeParser(false)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cond, err := parser.ParseCondition(`name == "lib"`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	tCtx := newBenchScopeContext()
+	tCtx.GetInstrumentationScope().SetName("lib")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ok, err := cond.Eval(ctx, tCtx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !ok {
+			b.Fatal("expected true")
+		}
+	}
+}
+
+func BenchmarkOTTLScopeNameEq_VM(b *testing.B) {
+	parser, err := newBenchScopeParser(true)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cond, err := parser.ParseCondition(`name == "lib"`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	tCtx := newBenchScopeContext()
+	tCtx.GetInstrumentationScope().SetName("lib")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ok, err := cond.Eval(ctx, tCtx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !ok {
+			b.Fatal("expected true")
+		}
+	}
+}
+
+func BenchmarkOTTLScopeDroppedAttributesCountEq_Interpreter(b *testing.B) {
+	parser, err := newBenchScopeParser(false)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cond, err := parser.ParseCondition(`dropped_attributes_count == 5`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	tCtx := newBenchScopeContext()
+	tCtx.GetInstrumentationScope().SetDroppedAttributesCount(5)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ok, err := cond.Eval(ctx, tCtx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !ok {
+			b.Fatal("expected true")
+		}
+	}
+}
+
+func BenchmarkOTTLScopeDroppedAttributesCountEq_VM(b *testing.B) {
+	parser, err := newBenchScopeParser(true)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cond, err := parser.ParseCondition(`dropped_attributes_count == 5`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	tCtx := newBenchScopeContext()
+	tCtx.GetInstrumentationScope().SetDroppedAttributesCount(5)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ok, err := cond.Eval(ctx, tCtx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !ok {
+			b.Fatal("expected true")
+		}
+	}
+}

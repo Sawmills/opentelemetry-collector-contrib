@@ -48,17 +48,32 @@ type MetricContext interface {
 	GetMetric() pmetric.Metric
 }
 
+// ResourceContext exposes a resource for direct field opcodes.
+type ResourceContext interface {
+	GetResource() pcommon.Resource
+}
+
+// ScopeContext exposes an instrumentation scope for direct field opcodes.
+type ScopeContext interface {
+	GetInstrumentationScope() pcommon.InstrumentationScope
+}
+
 // Program is a minimal bytecode program for the micro-VM.
 // Generic over K to support typed path accessors without interface{} overhead.
 type Program[K any] struct {
-	Code       []ir.Instruction
-	Consts     []ir.Value
-	Accessors  []PathAccessor[K] // cached attribute accessors for OpLoadAttrCached
-	Setters    []PathSetter[K]   // cached attribute setters for OpSetAttrCached
-	AttrKeys   []string          // fast attribute keys for OpLoadAttrFast
-	AttrGetter AttrGetter[K]     // fast attribute getter for OpLoadAttrFast
-	AttrSetter AttrSetter[K]     // fast attribute setter for OpSetAttrFast
-	GasLimit   uint64
+	Code            []ir.Instruction
+	Consts          []ir.Value
+	Accessors       []PathAccessor[K] // cached attribute accessors for OpLoadAttrCached
+	Setters         []PathSetter[K]   // cached attribute setters for OpSetAttrCached
+	AttrKeys        []string          // fast attribute keys for OpLoadAttrFast
+	AttrGetter      AttrGetter[K]     // fast attribute getter for OpLoadAttrFast
+	AttrSetter      AttrSetter[K]     // fast attribute setter for OpSetAttrFast
+	LogRecordGetter func(K) plog.LogRecord
+	SpanGetter      func(K) ptrace.Span
+	MetricGetter    func(K) pmetric.Metric
+	ResourceGetter  func(K) pcommon.Resource
+	ScopeGetter     func(K) pcommon.InstrumentationScope
+	GasLimit        uint64
 }
 
 // ProgramAny is an alias for Program[any] for backward compatibility.
@@ -863,6 +878,11 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 	code := p.Code
 	consts := p.Consts
 	codeLen := len(code)
+	logGetter := p.LogRecordGetter
+	spanGetter := p.SpanGetter
+	metricGetter := p.MetricGetter
+	resourceGetter := p.ResourceGetter
+	scopeGetter := p.ScopeGetter
 
 	for ip := 0; ip < codeLen; ip++ {
 		if gas == 0 {
@@ -1330,11 +1350,17 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			stack[sp-1].Num = stack[sp-1].Num ^ (1 << 63)
 
 		case ir.OpGetBody:
-			logCtx, ok := any(tCtx).(LogRecordContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
+			var lr plog.LogRecord
+			if logGetter != nil {
+				lr = logGetter(tCtx)
+			} else {
+				logCtx, ok := any(tCtx).(LogRecordContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				lr = logCtx.GetLogRecord()
 			}
-			val, err := pcommonValueToVM(logCtx.GetLogRecord().Body())
+			val, err := pcommonValueToVM(lr.Body())
 			if err != nil {
 				return ir.Value{}, err
 			}
@@ -1345,34 +1371,42 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			sp++
 
 		case ir.OpSetBody:
-			logCtx, ok := any(tCtx).(LogRecordContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
-			}
 			if sp < 1 {
 				return ir.Value{}, ErrStackUnderflow
 			}
 			sp--
-			if err := setLogBodyFromVM(logCtx.GetLogRecord(), stack[sp]); err != nil {
+			var lr plog.LogRecord
+			if logGetter != nil {
+				lr = logGetter(tCtx)
+			} else {
+				logCtx, ok := any(tCtx).(LogRecordContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				lr = logCtx.GetLogRecord()
+			}
+			if err := setLogBodyFromVM(lr, stack[sp]); err != nil {
 				return ir.Value{}, err
 			}
 
 		case ir.OpGetSeverity:
-			logCtx, ok := any(tCtx).(LogRecordContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
+			var lr plog.LogRecord
+			if logGetter != nil {
+				lr = logGetter(tCtx)
+			} else {
+				logCtx, ok := any(tCtx).(LogRecordContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				lr = logCtx.GetLogRecord()
 			}
 			if sp >= len(stack) {
 				return ir.Value{}, ErrStackOverflow
 			}
-			stack[sp] = ir.Int64Value(int64(logCtx.GetLogRecord().SeverityNumber()))
+			stack[sp] = ir.Int64Value(int64(lr.SeverityNumber()))
 			sp++
 
 		case ir.OpSetSeverity:
-			logCtx, ok := any(tCtx).(LogRecordContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
-			}
 			if sp < 1 {
 				return ir.Value{}, ErrStackUnderflow
 			}
@@ -1380,25 +1414,37 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			if stack[sp].Type != ir.TypeInt {
 				return ir.Value{}, ErrTypeMismatch
 			}
-			logCtx.GetLogRecord().SetSeverityNumber(plog.SeverityNumber(int64(stack[sp].Num)))
+			var lr plog.LogRecord
+			if logGetter != nil {
+				lr = logGetter(tCtx)
+			} else {
+				logCtx, ok := any(tCtx).(LogRecordContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				lr = logCtx.GetLogRecord()
+			}
+			lr.SetSeverityNumber(plog.SeverityNumber(int64(stack[sp].Num)))
 
 		case ir.OpGetTimestamp:
-			logCtx, ok := any(tCtx).(LogRecordContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
+			var lr plog.LogRecord
+			if logGetter != nil {
+				lr = logGetter(tCtx)
+			} else {
+				logCtx, ok := any(tCtx).(LogRecordContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				lr = logCtx.GetLogRecord()
 			}
 			if sp >= len(stack) {
 				return ir.Value{}, ErrStackOverflow
 			}
-			ts := logCtx.GetLogRecord().Timestamp().AsTime().UnixNano()
+			ts := lr.Timestamp().AsTime().UnixNano()
 			stack[sp] = ir.Int64Value(ts)
 			sp++
 
 		case ir.OpSetTimestamp:
-			logCtx, ok := any(tCtx).(LogRecordContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
-			}
 			if sp < 1 {
 				return ir.Value{}, ErrStackUnderflow
 			}
@@ -1406,24 +1452,36 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			if stack[sp].Type != ir.TypeInt {
 				return ir.Value{}, ErrTypeMismatch
 			}
-			logCtx.GetLogRecord().SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, int64(stack[sp].Num))))
+			var lr plog.LogRecord
+			if logGetter != nil {
+				lr = logGetter(tCtx)
+			} else {
+				logCtx, ok := any(tCtx).(LogRecordContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				lr = logCtx.GetLogRecord()
+			}
+			lr.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, int64(stack[sp].Num))))
 
 		case ir.OpGetSpanName:
-			spanCtx, ok := any(tCtx).(SpanContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
 			}
 			if sp >= len(stack) {
 				return ir.Value{}, ErrStackOverflow
 			}
-			stack[sp] = ir.StringValue(spanCtx.GetSpan().Name())
+			stack[sp] = ir.StringValue(span.Name())
 			sp++
 
 		case ir.OpSetSpanName:
-			spanCtx, ok := any(tCtx).(SpanContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
-			}
 			if sp < 1 {
 				return ir.Value{}, ErrStackUnderflow
 			}
@@ -1432,25 +1490,37 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			if !ok {
 				return ir.Value{}, ErrTypeMismatch
 			}
-			spanCtx.GetSpan().SetName(name)
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			span.SetName(name)
 
 		case ir.OpGetSpanStartTime:
-			spanCtx, ok := any(tCtx).(SpanContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
 			}
 			if sp >= len(stack) {
 				return ir.Value{}, ErrStackOverflow
 			}
-			ts := spanCtx.GetSpan().StartTimestamp().AsTime().UnixNano()
+			ts := span.StartTimestamp().AsTime().UnixNano()
 			stack[sp] = ir.Int64Value(ts)
 			sp++
 
 		case ir.OpSetSpanStartTime:
-			spanCtx, ok := any(tCtx).(SpanContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
-			}
 			if sp < 1 {
 				return ir.Value{}, ErrStackUnderflow
 			}
@@ -1458,25 +1528,37 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			if stack[sp].Type != ir.TypeInt {
 				return ir.Value{}, ErrTypeMismatch
 			}
-			spanCtx.GetSpan().SetStartTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, int64(stack[sp].Num))))
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			span.SetStartTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, int64(stack[sp].Num))))
 
 		case ir.OpGetSpanEndTime:
-			spanCtx, ok := any(tCtx).(SpanContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
 			}
 			if sp >= len(stack) {
 				return ir.Value{}, ErrStackOverflow
 			}
-			ts := spanCtx.GetSpan().EndTimestamp().AsTime().UnixNano()
+			ts := span.EndTimestamp().AsTime().UnixNano()
 			stack[sp] = ir.Int64Value(ts)
 			sp++
 
 		case ir.OpSetSpanEndTime:
-			spanCtx, ok := any(tCtx).(SpanContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
-			}
 			if sp < 1 {
 				return ir.Value{}, ErrStackUnderflow
 			}
@@ -1484,24 +1566,36 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			if stack[sp].Type != ir.TypeInt {
 				return ir.Value{}, ErrTypeMismatch
 			}
-			spanCtx.GetSpan().SetEndTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, int64(stack[sp].Num))))
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			span.SetEndTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, int64(stack[sp].Num))))
 
 		case ir.OpGetSpanKind:
-			spanCtx, ok := any(tCtx).(SpanContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
 			}
 			if sp >= len(stack) {
 				return ir.Value{}, ErrStackOverflow
 			}
-			stack[sp] = ir.Int64Value(int64(spanCtx.GetSpan().Kind()))
+			stack[sp] = ir.Int64Value(int64(span.Kind()))
 			sp++
 
 		case ir.OpSetSpanKind:
-			spanCtx, ok := any(tCtx).(SpanContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
-			}
 			if sp < 1 {
 				return ir.Value{}, ErrStackUnderflow
 			}
@@ -1509,24 +1603,36 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			if stack[sp].Type != ir.TypeInt {
 				return ir.Value{}, ErrTypeMismatch
 			}
-			spanCtx.GetSpan().SetKind(ptrace.SpanKind(int64(stack[sp].Num)))
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			span.SetKind(ptrace.SpanKind(int64(stack[sp].Num)))
 
 		case ir.OpGetSpanStatus:
-			spanCtx, ok := any(tCtx).(SpanContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
 			}
 			if sp >= len(stack) {
 				return ir.Value{}, ErrStackOverflow
 			}
-			stack[sp] = ir.Int64Value(int64(spanCtx.GetSpan().Status().Code()))
+			stack[sp] = ir.Int64Value(int64(span.Status().Code()))
 			sp++
 
 		case ir.OpSetSpanStatus:
-			spanCtx, ok := any(tCtx).(SpanContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
-			}
 			if sp < 1 {
 				return ir.Value{}, ErrStackUnderflow
 			}
@@ -1534,24 +1640,36 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			if stack[sp].Type != ir.TypeInt {
 				return ir.Value{}, ErrTypeMismatch
 			}
-			spanCtx.GetSpan().Status().SetCode(ptrace.StatusCode(int64(stack[sp].Num)))
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			span.Status().SetCode(ptrace.StatusCode(int64(stack[sp].Num)))
 
 		case ir.OpGetMetricName:
-			metricCtx, ok := any(tCtx).(MetricContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
+			var metric pmetric.Metric
+			if metricGetter != nil {
+				metric = metricGetter(tCtx)
+			} else {
+				metricCtx, ok := any(tCtx).(MetricContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				metric = metricCtx.GetMetric()
 			}
 			if sp >= len(stack) {
 				return ir.Value{}, ErrStackOverflow
 			}
-			stack[sp] = ir.StringValue(metricCtx.GetMetric().Name())
+			stack[sp] = ir.StringValue(metric.Name())
 			sp++
 
 		case ir.OpSetMetricName:
-			metricCtx, ok := any(tCtx).(MetricContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
-			}
 			if sp < 1 {
 				return ir.Value{}, ErrStackUnderflow
 			}
@@ -1560,24 +1678,36 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			if !ok {
 				return ir.Value{}, ErrTypeMismatch
 			}
-			metricCtx.GetMetric().SetName(name)
+			var metric pmetric.Metric
+			if metricGetter != nil {
+				metric = metricGetter(tCtx)
+			} else {
+				metricCtx, ok := any(tCtx).(MetricContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				metric = metricCtx.GetMetric()
+			}
+			metric.SetName(name)
 
 		case ir.OpGetMetricUnit:
-			metricCtx, ok := any(tCtx).(MetricContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
+			var metric pmetric.Metric
+			if metricGetter != nil {
+				metric = metricGetter(tCtx)
+			} else {
+				metricCtx, ok := any(tCtx).(MetricContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				metric = metricCtx.GetMetric()
 			}
 			if sp >= len(stack) {
 				return ir.Value{}, ErrStackOverflow
 			}
-			stack[sp] = ir.StringValue(metricCtx.GetMetric().Unit())
+			stack[sp] = ir.StringValue(metric.Unit())
 			sp++
 
 		case ir.OpSetMetricUnit:
-			metricCtx, ok := any(tCtx).(MetricContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
-			}
 			if sp < 1 {
 				return ir.Value{}, ErrStackUnderflow
 			}
@@ -1586,35 +1716,53 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			if !ok {
 				return ir.Value{}, ErrTypeMismatch
 			}
-			metricCtx.GetMetric().SetUnit(unit)
+			var metric pmetric.Metric
+			if metricGetter != nil {
+				metric = metricGetter(tCtx)
+			} else {
+				metricCtx, ok := any(tCtx).(MetricContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				metric = metricCtx.GetMetric()
+			}
+			metric.SetUnit(unit)
 
 		case ir.OpGetMetricType:
-			metricCtx, ok := any(tCtx).(MetricContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
+			var metric pmetric.Metric
+			if metricGetter != nil {
+				metric = metricGetter(tCtx)
+			} else {
+				metricCtx, ok := any(tCtx).(MetricContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				metric = metricCtx.GetMetric()
 			}
 			if sp >= len(stack) {
 				return ir.Value{}, ErrStackOverflow
 			}
-			stack[sp] = ir.Int64Value(int64(metricCtx.GetMetric().Type()))
+			stack[sp] = ir.Int64Value(int64(metric.Type()))
 			sp++
 
 		case ir.OpGetSpanStatusMsg:
-			spanCtx, ok := any(tCtx).(SpanContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
 			}
 			if sp >= len(stack) {
 				return ir.Value{}, ErrStackOverflow
 			}
-			stack[sp] = ir.StringValue(spanCtx.GetSpan().Status().Message())
+			stack[sp] = ir.StringValue(span.Status().Message())
 			sp++
 
 		case ir.OpSetSpanStatusMsg:
-			spanCtx, ok := any(tCtx).(SpanContext)
-			if !ok {
-				return ir.Value{}, ErrTypeMismatch
-			}
 			if sp < 1 {
 				return ir.Value{}, ErrStackUnderflow
 			}
@@ -1623,7 +1771,167 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			if !ok {
 				return ir.Value{}, ErrTypeMismatch
 			}
-			spanCtx.GetSpan().Status().SetMessage(msg)
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			span.Status().SetMessage(msg)
+
+		case ir.OpGetResourceDroppedAttributesCount:
+			var res pcommon.Resource
+			if resourceGetter != nil {
+				res = resourceGetter(tCtx)
+			} else {
+				resourceCtx, ok := any(tCtx).(ResourceContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				res = resourceCtx.GetResource()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.Int64Value(int64(res.DroppedAttributesCount()))
+			sp++
+
+		case ir.OpSetResourceDroppedAttributesCount:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if stack[sp].Type != ir.TypeInt {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			var res pcommon.Resource
+			if resourceGetter != nil {
+				res = resourceGetter(tCtx)
+			} else {
+				resourceCtx, ok := any(tCtx).(ResourceContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				res = resourceCtx.GetResource()
+			}
+			res.SetDroppedAttributesCount(uint32(stack[sp].Num))
+
+		case ir.OpGetScopeName:
+			var scope pcommon.InstrumentationScope
+			if scopeGetter != nil {
+				scope = scopeGetter(tCtx)
+			} else {
+				scopeCtx, ok := any(tCtx).(ScopeContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				scope = scopeCtx.GetInstrumentationScope()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.StringValue(scope.Name())
+			sp++
+
+		case ir.OpSetScopeName:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			name, ok := stack[sp].String()
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			var scope pcommon.InstrumentationScope
+			if scopeGetter != nil {
+				scope = scopeGetter(tCtx)
+			} else {
+				scopeCtx, ok := any(tCtx).(ScopeContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				scope = scopeCtx.GetInstrumentationScope()
+			}
+			scope.SetName(name)
+
+		case ir.OpGetScopeVersion:
+			var scope pcommon.InstrumentationScope
+			if scopeGetter != nil {
+				scope = scopeGetter(tCtx)
+			} else {
+				scopeCtx, ok := any(tCtx).(ScopeContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				scope = scopeCtx.GetInstrumentationScope()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.StringValue(scope.Version())
+			sp++
+
+		case ir.OpSetScopeVersion:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			version, ok := stack[sp].String()
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			var scope pcommon.InstrumentationScope
+			if scopeGetter != nil {
+				scope = scopeGetter(tCtx)
+			} else {
+				scopeCtx, ok := any(tCtx).(ScopeContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				scope = scopeCtx.GetInstrumentationScope()
+			}
+			scope.SetVersion(version)
+
+		case ir.OpGetScopeDroppedAttributesCount:
+			var scope pcommon.InstrumentationScope
+			if scopeGetter != nil {
+				scope = scopeGetter(tCtx)
+			} else {
+				scopeCtx, ok := any(tCtx).(ScopeContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				scope = scopeCtx.GetInstrumentationScope()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.Int64Value(int64(scope.DroppedAttributesCount()))
+			sp++
+
+		case ir.OpSetScopeDroppedAttributesCount:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if stack[sp].Type != ir.TypeInt {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			var scope pcommon.InstrumentationScope
+			if scopeGetter != nil {
+				scope = scopeGetter(tCtx)
+			} else {
+				scopeCtx, ok := any(tCtx).(ScopeContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				scope = scopeCtx.GetInstrumentationScope()
+			}
+			scope.SetDroppedAttributesCount(uint32(stack[sp].Num))
 
 		default:
 			return ir.Value{}, ErrInvalidOpcode

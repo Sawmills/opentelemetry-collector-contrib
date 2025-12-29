@@ -186,6 +186,22 @@ func opcodeName(op ir.Opcode) string {
 		return "GET_SPAN_STATUS_MSG"
 	case ir.OpSetSpanStatusMsg:
 		return "SET_SPAN_STATUS_MSG"
+	case ir.OpGetResourceDroppedAttributesCount:
+		return "GET_RESOURCE_DROPPED_ATTRIBUTES_COUNT"
+	case ir.OpSetResourceDroppedAttributesCount:
+		return "SET_RESOURCE_DROPPED_ATTRIBUTES_COUNT"
+	case ir.OpGetScopeName:
+		return "GET_SCOPE_NAME"
+	case ir.OpSetScopeName:
+		return "SET_SCOPE_NAME"
+	case ir.OpGetScopeVersion:
+		return "GET_SCOPE_VERSION"
+	case ir.OpSetScopeVersion:
+		return "SET_SCOPE_VERSION"
+	case ir.OpGetScopeDroppedAttributesCount:
+		return "GET_SCOPE_DROPPED_ATTRIBUTES_COUNT"
+	case ir.OpSetScopeDroppedAttributesCount:
+		return "SET_SCOPE_DROPPED_ATTRIBUTES_COUNT"
 	default:
 		return fmt.Sprintf("OP_%d", op)
 	}

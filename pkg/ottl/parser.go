@@ -15,6 +15,9 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.uber.org/zap"
 )
 
@@ -75,6 +78,11 @@ type Parser[K any] struct {
 	vmAttrGetter       vm.AttrGetter[K]
 	vmAttrSetter       vm.AttrSetter[K]
 	vmAttrContextNames map[string]struct{}
+	vmLogRecordGetter  func(K) plog.LogRecord
+	vmSpanGetter       func(K) ptrace.Span
+	vmMetricGetter     func(K) pmetric.Metric
+	vmResourceGetter   func(K) pcommon.Resource
+	vmScopeGetter      func(K) pcommon.InstrumentationScope
 	vmProgramCache     map[*comparison]*microProgram[K]
 	vmBoolProgramCache map[*booleanExpression]*microProgram[K]
 	vmProgramCacheMu   sync.Mutex

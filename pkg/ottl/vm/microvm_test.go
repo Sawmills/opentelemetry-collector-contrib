@@ -40,6 +40,22 @@ func (c metricCtx) GetMetric() pmetric.Metric {
 	return c.metric
 }
 
+type resourceCtx struct {
+	res pcommon.Resource
+}
+
+func (c resourceCtx) GetResource() pcommon.Resource {
+	return c.res
+}
+
+type scopeCtx struct {
+	scope pcommon.InstrumentationScope
+}
+
+func (c scopeCtx) GetInstrumentationScope() pcommon.InstrumentationScope {
+	return c.scope
+}
+
 func TestMicroVMRun_AddEq(t *testing.T) {
 	program := &ProgramAny{
 		Code: []ir.Instruction{
@@ -603,6 +619,115 @@ func TestRunWithStackAndContext_SetSpanStatusMessage(t *testing.T) {
 	}
 	if got := span.Status().Message(); got != "bad" {
 		t.Fatalf("unexpected span status message: %q", got)
+	}
+}
+
+func TestRunWithStackAndContext_GetResourceDroppedAttributesCount(t *testing.T) {
+	res := pcommon.NewResource()
+	res.SetDroppedAttributesCount(7)
+	ctx := resourceCtx{res: res}
+
+	program := &Program[resourceCtx]{Code: []ir.Instruction{ir.Encode(ir.OpGetResourceDroppedAttributesCount, 0)}}
+	var stack [4]ir.Value
+	val, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Int64()
+	if !ok || got != 7 {
+		t.Fatalf("unexpected resource dropped attributes: %v", val)
+	}
+}
+
+func TestRunWithStackAndContext_SetResourceDroppedAttributesCount(t *testing.T) {
+	res := pcommon.NewResource()
+	ctx := resourceCtx{res: res}
+
+	program := &Program[resourceCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetResourceDroppedAttributesCount, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(9),
+			ir.BoolValue(true),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got := res.DroppedAttributesCount(); got != 9 {
+		t.Fatalf("unexpected resource dropped attributes: %v", got)
+	}
+}
+
+func TestRunWithStackAndContext_GetScopeFields(t *testing.T) {
+	scope := pcommon.NewInstrumentationScope()
+	scope.SetName("lib")
+	scope.SetVersion("1.2.3")
+	scope.SetDroppedAttributesCount(5)
+	ctx := scopeCtx{scope: scope}
+
+	program := &Program[scopeCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpGetScopeName, 0),
+			ir.Encode(ir.OpGetScopeVersion, 0),
+			ir.Encode(ir.OpGetScopeDroppedAttributesCount, 0),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got, ok := stack[0].String(); !ok || got != "lib" {
+		t.Fatalf("unexpected scope name: %v", stack[0])
+	}
+	if got, ok := stack[1].String(); !ok || got != "1.2.3" {
+		t.Fatalf("unexpected scope version: %v", stack[1])
+	}
+	if got, ok := stack[2].Int64(); !ok || got != 5 {
+		t.Fatalf("unexpected scope dropped attributes: %v", stack[2])
+	}
+}
+
+func TestRunWithStackAndContext_SetScopeFields(t *testing.T) {
+	scope := pcommon.NewInstrumentationScope()
+	ctx := scopeCtx{scope: scope}
+
+	program := &Program[scopeCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetScopeName, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+			ir.Encode(ir.OpSetScopeVersion, 0),
+			ir.Encode(ir.OpLoadConst, 2),
+			ir.Encode(ir.OpSetScopeDroppedAttributesCount, 0),
+			ir.Encode(ir.OpLoadConst, 3),
+		},
+		Consts: []ir.Value{
+			ir.StringValue("svc"),
+			ir.StringValue("9.9.9"),
+			ir.Int64Value(12),
+			ir.BoolValue(true),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got := scope.Name(); got != "svc" {
+		t.Fatalf("unexpected scope name: %q", got)
+	}
+	if got := scope.Version(); got != "9.9.9" {
+		t.Fatalf("unexpected scope version: %q", got)
+	}
+	if got := scope.DroppedAttributesCount(); got != 12 {
+		t.Fatalf("unexpected scope dropped attributes: %v", got)
 	}
 }
 

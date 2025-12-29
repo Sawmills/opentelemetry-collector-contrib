@@ -1,8 +1,19 @@
 # OTTL Bytecode VM (OVM) Implementation Plan
 
-Status: Draft
+Status: Phase 3 Core Complete
 Owner: Sawmills.ai / OTel Collector Contrib
 Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-alloc hot loop, safe execution bounds.
+
+## Implementation Status (2025-12-29)
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Phase 0: Foundation | ✓ Complete | ir pkg, Value, Instruction, micro-VM |
+| Phase 1: Core VM | ✓ Complete | All ops, gas, errors, stack pool |
+| Phase 2: Compiler | ✓ Complete | AST→bytecode, folding, disasm |
+| Phase 3: pdata Bridge | ✓ Core done | Fast attrs + key direct fields; remaining fields deferred |
+| Phase 4: Stdlib | Not started | — |
+| Phase 5: Verification | Not started | — |
 
 ## 1. Goals
 
@@ -193,6 +204,30 @@ The slowest part of OTTL is `attributes["key"]` lookups. We optimize via path co
 **Concurrency model:**
 - `Program` and accessors are read-only, safe across goroutines
 - VM instances are per-evaluation, not shared
+
+#### Phase 3 Tracking (Current)
+Completed (as of 2025-12-29):
+- Fast attr getters/setters wired across contexts (log/span/resource/scope/metric/datapoint/spanevent/profile/profile-sample)
+- Fast literal-key attribute access (OpLoadAttrFast) and setter fast path (OpSetAttrFast)
+- Direct field opcodes:
+  - log: body, severity_number, time_unix_nano
+  - span: name, start/end_time_unix_nano, kind, status.code, status.message
+  - metric: name, unit, type
+  - resource: dropped_attributes_count
+  - scope: name, version, dropped_attributes_count
+
+Remaining (deferred to future iteration):
+- Direct field opcodes:
+  - resource: schema_url
+  - scope: schema_url
+  - metric: description, aggregation_temporality, is_monotonic
+  - log: observed_time_unix_nano, severity_text, flags
+  - span: trace_id, span_id, parent_span_id, trace_state, dropped_* counts
+- Bench coverage for remaining direct opcodes
+- OpSetAttrCached never emitted by compiler (VM impl exists; wire when needed)
+- Minor: OpNeConst/GtConst/GteConst/LteConst tests missing (impl exists)
+
+**Phase 3 Status: Core complete.** High-value fields implemented; remaining fields are low-frequency access patterns. Effort: ~1-3 days if needed.
 
 ### Phase 4: Stdlib + Native Ops
 

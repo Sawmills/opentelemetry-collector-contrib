@@ -128,6 +128,9 @@ func NewParser(
 		ottl.WithVMAttrGetter[TransformContext](resourceAttrGetter),
 		ottl.WithVMAttrSetter[TransformContext](resourceAttrSetter),
 		ottl.WithVMAttrContextNames[TransformContext]([]string{ctxresource.Name}),
+		ottl.WithVMResourceGetter[TransformContext](func(tCtx TransformContext) pcommon.Resource {
+			return tCtx.GetResource()
+		}),
 	}, options...)
 	return ctxcommon.NewParser(
 		functions,
