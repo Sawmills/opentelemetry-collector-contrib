@@ -814,11 +814,15 @@ func foldBooleanValueConst(val *booleanValue) (bool, bool, error) {
 			return false, false, nil
 		}
 	case val.ConstExpr != nil:
-		if val.ConstExpr.Boolean == nil {
-			return false, false, fmt.Errorf("boolean converter unsupported in micro compiler")
+		if val.ConstExpr.Boolean != nil {
+			result = bool(*val.ConstExpr.Boolean)
+			ok = true
+			break
 		}
-		result = bool(*val.ConstExpr.Boolean)
-		ok = true
+		if val.ConstExpr.Converter != nil {
+			return false, false, nil
+		}
+		return false, false, fmt.Errorf("boolean converter unsupported in micro compiler")
 	case val.SubExpr != nil:
 		result, ok, err = foldBooleanExpressionConst(val.SubExpr)
 		if !ok || err != nil {
@@ -931,6 +935,8 @@ func (c *microCompiler[K]) emitBooleanValue(val *booleanValue) error {
 	case val.ConstExpr != nil:
 		if val.ConstExpr.Boolean != nil {
 			c.emitLoadConst(ir.BoolValue(bool(*val.ConstExpr.Boolean)))
+		} else if val.ConstExpr.Converter != nil {
+			return c.emitConverter(val.ConstExpr.Converter)
 		} else {
 			return fmt.Errorf("boolean converter unsupported in micro compiler")
 		}
