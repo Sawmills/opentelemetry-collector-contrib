@@ -1202,21 +1202,28 @@ func (c *microCompiler[K]) emitNativeConverter(conv *converter) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		if !ok || patternConst.Type != ir.TypeString {
-			return false, nil
-		}
-		patternStr, ok := patternConst.String()
-		if !ok {
-			return true, fmt.Errorf("invalid IsMatch pattern")
-		}
-		idx, err := c.addRegexp(patternStr)
-		if err != nil {
-			return true, err
+		if ok && patternConst.Type == ir.TypeString {
+			patternStr, ok := patternConst.String()
+			if !ok {
+				return true, fmt.Errorf("invalid IsMatch pattern")
+			}
+			idx, err := c.addRegexp(patternStr)
+			if err != nil {
+				return true, err
+			}
+			if err := c.emitValue(target); err != nil {
+				return true, err
+			}
+			c.code = append(c.code, ir.Encode(ir.OpIsMatch, idx))
+			return true, nil
 		}
 		if err := c.emitValue(target); err != nil {
 			return true, err
 		}
-		c.code = append(c.code, ir.Encode(ir.OpIsMatch, idx))
+		if err := c.emitValue(pattern); err != nil {
+			return true, err
+		}
+		c.code = append(c.code, ir.Encode(ir.OpIsMatchDynamic, 0))
 		return true, nil
 	default:
 		return false, nil

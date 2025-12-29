@@ -206,6 +206,39 @@ func TestCompileBoolExpression_IsMatchLiteralPattern(t *testing.T) {
 	}
 }
 
+func TestCompileBoolExpression_IsMatchDynamicPattern(t *testing.T) {
+	parser, err := NewParser[struct{}](
+		map[string]Factory[struct{}]{},
+		func(path Path[struct{}]) (GetSetter[struct{}], error) {
+			_ = path.Keys()
+			return StandardGetSetter[struct{}]{
+				Getter: func(context.Context, struct{}) (any, error) {
+					return "operation[AC]", nil
+				},
+				Setter: func(context.Context, struct{}, any) error { return nil },
+			}, nil
+		},
+		componenttest.NewNopTelemetrySettings(),
+	)
+	if err != nil {
+		t.Fatalf("parser setup failed: %v", err)
+	}
+	expr, err := parseCondition(`IsMatch("foo", attributes["pattern"])`)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	program, err := parser.compileMicroBoolExpression(expr)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 3 {
+		t.Fatalf("expected 3 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[2].Op(); got != ir.OpIsMatchDynamic {
+		t.Fatalf("expected IS_MATCH_DYNAMIC, got %v", got)
+	}
+}
+
 func TestCompileBoolExpression_IsIntNative(t *testing.T) {
 	parser, err := NewParser[struct{}](
 		map[string]Factory[struct{}]{},

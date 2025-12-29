@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math"
 	"regexp"
 	"strconv"
@@ -724,6 +725,30 @@ func runProgram[K any](stack []ir.Value, p *Program[K], loader func(uint32) (ir.
 			}
 			stack[sp-1] = ir.BoolValue(p.Regexps[idx].MatchString(target))
 
+		case ir.OpIsMatchDynamic:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			pattern, err := stringFromValue(stack[sp-1])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			r, err := regexp.Compile(pattern)
+			if err != nil {
+				return ir.Value{}, fmt.Errorf("the regex pattern supplied to IsMatch '%q' is not a valid pattern: %w", pattern, err)
+			}
+			target, ok, err := stringLikeFromValue(stack[sp-2])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if !ok {
+				stack[sp-2] = ir.BoolValue(false)
+				sp--
+				continue
+			}
+			stack[sp-2] = ir.BoolValue(r.MatchString(target))
+			sp--
+
 		case ir.OpLoadAttrCached:
 			// OpLoadAttrCached requires context; use RunWithStackAndContext instead
 			return ir.Value{}, ErrInvalidOpcode
@@ -1025,6 +1050,17 @@ func stringLikeFromValue(val ir.Value) (string, bool, error) {
 	default:
 		return "", false, ErrTypeMismatch
 	}
+}
+
+func stringFromValue(val ir.Value) (string, error) {
+	if val.Type != ir.TypeString {
+		return "", ErrTypeMismatch
+	}
+	str, ok := val.String()
+	if !ok {
+		return "", ErrTypeMismatch
+	}
+	return str, nil
 }
 
 func pcommonValueToVM(val pcommon.Value) (ir.Value, error) {
@@ -1618,6 +1654,30 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 				continue
 			}
 			stack[sp-1] = ir.BoolValue(p.Regexps[idx].MatchString(target))
+
+		case ir.OpIsMatchDynamic:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			pattern, err := stringFromValue(stack[sp-1])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			r, err := regexp.Compile(pattern)
+			if err != nil {
+				return ir.Value{}, fmt.Errorf("the regex pattern supplied to IsMatch '%q' is not a valid pattern: %w", pattern, err)
+			}
+			target, ok, err := stringLikeFromValue(stack[sp-2])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if !ok {
+				stack[sp-2] = ir.BoolValue(false)
+				sp--
+				continue
+			}
+			stack[sp-2] = ir.BoolValue(r.MatchString(target))
+			sp--
 
 		case ir.OpGetBody:
 			var lr plog.LogRecord
