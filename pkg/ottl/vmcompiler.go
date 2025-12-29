@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"regexp"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
@@ -45,6 +46,8 @@ type microCompiler[K any] struct {
 	code         []ir.Instruction
 	consts       []ir.Value
 	constIndex   map[constKey]uint32
+	regexps      []*regexp.Regexp
+	regexIndex   map[string]uint32
 	getterIndex  map[string]uint32
 	getters      []Getter[K]
 	vmGetters    []VMGetter[K]
@@ -98,6 +101,7 @@ func (p *Parser[K]) compileMicroComparisonVM(cmp *comparison) (*microProgram[K],
 	c := &microCompiler[K]{
 		parser:       p,
 		constIndex:   map[constKey]uint32{},
+		regexIndex:   map[string]uint32{},
 		getterIndex:  map[string]uint32{},
 		attrKeyIndex: map[string]uint32{},
 		attrGetter:   p.vmAttrGetter,
@@ -113,6 +117,7 @@ func (p *Parser[K]) compileMicroComparisonVM(cmp *comparison) (*microProgram[K],
 		program: &vm.Program[K]{
 			Code:                    c.code,
 			Consts:                  c.consts,
+			Regexps:                 c.regexps,
 			Accessors:               c.buildAccessors(),
 			AttrKeys:                c.attrKeys,
 			AttrGetter:              c.attrGetter,
@@ -142,6 +147,7 @@ func (p *Parser[K]) compileMicroBoolExpression(expr *booleanExpression) (*microP
 	c := &microCompiler[K]{
 		parser:       p,
 		constIndex:   map[constKey]uint32{},
+		regexIndex:   map[string]uint32{},
 		getterIndex:  map[string]uint32{},
 		attrKeyIndex: map[string]uint32{},
 		attrGetter:   p.vmAttrGetter,
@@ -157,6 +163,7 @@ func (p *Parser[K]) compileMicroBoolExpression(expr *booleanExpression) (*microP
 		program: &vm.Program[K]{
 			Code:                    c.code,
 			Consts:                  c.consts,
+			Regexps:                 c.regexps,
 			Accessors:               c.buildAccessors(),
 			AttrKeys:                c.attrKeys,
 			AttrGetter:              c.attrGetter,
@@ -1090,6 +1097,9 @@ func (c *microCompiler[K]) emitConverter(conv *converter) error {
 	if c.parser == nil {
 		return fmt.Errorf("converter literals unsupported in micro compiler")
 	}
+	if ok, err := c.emitNativeConverter(conv); ok || err != nil {
+		return err
+	}
 	gs, err := c.parser.newGetterFromConverter(*conv)
 	if err != nil {
 		return err
@@ -1103,6 +1113,102 @@ func (c *microCompiler[K]) emitConverter(conv *converter) error {
 	c.code = append(c.code, ir.Encode(ir.OpLoadAttrCached, idx))
 	c.onPush()
 	return nil
+}
+
+func (c *microCompiler[K]) emitNativeConverter(conv *converter) (bool, error) {
+	if len(conv.Arguments) == 0 {
+		return false, nil
+	}
+	if hasFunctionNameArg(conv.Arguments) {
+		return false, nil
+	}
+	switch conv.Function {
+	case "Int":
+		arg, ok := converterArg(conv.Arguments, "target", 0)
+		if !ok {
+			return false, nil
+		}
+		if err := c.emitValue(arg); err != nil {
+			return true, err
+		}
+		c.code = append(c.code, ir.Encode(ir.OpInt, 0))
+		return true, nil
+	case "IsMatch":
+		target, pattern, ok := converterArgs(conv.Arguments, "target", "pattern")
+		if !ok {
+			return false, nil
+		}
+		patternConst, ok, err := foldValueConst(pattern)
+		if err != nil {
+			return true, err
+		}
+		if !ok || patternConst.Type != ir.TypeString {
+			return false, nil
+		}
+		patternStr, ok := patternConst.String()
+		if !ok {
+			return true, fmt.Errorf("invalid IsMatch pattern")
+		}
+		idx, err := c.addRegexp(patternStr)
+		if err != nil {
+			return true, err
+		}
+		if err := c.emitValue(target); err != nil {
+			return true, err
+		}
+		c.code = append(c.code, ir.Encode(ir.OpIsMatch, idx))
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func converterArg(args []argument, name string, idx int) (value, bool) {
+	if len(args) == 0 {
+		return value{}, false
+	}
+	if usesNamedArgs(args) {
+		for _, arg := range args {
+			if arg.Name == name {
+				return arg.Value, true
+			}
+		}
+		return value{}, false
+	}
+	if idx >= len(args) {
+		return value{}, false
+	}
+	return args[idx].Value, true
+}
+
+func converterArgs(args []argument, firstName, secondName string) (value, value, bool) {
+	first, ok := converterArg(args, firstName, 0)
+	if !ok {
+		return value{}, value{}, false
+	}
+	second, ok := converterArg(args, secondName, 1)
+	if !ok {
+		return value{}, value{}, false
+	}
+	return first, second, true
+}
+
+func usesNamedArgs(args []argument) bool {
+	for _, arg := range args {
+		if arg.Name != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFunctionNameArg(args []argument) bool {
+	for _, arg := range args {
+		if arg.FunctionName != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *microCompiler[K]) emitFastAttr(path *path) (bool, error) {
@@ -1489,6 +1595,23 @@ func (c *microCompiler[K]) addConst(val ir.Value) uint32 {
 	c.consts = append(c.consts, val)
 	c.constIndex[key] = idx
 	return idx
+}
+
+func (c *microCompiler[K]) addRegexp(pattern string) (uint32, error) {
+	if c.regexIndex == nil {
+		c.regexIndex = map[string]uint32{}
+	}
+	if idx, ok := c.regexIndex[pattern]; ok {
+		return idx, nil
+	}
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		return 0, fmt.Errorf("the regex pattern supplied to IsMatch '%q' is not a valid pattern: %w", pattern, err)
+	}
+	idx := uint32(len(c.regexps))
+	c.regexps = append(c.regexps, compiled)
+	c.regexIndex[pattern] = idx
+	return idx, nil
 }
 
 func (c *microCompiler[K]) addGetter(key string, getter Getter[K], vmGetter VMGetter[K]) uint32 {

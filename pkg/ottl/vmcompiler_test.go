@@ -173,6 +173,39 @@ func TestCompileBoolExpression_Converter(t *testing.T) {
 	}
 }
 
+func TestCompileBoolExpression_IsMatchLiteralPattern(t *testing.T) {
+	parser, err := NewParser[struct{}](
+		map[string]Factory[struct{}]{},
+		func(Path[struct{}]) (GetSetter[struct{}], error) {
+			return nil, fmt.Errorf("path parsing not supported")
+		},
+		componenttest.NewNopTelemetrySettings(),
+	)
+	if err != nil {
+		t.Fatalf("parser setup failed: %v", err)
+	}
+	expr, err := parseCondition(`IsMatch("foo", "fo+")`)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	program, err := parser.compileMicroBoolExpression(expr)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpLoadConst {
+		t.Fatalf("expected LOAD_CONST, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpIsMatch {
+		t.Fatalf("expected IS_MATCH, got %v", got)
+	}
+	if len(program.program.Regexps) != 1 {
+		t.Fatalf("expected 1 regex, got %d", len(program.program.Regexps))
+	}
+}
+
 func TestCompileBoolExpressionConstFold_AllFalse(t *testing.T) {
 	parser, err := NewParser[struct{}](
 		map[string]Factory[struct{}]{},

@@ -5,6 +5,7 @@ package vm
 
 import (
 	"context"
+	"regexp"
 	"testing"
 	"time"
 
@@ -1840,5 +1841,67 @@ func TestMicroVMRun_NegFloat(t *testing.T) {
 	}
 	if got != -3.14 {
 		t.Fatalf("expected -3.14, got %v", got)
+	}
+}
+
+func TestMicroVMRun_Int(t *testing.T) {
+	vm := NewMicroVM(2)
+	program := &ProgramAny{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpInt, 0),
+		},
+		Consts: []ir.Value{
+			ir.StringValue("42"),
+		},
+	}
+	val, err := vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Int64()
+	if !ok || got != 42 {
+		t.Fatalf("expected 42, got %v", val)
+	}
+
+	program = &ProgramAny{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpInt, 0),
+		},
+		Consts: []ir.Value{
+			ir.StringValue("nope"),
+		},
+	}
+	val, err = vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if val.Type != ir.TypeNone {
+		t.Fatalf("expected nil result, got %v", val)
+	}
+}
+
+func TestMicroVMRun_IsMatch(t *testing.T) {
+	program := &ProgramAny{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpIsMatch, 0),
+		},
+		Consts: []ir.Value{
+			ir.StringValue("operationA"),
+		},
+		Regexps: []*regexp.Regexp{
+			regexp.MustCompile("operation[AC]"),
+		},
+	}
+	vm := NewMicroVM(2)
+	val, err := vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Bool()
+	if !ok || !got {
+		t.Fatalf("expected true, got %v", val)
 	}
 }

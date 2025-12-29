@@ -269,6 +269,9 @@ const (
 	OpSetMetricAggTemporality           // Set metric aggregation temporality; pops int from stack
 	OpGetMetricIsMonotonic              // Get metric monotonicity; pushes bool or nil to stack
 	OpSetMetricIsMonotonic              // Set metric monotonicity; pops bool from stack
+
+	OpInt     // Convert top of stack to int (OTTL Int converter semantics)
+	OpIsMatch // Regex match for string-like target; arg = regex index
 )
 
 // Instruction is a 32-bit fixed-width instruction.
