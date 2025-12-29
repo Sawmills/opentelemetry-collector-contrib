@@ -266,6 +266,10 @@ func opcodeName(op ir.Opcode) string {
 		return "GET_METRIC_IS_MONOTONIC"
 	case ir.OpSetMetricIsMonotonic:
 		return "SET_METRIC_IS_MONOTONIC"
+	case ir.OpInt:
+		return "INT"
+	case ir.OpIsMatch:
+		return "IS_MATCH"
 	default:
 		return fmt.Sprintf("OP_%d", op)
 	}

@@ -6,12 +6,16 @@ package vm // import "github.com/open-telemetry/opentelemetry-collector-contrib/
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"math"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/goccy/go-json"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
@@ -66,6 +70,7 @@ type ScopeContext interface {
 type Program[K any] struct {
 	Code                    []ir.Instruction
 	Consts                  []ir.Value
+	Regexps                 []*regexp.Regexp
 	Accessors               []PathAccessor[K] // cached attribute accessors for OpLoadAttrCached
 	Setters                 []PathSetter[K]   // cached attribute setters for OpSetAttrCached
 	AttrKeys                []string          // fast attribute keys for OpLoadAttrFast
@@ -91,6 +96,7 @@ var (
 	ErrStackOverflow   = errors.New("stack overflow")
 	ErrInvalidOpcode   = errors.New("invalid opcode")
 	ErrInvalidConst    = errors.New("invalid const index")
+	ErrInvalidRegex    = errors.New("invalid regex index")
 	ErrInvalidGetter   = errors.New("invalid getter index")
 	ErrInvalidAccessor = errors.New("invalid accessor index")
 	ErrInvalidSetter   = errors.New("invalid setter index")
@@ -673,6 +679,34 @@ func runProgram[K any](stack []ir.Value, p *Program[K], loader func(uint32) (ir.
 			}
 			stack[sp-1].Num = stack[sp-1].Num ^ (1 << 63) // flip sign bit
 
+		case ir.OpInt:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			converted, err := intFromValue(stack[sp-1])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			stack[sp-1] = converted
+
+		case ir.OpIsMatch:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			idx := inst.Arg()
+			if int(idx) >= len(p.Regexps) || p.Regexps[idx] == nil {
+				return ir.Value{}, ErrInvalidRegex
+			}
+			target, ok, err := stringLikeFromValue(stack[sp-1])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if !ok {
+				stack[sp-1] = ir.BoolValue(false)
+				continue
+			}
+			stack[sp-1] = ir.BoolValue(p.Regexps[idx].MatchString(target))
+
 		case ir.OpLoadAttrCached:
 			// OpLoadAttrCached requires context; use RunWithStackAndContext instead
 			return ir.Value{}, ErrInvalidOpcode
@@ -898,6 +932,81 @@ func compareBytes(op ir.Opcode, a, b ir.Value) (ir.Value, error) {
 		return ir.BoolValue(cmp >= 0), nil
 	default:
 		return ir.Value{}, ErrInvalidOpcode
+	}
+}
+
+func intFromValue(val ir.Value) (ir.Value, error) {
+	switch val.Type {
+	case ir.TypeNone:
+		return ir.Value{Type: ir.TypeNone}, nil
+	case ir.TypeInt:
+		return val, nil
+	case ir.TypeFloat:
+		return ir.Int64Value(int64(math.Float64frombits(val.Num))), nil
+	case ir.TypeBool:
+		return ir.Int64Value(boolToInt(val.Num != 0)), nil
+	case ir.TypeString:
+		str, ok := val.String()
+		if !ok {
+			return ir.Value{}, ErrTypeMismatch
+		}
+		parsed, err := parseIntString(str)
+		if err != nil {
+			return ir.Value{Type: ir.TypeNone}, nil
+		}
+		return ir.Int64Value(parsed), nil
+	default:
+		return ir.Value{}, ErrTypeMismatch
+	}
+}
+
+func boolToInt(v bool) int64 {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func parseIntString(s string) (int64, error) {
+	return strconv.ParseInt(s, 10, 64)
+}
+
+func stringLikeFromValue(val ir.Value) (string, bool, error) {
+	switch val.Type {
+	case ir.TypeNone:
+		return "", false, nil
+	case ir.TypeString:
+		str, ok := val.String()
+		if !ok {
+			return "", false, ErrTypeMismatch
+		}
+		return str, true, nil
+	case ir.TypeBytes:
+		raw, ok := val.Bytes()
+		if !ok {
+			return "", false, ErrTypeMismatch
+		}
+		return hex.EncodeToString(raw), true, nil
+	case ir.TypeInt:
+		encoded, err := json.Marshal(int64(val.Num))
+		if err != nil {
+			return "", false, err
+		}
+		return string(encoded), true, nil
+	case ir.TypeFloat:
+		encoded, err := json.Marshal(math.Float64frombits(val.Num))
+		if err != nil {
+			return "", false, err
+		}
+		return string(encoded), true, nil
+	case ir.TypeBool:
+		encoded, err := json.Marshal(val.Num != 0)
+		if err != nil {
+			return "", false, err
+		}
+		return string(encoded), true, nil
+	default:
+		return "", false, ErrTypeMismatch
 	}
 }
 
@@ -1448,6 +1557,34 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 				return ir.Value{}, ErrStackUnderflow
 			}
 			stack[sp-1].Num = stack[sp-1].Num ^ (1 << 63)
+
+		case ir.OpInt:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			converted, err := intFromValue(stack[sp-1])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			stack[sp-1] = converted
+
+		case ir.OpIsMatch:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			idx := inst.Arg()
+			if int(idx) >= len(p.Regexps) || p.Regexps[idx] == nil {
+				return ir.Value{}, ErrInvalidRegex
+			}
+			target, ok, err := stringLikeFromValue(stack[sp-1])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if !ok {
+				stack[sp-1] = ir.BoolValue(false)
+				continue
+			}
+			stack[sp-1] = ir.BoolValue(p.Regexps[idx].MatchString(target))
 
 		case ir.OpGetBody:
 			var lr plog.LogRecord
