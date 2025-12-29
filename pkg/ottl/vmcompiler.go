@@ -1185,6 +1185,14 @@ func (c *microCompiler[K]) emitNativeConverter(conv *converter) (bool, error) {
 		}
 		c.code = append(c.code, ir.Encode(ir.OpInt, 0))
 		return true, nil
+	case "IsInt":
+		return c.emitIsTypeConverter(conv.Arguments, ir.TypeInt)
+	case "IsDouble":
+		return c.emitIsTypeConverter(conv.Arguments, ir.TypeFloat)
+	case "IsBool":
+		return c.emitIsTypeConverter(conv.Arguments, ir.TypeBool)
+	case "IsString":
+		return c.emitIsTypeConverter(conv.Arguments, ir.TypeString)
 	case "IsMatch":
 		target, pattern, ok := converterArgs(conv.Arguments, "target", "pattern")
 		if !ok {
@@ -1213,6 +1221,18 @@ func (c *microCompiler[K]) emitNativeConverter(conv *converter) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+func (c *microCompiler[K]) emitIsTypeConverter(args []argument, typ ir.Type) (bool, error) {
+	arg, ok := converterArg(args, "target", 0)
+	if !ok {
+		return false, nil
+	}
+	if err := c.emitValue(arg); err != nil {
+		return true, err
+	}
+	c.code = append(c.code, ir.Encode(ir.OpIsType, uint32(typ)))
+	return true, nil
 }
 
 func converterArg(args []argument, name string, idx int) (value, bool) {
