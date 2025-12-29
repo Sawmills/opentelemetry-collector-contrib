@@ -145,6 +145,15 @@ func WithVMEnabledFromEnv[K any]() Option[K] {
 	}
 }
 
+// WithShadowMode enables shadow execution mode that runs both the legacy interpreter
+// and the VM for every evaluation, comparing results. Divergences are logged but
+// the interpreter result is always returned for safety.
+func WithShadowMode[K any]() Option[K] {
+	return func(p *Parser[K]) {
+		p.shadowMode = true
+	}
+}
+
 func isVMEnvEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(vmEnvVar))) {
 	case "1", "true", "t", "yes", "y":

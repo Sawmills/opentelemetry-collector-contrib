@@ -11,12 +11,10 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
-	"unsafe"
 
 	"github.com/iancoleman/strcase"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
-	"go.opentelemetry.io/collector/pdata/pcommon"
 )
 
 type constKey struct {
@@ -166,6 +164,52 @@ func (p *Parser[K]) compileMicroBoolExpression(expr *booleanExpression) (*microP
 		attrSetter:    p.vmAttrSetter,
 	}
 	if err := c.emitBooleanExpression(expr); err != nil {
+		return nil, err
+	}
+	if c.maxStack > defaultMicroVMStackSize {
+		return nil, fmt.Errorf("vm stack depth %d exceeds max %d", c.maxStack, defaultMicroVMStackSize)
+	}
+	return &microProgram[K]{
+		program: &vm.Program[K]{
+			Code:                    c.code,
+			Consts:                  c.consts,
+			Regexps:                 c.regexps,
+			CallSites:               c.callSites,
+			Accessors:               c.buildAccessors(),
+			AttrKeys:                c.attrKeys,
+			AttrGetter:              c.attrGetter,
+			AttrSetter:              c.attrSetter,
+			LogRecordGetter:         p.vmLogRecordGetter,
+			SpanGetter:              p.vmSpanGetter,
+			MetricGetter:            p.vmMetricGetter,
+			ResourceGetter:          p.vmResourceGetter,
+			ResourceSchemaURLGetter: p.vmResourceSchemaURLGetter,
+			ResourceSchemaURLSetter: p.vmResourceSchemaURLSetter,
+			ScopeGetter:             p.vmScopeGetter,
+			ScopeSchemaURLGetter:    p.vmScopeSchemaURLGetter,
+			ScopeSchemaURLSetter:    p.vmScopeSchemaURLSetter,
+			GasLimit:                vmGasLimitFor(p),
+		},
+		getters:      c.getters,
+		vmGetters:    c.vmGetters,
+		stack:        c.maxStack,
+		needsContext: c.needsContext,
+		stackPool:    p.vmStackPool,
+	}, nil
+}
+
+func (p *Parser[K]) compileMicroFunctionCall(ed editor) (*microProgram[K], error) {
+	c := &microCompiler[K]{
+		parser:        p,
+		constIndex:    map[constKey]uint32{},
+		regexIndex:    map[string]uint32{},
+		callSiteIndex: map[string]uint32{},
+		getterIndex:   map[string]uint32{},
+		attrKeyIndex:  map[string]uint32{},
+		attrGetter:    p.vmAttrGetter,
+		attrSetter:    p.vmAttrSetter,
+	}
+	if err := c.emitEditor(ed); err != nil {
 		return nil, err
 	}
 	if c.maxStack > defaultMicroVMStackSize {
@@ -1197,62 +1241,7 @@ func (g vmArgGetter[K]) Get(context.Context, K) (any, error) {
 	if g.frame == nil || g.idx < 0 || g.idx >= len(g.frame.values) {
 		return nil, fmt.Errorf("invalid call argument index")
 	}
-	return vmValueToAny(g.frame.values[g.idx])
-}
-
-func vmValueToAny(val ir.Value) (any, error) {
-	switch val.Type {
-	case ir.TypeNone:
-		return nil, nil
-	case ir.TypeInt:
-		return int64(val.Num), nil
-	case ir.TypeFloat:
-		return math.Float64frombits(val.Num), nil
-	case ir.TypeBool:
-		return val.Num != 0, nil
-	case ir.TypeString:
-		str, ok := val.String()
-		if !ok {
-			return nil, fmt.Errorf("invalid string value")
-		}
-		return str, nil
-	case ir.TypeBytes:
-		b, ok := val.Bytes()
-		if !ok {
-			return nil, fmt.Errorf("invalid bytes value")
-		}
-		return b, nil
-	case ir.TypePMap:
-		pm, ok := pMapFromValue(val)
-		if !ok {
-			return nil, fmt.Errorf("invalid map value")
-		}
-		return pm, nil
-	case ir.TypePSlice:
-		ps, ok := pSliceFromValue(val)
-		if !ok {
-			return nil, fmt.Errorf("invalid slice value")
-		}
-		return ps, nil
-	default:
-		return nil, fmt.Errorf("unsupported vm value type %v", val.Type)
-	}
-}
-
-func pMapFromValue(val ir.Value) (pcommon.Map, bool) {
-	if val.Type != ir.TypePMap || val.Ptr == nil || val.Num == 0 {
-		return pcommon.Map{}, false
-	}
-	w := pcommonWrapper{orig: val.Ptr, state: unsafe.Pointer(uintptr(val.Num))}
-	return *(*pcommon.Map)(unsafe.Pointer(&w)), true
-}
-
-func pSliceFromValue(val ir.Value) (pcommon.Slice, bool) {
-	if val.Type != ir.TypePSlice || val.Ptr == nil || val.Num == 0 {
-		return pcommon.Slice{}, false
-	}
-	w := pcommonWrapper{orig: val.Ptr, state: unsafe.Pointer(uintptr(val.Num))}
-	return *(*pcommon.Slice)(unsafe.Pointer(&w)), true
+	return VMValueToAny(g.frame.values[g.idx])
 }
 
 func (c *microCompiler[K]) emitCallSiteConverter(conv *converter) (bool, error) {
@@ -1267,7 +1256,7 @@ func (c *microCompiler[K]) emitCallSiteConverter(conv *converter) (bool, error) 
 			return false, nil
 		}
 	}
-	callsite, argCount, ok, err := c.buildCallSite(conv)
+	callsite, argCount, ok, err := c.buildCallSite(conv.Function, conv.Arguments)
 	if err != nil {
 		return true, err
 	}
@@ -1282,17 +1271,53 @@ func (c *microCompiler[K]) emitCallSiteConverter(conv *converter) (bool, error) 
 			return true, err
 		}
 	}
-	idx := c.addCallSite(callsite, conv)
+	key := fmt.Sprintf("callsite:%s@%p", conv.Function, conv)
+	idx := c.addCallSite(callsite, key)
 	c.code = append(c.code, ir.Encode(ir.OpCall, idx))
 	c.needsContext = true
 	c.onCall(argCount)
 	return true, nil
 }
 
-func (c *microCompiler[K]) buildCallSite(conv *converter) (vm.CallSite[K], int, bool, error) {
-	f, ok := c.parser.functions[conv.Function]
+func (c *microCompiler[K]) emitEditor(ed editor) error {
+	if c.parser == nil {
+		return fmt.Errorf("editor literals unsupported in micro compiler")
+	}
+	for _, arg := range ed.Arguments {
+		if arg.FunctionName != nil {
+			return fmt.Errorf("function arguments not supported in editor")
+		}
+		if arg.Value.Map != nil || arg.Value.Enum != nil {
+			return fmt.Errorf("map/enum arguments not supported in editor")
+		}
+	}
+	callsite, argCount, ok, err := c.buildCallSite(ed.Function, ed.Arguments)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("failed to build callsite for %s", ed.Function)
+	}
+	for _, arg := range ed.Arguments {
+		if arg.Value.List != nil {
+			continue
+		}
+		if err := c.emitValue(arg.Value); err != nil {
+			return err
+		}
+	}
+	key := fmt.Sprintf("editor:%s", ed.Function)
+	idx := c.addCallSite(callsite, key)
+	c.code = append(c.code, ir.Encode(ir.OpCall, idx))
+	c.needsContext = true
+	c.onCall(argCount)
+	return nil
+}
+
+func (c *microCompiler[K]) buildCallSite(functionName string, arguments []argument) (vm.CallSite[K], int, bool, error) {
+	f, ok := c.parser.functions[functionName]
 	if !ok || f == nil {
-		return vm.CallSite[K]{}, 0, false, fmt.Errorf("undefined function %q", conv.Function)
+		return vm.CallSite[K]{}, 0, false, fmt.Errorf("undefined function %q", functionName)
 	}
 	args := f.CreateDefaultArguments()
 	if args == nil {
@@ -1322,10 +1347,10 @@ func (c *microCompiler[K]) buildCallSite(conv *converter) (vm.CallSite[K], int, 
 	argIndexByField := make(map[int]int)
 	required := 0
 	seenNamed := false
-	for i := 0; i < len(conv.Arguments); i++ {
-		if !seenNamed && conv.Arguments[i].Name != "" {
+	for i := 0; i < len(arguments); i++ {
+		if !seenNamed && arguments[i].Name != "" {
 			seenNamed = true
-		} else if seenNamed && conv.Arguments[i].Name == "" {
+		} else if seenNamed && arguments[i].Name == "" {
 			return vm.CallSite[K]{}, 0, false, fmt.Errorf("unnamed argument used after named argument")
 		}
 	}
@@ -1334,11 +1359,11 @@ func (c *microCompiler[K]) buildCallSite(conv *converter) (vm.CallSite[K], int, 
 			required++
 		}
 	}
-	if len(conv.Arguments) < required || len(conv.Arguments) > argsType.NumField() {
-		return vm.CallSite[K]{}, 0, false, fmt.Errorf("incorrect number of arguments. Expected: %d Received: %d", argsType.NumField(), len(conv.Arguments))
+	if len(arguments) < required || len(arguments) > argsType.NumField() {
+		return vm.CallSite[K]{}, 0, false, fmt.Errorf("incorrect number of arguments. Expected: %d Received: %d", argsType.NumField(), len(arguments))
 	}
 	if seenNamed {
-		for i, arg := range conv.Arguments {
+		for i, arg := range arguments {
 			field, ok := argsType.FieldByName(strcase.ToCamel(arg.Name))
 			if !ok {
 				return vm.CallSite[K]{}, 0, false, fmt.Errorf("no such parameter: %s", arg.Name)
@@ -1346,7 +1371,7 @@ func (c *microCompiler[K]) buildCallSite(conv *converter) (vm.CallSite[K], int, 
 			argIndexByField[field.Index[0]] = i
 		}
 	} else {
-		for i := range conv.Arguments {
+		for i := range arguments {
 			argIndexByField[i] = i
 		}
 	}
@@ -1359,16 +1384,16 @@ func (c *microCompiler[K]) buildCallSite(conv *converter) (vm.CallSite[K], int, 
 			}
 			return vm.CallSite[K]{}, 0, false, fmt.Errorf("missing required argument %q", argsType.Field(i).Name)
 		}
-		if !c.supportsCallSiteArg(argsType.Field(i).Type, conv.Arguments[argIdx].Value) {
+		if !c.supportsCallSiteArg(argsType.Field(i).Type, arguments[argIdx].Value) {
 			return vm.CallSite[K]{}, 0, false, nil
 		}
 	}
 
-	vmIndexByArg := make(map[int]int, len(conv.Arguments))
+	vmIndexByArg := make(map[int]int, len(arguments))
 	staticByArg := make(map[int]reflect.Value)
 	vmArgCount := 0
-	for argIdx := range conv.Arguments {
-		if conv.Arguments[argIdx].Value.List != nil {
+	for argIdx := range arguments {
+		if arguments[argIdx].Value.List != nil {
 			continue
 		}
 		vmIndexByArg[argIdx] = vmArgCount
@@ -1379,7 +1404,7 @@ func (c *microCompiler[K]) buildCallSite(conv *converter) (vm.CallSite[K], int, 
 		if !ok {
 			continue
 		}
-		argVal := conv.Arguments[argIdx].Value
+		argVal := arguments[argIdx].Value
 		if argVal.List == nil {
 			continue
 		}
@@ -1647,7 +1672,7 @@ func (c *microCompiler[K]) buildCallSiteArgValue(fieldType reflect.Type, frame *
 		name == reflect.Float64.String(),
 		name == reflect.Int64.String(),
 		name == reflect.Bool.String():
-		raw, err := vmValueToAny(frame.values[argIdx])
+		raw, err := VMValueToAny(frame.values[argIdx])
 		if err != nil {
 			return reflect.Value{}, err
 		}
@@ -2197,11 +2222,10 @@ func (c *microCompiler[K]) addRegexp(pattern string) (uint32, error) {
 	return idx, nil
 }
 
-func (c *microCompiler[K]) addCallSite(site vm.CallSite[K], conv *converter) uint32 {
+func (c *microCompiler[K]) addCallSite(site vm.CallSite[K], key string) uint32 {
 	if c.callSiteIndex == nil {
 		c.callSiteIndex = map[string]uint32{}
 	}
-	key := fmt.Sprintf("callsite:%s@%p", conv.Function, conv)
 	if idx, ok := c.callSiteIndex[key]; ok {
 		return idx
 	}

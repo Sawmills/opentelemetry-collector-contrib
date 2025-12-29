@@ -5,6 +5,7 @@ package ottl // import "github.com/open-telemetry/opentelemetry-collector-contri
 
 import (
 	"fmt"
+	"math"
 	"unsafe"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
@@ -72,4 +73,59 @@ func pSliceValue(val pcommon.Slice) ir.Value {
 type pcommonWrapper struct {
 	orig  unsafe.Pointer
 	state unsafe.Pointer
+}
+
+func VMValueToAny(val ir.Value) (any, error) {
+	switch val.Type {
+	case ir.TypeNone:
+		return nil, nil
+	case ir.TypeInt:
+		return int64(val.Num), nil
+	case ir.TypeFloat:
+		return math.Float64frombits(val.Num), nil
+	case ir.TypeBool:
+		return val.Num != 0, nil
+	case ir.TypeString:
+		str, ok := val.String()
+		if !ok {
+			return nil, fmt.Errorf("invalid string value")
+		}
+		return str, nil
+	case ir.TypeBytes:
+		b, ok := val.Bytes()
+		if !ok {
+			return nil, fmt.Errorf("invalid bytes value")
+		}
+		return b, nil
+	case ir.TypePMap:
+		pm, ok := pMapFromValue(val)
+		if !ok {
+			return nil, fmt.Errorf("invalid map value")
+		}
+		return pm, nil
+	case ir.TypePSlice:
+		ps, ok := pSliceFromValue(val)
+		if !ok {
+			return nil, fmt.Errorf("invalid slice value")
+		}
+		return ps, nil
+	default:
+		return nil, fmt.Errorf("unsupported vm value type %v", val.Type)
+	}
+}
+
+func pMapFromValue(val ir.Value) (pcommon.Map, bool) {
+	if val.Type != ir.TypePMap || val.Ptr == nil || val.Num == 0 {
+		return pcommon.Map{}, false
+	}
+	w := pcommonWrapper{orig: val.Ptr, state: unsafe.Pointer(uintptr(val.Num))}
+	return *(*pcommon.Map)(unsafe.Pointer(&w)), true
+}
+
+func pSliceFromValue(val ir.Value) (pcommon.Slice, bool) {
+	if val.Type != ir.TypePSlice || val.Ptr == nil || val.Num == 0 {
+		return pcommon.Slice{}, false
+	}
+	w := pcommonWrapper{orig: val.Ptr, state: unsafe.Pointer(uintptr(val.Num))}
+	return *(*pcommon.Slice)(unsafe.Pointer(&w)), true
 }

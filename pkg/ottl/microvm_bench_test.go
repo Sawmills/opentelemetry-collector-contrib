@@ -179,7 +179,16 @@ func newBenchParserWithPath(withVM bool, getter func() any) (Parser[any], error)
 	return NewParser[any](
 		map[string]Factory[any]{},
 		func(path Path[any]) (GetSetter[any], error) {
-			_ = path.Keys()
+			curr := path
+			_ = curr.Keys()
+			for {
+				next := curr.Next()
+				if next == nil {
+					break
+				}
+				curr = next
+				_ = curr.Keys()
+			}
 			return StandardGetSetter[any]{
 				Getter: func(context.Context, any) (any, error) {
 					return getter(), nil
@@ -1253,7 +1262,7 @@ func BenchmarkOTTLInterpreterIsMatchDynamic(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	expr, err := parseCondition(`IsMatch("operationA", attributes["pattern"])`)
+	expr, err := parseCondition(`IsMatch("operationA", "operation[" + "AC" + "]")`)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -1281,7 +1290,7 @@ func BenchmarkOTTLComparisonIsMatchDynamic_VM(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	expr, err := parseCondition(`IsMatch("operationA", attributes["pattern"])`)
+	expr, err := parseCondition(`IsMatch("operationA", "operation[" + "AC" + "]")`)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -1309,7 +1318,7 @@ func BenchmarkOTTLInterpreterIsInt(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	expr, err := parseCondition(`IsInt(1)`)
+	expr, err := parseCondition(`IsInt(attributes["foo"])`)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -1331,13 +1340,13 @@ func BenchmarkOTTLInterpreterIsInt(b *testing.B) {
 
 func BenchmarkOTTLComparisonIsInt_VM(b *testing.B) {
 	functions := CreateFactoryMap[any](newBenchIsIntFactory[any]())
-	p, err := newBenchParserWithPathAndFunctions(true, functions, func() any {
-		return int64(1)
+	p, err := newBenchParserWithPathVMGetterAny(true, functions, func() any { return int64(1) }, func() ir.Value {
+		return ir.Int64Value(1)
 	})
 	if err != nil {
 		b.Fatal(err)
 	}
-	expr, err := parseCondition(`IsInt(1)`)
+	expr, err := parseCondition(`IsInt(attributes["foo"])`)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -1465,6 +1474,98 @@ func BenchmarkOTTLComparisonIsList_VM(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLInterpreterMixedPath(b *testing.B) {
+	// Setup: attributes["root"]["nested"][1]["id"] == 2
+	m := pcommon.NewMap()
+	root := m.PutEmptyMap("root")
+	nested := root.PutEmptySlice("nested")
+	nested.AppendEmpty().SetEmptyMap().PutInt("id", 1)
+	nested.AppendEmpty().SetEmptyMap().PutInt("id", 2)
+
+	p, err := newBenchParserWithPath(false, func() any { return int64(2) })
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	// path: attributes["root"]["nested"][1]["id"]
+	pathExpr := &mathExprLiteral{
+		Path: &path{
+			Fields: []field{
+				{Name: "attributes", Keys: []key{{String: stringp("root")}}},
+				{Name: "nested", Keys: []key{{Int: int64p(1)}}},
+				{Name: "id", Keys: []key{}},
+			},
+		},
+	}
+	cmp := &comparison{
+		Left:  value{Literal: pathExpr},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(2)}},
+	}
+
+	evaluator, err := p.newComparisonEvaluator(cmp)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonMixedPath_VM(b *testing.B) {
+	// Setup: attributes["root"]["nested"][1]["id"] == 2
+	m := pcommon.NewMap()
+	root := m.PutEmptyMap("root")
+	nested := root.PutEmptySlice("nested")
+	nested.AppendEmpty().SetEmptyMap().PutInt("id", 1)
+	nested.AppendEmpty().SetEmptyMap().PutInt("id", 2)
+
+	p, err := newBenchParserWithPath(true, func() any { return int64(2) })
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	// path: attributes["root"]["nested"][1]["id"]
+	pathExpr := &mathExprLiteral{
+		Path: &path{
+			Fields: []field{
+				{Name: "attributes", Keys: []key{{String: stringp("root")}}},
+				{Name: "nested", Keys: []key{{Int: int64p(1)}}},
+				{Name: "id", Keys: []key{}},
+			},
+		},
+	}
+	cmp := &comparison{
+		Left:  value{Literal: pathExpr},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(2)}},
+	}
+
+	evaluator, err := p.newComparisonEvaluator(cmp)
+	if err != nil {
+		b.Fatal(err)
+	}
+
 	ctx := context.Background()
 	b.ReportAllocs()
 	b.ResetTimer()
