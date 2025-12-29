@@ -193,6 +193,11 @@ const (
 	OpSetSpanKind      // Set span kind; pops int from stack
 	OpGetSpanStatus    // Get span status code; pushes int to stack
 	OpSetSpanStatus    // Set span status code; pops int from stack
+	OpGetMetricName    // Get metric name; pushes string to stack
+	OpSetMetricName    // Set metric name; pops string from stack
+	OpGetMetricUnit    // Get metric unit; pushes string to stack
+	OpSetMetricUnit    // Set metric unit; pops string from stack
+	OpGetMetricType    // Get metric type; pushes int to stack
 )
 
 // Instruction is a 32-bit fixed-width instruction.

@@ -558,6 +558,75 @@ func TestCompileMicroComparison_DirectFieldSpanStatusOpcode(t *testing.T) {
 	}
 }
 
+func TestCompileMicroComparison_DirectFieldMetricNameOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "metric", Fields: []field{{Name: "name"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("requests")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetMetricName {
+		t.Fatalf("expected GET_METRIC_NAME, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldMetricUnitOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "metric", Fields: []field{{Name: "unit"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("ms")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetMetricUnit {
+		t.Fatalf("expected GET_METRIC_UNIT, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldMetricTypeOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "metric", Fields: []field{{Name: "type"}}}}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(2)}},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetMetricType {
+		t.Fatalf("expected GET_METRIC_TYPE, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
 func TestCompileMicroComparison_Unsupported(t *testing.T) {
 	p := newTestParser(t, false)
 	n := isNil(true)

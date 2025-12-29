@@ -10,6 +10,7 @@ import (
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
@@ -29,6 +30,14 @@ type spanCtx struct {
 
 func (c spanCtx) GetSpan() ptrace.Span {
 	return c.span
+}
+
+type metricCtx struct {
+	metric pmetric.Metric
+}
+
+func (c metricCtx) GetMetric() pmetric.Metric {
+	return c.metric
 }
 
 func TestMicroVMRun_AddEq(t *testing.T) {
@@ -491,6 +500,67 @@ func TestRunWithStackAndContext_SetSpanStatus(t *testing.T) {
 	}
 	if got := span.Status().Code(); got != ptrace.StatusCodeOk {
 		t.Fatalf("unexpected span status: %v", got)
+	}
+}
+
+func TestRunWithStackAndContext_GetMetricNameUnitType(t *testing.T) {
+	metric := pmetric.NewMetric()
+	metric.SetName("requests")
+	metric.SetUnit("ms")
+	metric.SetEmptySum()
+	ctx := metricCtx{metric: metric}
+
+	program := &Program[metricCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpGetMetricName, 0),
+			ir.Encode(ir.OpGetMetricUnit, 0),
+			ir.Encode(ir.OpGetMetricType, 0),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got, ok := stack[0].String(); !ok || got != "requests" {
+		t.Fatalf("unexpected metric name: %v", stack[0])
+	}
+	if got, ok := stack[1].String(); !ok || got != "ms" {
+		t.Fatalf("unexpected metric unit: %v", stack[1])
+	}
+	if got, ok := stack[2].Int64(); !ok || got != int64(pmetric.MetricTypeSum) {
+		t.Fatalf("unexpected metric type: %v", stack[2])
+	}
+}
+
+func TestRunWithStackAndContext_SetMetricNameUnit(t *testing.T) {
+	metric := pmetric.NewMetric()
+	ctx := metricCtx{metric: metric}
+
+	program := &Program[metricCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetMetricName, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+			ir.Encode(ir.OpSetMetricUnit, 0),
+			ir.Encode(ir.OpLoadConst, 2),
+		},
+		Consts: []ir.Value{
+			ir.StringValue("cpu"),
+			ir.StringValue("percent"),
+			ir.BoolValue(true),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got := metric.Name(); got != "cpu" {
+		t.Fatalf("unexpected metric name: %q", got)
+	}
+	if got := metric.Unit(); got != "percent" {
+		t.Fatalf("unexpected metric unit: %q", got)
 	}
 }
 
