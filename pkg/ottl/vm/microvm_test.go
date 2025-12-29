@@ -1921,6 +1921,45 @@ func TestMicroVMRun_IsNil(t *testing.T) {
 	}
 }
 
+func TestMicroVMRun_IsType(t *testing.T) {
+	vm := NewMicroVM(2)
+	program := &ProgramAny{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpIsType, uint32(ir.TypeInt)),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(1),
+		},
+	}
+	val, err := vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Bool()
+	if !ok || !got {
+		t.Fatalf("expected true, got %v", val)
+	}
+
+	program = &ProgramAny{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpIsType, uint32(ir.TypeString)),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(1),
+		},
+	}
+	val, err = vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok = val.Bool()
+	if !ok || got {
+		t.Fatalf("expected false, got %v", val)
+	}
+}
+
 func TestMicroVMRun_IsMatch(t *testing.T) {
 	program := &ProgramAny{
 		Code: []ir.Instruction{

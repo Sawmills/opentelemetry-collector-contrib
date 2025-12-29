@@ -97,6 +97,7 @@ var (
 	ErrInvalidOpcode   = errors.New("invalid opcode")
 	ErrInvalidConst    = errors.New("invalid const index")
 	ErrInvalidRegex    = errors.New("invalid regex index")
+	ErrInvalidType     = errors.New("invalid type index")
 	ErrInvalidGetter   = errors.New("invalid getter index")
 	ErrInvalidAccessor = errors.New("invalid accessor index")
 	ErrInvalidSetter   = errors.New("invalid setter index")
@@ -694,6 +695,16 @@ func runProgram[K any](stack []ir.Value, p *Program[K], loader func(uint32) (ir.
 				return ir.Value{}, ErrStackUnderflow
 			}
 			stack[sp-1] = ir.BoolValue(stack[sp-1].Type == ir.TypeNone)
+
+		case ir.OpIsType:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			typ := ir.Type(inst.Arg())
+			if typ > ir.TypePSlice {
+				return ir.Value{}, ErrInvalidType
+			}
+			stack[sp-1] = ir.BoolValue(stack[sp-1].Type == typ)
 
 		case ir.OpIsMatch:
 			if sp < 1 {
@@ -1579,6 +1590,16 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 				return ir.Value{}, ErrStackUnderflow
 			}
 			stack[sp-1] = ir.BoolValue(stack[sp-1].Type == ir.TypeNone)
+
+		case ir.OpIsType:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			typ := ir.Type(inst.Arg())
+			if typ > ir.TypePSlice {
+				return ir.Value{}, ErrInvalidType
+			}
+			stack[sp-1] = ir.BoolValue(stack[sp-1].Type == typ)
 
 		case ir.OpIsMatch:
 			if sp < 1 {

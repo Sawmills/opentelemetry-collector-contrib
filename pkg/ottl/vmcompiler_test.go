@@ -206,6 +206,33 @@ func TestCompileBoolExpression_IsMatchLiteralPattern(t *testing.T) {
 	}
 }
 
+func TestCompileBoolExpression_IsIntNative(t *testing.T) {
+	parser, err := NewParser[struct{}](
+		map[string]Factory[struct{}]{},
+		func(Path[struct{}]) (GetSetter[struct{}], error) {
+			return nil, fmt.Errorf("path parsing not supported")
+		},
+		componenttest.NewNopTelemetrySettings(),
+	)
+	if err != nil {
+		t.Fatalf("parser setup failed: %v", err)
+	}
+	expr, err := parseCondition("IsInt(1)")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	program, err := parser.compileMicroBoolExpression(expr)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpIsType {
+		t.Fatalf("expected IS_TYPE, got %v", got)
+	}
+}
+
 func TestCompileBoolExpressionConstFold_AllFalse(t *testing.T) {
 	parser, err := NewParser[struct{}](
 		map[string]Factory[struct{}]{},

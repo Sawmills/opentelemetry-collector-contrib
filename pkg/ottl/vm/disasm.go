@@ -270,6 +270,8 @@ func opcodeName(op ir.Opcode) string {
 		return "INT"
 	case ir.OpIsNil:
 		return "IS_NIL"
+	case ir.OpIsType:
+		return "IS_TYPE"
 	case ir.OpIsMatch:
 		return "IS_MATCH"
 	default:
