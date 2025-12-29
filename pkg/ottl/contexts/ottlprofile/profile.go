@@ -119,6 +119,18 @@ func NewParser(functions map[string]ottl.Factory[TransformContext], telemetrySet
 		ottl.WithVMScopeGetter[TransformContext](func(tCtx TransformContext) pcommon.InstrumentationScope {
 			return tCtx.GetInstrumentationScope()
 		}),
+		ottl.WithVMResourceSchemaURLGetter[TransformContext](func(tCtx TransformContext) string {
+			return tCtx.GetResourceSchemaURLItem().SchemaUrl()
+		}),
+		ottl.WithVMResourceSchemaURLSetter[TransformContext](func(tCtx TransformContext, schemaURL string) {
+			tCtx.GetResourceSchemaURLItem().SetSchemaUrl(schemaURL)
+		}),
+		ottl.WithVMScopeSchemaURLGetter[TransformContext](func(tCtx TransformContext) string {
+			return tCtx.GetScopeSchemaURLItem().SchemaUrl()
+		}),
+		ottl.WithVMScopeSchemaURLSetter[TransformContext](func(tCtx TransformContext, schemaURL string) {
+			tCtx.GetScopeSchemaURLItem().SetSchemaUrl(schemaURL)
+		}),
 	}, options...)
 	return ctxcommon.NewParser(
 		functions,

@@ -130,3 +130,53 @@ func BenchmarkOTTLResourceDroppedAttributesCountEq_VM(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkOTTLResourceSchemaURLEq_Interpreter(b *testing.B) {
+	parser, err := newBenchResourceParser(false)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cond, err := parser.ParseCondition(`schema_url == "https://example.com/schema"`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	tCtx := newBenchResourceContext()
+	tCtx.GetResourceSchemaURLItem().SetSchemaUrl("https://example.com/schema")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ok, err := cond.Eval(ctx, tCtx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !ok {
+			b.Fatal("expected true")
+		}
+	}
+}
+
+func BenchmarkOTTLResourceSchemaURLEq_VM(b *testing.B) {
+	parser, err := newBenchResourceParser(true)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cond, err := parser.ParseCondition(`schema_url == "https://example.com/schema"`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	tCtx := newBenchResourceContext()
+	tCtx.GetResourceSchemaURLItem().SetSchemaUrl("https://example.com/schema")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ok, err := cond.Eval(ctx, tCtx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !ok {
+			b.Fatal("expected true")
+		}
+	}
+}

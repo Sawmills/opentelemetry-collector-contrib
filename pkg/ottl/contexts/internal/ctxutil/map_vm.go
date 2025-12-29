@@ -46,6 +46,8 @@ func valueToVM(val pcommon.Value) (ir.Value, error) {
 		return ir.BoolValue(val.Bool()), nil
 	case pcommon.ValueTypeStr:
 		return ir.StringValue(val.Str()), nil
+	case pcommon.ValueTypeBytes:
+		return ir.BytesValue(val.Bytes().AsRaw()), nil
 	default:
 		return ir.Value{}, fmt.Errorf("unsupported pcommon.Value type: %v", val.Type())
 	}
@@ -74,6 +76,13 @@ func SetMapValueFromVM(m pcommon.Map, key string, val ir.Value) error {
 			return fmt.Errorf("invalid string value")
 		}
 		m.PutStr(key, s)
+		return nil
+	case ir.TypeBytes:
+		bytesVal, ok := val.Bytes()
+		if !ok {
+			return fmt.Errorf("invalid bytes value")
+		}
+		m.PutEmptyBytes(key).FromRaw(bytesVal)
 		return nil
 	default:
 		return fmt.Errorf("unsupported VM value type: %v", val.Type)

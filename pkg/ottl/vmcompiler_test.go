@@ -22,6 +22,11 @@ func stringpTest(v string) *string {
 	return &v
 }
 
+func boolp(v bool) *boolean {
+	b := boolean(v)
+	return &b
+}
+
 func newTestParser(t *testing.T, withVM bool) Parser[any] {
 	opts := []Option[any]{}
 	if withVM {
@@ -736,6 +741,416 @@ func TestCompileMicroComparison_DirectFieldScopeDroppedAttributesCountOpcode(t *
 	}
 	if got := program.program.Code[0].Op(); got != ir.OpGetScopeDroppedAttributesCount {
 		t.Fatalf("expected GET_SCOPE_DROPPED_ATTRIBUTES_COUNT, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldObservedTimestampOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "observed_time_unix_nano"}}}}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(42)}},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetObservedTimestamp {
+		t.Fatalf("expected GET_OBSERVED_TIMESTAMP, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldSeverityTextOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "severity_text"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("warn")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetSeverityText {
+		t.Fatalf("expected GET_SEVERITY_TEXT, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldLogFlagsOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "flags"}}}}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(1)}},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetLogFlags {
+		t.Fatalf("expected GET_LOG_FLAGS, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldSpanTraceIDStringOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "span", Fields: []field{{Name: "trace_id"}, {Name: "string"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("traceid")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetSpanTraceIDString {
+		t.Fatalf("expected GET_SPAN_TRACE_ID_STRING, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldSpanIDStringOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "span", Fields: []field{{Name: "span_id"}, {Name: "string"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("spanid")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetSpanIDString {
+		t.Fatalf("expected GET_SPAN_ID_STRING, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldSpanTraceIDOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "span", Fields: []field{{Name: "trace_id"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("deadbeef")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetSpanTraceID {
+		t.Fatalf("expected GET_SPAN_TRACE_ID, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldSpanIDOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "span", Fields: []field{{Name: "span_id"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("deadbeef")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetSpanID {
+		t.Fatalf("expected GET_SPAN_ID, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldSpanParentIDOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "span", Fields: []field{{Name: "parent_span_id"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("deadbeef")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetSpanParentID {
+		t.Fatalf("expected GET_SPAN_PARENT_ID, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldSpanParentIDStringOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "span", Fields: []field{{Name: "parent_span_id"}, {Name: "string"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("parentid")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetSpanParentIDString {
+		t.Fatalf("expected GET_SPAN_PARENT_ID_STRING, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldSpanTraceStateOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "span", Fields: []field{{Name: "trace_state"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("rojo=00f067aa0ba902b7")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetSpanTraceState {
+		t.Fatalf("expected GET_SPAN_TRACE_STATE, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldSpanTraceStateKeyOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left: value{Literal: &mathExprLiteral{Path: &path{
+			Context: "span",
+			Fields: []field{{
+				Name: "trace_state",
+				Keys: []key{{String: stringpTest("rojo")}},
+			}},
+		}}},
+		Op:    eq,
+		Right: value{String: stringpTest("00f067aa0ba902b7")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetSpanTraceStateKey {
+		t.Fatalf("expected GET_SPAN_TRACE_STATE_KEY, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldSpanDroppedCountsOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cases := []struct {
+		name   string
+		field  string
+		opcode ir.Opcode
+	}{
+		{name: "attributes", field: "dropped_attributes_count", opcode: ir.OpGetSpanDroppedAttributesCount},
+		{name: "events", field: "dropped_events_count", opcode: ir.OpGetSpanDroppedEventsCount},
+		{name: "links", field: "dropped_links_count", opcode: ir.OpGetSpanDroppedLinksCount},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			cmp := &comparison{
+				Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "span", Fields: []field{{Name: tt.field}}}}},
+				Op:    eq,
+				Right: value{Literal: &mathExprLiteral{Int: int64p(3)}},
+			}
+
+			program, err := p.compileMicroComparisonVM(cmp)
+			if err != nil {
+				t.Fatalf("compile failed: %v", err)
+			}
+			if len(program.program.Code) != 2 {
+				t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+			}
+			if got := program.program.Code[0].Op(); got != tt.opcode {
+				t.Fatalf("expected %v, got %v", tt.opcode, got)
+			}
+			if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+				t.Fatalf("expected EQ_CONST, got %v", got)
+			}
+		})
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldMetricDescriptionOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "metric", Fields: []field{{Name: "description"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("desc")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetMetricDescription {
+		t.Fatalf("expected GET_METRIC_DESCRIPTION, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldResourceSchemaURLOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "resource", Fields: []field{{Name: "schema_url"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("https://example.com/schema")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetResourceSchemaURL {
+		t.Fatalf("expected GET_RESOURCE_SCHEMA_URL, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldScopeSchemaURLOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "scope", Fields: []field{{Name: "schema_url"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("https://example.com/scope-schema")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetScopeSchemaURL {
+		t.Fatalf("expected GET_SCOPE_SCHEMA_URL, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldMetricAggTemporalityOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "metric", Fields: []field{{Name: "aggregation_temporality"}}}}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(1)}},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetMetricAggTemporality {
+		t.Fatalf("expected GET_METRIC_AGG_TEMPORALITY, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldMetricIsMonotonicOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "metric", Fields: []field{{Name: "is_monotonic"}}}}},
+		Op:    eq,
+		Right: value{Bool: boolp(true)},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetMetricIsMonotonic {
+		t.Fatalf("expected GET_METRIC_IS_MONOTONIC, got %v", got)
 	}
 	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
 		t.Fatalf("expected EQ_CONST, got %v", got)

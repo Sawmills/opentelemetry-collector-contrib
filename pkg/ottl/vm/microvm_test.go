@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 )
@@ -117,6 +118,98 @@ func TestMicroVMRun_LtConst(t *testing.T) {
 		},
 		Consts: []ir.Value{
 			ir.Int64Value(5),
+			ir.Int64Value(7),
+		},
+	}
+
+	vm := NewMicroVM(2)
+	val, err := vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Bool()
+	if !ok || !got {
+		t.Fatalf("expected true, got %v", val)
+	}
+}
+
+func TestMicroVMRun_NeConst(t *testing.T) {
+	program := &ProgramAny{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpNeConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(5),
+			ir.Int64Value(7),
+		},
+	}
+
+	vm := NewMicroVM(2)
+	val, err := vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Bool()
+	if !ok || !got {
+		t.Fatalf("expected true, got %v", val)
+	}
+}
+
+func TestMicroVMRun_LteConst(t *testing.T) {
+	program := &ProgramAny{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpLteConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(5),
+			ir.Int64Value(5),
+		},
+	}
+
+	vm := NewMicroVM(2)
+	val, err := vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Bool()
+	if !ok || !got {
+		t.Fatalf("expected true, got %v", val)
+	}
+}
+
+func TestMicroVMRun_GteConst(t *testing.T) {
+	program := &ProgramAny{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpGteConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(7),
+			ir.Int64Value(7),
+		},
+	}
+
+	vm := NewMicroVM(2)
+	val, err := vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Bool()
+	if !ok || !got {
+		t.Fatalf("expected true, got %v", val)
+	}
+}
+
+func TestMicroVMRun_GtConst(t *testing.T) {
+	program := &ProgramAny{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpGtConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(9),
 			ir.Int64Value(7),
 		},
 	}
@@ -664,6 +757,52 @@ func TestRunWithStackAndContext_SetResourceDroppedAttributesCount(t *testing.T) 
 	}
 }
 
+func TestRunWithStackAndContext_GetResourceSchemaURL(t *testing.T) {
+	ctx := resourceCtx{res: pcommon.NewResource()}
+	program := &Program[resourceCtx]{
+		Code: []ir.Instruction{ir.Encode(ir.OpGetResourceSchemaURL, 0)},
+		ResourceSchemaURLGetter: func(_ resourceCtx) string {
+			return "https://example.com/schema"
+		},
+	}
+	var stack [4]ir.Value
+	val, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.String()
+	if !ok || got != "https://example.com/schema" {
+		t.Fatalf("unexpected resource schema url: %v", val)
+	}
+}
+
+func TestRunWithStackAndContext_SetResourceSchemaURL(t *testing.T) {
+	ctx := resourceCtx{res: pcommon.NewResource()}
+	var got string
+	program := &Program[resourceCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetResourceSchemaURL, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.StringValue("https://example.com/new-schema"),
+			ir.BoolValue(true),
+		},
+		ResourceSchemaURLSetter: func(_ resourceCtx, schemaURL string) {
+			got = schemaURL
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got != "https://example.com/new-schema" {
+		t.Fatalf("unexpected resource schema url: %q", got)
+	}
+}
+
 func TestRunWithStackAndContext_GetScopeFields(t *testing.T) {
 	scope := pcommon.NewInstrumentationScope()
 	scope.SetName("lib")
@@ -728,6 +867,389 @@ func TestRunWithStackAndContext_SetScopeFields(t *testing.T) {
 	}
 	if got := scope.DroppedAttributesCount(); got != 12 {
 		t.Fatalf("unexpected scope dropped attributes: %v", got)
+	}
+}
+
+func TestRunWithStackAndContext_GetScopeSchemaURL(t *testing.T) {
+	ctx := scopeCtx{scope: pcommon.NewInstrumentationScope()}
+	program := &Program[scopeCtx]{
+		Code: []ir.Instruction{ir.Encode(ir.OpGetScopeSchemaURL, 0)},
+		ScopeSchemaURLGetter: func(_ scopeCtx) string {
+			return "https://example.com/scope-schema"
+		},
+	}
+	var stack [4]ir.Value
+	val, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.String()
+	if !ok || got != "https://example.com/scope-schema" {
+		t.Fatalf("unexpected scope schema url: %v", val)
+	}
+}
+
+func TestRunWithStackAndContext_SetScopeSchemaURL(t *testing.T) {
+	ctx := scopeCtx{scope: pcommon.NewInstrumentationScope()}
+	var got string
+	program := &Program[scopeCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetScopeSchemaURL, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+		},
+		Consts: []ir.Value{
+			ir.StringValue("https://example.com/new-scope-schema"),
+			ir.BoolValue(true),
+		},
+		ScopeSchemaURLSetter: func(_ scopeCtx, schemaURL string) {
+			got = schemaURL
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got != "https://example.com/new-scope-schema" {
+		t.Fatalf("unexpected scope schema url: %q", got)
+	}
+}
+
+func TestRunWithStackAndContext_GetLogObservedTimestampSeverityTextFlags(t *testing.T) {
+	lr := plog.NewLogRecord()
+	lr.SetObservedTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, 77)))
+	lr.SetSeverityText("warn")
+	lr.SetFlags(plog.LogRecordFlags(3))
+	ctx := logCtx{lr: lr}
+
+	program := &Program[logCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpGetObservedTimestamp, 0),
+			ir.Encode(ir.OpGetSeverityText, 0),
+			ir.Encode(ir.OpGetLogFlags, 0),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got := stack[0]; got.Type != ir.TypeInt || int64(got.Num) != 77 {
+		t.Fatalf("unexpected observed timestamp: %v", got)
+	}
+	if got, ok := stack[1].String(); !ok || got != "warn" {
+		t.Fatalf("unexpected severity text: %v", stack[1])
+	}
+	if got := stack[2]; got.Type != ir.TypeInt || int64(got.Num) != 3 {
+		t.Fatalf("unexpected log flags: %v", got)
+	}
+}
+
+func TestRunWithStackAndContext_SetLogObservedTimestampSeverityTextFlags(t *testing.T) {
+	lr := plog.NewLogRecord()
+	ctx := logCtx{lr: lr}
+
+	program := &Program[logCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetObservedTimestamp, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+			ir.Encode(ir.OpSetSeverityText, 0),
+			ir.Encode(ir.OpLoadConst, 2),
+			ir.Encode(ir.OpSetLogFlags, 0),
+			ir.Encode(ir.OpLoadConst, 3),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(101),
+			ir.StringValue("err"),
+			ir.Int64Value(5),
+			ir.BoolValue(true),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got := lr.ObservedTimestamp().AsTime().UnixNano(); got != 101 {
+		t.Fatalf("unexpected observed timestamp: %d", got)
+	}
+	if got := lr.SeverityText(); got != "err" {
+		t.Fatalf("unexpected severity text: %q", got)
+	}
+	if got := lr.Flags(); got != plog.LogRecordFlags(5) {
+		t.Fatalf("unexpected log flags: %v", got)
+	}
+}
+
+func TestRunWithStackAndContext_GetSpanIDsTraceStateAndDroppedCounts(t *testing.T) {
+	span := ptrace.NewSpan()
+	traceID := pcommon.TraceID{0x01, 0x02, 0x03, 0x04}
+	spanID := pcommon.SpanID{0x0a, 0x0b, 0x0c, 0x0d}
+	parentID := pcommon.SpanID{0x11, 0x12, 0x13, 0x14}
+	span.SetTraceID(traceID)
+	span.SetSpanID(spanID)
+	span.SetParentSpanID(parentID)
+	span.TraceState().FromRaw("rojo=00f067aa0ba902b7")
+	span.SetDroppedAttributesCount(2)
+	span.SetDroppedEventsCount(3)
+	span.SetDroppedLinksCount(4)
+	ctx := spanCtx{span: span}
+
+	program := &Program[spanCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpGetSpanTraceIDString, 0),
+			ir.Encode(ir.OpGetSpanIDString, 0),
+			ir.Encode(ir.OpGetSpanParentIDString, 0),
+			ir.Encode(ir.OpGetSpanTraceState, 0),
+			ir.Encode(ir.OpGetSpanDroppedAttributesCount, 0),
+			ir.Encode(ir.OpGetSpanDroppedEventsCount, 0),
+			ir.Encode(ir.OpGetSpanDroppedLinksCount, 0),
+		},
+	}
+	var stack [8]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got, ok := stack[0].String(); !ok || got == "" {
+		t.Fatalf("unexpected trace id string: %v", stack[0])
+	}
+	if got, ok := stack[1].String(); !ok || got == "" {
+		t.Fatalf("unexpected span id string: %v", stack[1])
+	}
+	if got, ok := stack[2].String(); !ok || got == "" {
+		t.Fatalf("unexpected parent span id string: %v", stack[2])
+	}
+	if got, ok := stack[3].String(); !ok || got != "rojo=00f067aa0ba902b7" {
+		t.Fatalf("unexpected trace state: %v", stack[3])
+	}
+	if got := stack[4]; got.Type != ir.TypeInt || int64(got.Num) != 2 {
+		t.Fatalf("unexpected dropped attributes: %v", got)
+	}
+	if got := stack[5]; got.Type != ir.TypeInt || int64(got.Num) != 3 {
+		t.Fatalf("unexpected dropped events: %v", got)
+	}
+	if got := stack[6]; got.Type != ir.TypeInt || int64(got.Num) != 4 {
+		t.Fatalf("unexpected dropped links: %v", got)
+	}
+}
+
+func TestRunWithStackAndContext_GetSpanIDsRaw(t *testing.T) {
+	span := ptrace.NewSpan()
+	traceID := pcommon.TraceID{0x01, 0x02, 0x03, 0x04}
+	spanID := pcommon.SpanID{0x0a, 0x0b, 0x0c, 0x0d}
+	parentID := pcommon.SpanID{0x11, 0x12, 0x13, 0x14}
+	span.SetTraceID(traceID)
+	span.SetSpanID(spanID)
+	span.SetParentSpanID(parentID)
+	ctx := spanCtx{span: span}
+
+	program := &Program[spanCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpGetSpanTraceID, 0),
+			ir.Encode(ir.OpGetSpanID, 0),
+			ir.Encode(ir.OpGetSpanParentID, 0),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got, ok := stack[0].Bytes(); !ok || len(got) == 0 {
+		t.Fatalf("unexpected trace id bytes: %v", stack[0])
+	}
+	if got, ok := stack[1].Bytes(); !ok || len(got) == 0 {
+		t.Fatalf("unexpected span id bytes: %v", stack[1])
+	}
+	if got, ok := stack[2].Bytes(); !ok || len(got) == 0 {
+		t.Fatalf("unexpected parent span id bytes: %v", stack[2])
+	}
+}
+
+func TestRunWithStackAndContext_CompareSpanTraceID(t *testing.T) {
+	span := ptrace.NewSpan()
+	traceID := pcommon.TraceID{0x01, 0x02, 0x03, 0x04}
+	span.SetTraceID(traceID)
+	ctx := spanCtx{span: span}
+
+	program := &Program[spanCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpGetSpanTraceID, 0),
+			ir.Encode(ir.OpGetSpanTraceID, 0),
+			ir.Encode(ir.OpEq, 0),
+		},
+	}
+	var stack [4]ir.Value
+	val, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Bool()
+	if !ok || !got {
+		t.Fatalf("expected true, got %v", val)
+	}
+}
+
+func TestRunWithStackAndContext_SetSpanTraceStateAndDroppedCounts(t *testing.T) {
+	span := ptrace.NewSpan()
+	ctx := spanCtx{span: span}
+
+	program := &Program[spanCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetSpanTraceState, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+			ir.Encode(ir.OpSetSpanDroppedAttributesCount, 0),
+			ir.Encode(ir.OpLoadConst, 2),
+			ir.Encode(ir.OpSetSpanDroppedEventsCount, 0),
+			ir.Encode(ir.OpLoadConst, 3),
+			ir.Encode(ir.OpSetSpanDroppedLinksCount, 0),
+			ir.Encode(ir.OpLoadConst, 4),
+		},
+		Consts: []ir.Value{
+			ir.StringValue("k1=v1"),
+			ir.Int64Value(7),
+			ir.Int64Value(8),
+			ir.Int64Value(9),
+			ir.BoolValue(true),
+		},
+	}
+	var stack [8]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got := span.TraceState().AsRaw(); got != "k1=v1" {
+		t.Fatalf("unexpected trace state: %q", got)
+	}
+	if got := span.DroppedAttributesCount(); got != 7 {
+		t.Fatalf("unexpected dropped attributes: %v", got)
+	}
+	if got := span.DroppedEventsCount(); got != 8 {
+		t.Fatalf("unexpected dropped events: %v", got)
+	}
+	if got := span.DroppedLinksCount(); got != 9 {
+		t.Fatalf("unexpected dropped links: %v", got)
+	}
+}
+
+func TestRunWithStackAndContext_GetSpanTraceStateKey(t *testing.T) {
+	span := ptrace.NewSpan()
+	span.TraceState().FromRaw("rojo=00f067aa0ba902b7,congo=t61rcWkgMzE")
+	ctx := spanCtx{span: span}
+
+	program := &Program[spanCtx]{
+		Code:     []ir.Instruction{ir.Encode(ir.OpGetSpanTraceStateKey, 0)},
+		AttrKeys: []string{"congo"},
+	}
+	var stack [4]ir.Value
+	val, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.String()
+	if !ok || got != "t61rcWkgMzE" {
+		t.Fatalf("unexpected trace state value: %v", val)
+	}
+}
+
+func TestRunWithStackAndContext_SetSpanTraceStateKey(t *testing.T) {
+	span := ptrace.NewSpan()
+	span.TraceState().FromRaw("rojo=00f067aa0ba902b7")
+	ctx := spanCtx{span: span}
+
+	program := &Program[spanCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetSpanTraceStateKey, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+		},
+		Consts:   []ir.Value{ir.StringValue("t61rcWkgMzE"), ir.BoolValue(true)},
+		AttrKeys: []string{"congo"},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	parsed, err := trace.ParseTraceState(span.TraceState().AsRaw())
+	if err != nil {
+		t.Fatalf("parse trace state failed: %v", err)
+	}
+	if got := parsed.Get("congo"); got != "t61rcWkgMzE" {
+		t.Fatalf("unexpected trace state value: %q", got)
+	}
+}
+
+func TestRunWithStackAndContext_GetMetricDescriptionAggTemporalityIsMonotonic(t *testing.T) {
+	metric := pmetric.NewMetric()
+	metric.SetDescription("desc")
+	metric.SetEmptySum()
+	metric.Sum().SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
+	metric.Sum().SetIsMonotonic(true)
+	ctx := metricCtx{metric: metric}
+
+	program := &Program[metricCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpGetMetricDescription, 0),
+			ir.Encode(ir.OpGetMetricAggTemporality, 0),
+			ir.Encode(ir.OpGetMetricIsMonotonic, 0),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got, ok := stack[0].String(); !ok || got != "desc" {
+		t.Fatalf("unexpected metric description: %v", stack[0])
+	}
+	if got := stack[1]; got.Type != ir.TypeInt || int64(got.Num) != int64(pmetric.AggregationTemporalityCumulative) {
+		t.Fatalf("unexpected metric agg temporality: %v", got)
+	}
+	if got := stack[2]; got.Type != ir.TypeBool || got.Num == 0 {
+		t.Fatalf("unexpected metric is monotonic: %v", got)
+	}
+}
+
+func TestRunWithStackAndContext_SetMetricDescriptionAggTemporalityIsMonotonic(t *testing.T) {
+	metric := pmetric.NewMetric()
+	metric.SetEmptySum()
+	ctx := metricCtx{metric: metric}
+
+	program := &Program[metricCtx]{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpSetMetricDescription, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+			ir.Encode(ir.OpSetMetricAggTemporality, 0),
+			ir.Encode(ir.OpLoadConst, 2),
+			ir.Encode(ir.OpSetMetricIsMonotonic, 0),
+			ir.Encode(ir.OpLoadConst, 3),
+		},
+		Consts: []ir.Value{
+			ir.StringValue("updated"),
+			ir.Int64Value(int64(pmetric.AggregationTemporalityDelta)),
+			ir.BoolValue(true),
+			ir.BoolValue(true),
+		},
+	}
+	var stack [4]ir.Value
+	_, err := RunWithStackAndContext(stack[:], program, context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if got := metric.Description(); got != "updated" {
+		t.Fatalf("unexpected metric description: %q", got)
+	}
+	if got := metric.Sum().AggregationTemporality(); got != pmetric.AggregationTemporalityDelta {
+		t.Fatalf("unexpected metric agg temporality: %v", got)
+	}
+	if got := metric.Sum().IsMonotonic(); !got {
+		t.Fatalf("expected metric to be monotonic")
 	}
 }
 

@@ -4,6 +4,7 @@
 package ottl // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -26,6 +27,7 @@ const (
 	kindFloat
 	kindBool
 	kindString
+	kindBytes
 )
 
 const maxInstructionArg = 0x00FFFFFF
@@ -109,18 +111,22 @@ func (p *Parser[K]) compileMicroComparisonVM(cmp *comparison) (*microProgram[K],
 	}
 	return &microProgram[K]{
 		program: &vm.Program[K]{
-			Code:            c.code,
-			Consts:          c.consts,
-			Accessors:       c.buildAccessors(),
-			AttrKeys:        c.attrKeys,
-			AttrGetter:      c.attrGetter,
-			AttrSetter:      c.attrSetter,
-			LogRecordGetter: p.vmLogRecordGetter,
-			SpanGetter:      p.vmSpanGetter,
-			MetricGetter:    p.vmMetricGetter,
-			ResourceGetter:  p.vmResourceGetter,
-			ScopeGetter:     p.vmScopeGetter,
-			GasLimit:        vmGasLimitFor(p),
+			Code:                    c.code,
+			Consts:                  c.consts,
+			Accessors:               c.buildAccessors(),
+			AttrKeys:                c.attrKeys,
+			AttrGetter:              c.attrGetter,
+			AttrSetter:              c.attrSetter,
+			LogRecordGetter:         p.vmLogRecordGetter,
+			SpanGetter:              p.vmSpanGetter,
+			MetricGetter:            p.vmMetricGetter,
+			ResourceGetter:          p.vmResourceGetter,
+			ResourceSchemaURLGetter: p.vmResourceSchemaURLGetter,
+			ResourceSchemaURLSetter: p.vmResourceSchemaURLSetter,
+			ScopeGetter:             p.vmScopeGetter,
+			ScopeSchemaURLGetter:    p.vmScopeSchemaURLGetter,
+			ScopeSchemaURLSetter:    p.vmScopeSchemaURLSetter,
+			GasLimit:                vmGasLimitFor(p),
 		},
 		getters:      c.getters,
 		vmGetters:    c.vmGetters,
@@ -149,18 +155,22 @@ func (p *Parser[K]) compileMicroBoolExpression(expr *booleanExpression) (*microP
 	}
 	return &microProgram[K]{
 		program: &vm.Program[K]{
-			Code:            c.code,
-			Consts:          c.consts,
-			Accessors:       c.buildAccessors(),
-			AttrKeys:        c.attrKeys,
-			AttrGetter:      c.attrGetter,
-			AttrSetter:      c.attrSetter,
-			LogRecordGetter: p.vmLogRecordGetter,
-			SpanGetter:      p.vmSpanGetter,
-			MetricGetter:    p.vmMetricGetter,
-			ResourceGetter:  p.vmResourceGetter,
-			ScopeGetter:     p.vmScopeGetter,
-			GasLimit:        vmGasLimitFor(p),
+			Code:                    c.code,
+			Consts:                  c.consts,
+			Accessors:               c.buildAccessors(),
+			AttrKeys:                c.attrKeys,
+			AttrGetter:              c.attrGetter,
+			AttrSetter:              c.attrSetter,
+			LogRecordGetter:         p.vmLogRecordGetter,
+			SpanGetter:              p.vmSpanGetter,
+			MetricGetter:            p.vmMetricGetter,
+			ResourceGetter:          p.vmResourceGetter,
+			ResourceSchemaURLGetter: p.vmResourceSchemaURLGetter,
+			ResourceSchemaURLSetter: p.vmResourceSchemaURLSetter,
+			ScopeGetter:             p.vmScopeGetter,
+			ScopeSchemaURLGetter:    p.vmScopeSchemaURLGetter,
+			ScopeSchemaURLSetter:    p.vmScopeSchemaURLSetter,
+			GasLimit:                vmGasLimitFor(p),
 		},
 		getters:      c.getters,
 		vmGetters:    c.vmGetters,
@@ -280,6 +290,9 @@ func supportsComparison(op compareOp, left, right valueKind) bool {
 		}
 		return op == eq || op == ne
 	}
+	if left == kindBytes {
+		return right == kindBytes && (op == eq || op == ne)
+	}
 	return false
 }
 
@@ -298,7 +311,7 @@ func inferValueKind(val value) (valueKind, error) {
 	case val.IsNil != nil:
 		return kindUnknown, fmt.Errorf("nil literals unsupported in micro compiler")
 	case val.Bytes != nil:
-		return kindUnknown, fmt.Errorf("byte literals unsupported in micro compiler")
+		return kindBytes, nil
 	case val.Enum != nil:
 		return kindUnknown, fmt.Errorf("enum literals unsupported in micro compiler")
 	case val.Map != nil:
@@ -409,6 +422,8 @@ func foldValueConst(val value) (ir.Value, bool, error) {
 		return ir.BoolValue(bool(*val.Bool)), true, nil
 	case val.String != nil:
 		return ir.StringValue(*val.String), true, nil
+	case val.Bytes != nil:
+		return ir.BytesValue([]byte(*val.Bytes)), true, nil
 	case val.Literal != nil:
 		return foldMathExprLiteralConst(val.Literal)
 	case val.MathExpression != nil:
@@ -598,6 +613,8 @@ func kindFromValue(val ir.Value) valueKind {
 		return kindBool
 	case ir.TypeString:
 		return kindString
+	case ir.TypeBytes:
+		return kindBytes
 	default:
 		return kindUnknown
 	}
@@ -630,6 +647,16 @@ func compareConst(op compareOp, left, right ir.Value) (ir.Value, error) {
 			return ir.Value{}, fmt.Errorf("invalid string constant")
 		}
 		return compareStringConst(op, ls, rs)
+	case left.Type == ir.TypeBytes && right.Type == ir.TypeBytes:
+		ls, ok := left.Bytes()
+		if !ok {
+			return ir.Value{}, fmt.Errorf("invalid bytes constant")
+		}
+		rs, ok := right.Bytes()
+		if !ok {
+			return ir.Value{}, fmt.Errorf("invalid bytes constant")
+		}
+		return compareBytesConst(op, ls, rs)
 	default:
 		return ir.Value{}, fmt.Errorf("unsupported comparison types")
 	}
@@ -690,6 +717,26 @@ func compareStringConst(op compareOp, a, b string) (ir.Value, error) {
 		return ir.BoolValue(a == b), nil
 	case ne:
 		return ir.BoolValue(a != b), nil
+	default:
+		return ir.Value{}, fmt.Errorf("unsupported comparison op")
+	}
+}
+
+func compareBytesConst(op compareOp, a, b []byte) (ir.Value, error) {
+	cmp := bytes.Compare(a, b)
+	switch op {
+	case eq:
+		return ir.BoolValue(cmp == 0), nil
+	case ne:
+		return ir.BoolValue(cmp != 0), nil
+	case lt:
+		return ir.BoolValue(cmp < 0), nil
+	case lte:
+		return ir.BoolValue(cmp <= 0), nil
+	case gt:
+		return ir.BoolValue(cmp > 0), nil
+	case gte:
+		return ir.BoolValue(cmp >= 0), nil
 	default:
 		return ir.Value{}, fmt.Errorf("unsupported comparison op")
 	}
@@ -803,7 +850,8 @@ func (c *microCompiler[K]) emitValue(val value) error {
 	case val.IsNil != nil:
 		return fmt.Errorf("nil literals unsupported in micro compiler")
 	case val.Bytes != nil:
-		return fmt.Errorf("byte literals unsupported in micro compiler")
+		c.emitLoadConst(ir.BytesValue([]byte(*val.Bytes)))
+		return nil
 	case val.Enum != nil:
 		return fmt.Errorf("enum literals unsupported in micro compiler")
 	case val.Map != nil:
@@ -1098,6 +1146,16 @@ func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
 	switch len(path.Fields) {
 	case 1:
 		field := path.Fields[0]
+		if field.Name == "trace_state" && len(field.Keys) == 1 && spanAllowed {
+			if field.Keys[0].String == nil {
+				return false, nil
+			}
+			idx := c.addAttrKey(*field.Keys[0].String)
+			c.code = append(c.code, ir.Encode(ir.OpGetSpanTraceStateKey, idx))
+			c.needsContext = true
+			c.onPush()
+			return true, nil
+		}
 		if len(field.Keys) != 0 {
 			return false, nil
 		}
@@ -1111,6 +1169,15 @@ func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
 				return true, nil
 			case "time_unix_nano":
 				emit(ir.OpGetTimestamp)
+				return true, nil
+			case "observed_time_unix_nano":
+				emit(ir.OpGetObservedTimestamp)
+				return true, nil
+			case "severity_text":
+				emit(ir.OpGetSeverityText)
+				return true, nil
+			case "flags":
+				emit(ir.OpGetLogFlags)
 				return true, nil
 			}
 		}
@@ -1128,6 +1195,27 @@ func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
 			case "kind":
 				emit(ir.OpGetSpanKind)
 				return true, nil
+			case "trace_id":
+				emit(ir.OpGetSpanTraceID)
+				return true, nil
+			case "span_id":
+				emit(ir.OpGetSpanID)
+				return true, nil
+			case "parent_span_id":
+				emit(ir.OpGetSpanParentID)
+				return true, nil
+			case "trace_state":
+				emit(ir.OpGetSpanTraceState)
+				return true, nil
+			case "dropped_attributes_count":
+				emit(ir.OpGetSpanDroppedAttributesCount)
+				return true, nil
+			case "dropped_events_count":
+				emit(ir.OpGetSpanDroppedEventsCount)
+				return true, nil
+			case "dropped_links_count":
+				emit(ir.OpGetSpanDroppedLinksCount)
+				return true, nil
 			}
 		}
 		if metricAllowed {
@@ -1135,11 +1223,20 @@ func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
 			case "name":
 				emit(ir.OpGetMetricName)
 				return true, nil
+			case "description":
+				emit(ir.OpGetMetricDescription)
+				return true, nil
 			case "unit":
 				emit(ir.OpGetMetricUnit)
 				return true, nil
 			case "type":
 				emit(ir.OpGetMetricType)
+				return true, nil
+			case "aggregation_temporality":
+				emit(ir.OpGetMetricAggTemporality)
+				return true, nil
+			case "is_monotonic":
+				emit(ir.OpGetMetricIsMonotonic)
 				return true, nil
 			}
 		}
@@ -1147,6 +1244,9 @@ func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
 			switch field.Name {
 			case "dropped_attributes_count":
 				emit(ir.OpGetResourceDroppedAttributesCount)
+				return true, nil
+			case "schema_url":
+				emit(ir.OpGetResourceSchemaURL)
 				return true, nil
 			}
 		}
@@ -1160,6 +1260,9 @@ func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
 				return true, nil
 			case "dropped_attributes_count":
 				emit(ir.OpGetScopeDroppedAttributesCount)
+				return true, nil
+			case "schema_url":
+				emit(ir.OpGetScopeSchemaURL)
 				return true, nil
 			}
 		}
@@ -1177,6 +1280,25 @@ func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
 			case "message":
 				emit(ir.OpGetSpanStatusMsg)
 				return true, nil
+			}
+		}
+		if spanAllowed {
+			switch field.Name {
+			case "trace_id":
+				if next.Name == "string" {
+					emit(ir.OpGetSpanTraceIDString)
+					return true, nil
+				}
+			case "span_id":
+				if next.Name == "string" {
+					emit(ir.OpGetSpanIDString)
+					return true, nil
+				}
+			case "parent_span_id":
+				if next.Name == "string" {
+					emit(ir.OpGetSpanParentIDString)
+					return true, nil
+				}
 			}
 		}
 	}
@@ -1310,6 +1432,11 @@ func (c *microCompiler[K]) addConst(val ir.Value) uint32 {
 	if val.Type == ir.TypeString {
 		if s, ok := val.String(); ok {
 			key.str = s
+		}
+	}
+	if val.Type == ir.TypeBytes {
+		if b, ok := val.Bytes(); ok {
+			key.str = string(b)
 		}
 	}
 	if idx, ok := c.constIndex[key]; ok {

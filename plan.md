@@ -211,21 +211,23 @@ Completed (as of 2025-12-29):
 - Fast literal-key attribute access (OpLoadAttrFast) and setter fast path (OpSetAttrFast)
 - Direct field opcodes:
   - log: body, severity_number, time_unix_nano
+  - log: observed_time_unix_nano, severity_text, flags
   - span: name, start/end_time_unix_nano, kind, status.code, status.message
+  - span: trace_id.string, span_id.string, parent_span_id.string, trace_state, dropped_* counts
+  - span: trace_id/span_id/parent_span_id (raw IDs)
   - metric: name, unit, type
+  - metric: description, aggregation_temporality, is_monotonic
   - resource: dropped_attributes_count
+  - resource: schema_url
   - scope: name, version, dropped_attributes_count
+  - scope: schema_url
+  - span: trace_state key access
 
 Remaining (deferred to future iteration):
 - Direct field opcodes:
-  - resource: schema_url
-  - scope: schema_url
-  - metric: description, aggregation_temporality, is_monotonic
-  - log: observed_time_unix_nano, severity_text, flags
-  - span: trace_id, span_id, parent_span_id, trace_state, dropped_* counts
+  - none
 - Bench coverage for remaining direct opcodes
 - OpSetAttrCached never emitted by compiler (VM impl exists; wire when needed)
-- Minor: OpNeConst/GtConst/GteConst/LteConst tests missing (impl exists)
 
 **Phase 3 Status: Core complete.** High-value fields implemented; remaining fields are low-frequency access patterns. Effort: ~1-3 days if needed.
 

@@ -20,6 +20,16 @@ func valueToVM(val any) (ir.Value, error) {
 		return ir.BoolValue(v), nil
 	case string:
 		return ir.StringValue(v), nil
+	case []byte:
+		return ir.BytesValue(v), nil
+	case pcommon.TraceID:
+		b := make([]byte, len(v))
+		copy(b, v[:])
+		return ir.BytesValue(b), nil
+	case pcommon.SpanID:
+		b := make([]byte, len(v))
+		copy(b, v[:])
+		return ir.BytesValue(b), nil
 	case pcommon.Value:
 		switch v.Type() {
 		case pcommon.ValueTypeInt:
@@ -30,6 +40,8 @@ func valueToVM(val any) (ir.Value, error) {
 			return ir.BoolValue(v.Bool()), nil
 		case pcommon.ValueTypeStr:
 			return ir.StringValue(v.Str()), nil
+		case pcommon.ValueTypeBytes:
+			return ir.BytesValue(v.Bytes().AsRaw()), nil
 		default:
 			return ir.Value{}, fmt.Errorf("unsupported pcommon.Value type: %v", v.Type())
 		}
