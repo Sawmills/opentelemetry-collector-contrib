@@ -41,6 +41,12 @@ type PathSetter[K any] func(ctx context.Context, tCtx K, val ir.Value) error
 type AttrGetter[K any] func(tCtx K, key string) (ir.Value, error)
 type AttrSetter[K any] func(tCtx K, key string, val ir.Value) error
 
+// CallSite represents a callable function with VM value arguments.
+type CallSite[K any] struct {
+	ArgCount int
+	Func     func(ctx context.Context, tCtx K, args []ir.Value) (ir.Value, error)
+}
+
 // LogRecordContext exposes a log record for direct field opcodes.
 type LogRecordContext interface {
 	GetLogRecord() plog.LogRecord
@@ -72,6 +78,7 @@ type Program[K any] struct {
 	Code                    []ir.Instruction
 	Consts                  []ir.Value
 	Regexps                 []*regexp.Regexp
+	CallSites               []CallSite[K]
 	Accessors               []PathAccessor[K] // cached attribute accessors for OpLoadAttrCached
 	Setters                 []PathSetter[K]   // cached attribute setters for OpSetAttrCached
 	AttrKeys                []string          // fast attribute keys for OpLoadAttrFast
@@ -99,6 +106,7 @@ var (
 	ErrInvalidConst    = errors.New("invalid const index")
 	ErrInvalidRegex    = errors.New("invalid regex index")
 	ErrInvalidType     = errors.New("invalid type index")
+	ErrInvalidCallSite = errors.New("invalid callsite index")
 	ErrInvalidGetter   = errors.New("invalid getter index")
 	ErrInvalidAccessor = errors.New("invalid accessor index")
 	ErrInvalidSetter   = errors.New("invalid setter index")
@@ -757,6 +765,9 @@ func runProgram[K any](stack []ir.Value, p *Program[K], loader func(uint32) (ir.
 			return ir.Value{}, ErrInvalidOpcode
 		case ir.OpSetAttrFast:
 			// OpSetAttrFast requires context; use RunWithStackAndContext instead
+			return ir.Value{}, ErrInvalidOpcode
+		case ir.OpCall:
+			// OpCall requires context; use RunWithStackAndContext instead
 			return ir.Value{}, ErrInvalidOpcode
 
 		default:
@@ -1678,6 +1689,26 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			}
 			stack[sp-2] = ir.BoolValue(r.MatchString(target))
 			sp--
+
+		case ir.OpCall:
+			idx := inst.Arg()
+			if int(idx) >= len(p.CallSites) {
+				return ir.Value{}, ErrInvalidCallSite
+			}
+			callsite := p.CallSites[idx]
+			if callsite.Func == nil || callsite.ArgCount < 0 {
+				return ir.Value{}, ErrInvalidCallSite
+			}
+			if sp < callsite.ArgCount {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			args := stack[sp-callsite.ArgCount : sp]
+			result, err := callsite.Func(ctx, tCtx, args)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			stack[sp-callsite.ArgCount] = result
+			sp = sp - callsite.ArgCount + 1
 
 		case ir.OpGetBody:
 			var lr plog.LogRecord

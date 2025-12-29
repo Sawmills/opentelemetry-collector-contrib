@@ -276,6 +276,8 @@ func opcodeName(op ir.Opcode) string {
 		return "IS_MATCH"
 	case ir.OpIsMatchDynamic:
 		return "IS_MATCH_DYNAMIC"
+	case ir.OpCall:
+		return "CALL"
 	default:
 		return fmt.Sprintf("OP_%d", op)
 	}

@@ -8,8 +8,11 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"reflect"
 	"regexp"
+	"strings"
 
+	"github.com/iancoleman/strcase"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 )
@@ -42,22 +45,24 @@ type microProgram[K any] struct {
 }
 
 type microCompiler[K any] struct {
-	parser       *Parser[K]
-	code         []ir.Instruction
-	consts       []ir.Value
-	constIndex   map[constKey]uint32
-	regexps      []*regexp.Regexp
-	regexIndex   map[string]uint32
-	getterIndex  map[string]uint32
-	getters      []Getter[K]
-	vmGetters    []VMGetter[K]
-	attrKeys     []string
-	attrKeyIndex map[string]uint32
-	attrGetter   vm.AttrGetter[K]
-	attrSetter   vm.AttrSetter[K]
-	stackDepth   int
-	maxStack     int
-	needsContext bool
+	parser        *Parser[K]
+	code          []ir.Instruction
+	consts        []ir.Value
+	constIndex    map[constKey]uint32
+	regexps       []*regexp.Regexp
+	regexIndex    map[string]uint32
+	callSites     []vm.CallSite[K]
+	callSiteIndex map[string]uint32
+	getterIndex   map[string]uint32
+	getters       []Getter[K]
+	vmGetters     []VMGetter[K]
+	attrKeys      []string
+	attrKeyIndex  map[string]uint32
+	attrGetter    vm.AttrGetter[K]
+	attrSetter    vm.AttrSetter[K]
+	stackDepth    int
+	maxStack      int
+	needsContext  bool
 }
 
 func vmGasLimitFor[K any](p *Parser[K]) uint64 {
@@ -99,13 +104,14 @@ func (p *Parser[K]) compileMicroComparisonVM(cmp *comparison) (*microProgram[K],
 	}
 
 	c := &microCompiler[K]{
-		parser:       p,
-		constIndex:   map[constKey]uint32{},
-		regexIndex:   map[string]uint32{},
-		getterIndex:  map[string]uint32{},
-		attrKeyIndex: map[string]uint32{},
-		attrGetter:   p.vmAttrGetter,
-		attrSetter:   p.vmAttrSetter,
+		parser:        p,
+		constIndex:    map[constKey]uint32{},
+		regexIndex:    map[string]uint32{},
+		callSiteIndex: map[string]uint32{},
+		getterIndex:   map[string]uint32{},
+		attrKeyIndex:  map[string]uint32{},
+		attrGetter:    p.vmAttrGetter,
+		attrSetter:    p.vmAttrSetter,
 	}
 	if err := c.emitComparison(cmp); err != nil {
 		return nil, err
@@ -118,6 +124,7 @@ func (p *Parser[K]) compileMicroComparisonVM(cmp *comparison) (*microProgram[K],
 			Code:                    c.code,
 			Consts:                  c.consts,
 			Regexps:                 c.regexps,
+			CallSites:               c.callSites,
 			Accessors:               c.buildAccessors(),
 			AttrKeys:                c.attrKeys,
 			AttrGetter:              c.attrGetter,
@@ -145,13 +152,14 @@ func (p *Parser[K]) compileMicroBoolExpression(expr *booleanExpression) (*microP
 		return nil, fmt.Errorf("boolean expression is nil")
 	}
 	c := &microCompiler[K]{
-		parser:       p,
-		constIndex:   map[constKey]uint32{},
-		regexIndex:   map[string]uint32{},
-		getterIndex:  map[string]uint32{},
-		attrKeyIndex: map[string]uint32{},
-		attrGetter:   p.vmAttrGetter,
-		attrSetter:   p.vmAttrSetter,
+		parser:        p,
+		constIndex:    map[constKey]uint32{},
+		regexIndex:    map[string]uint32{},
+		callSiteIndex: map[string]uint32{},
+		getterIndex:   map[string]uint32{},
+		attrKeyIndex:  map[string]uint32{},
+		attrGetter:    p.vmAttrGetter,
+		attrSetter:    p.vmAttrSetter,
 	}
 	if err := c.emitBooleanExpression(expr); err != nil {
 		return nil, err
@@ -164,6 +172,7 @@ func (p *Parser[K]) compileMicroBoolExpression(expr *booleanExpression) (*microP
 			Code:                    c.code,
 			Consts:                  c.consts,
 			Regexps:                 c.regexps,
+			CallSites:               c.callSites,
 			Accessors:               c.buildAccessors(),
 			AttrKeys:                c.attrKeys,
 			AttrGetter:              c.attrGetter,
@@ -1152,6 +1161,9 @@ func (c *microCompiler[K]) emitConverter(conv *converter) error {
 	if ok, err := c.emitNativeConverter(conv); ok || err != nil {
 		return err
 	}
+	if ok, err := c.emitCallSiteConverter(conv); ok || err != nil {
+		return err
+	}
 	gs, err := c.parser.newGetterFromConverter(*conv)
 	if err != nil {
 		return err
@@ -1165,6 +1177,352 @@ func (c *microCompiler[K]) emitConverter(conv *converter) error {
 	c.code = append(c.code, ir.Encode(ir.OpLoadAttrCached, idx))
 	c.onPush()
 	return nil
+}
+
+type callFrame struct {
+	values []ir.Value
+}
+
+type vmArgGetter[K any] struct {
+	frame *callFrame
+	idx   int
+}
+
+func (g vmArgGetter[K]) Get(context.Context, K) (any, error) {
+	if g.frame == nil || g.idx < 0 || g.idx >= len(g.frame.values) {
+		return nil, fmt.Errorf("invalid call argument index")
+	}
+	return vmValueToAny(g.frame.values[g.idx])
+}
+
+func vmValueToAny(val ir.Value) (any, error) {
+	switch val.Type {
+	case ir.TypeNone:
+		return nil, nil
+	case ir.TypeInt:
+		return int64(val.Num), nil
+	case ir.TypeFloat:
+		return math.Float64frombits(val.Num), nil
+	case ir.TypeBool:
+		return val.Num != 0, nil
+	case ir.TypeString:
+		str, ok := val.String()
+		if !ok {
+			return nil, fmt.Errorf("invalid string value")
+		}
+		return str, nil
+	case ir.TypeBytes:
+		b, ok := val.Bytes()
+		if !ok {
+			return nil, fmt.Errorf("invalid bytes value")
+		}
+		return b, nil
+	default:
+		return nil, fmt.Errorf("unsupported vm value type %v", val.Type)
+	}
+}
+
+func (c *microCompiler[K]) emitCallSiteConverter(conv *converter) (bool, error) {
+	if c.parser == nil {
+		return false, nil
+	}
+	for _, arg := range conv.Arguments {
+		if arg.FunctionName != nil {
+			return false, nil
+		}
+		if arg.Value.Map != nil || arg.Value.List != nil || arg.Value.Enum != nil {
+			return false, nil
+		}
+	}
+	callsite, argCount, ok, err := c.buildCallSite(conv)
+	if err != nil {
+		return true, err
+	}
+	if !ok {
+		return false, nil
+	}
+	for _, arg := range conv.Arguments {
+		if err := c.emitValue(arg.Value); err != nil {
+			return true, err
+		}
+	}
+	idx := c.addCallSite(callsite, conv)
+	c.code = append(c.code, ir.Encode(ir.OpCall, idx))
+	c.needsContext = true
+	c.onCall(argCount)
+	return true, nil
+}
+
+func (c *microCompiler[K]) buildCallSite(conv *converter) (vm.CallSite[K], int, bool, error) {
+	f, ok := c.parser.functions[conv.Function]
+	if !ok || f == nil {
+		return vm.CallSite[K]{}, 0, false, fmt.Errorf("undefined function %q", conv.Function)
+	}
+	args := f.CreateDefaultArguments()
+	if args == nil {
+		callsite := vm.CallSite[K]{
+			ArgCount: 0,
+			Func: func(ctx context.Context, tCtx K, _ []ir.Value) (ir.Value, error) {
+				fn, err := f.CreateFunction(FunctionContext{Set: c.parser.telemetrySettings}, nil)
+				if err != nil {
+					return ir.Value{}, err
+				}
+				raw, err := fn(ctx, tCtx)
+				if err != nil {
+					return ir.Value{}, err
+				}
+				if raw == nil {
+					return ir.Value{Type: ir.TypeNone}, nil
+				}
+				return valueToVM(raw)
+			},
+		}
+		return callsite, 0, true, nil
+	}
+	if reflect.TypeOf(args).Kind() != reflect.Pointer {
+		return vm.CallSite[K]{}, 0, false, fmt.Errorf("factory for %q must return a pointer to an Arguments value", f.Name())
+	}
+	argsType := reflect.TypeOf(args).Elem()
+	argIndexByField := make(map[int]int)
+	required := 0
+	seenNamed := false
+	for i := 0; i < len(conv.Arguments); i++ {
+		if !seenNamed && conv.Arguments[i].Name != "" {
+			seenNamed = true
+		} else if seenNamed && conv.Arguments[i].Name == "" {
+			return vm.CallSite[K]{}, 0, false, fmt.Errorf("unnamed argument used after named argument")
+		}
+	}
+	for i := 0; i < argsType.NumField(); i++ {
+		if !strings.HasPrefix(argsType.Field(i).Type.Name(), "Optional") {
+			required++
+		}
+	}
+	if len(conv.Arguments) < required || len(conv.Arguments) > argsType.NumField() {
+		return vm.CallSite[K]{}, 0, false, fmt.Errorf("incorrect number of arguments. Expected: %d Received: %d", argsType.NumField(), len(conv.Arguments))
+	}
+	if seenNamed {
+		for i, arg := range conv.Arguments {
+			field, ok := argsType.FieldByName(strcase.ToCamel(arg.Name))
+			if !ok {
+				return vm.CallSite[K]{}, 0, false, fmt.Errorf("no such parameter: %s", arg.Name)
+			}
+			argIndexByField[field.Index[0]] = i
+		}
+	} else {
+		for i := range conv.Arguments {
+			argIndexByField[i] = i
+		}
+	}
+
+	for i := 0; i < argsType.NumField(); i++ {
+		argIdx, ok := argIndexByField[i]
+		if !ok {
+			if strings.HasPrefix(argsType.Field(i).Type.Name(), "Optional") {
+				continue
+			}
+			return vm.CallSite[K]{}, 0, false, fmt.Errorf("missing required argument %q", argsType.Field(i).Name)
+		}
+		if !c.supportsCallSiteArg(argsType.Field(i).Type, conv.Arguments[argIdx].Value) {
+			return vm.CallSite[K]{}, 0, false, nil
+		}
+	}
+
+	callsite := vm.CallSite[K]{
+		ArgCount: len(conv.Arguments),
+		Func: func(ctx context.Context, tCtx K, values []ir.Value) (ir.Value, error) {
+			frame := &callFrame{values: values}
+			argsVal := reflect.New(argsType)
+			for i := 0; i < argsType.NumField(); i++ {
+				argIdx, ok := argIndexByField[i]
+				if !ok {
+					continue
+				}
+				field := argsType.Field(i)
+				fieldVal := argsVal.Elem().Field(i)
+				isOptional := strings.HasPrefix(field.Type.Name(), "Optional")
+				var manager optionalManager
+				if isOptional {
+					var ok bool
+					manager, ok = fieldVal.Interface().(optionalManager)
+					if !ok {
+						return ir.Value{}, fmt.Errorf("optional type is not manageable by the OTTL parser")
+					}
+				}
+				val, err := c.buildCallSiteArgValue(field.Type, frame, argIdx, isOptional, manager)
+				if err != nil {
+					return ir.Value{}, err
+				}
+				if !val.IsValid() {
+					continue
+				}
+				fieldVal.Set(val)
+			}
+			fn, err := f.CreateFunction(FunctionContext{Set: c.parser.telemetrySettings}, argsVal.Interface())
+			if err != nil {
+				return ir.Value{}, err
+			}
+			raw, err := fn(ctx, tCtx)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if raw == nil {
+				return ir.Value{Type: ir.TypeNone}, nil
+			}
+			return valueToVM(raw)
+		},
+	}
+	return callsite, len(conv.Arguments), true, nil
+}
+
+func (c *microCompiler[K]) supportsCallSiteArg(argType reflect.Type, argVal value) bool {
+	t := argType
+	if strings.HasPrefix(t.Name(), "Optional") {
+		manager, ok := reflect.New(t).Elem().Interface().(optionalManager)
+		if !ok {
+			return false
+		}
+		t = manager.get().Type()
+	}
+	name := t.Name()
+	switch {
+	case strings.HasPrefix(name, "Getter"),
+		strings.HasPrefix(name, "StringGetter"),
+		strings.HasPrefix(name, "StringLikeGetter"),
+		strings.HasPrefix(name, "FloatGetter"),
+		strings.HasPrefix(name, "FloatLikeGetter"),
+		strings.HasPrefix(name, "IntGetter"),
+		strings.HasPrefix(name, "IntLikeGetter"),
+		strings.HasPrefix(name, "BoolGetter"),
+		strings.HasPrefix(name, "BoolLikeGetter"),
+		strings.HasPrefix(name, "ByteSliceLikeGetter"),
+		name == reflect.String.String(),
+		name == reflect.Float64.String(),
+		name == reflect.Int64.String(),
+		name == reflect.Bool.String():
+		return argVal.Map == nil && argVal.List == nil && argVal.Enum == nil
+	default:
+		return false
+	}
+}
+
+func (c *microCompiler[K]) buildCallSiteArgValue(fieldType reflect.Type, frame *callFrame, argIdx int, isOptional bool, manager optionalManager) (reflect.Value, error) {
+	t := fieldType
+	if isOptional {
+		t = manager.get().Type()
+	}
+	name := t.Name()
+	getter := vmArgGetter[K]{frame: frame, idx: argIdx}
+	switch {
+	case strings.HasPrefix(name, "Getter"):
+		val := any(getter)
+		if isOptional {
+			return manager.set(val), nil
+		}
+		return reflect.ValueOf(val), nil
+	case strings.HasPrefix(name, "StringGetter"):
+		arg, err := newStandardStringGetter[K](getter)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		if isOptional {
+			return manager.set(arg), nil
+		}
+		return reflect.ValueOf(arg), nil
+	case strings.HasPrefix(name, "StringLikeGetter"):
+		arg, err := newStandardStringLikeGetter[K](getter)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		if isOptional {
+			return manager.set(arg), nil
+		}
+		return reflect.ValueOf(arg), nil
+	case strings.HasPrefix(name, "FloatGetter"):
+		arg, err := newStandardFloatGetter[K](getter)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		if isOptional {
+			return manager.set(arg), nil
+		}
+		return reflect.ValueOf(arg), nil
+	case strings.HasPrefix(name, "FloatLikeGetter"):
+		arg, err := newStandardFloatLikeGetter[K](getter)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		if isOptional {
+			return manager.set(arg), nil
+		}
+		return reflect.ValueOf(arg), nil
+	case strings.HasPrefix(name, "IntGetter"):
+		arg, err := newStandardIntGetter[K](getter)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		if isOptional {
+			return manager.set(arg), nil
+		}
+		return reflect.ValueOf(arg), nil
+	case strings.HasPrefix(name, "IntLikeGetter"):
+		arg, err := newStandardIntLikeGetter[K](getter)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		if isOptional {
+			return manager.set(arg), nil
+		}
+		return reflect.ValueOf(arg), nil
+	case strings.HasPrefix(name, "BoolGetter"):
+		arg, err := newStandardBoolGetter[K](getter)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		if isOptional {
+			return manager.set(arg), nil
+		}
+		return reflect.ValueOf(arg), nil
+	case strings.HasPrefix(name, "BoolLikeGetter"):
+		arg, err := newStandardBoolLikeGetter[K](getter)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		if isOptional {
+			return manager.set(arg), nil
+		}
+		return reflect.ValueOf(arg), nil
+	case strings.HasPrefix(name, "ByteSliceLikeGetter"):
+		arg, err := newStandardByteSliceLikeGetter[K](getter)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		if isOptional {
+			return manager.set(arg), nil
+		}
+		return reflect.ValueOf(arg), nil
+	case name == reflect.String.String(),
+		name == reflect.Float64.String(),
+		name == reflect.Int64.String(),
+		name == reflect.Bool.String():
+		raw, err := vmValueToAny(frame.values[argIdx])
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		if raw == nil {
+			return reflect.Value{}, fmt.Errorf("nil not supported for %s", name)
+		}
+		val := reflect.ValueOf(raw)
+		if !val.Type().AssignableTo(t) {
+			return reflect.Value{}, fmt.Errorf("invalid argument type %T for %s", raw, name)
+		}
+		if isOptional {
+			return manager.set(raw), nil
+		}
+		return val, nil
+	default:
+		return reflect.Value{}, fmt.Errorf("unsupported argument type: %s", name)
+	}
 }
 
 func (c *microCompiler[K]) emitNativeConverter(conv *converter) (bool, error) {
@@ -1693,6 +2051,20 @@ func (c *microCompiler[K]) addRegexp(pattern string) (uint32, error) {
 	return idx, nil
 }
 
+func (c *microCompiler[K]) addCallSite(site vm.CallSite[K], conv *converter) uint32 {
+	if c.callSiteIndex == nil {
+		c.callSiteIndex = map[string]uint32{}
+	}
+	key := fmt.Sprintf("callsite:%s@%p", conv.Function, conv)
+	if idx, ok := c.callSiteIndex[key]; ok {
+		return idx
+	}
+	idx := uint32(len(c.callSites))
+	c.callSites = append(c.callSites, site)
+	c.callSiteIndex[key] = idx
+	return idx
+}
+
 func (c *microCompiler[K]) addGetter(key string, getter Getter[K], vmGetter VMGetter[K]) uint32 {
 	if idx, ok := c.getterIndex[key]; ok {
 		if vmGetter != nil && int(idx) < len(c.vmGetters) && c.vmGetters[idx] == nil {
@@ -1727,6 +2099,22 @@ func (c *microCompiler[K]) onPush() {
 func (c *microCompiler[K]) onBinaryOp() {
 	if c.stackDepth >= 2 {
 		c.stackDepth--
+	}
+}
+
+func (c *microCompiler[K]) onCall(argCount int) {
+	if argCount <= 0 {
+		c.stackDepth++
+		if c.stackDepth > c.maxStack {
+			c.maxStack = c.stackDepth
+		}
+		return
+	}
+	if c.stackDepth >= argCount {
+		c.stackDepth = c.stackDepth - argCount + 1
+		if c.stackDepth > c.maxStack {
+			c.maxStack = c.stackDepth
+		}
 	}
 }
 
