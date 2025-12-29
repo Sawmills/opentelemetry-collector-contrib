@@ -70,47 +70,6 @@ func (s *shadowBoolExpr[K]) compareAndLog(interpResult bool, interpErr error, vm
 	}
 }
 
-type shadowExpr[K any] struct {
-	interpreter Expr[K]
-	vmExpr      Expr[K]
-	origText    string
-	logger      *zap.Logger
-}
-
-func (s *shadowExpr[K]) Eval(ctx context.Context, tCtx K) (any, error) {
-	interpResult, interpErr := s.interpreter.Eval(ctx, tCtx)
-	vmResult, vmErr := s.vmExpr.Eval(ctx, tCtx)
-
-	s.compareAndLog(interpResult, interpErr, vmResult, vmErr)
-
-	return interpResult, interpErr
-}
-
-func (s *shadowExpr[K]) compareAndLog(interpResult any, interpErr error, vmResult any, vmErr error) {
-	if !errorsEquivalent(interpErr, vmErr) {
-		globalShadowMetrics.divergenceTotal.Add(1)
-		s.logger.Warn("OTTL shadow mode: error divergence",
-			zap.String("statement", s.origText),
-			zap.Error(interpErr),
-			zap.NamedError("vm_error", vmErr),
-		)
-		return
-	}
-
-	if interpErr != nil {
-		return
-	}
-
-	if !reflect.DeepEqual(interpResult, vmResult) {
-		globalShadowMetrics.divergenceTotal.Add(1)
-		s.logger.Warn("OTTL shadow mode: result divergence",
-			zap.String("statement", s.origText),
-			zap.Any("interpreter_result", interpResult),
-			zap.Any("vm_result", vmResult),
-		)
-	}
-}
-
 // errorsEquivalent checks if two errors are equivalent for shadow mode comparison.
 // ErrGasExhausted from VM is treated as acceptable when interpreter succeeds.
 func errorsEquivalent(interpErr, vmErr error) bool {
@@ -151,14 +110,4 @@ func wrapWithShadow[K any](interpreter, vmExpr BoolExpr[K], origText string, log
 		logger:      logger,
 	}
 	return BoolExpr[K]{shadow.Eval}
-}
-
-func wrapWithShadowExpr[K any](interpreter, vmExpr Expr[K], origText string, logger *zap.Logger) Expr[K] {
-	shadow := &shadowExpr[K]{
-		interpreter: interpreter,
-		vmExpr:      vmExpr,
-		origText:    origText,
-		logger:      logger,
-	}
-	return Expr[K]{exprFunc: shadow.Eval}
 }

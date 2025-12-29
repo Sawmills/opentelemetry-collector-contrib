@@ -361,24 +361,21 @@ if isBackwardJump(inst) {
 - pdata heavy: `attributes["http.method"] == "GET"`
 - Real rules: representative transform processor configs
 
-## 9. Next Steps (Detailed)
+## 9. Next Steps (GA Readiness)
 
-1. **Add real-path VM benchmarks**
-   - Implement VM bench for ctxutil map→slice→map path (same workload as existing baseline).
-   - Compare interpreter vs VM; update bench table and note any regressions.
-2. **Path fast-path validation**
-   - Ensure map literal key paths use VM getters in real contexts.
-   - Add a bench variant with real ctx parsers (log/span/resource) to confirm 0 allocs.
-3. **Phase 5 harness setup**
-   - Build a fuzz harness that runs interpreter + VM side-by-side on identical inputs.
-   - Start with a curated corpus (common OTTL rules, map/slice/bytes edge cases).
-   - Wire CI gate (short fuzz) + nightly long fuzz.
-4. **Stdlib/native opcode follow-ups**
-   - Identify top hot stdlib funcs from configs; consider native ops or inlining.
-   - Add benches before/after each native conversion.
-5. **Docs + rollout hooks**
-   - Update user docs with VM mode + known limitations.
-   - Add divergence metrics for shadow mode.
+1. **Extended fuzzing**
+   - Run 24h CI fuzz gate with zero divergences required.
+   - Monitor for edge cases in complex OTTL rules.
+2. **Shadow mode production validation**
+   - Deploy with `WithShadowMode()` in staging/canary.
+   - Monitor divergence metrics and logs.
+   - Target: 1 week with zero divergences.
+3. **Gradual default-on rollout**
+   - Enable VM by default for read-only processors first (filter, routing).
+   - Then enable for mutating processors (transform).
+4. **Stdlib native opcode expansion** (if profiling shows need)
+   - Identify hot stdlib funcs from production configs.
+   - Add native opcodes for remaining high-frequency functions.
 
 ## 10. Risks & Mitigations
 

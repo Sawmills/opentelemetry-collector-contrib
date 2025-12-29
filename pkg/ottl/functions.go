@@ -12,8 +12,6 @@ import (
 	"strings"
 
 	"github.com/iancoleman/strcase"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 )
 
 // PathExpressionParser is how a context provides OTTL access to all its Paths.
@@ -341,72 +339,11 @@ func (p *Parser[K]) parsePath(ip *basePath[K]) (GetSetter[K], error) {
 }
 
 func (p *Parser[K]) newFunctionCall(ed editor) (Expr[K], error) {
-	if p.shadowMode && p.vmEnabled {
-		return p.newShadowFunctionCall(ed)
-	}
+	// NOTE: Shadow mode is intentionally NOT applied to function calls.
+	// Function calls may be mutating editors (set, delete, etc.) and running
+	// both interpreter and VM would cause double mutation.
+	// Shadow mode only applies to BoolExpr conditions (where clauses).
 	return p.newInterpreterFunctionCall(ed)
-}
-
-func (p *Parser[K]) newShadowFunctionCall(ed editor) (Expr[K], error) {
-	interpreterExpr, err := p.newInterpreterFunctionCall(ed)
-	if err != nil {
-		return Expr[K]{}, err
-	}
-
-	program, err := p.compileMicroFunctionCall(ed)
-	if err != nil {
-		// If compilation fails, return interpreter expr (fallback)
-		return interpreterExpr, nil
-	}
-
-	var vmExpr Expr[K]
-	if len(program.getters) == 0 && len(program.program.AttrKeys) == 0 && !program.needsContext {
-		vmExpr = Expr[K]{exprFunc: func(ctx context.Context, tCtx K) (any, error) {
-			return p.runVM(ctx, tCtx, program)
-		}}
-	} else {
-		vmExpr = Expr[K]{exprFunc: func(ctx context.Context, tCtx K) (any, error) {
-			return p.runVM(ctx, tCtx, program)
-		}}
-	}
-
-	return wrapWithShadowExpr(interpreterExpr, vmExpr, ed.Function, p.telemetrySettings.Logger), nil
-}
-
-func (p *Parser[K]) runVM(ctx context.Context, tCtx K, program *microProgram[K]) (any, error) {
-	var stack []ir.Value
-	var holder *vm.StackHolder
-	fromPool := false
-	if program.stackPool != nil {
-		holder = program.stackPool.GetHolder()
-		stack = holder.Stack
-		if program.stack > len(stack) {
-			program.stackPool.PutHolder(holder)
-			stack = nil
-			holder = nil
-		} else {
-			fromPool = true
-		}
-	}
-	if stack == nil {
-		if program.stack > defaultMicroVMStackSize {
-			stack = make([]ir.Value, program.stack)
-		} else {
-			var stackArr [defaultMicroVMStackSize]ir.Value
-			stack = stackArr[:program.stack]
-		}
-	}
-
-	val, err := vm.RunWithStackAndContext(stack[:program.stack], program.program, ctx, tCtx)
-	if fromPool {
-		program.stackPool.PutHolder(holder)
-	}
-
-	if err != nil {
-		p.logVMError(err)
-		return nil, err
-	}
-	return VMValueToAny(val)
 }
 
 func (p *Parser[K]) newInterpreterFunctionCall(ed editor) (Expr[K], error) {
