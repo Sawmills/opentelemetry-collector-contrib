@@ -68,24 +68,28 @@ func (c *Condition[K]) Eval(ctx context.Context, tCtx K) (bool, error) {
 // Parser provides the means to parse OTTL StatementSequence and Conditions given a specific set of functions,
 // a PathExpressionParser, and an EnumParser.
 type Parser[K any] struct {
-	functions          map[string]Factory[K]
-	pathParser         PathExpressionParser[K]
-	enumParser         EnumParser
-	telemetrySettings  component.TelemetrySettings
-	pathContextNames   map[string]struct{}
-	vmEnabled          bool
-	vmGasLimit         uint64
-	vmAttrGetter       vm.AttrGetter[K]
-	vmAttrSetter       vm.AttrSetter[K]
-	vmAttrContextNames map[string]struct{}
-	vmLogRecordGetter  func(K) plog.LogRecord
-	vmSpanGetter       func(K) ptrace.Span
-	vmMetricGetter     func(K) pmetric.Metric
-	vmResourceGetter   func(K) pcommon.Resource
-	vmScopeGetter      func(K) pcommon.InstrumentationScope
-	vmProgramCache     map[*comparison]*microProgram[K]
-	vmBoolProgramCache map[*booleanExpression]*microProgram[K]
-	vmProgramCacheMu   sync.Mutex
+	functions                 map[string]Factory[K]
+	pathParser                PathExpressionParser[K]
+	enumParser                EnumParser
+	telemetrySettings         component.TelemetrySettings
+	pathContextNames          map[string]struct{}
+	vmEnabled                 bool
+	vmGasLimit                uint64
+	vmAttrGetter              vm.AttrGetter[K]
+	vmAttrSetter              vm.AttrSetter[K]
+	vmAttrContextNames        map[string]struct{}
+	vmLogRecordGetter         func(K) plog.LogRecord
+	vmSpanGetter              func(K) ptrace.Span
+	vmMetricGetter            func(K) pmetric.Metric
+	vmResourceGetter          func(K) pcommon.Resource
+	vmResourceSchemaURLGetter func(K) string
+	vmResourceSchemaURLSetter func(K, string)
+	vmScopeGetter             func(K) pcommon.InstrumentationScope
+	vmScopeSchemaURLGetter    func(K) string
+	vmScopeSchemaURLSetter    func(K, string)
+	vmProgramCache            map[*comparison]*microProgram[K]
+	vmBoolProgramCache        map[*booleanExpression]*microProgram[K]
+	vmProgramCacheMu          sync.Mutex
 }
 
 // NewParser creates a new Parser

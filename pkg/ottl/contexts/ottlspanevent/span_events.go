@@ -201,6 +201,18 @@ func NewParser(
 		ottl.WithVMScopeGetter[TransformContext](func(tCtx TransformContext) pcommon.InstrumentationScope {
 			return tCtx.GetInstrumentationScope()
 		}),
+		ottl.WithVMResourceSchemaURLGetter[TransformContext](func(tCtx TransformContext) string {
+			return tCtx.GetResourceSchemaURLItem().SchemaUrl()
+		}),
+		ottl.WithVMResourceSchemaURLSetter[TransformContext](func(tCtx TransformContext, schemaURL string) {
+			tCtx.GetResourceSchemaURLItem().SetSchemaUrl(schemaURL)
+		}),
+		ottl.WithVMScopeSchemaURLGetter[TransformContext](func(tCtx TransformContext) string {
+			return tCtx.GetScopeSchemaURLItem().SchemaUrl()
+		}),
+		ottl.WithVMScopeSchemaURLSetter[TransformContext](func(tCtx TransformContext, schemaURL string) {
+			tCtx.GetScopeSchemaURLItem().SetSchemaUrl(schemaURL)
+		}),
 	}, options...)
 	return ctxcommon.NewParser(
 		functions,
@@ -239,6 +251,8 @@ func spanEventAttrGetter(tCtx TransformContext, key string) (ir.Value, error) {
 		return ir.BoolValue(val.Bool()), nil
 	case pcommon.ValueTypeStr:
 		return ir.StringValue(val.Str()), nil
+	case pcommon.ValueTypeBytes:
+		return ir.BytesValue(val.Bytes().AsRaw()), nil
 	default:
 		return ir.Value{}, vm.ErrTypeMismatch
 	}

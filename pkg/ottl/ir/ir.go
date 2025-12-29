@@ -65,6 +65,14 @@ func StringValue(v string) Value {
 	return Value{Type: TypeString, Num: uint64(len(v)), Ptr: unsafe.Pointer(unsafe.StringData(v))}
 }
 
+// BytesValue constructs a byte slice Value without heap allocation.
+func BytesValue(v []byte) Value {
+	if len(v) == 0 {
+		return Value{Type: TypeBytes}
+	}
+	return Value{Type: TypeBytes, Num: uint64(len(v)), Ptr: unsafe.Pointer(unsafe.SliceData(v))}
+}
+
 // Int64 returns the int64 payload when TypeInt.
 func (v Value) Int64() (int64, bool) {
 	if v.Type != TypeInt {
@@ -93,6 +101,23 @@ func (v Value) String() (string, bool) {
 		return "", false
 	}
 	return unsafe.String((*byte)(v.Ptr), int(v.Num)), true
+}
+
+// Bytes returns the byte slice payload when TypeBytes.
+func (v Value) Bytes() ([]byte, bool) {
+	if v.Type != TypeBytes {
+		return nil, false
+	}
+	if v.Num == 0 {
+		if v.Ptr == nil {
+			return nil, true
+		}
+		return []byte{}, true
+	}
+	if v.Ptr == nil {
+		return nil, false
+	}
+	return unsafe.Slice((*byte)(v.Ptr), int(v.Num)), true
 }
 
 // Bool returns the bool payload when TypeBool.
@@ -202,12 +227,44 @@ const (
 	OpSetSpanStatusMsg                  // Set span status message; pops string from stack
 	OpGetResourceDroppedAttributesCount // Get resource dropped attributes count; pushes int to stack
 	OpSetResourceDroppedAttributesCount // Set resource dropped attributes count; pops int from stack
+	OpGetResourceSchemaURL              // Get resource schema URL; pushes string to stack
+	OpSetResourceSchemaURL              // Set resource schema URL; pops string from stack
 	OpGetScopeName                      // Get scope name; pushes string to stack
 	OpSetScopeName                      // Set scope name; pops string from stack
 	OpGetScopeVersion                   // Get scope version; pushes string to stack
 	OpSetScopeVersion                   // Set scope version; pops string from stack
 	OpGetScopeDroppedAttributesCount    // Get scope dropped attributes count; pushes int to stack
 	OpSetScopeDroppedAttributesCount    // Set scope dropped attributes count; pops int from stack
+	OpGetScopeSchemaURL                 // Get scope schema URL; pushes string to stack
+	OpSetScopeSchemaURL                 // Set scope schema URL; pops string from stack
+	OpGetObservedTimestamp              // Get log observed time (UnixNano); pushes int to stack
+	OpSetObservedTimestamp              // Set log observed time (UnixNano); pops int from stack
+	OpGetSeverityText                   // Get log severity text; pushes string to stack
+	OpSetSeverityText                   // Set log severity text; pops string from stack
+	OpGetLogFlags                       // Get log flags; pushes int to stack
+	OpSetLogFlags                       // Set log flags; pops int from stack
+	OpGetSpanTraceID                    // Get span trace ID bytes; pushes bytes to stack
+	OpGetSpanID                         // Get span ID bytes; pushes bytes to stack
+	OpGetSpanParentID                   // Get parent span ID bytes; pushes bytes to stack
+	OpGetSpanTraceIDString              // Get span trace ID as hex string; pushes string to stack
+	OpGetSpanIDString                   // Get span ID as hex string; pushes string to stack
+	OpGetSpanParentIDString             // Get parent span ID as hex string; pushes string to stack
+	OpGetSpanTraceState                 // Get span trace state as raw string; pushes string to stack
+	OpSetSpanTraceState                 // Set span trace state from raw string; pops string from stack
+	OpGetSpanTraceStateKey              // Get span trace state value for key; pushes string or nil to stack
+	OpSetSpanTraceStateKey              // Set span trace state value for key; pops string from stack
+	OpGetSpanDroppedAttributesCount     // Get span dropped attributes count; pushes int to stack
+	OpSetSpanDroppedAttributesCount     // Set span dropped attributes count; pops int from stack
+	OpGetSpanDroppedEventsCount         // Get span dropped events count; pushes int to stack
+	OpSetSpanDroppedEventsCount         // Set span dropped events count; pops int from stack
+	OpGetSpanDroppedLinksCount          // Get span dropped links count; pushes int to stack
+	OpSetSpanDroppedLinksCount          // Set span dropped links count; pops int from stack
+	OpGetMetricDescription              // Get metric description; pushes string to stack
+	OpSetMetricDescription              // Set metric description; pops string from stack
+	OpGetMetricAggTemporality           // Get metric aggregation temporality; pushes int or nil to stack
+	OpSetMetricAggTemporality           // Set metric aggregation temporality; pops int from stack
+	OpGetMetricIsMonotonic              // Get metric monotonicity; pushes bool or nil to stack
+	OpSetMetricIsMonotonic              // Set metric monotonicity; pops bool from stack
 )
 
 // Instruction is a 32-bit fixed-width instruction.

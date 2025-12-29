@@ -190,6 +190,10 @@ func opcodeName(op ir.Opcode) string {
 		return "GET_RESOURCE_DROPPED_ATTRIBUTES_COUNT"
 	case ir.OpSetResourceDroppedAttributesCount:
 		return "SET_RESOURCE_DROPPED_ATTRIBUTES_COUNT"
+	case ir.OpGetResourceSchemaURL:
+		return "GET_RESOURCE_SCHEMA_URL"
+	case ir.OpSetResourceSchemaURL:
+		return "SET_RESOURCE_SCHEMA_URL"
 	case ir.OpGetScopeName:
 		return "GET_SCOPE_NAME"
 	case ir.OpSetScopeName:
@@ -202,6 +206,66 @@ func opcodeName(op ir.Opcode) string {
 		return "GET_SCOPE_DROPPED_ATTRIBUTES_COUNT"
 	case ir.OpSetScopeDroppedAttributesCount:
 		return "SET_SCOPE_DROPPED_ATTRIBUTES_COUNT"
+	case ir.OpGetScopeSchemaURL:
+		return "GET_SCOPE_SCHEMA_URL"
+	case ir.OpSetScopeSchemaURL:
+		return "SET_SCOPE_SCHEMA_URL"
+	case ir.OpGetObservedTimestamp:
+		return "GET_OBSERVED_TIMESTAMP"
+	case ir.OpSetObservedTimestamp:
+		return "SET_OBSERVED_TIMESTAMP"
+	case ir.OpGetSeverityText:
+		return "GET_SEVERITY_TEXT"
+	case ir.OpSetSeverityText:
+		return "SET_SEVERITY_TEXT"
+	case ir.OpGetLogFlags:
+		return "GET_LOG_FLAGS"
+	case ir.OpSetLogFlags:
+		return "SET_LOG_FLAGS"
+	case ir.OpGetSpanTraceID:
+		return "GET_SPAN_TRACE_ID"
+	case ir.OpGetSpanID:
+		return "GET_SPAN_ID"
+	case ir.OpGetSpanParentID:
+		return "GET_SPAN_PARENT_ID"
+	case ir.OpGetSpanTraceIDString:
+		return "GET_SPAN_TRACE_ID_STRING"
+	case ir.OpGetSpanIDString:
+		return "GET_SPAN_ID_STRING"
+	case ir.OpGetSpanParentIDString:
+		return "GET_SPAN_PARENT_ID_STRING"
+	case ir.OpGetSpanTraceState:
+		return "GET_SPAN_TRACE_STATE"
+	case ir.OpSetSpanTraceState:
+		return "SET_SPAN_TRACE_STATE"
+	case ir.OpGetSpanTraceStateKey:
+		return "GET_SPAN_TRACE_STATE_KEY"
+	case ir.OpSetSpanTraceStateKey:
+		return "SET_SPAN_TRACE_STATE_KEY"
+	case ir.OpGetSpanDroppedAttributesCount:
+		return "GET_SPAN_DROPPED_ATTRIBUTES_COUNT"
+	case ir.OpSetSpanDroppedAttributesCount:
+		return "SET_SPAN_DROPPED_ATTRIBUTES_COUNT"
+	case ir.OpGetSpanDroppedEventsCount:
+		return "GET_SPAN_DROPPED_EVENTS_COUNT"
+	case ir.OpSetSpanDroppedEventsCount:
+		return "SET_SPAN_DROPPED_EVENTS_COUNT"
+	case ir.OpGetSpanDroppedLinksCount:
+		return "GET_SPAN_DROPPED_LINKS_COUNT"
+	case ir.OpSetSpanDroppedLinksCount:
+		return "SET_SPAN_DROPPED_LINKS_COUNT"
+	case ir.OpGetMetricDescription:
+		return "GET_METRIC_DESCRIPTION"
+	case ir.OpSetMetricDescription:
+		return "SET_METRIC_DESCRIPTION"
+	case ir.OpGetMetricAggTemporality:
+		return "GET_METRIC_AGG_TEMPORALITY"
+	case ir.OpSetMetricAggTemporality:
+		return "SET_METRIC_AGG_TEMPORALITY"
+	case ir.OpGetMetricIsMonotonic:
+		return "GET_METRIC_IS_MONOTONIC"
+	case ir.OpSetMetricIsMonotonic:
+		return "SET_METRIC_IS_MONOTONIC"
 	default:
 		return fmt.Sprintf("OP_%d", op)
 	}

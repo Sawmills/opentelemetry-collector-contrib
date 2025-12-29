@@ -6,6 +6,7 @@ package ottllog
 import (
 	"context"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -74,6 +75,156 @@ func BenchmarkOTTLLogAttributesEq_VM(b *testing.B) {
 	}
 	ctx := context.Background()
 	tCtx := newBenchLogContext()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ok, err := cond.Eval(ctx, tCtx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !ok {
+			b.Fatal("expected true")
+		}
+	}
+}
+
+func BenchmarkOTTLLogObservedTimeEq_Interpreter(b *testing.B) {
+	parser, err := newBenchLogParser(false)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cond, err := parser.ParseCondition(`observed_time_unix_nano == 77`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	tCtx := newBenchLogContext()
+	tCtx.GetLogRecord().SetObservedTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, 77)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ok, err := cond.Eval(ctx, tCtx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !ok {
+			b.Fatal("expected true")
+		}
+	}
+}
+
+func BenchmarkOTTLLogObservedTimeEq_VM(b *testing.B) {
+	parser, err := newBenchLogParser(true)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cond, err := parser.ParseCondition(`observed_time_unix_nano == 77`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	tCtx := newBenchLogContext()
+	tCtx.GetLogRecord().SetObservedTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, 77)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ok, err := cond.Eval(ctx, tCtx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !ok {
+			b.Fatal("expected true")
+		}
+	}
+}
+
+func BenchmarkOTTLLogSeverityTextEq_Interpreter(b *testing.B) {
+	parser, err := newBenchLogParser(false)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cond, err := parser.ParseCondition(`severity_text == "warn"`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	tCtx := newBenchLogContext()
+	tCtx.GetLogRecord().SetSeverityText("warn")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ok, err := cond.Eval(ctx, tCtx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !ok {
+			b.Fatal("expected true")
+		}
+	}
+}
+
+func BenchmarkOTTLLogSeverityTextEq_VM(b *testing.B) {
+	parser, err := newBenchLogParser(true)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cond, err := parser.ParseCondition(`severity_text == "warn"`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	tCtx := newBenchLogContext()
+	tCtx.GetLogRecord().SetSeverityText("warn")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ok, err := cond.Eval(ctx, tCtx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !ok {
+			b.Fatal("expected true")
+		}
+	}
+}
+
+func BenchmarkOTTLLogFlagsEq_Interpreter(b *testing.B) {
+	parser, err := newBenchLogParser(false)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cond, err := parser.ParseCondition(`flags == 3`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	tCtx := newBenchLogContext()
+	tCtx.GetLogRecord().SetFlags(plog.LogRecordFlags(3))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ok, err := cond.Eval(ctx, tCtx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !ok {
+			b.Fatal("expected true")
+		}
+	}
+}
+
+func BenchmarkOTTLLogFlagsEq_VM(b *testing.B) {
+	parser, err := newBenchLogParser(true)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cond, err := parser.ParseCondition(`flags == 3`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	tCtx := newBenchLogContext()
+	tCtx.GetLogRecord().SetFlags(plog.LogRecordFlags(3))
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

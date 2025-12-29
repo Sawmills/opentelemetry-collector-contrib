@@ -4,6 +4,7 @@
 package vm // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
@@ -15,7 +16,9 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
+	"go.opentelemetry.io/otel/trace"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/coreinternal/traceutil"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 )
 
@@ -61,19 +64,23 @@ type ScopeContext interface {
 // Program is a minimal bytecode program for the micro-VM.
 // Generic over K to support typed path accessors without interface{} overhead.
 type Program[K any] struct {
-	Code            []ir.Instruction
-	Consts          []ir.Value
-	Accessors       []PathAccessor[K] // cached attribute accessors for OpLoadAttrCached
-	Setters         []PathSetter[K]   // cached attribute setters for OpSetAttrCached
-	AttrKeys        []string          // fast attribute keys for OpLoadAttrFast
-	AttrGetter      AttrGetter[K]     // fast attribute getter for OpLoadAttrFast
-	AttrSetter      AttrSetter[K]     // fast attribute setter for OpSetAttrFast
-	LogRecordGetter func(K) plog.LogRecord
-	SpanGetter      func(K) ptrace.Span
-	MetricGetter    func(K) pmetric.Metric
-	ResourceGetter  func(K) pcommon.Resource
-	ScopeGetter     func(K) pcommon.InstrumentationScope
-	GasLimit        uint64
+	Code                    []ir.Instruction
+	Consts                  []ir.Value
+	Accessors               []PathAccessor[K] // cached attribute accessors for OpLoadAttrCached
+	Setters                 []PathSetter[K]   // cached attribute setters for OpSetAttrCached
+	AttrKeys                []string          // fast attribute keys for OpLoadAttrFast
+	AttrGetter              AttrGetter[K]     // fast attribute getter for OpLoadAttrFast
+	AttrSetter              AttrSetter[K]     // fast attribute setter for OpSetAttrFast
+	LogRecordGetter         func(K) plog.LogRecord
+	SpanGetter              func(K) ptrace.Span
+	MetricGetter            func(K) pmetric.Metric
+	ResourceGetter          func(K) pcommon.Resource
+	ResourceSchemaURLGetter func(K) string
+	ResourceSchemaURLSetter func(K, string)
+	ScopeGetter             func(K) pcommon.InstrumentationScope
+	ScopeSchemaURLGetter    func(K) string
+	ScopeSchemaURLSetter    func(K, string)
+	GasLimit                uint64
 }
 
 // ProgramAny is an alias for Program[any] for backward compatibility.
@@ -251,6 +258,14 @@ func runProgram[K any](stack []ir.Value, p *Program[K], loader func(uint32) (ir.
 			}
 			// Inline const compare to avoid compareOp dispatch overhead.
 			constVal := consts[idx]
+			if stack[sp-1].Type == ir.TypeNone || constVal.Type == ir.TypeNone {
+				result, err := compareNil(cmpOp, stack[sp-1].Type == ir.TypeNone && constVal.Type == ir.TypeNone)
+				if err != nil {
+					return ir.Value{}, err
+				}
+				stack[sp-1] = result
+				continue
+			}
 			var result ir.Value
 			var err error
 			switch constVal.Type {
@@ -282,6 +297,11 @@ func runProgram[K any](stack []ir.Value, p *Program[K], loader func(uint32) (ir.
 					return ir.Value{}, ErrTypeMismatch
 				}
 				result, err = compareStrings(cmpOp, stack[sp-1], constVal)
+			case ir.TypeBytes:
+				if stack[sp-1].Type != ir.TypeBytes {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				result, err = compareBytes(cmpOp, stack[sp-1], constVal)
 			default:
 				return ir.Value{}, ErrTypeMismatch
 			}
@@ -724,6 +744,9 @@ func mathOpFloat(op ir.Opcode, a, b float64) (ir.Value, error) {
 }
 
 func compareOp(op ir.Opcode, a, b ir.Value) (ir.Value, error) {
+	if a.Type == ir.TypeNone || b.Type == ir.TypeNone {
+		return compareNil(op, a.Type == ir.TypeNone && b.Type == ir.TypeNone)
+	}
 	switch {
 	case a.Type == ir.TypeInt && b.Type == ir.TypeInt:
 		return compareInts(op, int64(a.Num), int64(b.Num))
@@ -737,8 +760,25 @@ func compareOp(op ir.Opcode, a, b ir.Value) (ir.Value, error) {
 		return compareBools(op, a.Num != 0, b.Num != 0)
 	case a.Type == ir.TypeString && b.Type == ir.TypeString:
 		return compareStrings(op, a, b)
+	case a.Type == ir.TypeBytes && b.Type == ir.TypeBytes:
+		return compareBytes(op, a, b)
 	default:
 		return ir.Value{}, ErrTypeMismatch
+	}
+}
+
+func compareNil(op ir.Opcode, bothNil bool) (ir.Value, error) {
+	switch op {
+	case ir.OpEq:
+		return ir.BoolValue(bothNil), nil
+	case ir.OpNe:
+		return ir.BoolValue(!bothNil), nil
+	case ir.OpLt, ir.OpGt:
+		return ir.BoolValue(false), nil
+	case ir.OpLte, ir.OpGte:
+		return ir.BoolValue(bothNil), nil
+	default:
+		return ir.Value{}, ErrInvalidOpcode
 	}
 }
 
@@ -827,6 +867,40 @@ func compareStrings(op ir.Opcode, a, b ir.Value) (ir.Value, error) {
 	}
 }
 
+func compareBytes(op ir.Opcode, a, b ir.Value) (ir.Value, error) {
+	ba, ok := a.Bytes()
+	if !ok {
+		return ir.Value{}, ErrTypeMismatch
+	}
+	bb, ok := b.Bytes()
+	if !ok {
+		return ir.Value{}, ErrTypeMismatch
+	}
+	if ba == nil || bb == nil {
+		if op == ir.OpNe {
+			return ir.BoolValue(true), nil
+		}
+		return ir.BoolValue(false), nil
+	}
+	cmp := bytes.Compare(ba, bb)
+	switch op {
+	case ir.OpEq:
+		return ir.BoolValue(cmp == 0), nil
+	case ir.OpNe:
+		return ir.BoolValue(cmp != 0), nil
+	case ir.OpLt:
+		return ir.BoolValue(cmp < 0), nil
+	case ir.OpLte:
+		return ir.BoolValue(cmp <= 0), nil
+	case ir.OpGt:
+		return ir.BoolValue(cmp > 0), nil
+	case ir.OpGte:
+		return ir.BoolValue(cmp >= 0), nil
+	default:
+		return ir.Value{}, ErrInvalidOpcode
+	}
+}
+
 func pcommonValueToVM(val pcommon.Value) (ir.Value, error) {
 	switch val.Type() {
 	case pcommon.ValueTypeInt:
@@ -837,6 +911,8 @@ func pcommonValueToVM(val pcommon.Value) (ir.Value, error) {
 		return ir.BoolValue(val.Bool()), nil
 	case pcommon.ValueTypeStr:
 		return ir.StringValue(val.Str()), nil
+	case pcommon.ValueTypeBytes:
+		return ir.BytesValue(val.Bytes().AsRaw()), nil
 	default:
 		return ir.Value{}, ErrTypeMismatch
 	}
@@ -861,6 +937,13 @@ func setLogBodyFromVM(lr plog.LogRecord, val ir.Value) error {
 		}
 		body.SetStr(s)
 		return nil
+	case ir.TypeBytes:
+		b, ok := val.Bytes()
+		if !ok {
+			return ErrTypeMismatch
+		}
+		body.SetEmptyBytes().FromRaw(b)
+		return nil
 	default:
 		return ErrTypeMismatch
 	}
@@ -882,7 +965,11 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 	spanGetter := p.SpanGetter
 	metricGetter := p.MetricGetter
 	resourceGetter := p.ResourceGetter
+	resourceSchemaURLGetter := p.ResourceSchemaURLGetter
+	resourceSchemaURLSetter := p.ResourceSchemaURLSetter
 	scopeGetter := p.ScopeGetter
+	scopeSchemaURLGetter := p.ScopeSchemaURLGetter
+	scopeSchemaURLSetter := p.ScopeSchemaURLSetter
 
 	for ip := 0; ip < codeLen; ip++ {
 		if gas == 0 {
@@ -931,6 +1018,14 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			}
 			// Inline const compare to avoid compareOp dispatch overhead.
 			constVal := consts[idx]
+			if stack[sp-1].Type == ir.TypeNone || constVal.Type == ir.TypeNone {
+				result, err := compareNil(cmpOp, stack[sp-1].Type == ir.TypeNone && constVal.Type == ir.TypeNone)
+				if err != nil {
+					return ir.Value{}, err
+				}
+				stack[sp-1] = result
+				continue
+			}
 			var result ir.Value
 			var err error
 			switch constVal.Type {
@@ -962,6 +1057,11 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 					return ir.Value{}, ErrTypeMismatch
 				}
 				result, err = compareStrings(cmpOp, stack[sp-1], constVal)
+			case ir.TypeBytes:
+				if stack[sp-1].Type != ir.TypeBytes {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				result, err = compareBytes(cmpOp, stack[sp-1], constVal)
 			default:
 				return ir.Value{}, ErrTypeMismatch
 			}
@@ -1820,6 +1920,30 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			}
 			res.SetDroppedAttributesCount(uint32(stack[sp].Num))
 
+		case ir.OpGetResourceSchemaURL:
+			if resourceSchemaURLGetter == nil {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.StringValue(resourceSchemaURLGetter(tCtx))
+			sp++
+
+		case ir.OpSetResourceSchemaURL:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			schemaURL, ok := stack[sp].String()
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if resourceSchemaURLSetter == nil {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			resourceSchemaURLSetter(tCtx, schemaURL)
+
 		case ir.OpGetScopeName:
 			var scope pcommon.InstrumentationScope
 			if scopeGetter != nil {
@@ -1932,6 +2056,601 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 				scope = scopeCtx.GetInstrumentationScope()
 			}
 			scope.SetDroppedAttributesCount(uint32(stack[sp].Num))
+
+		case ir.OpGetScopeSchemaURL:
+			if scopeSchemaURLGetter == nil {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.StringValue(scopeSchemaURLGetter(tCtx))
+			sp++
+
+		case ir.OpSetScopeSchemaURL:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			schemaURL, ok := stack[sp].String()
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if scopeSchemaURLSetter == nil {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			scopeSchemaURLSetter(tCtx, schemaURL)
+
+		case ir.OpGetObservedTimestamp:
+			var lr plog.LogRecord
+			if logGetter != nil {
+				lr = logGetter(tCtx)
+			} else {
+				logCtx, ok := any(tCtx).(LogRecordContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				lr = logCtx.GetLogRecord()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			ts := lr.ObservedTimestamp().AsTime().UnixNano()
+			stack[sp] = ir.Int64Value(ts)
+			sp++
+
+		case ir.OpSetObservedTimestamp:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if stack[sp].Type != ir.TypeInt {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			var lr plog.LogRecord
+			if logGetter != nil {
+				lr = logGetter(tCtx)
+			} else {
+				logCtx, ok := any(tCtx).(LogRecordContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				lr = logCtx.GetLogRecord()
+			}
+			lr.SetObservedTimestamp(pcommon.NewTimestampFromTime(time.Unix(0, int64(stack[sp].Num))))
+
+		case ir.OpGetSeverityText:
+			var lr plog.LogRecord
+			if logGetter != nil {
+				lr = logGetter(tCtx)
+			} else {
+				logCtx, ok := any(tCtx).(LogRecordContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				lr = logCtx.GetLogRecord()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.StringValue(lr.SeverityText())
+			sp++
+
+		case ir.OpSetSeverityText:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			text, ok := stack[sp].String()
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			var lr plog.LogRecord
+			if logGetter != nil {
+				lr = logGetter(tCtx)
+			} else {
+				logCtx, ok := any(tCtx).(LogRecordContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				lr = logCtx.GetLogRecord()
+			}
+			lr.SetSeverityText(text)
+
+		case ir.OpGetLogFlags:
+			var lr plog.LogRecord
+			if logGetter != nil {
+				lr = logGetter(tCtx)
+			} else {
+				logCtx, ok := any(tCtx).(LogRecordContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				lr = logCtx.GetLogRecord()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.Int64Value(int64(lr.Flags()))
+			sp++
+
+		case ir.OpSetLogFlags:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if stack[sp].Type != ir.TypeInt {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			var lr plog.LogRecord
+			if logGetter != nil {
+				lr = logGetter(tCtx)
+			} else {
+				logCtx, ok := any(tCtx).(LogRecordContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				lr = logCtx.GetLogRecord()
+			}
+			lr.SetFlags(plog.LogRecordFlags(int64(stack[sp].Num)))
+
+		case ir.OpGetSpanTraceID:
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			traceID := span.TraceID()
+			buf := make([]byte, len(traceID))
+			copy(buf, traceID[:])
+			stack[sp] = ir.BytesValue(buf)
+			sp++
+
+		case ir.OpGetSpanID:
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			spanID := span.SpanID()
+			buf := make([]byte, len(spanID))
+			copy(buf, spanID[:])
+			stack[sp] = ir.BytesValue(buf)
+			sp++
+
+		case ir.OpGetSpanParentID:
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			parentID := span.ParentSpanID()
+			buf := make([]byte, len(parentID))
+			copy(buf, parentID[:])
+			stack[sp] = ir.BytesValue(buf)
+			sp++
+
+		case ir.OpGetSpanTraceIDString:
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.StringValue(traceutil.TraceIDToHexOrEmptyString(span.TraceID()))
+			sp++
+
+		case ir.OpGetSpanIDString:
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.StringValue(traceutil.SpanIDToHexOrEmptyString(span.SpanID()))
+			sp++
+
+		case ir.OpGetSpanParentIDString:
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.StringValue(traceutil.SpanIDToHexOrEmptyString(span.ParentSpanID()))
+			sp++
+
+		case ir.OpGetSpanTraceState:
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.StringValue(span.TraceState().AsRaw())
+			sp++
+
+		case ir.OpSetSpanTraceState:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			raw, ok := stack[sp].String()
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			span.TraceState().FromRaw(raw)
+
+		case ir.OpGetSpanTraceStateKey:
+			idx := inst.Arg()
+			if int(idx) >= len(p.AttrKeys) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			raw := span.TraceState().AsRaw()
+			ts, err := trace.ParseTraceState(raw)
+			if err != nil {
+				if sp >= len(stack) {
+					return ir.Value{}, ErrStackOverflow
+				}
+				stack[sp] = ir.Value{Type: ir.TypeNone}
+				sp++
+				break
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.StringValue(ts.Get(p.AttrKeys[idx]))
+			sp++
+
+		case ir.OpSetSpanTraceStateKey:
+			idx := inst.Arg()
+			if int(idx) >= len(p.AttrKeys) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			value, ok := stack[sp].String()
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			raw := span.TraceState().AsRaw()
+			ts, err := trace.ParseTraceState(raw)
+			if err != nil {
+				break
+			}
+			if updated, err := ts.Insert(p.AttrKeys[idx], value); err == nil {
+				span.TraceState().FromRaw(updated.String())
+			}
+
+		case ir.OpGetSpanDroppedAttributesCount:
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.Int64Value(int64(span.DroppedAttributesCount()))
+			sp++
+
+		case ir.OpSetSpanDroppedAttributesCount:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if stack[sp].Type != ir.TypeInt {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			span.SetDroppedAttributesCount(uint32(stack[sp].Num))
+
+		case ir.OpGetSpanDroppedEventsCount:
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.Int64Value(int64(span.DroppedEventsCount()))
+			sp++
+
+		case ir.OpSetSpanDroppedEventsCount:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if stack[sp].Type != ir.TypeInt {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			span.SetDroppedEventsCount(uint32(stack[sp].Num))
+
+		case ir.OpGetSpanDroppedLinksCount:
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.Int64Value(int64(span.DroppedLinksCount()))
+			sp++
+
+		case ir.OpSetSpanDroppedLinksCount:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if stack[sp].Type != ir.TypeInt {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			var span ptrace.Span
+			if spanGetter != nil {
+				span = spanGetter(tCtx)
+			} else {
+				spanCtx, ok := any(tCtx).(SpanContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				span = spanCtx.GetSpan()
+			}
+			span.SetDroppedLinksCount(uint32(stack[sp].Num))
+
+		case ir.OpGetMetricDescription:
+			var metric pmetric.Metric
+			if metricGetter != nil {
+				metric = metricGetter(tCtx)
+			} else {
+				metricCtx, ok := any(tCtx).(MetricContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				metric = metricCtx.GetMetric()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.StringValue(metric.Description())
+			sp++
+
+		case ir.OpSetMetricDescription:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			desc, ok := stack[sp].String()
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			var metric pmetric.Metric
+			if metricGetter != nil {
+				metric = metricGetter(tCtx)
+			} else {
+				metricCtx, ok := any(tCtx).(MetricContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				metric = metricCtx.GetMetric()
+			}
+			metric.SetDescription(desc)
+
+		case ir.OpGetMetricAggTemporality:
+			var metric pmetric.Metric
+			if metricGetter != nil {
+				metric = metricGetter(tCtx)
+			} else {
+				metricCtx, ok := any(tCtx).(MetricContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				metric = metricCtx.GetMetric()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			switch metric.Type() {
+			case pmetric.MetricTypeSum:
+				stack[sp] = ir.Int64Value(int64(metric.Sum().AggregationTemporality()))
+			case pmetric.MetricTypeHistogram:
+				stack[sp] = ir.Int64Value(int64(metric.Histogram().AggregationTemporality()))
+			case pmetric.MetricTypeExponentialHistogram:
+				stack[sp] = ir.Int64Value(int64(metric.ExponentialHistogram().AggregationTemporality()))
+			default:
+				stack[sp] = ir.Value{Type: ir.TypeNone}
+			}
+			sp++
+
+		case ir.OpSetMetricAggTemporality:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if stack[sp].Type != ir.TypeInt {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			var metric pmetric.Metric
+			if metricGetter != nil {
+				metric = metricGetter(tCtx)
+			} else {
+				metricCtx, ok := any(tCtx).(MetricContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				metric = metricCtx.GetMetric()
+			}
+			agg := pmetric.AggregationTemporality(int64(stack[sp].Num))
+			switch metric.Type() {
+			case pmetric.MetricTypeSum:
+				metric.Sum().SetAggregationTemporality(agg)
+			case pmetric.MetricTypeHistogram:
+				metric.Histogram().SetAggregationTemporality(agg)
+			case pmetric.MetricTypeExponentialHistogram:
+				metric.ExponentialHistogram().SetAggregationTemporality(agg)
+			}
+
+		case ir.OpGetMetricIsMonotonic:
+			var metric pmetric.Metric
+			if metricGetter != nil {
+				metric = metricGetter(tCtx)
+			} else {
+				metricCtx, ok := any(tCtx).(MetricContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				metric = metricCtx.GetMetric()
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			if metric.Type() == pmetric.MetricTypeSum {
+				stack[sp] = ir.BoolValue(metric.Sum().IsMonotonic())
+			} else {
+				stack[sp] = ir.Value{Type: ir.TypeNone}
+			}
+			sp++
+
+		case ir.OpSetMetricIsMonotonic:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			if stack[sp].Type != ir.TypeBool {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			var metric pmetric.Metric
+			if metricGetter != nil {
+				metric = metricGetter(tCtx)
+			} else {
+				metricCtx, ok := any(tCtx).(MetricContext)
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				metric = metricCtx.GetMetric()
+			}
+			if metric.Type() == pmetric.MetricTypeSum {
+				metric.Sum().SetIsMonotonic(stack[sp].Num != 0)
+			}
 
 		default:
 			return ir.Value{}, ErrInvalidOpcode

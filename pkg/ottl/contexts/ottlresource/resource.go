@@ -131,6 +131,12 @@ func NewParser(
 		ottl.WithVMResourceGetter[TransformContext](func(tCtx TransformContext) pcommon.Resource {
 			return tCtx.GetResource()
 		}),
+		ottl.WithVMResourceSchemaURLGetter[TransformContext](func(tCtx TransformContext) string {
+			return tCtx.GetResourceSchemaURLItem().SchemaUrl()
+		}),
+		ottl.WithVMResourceSchemaURLSetter[TransformContext](func(tCtx TransformContext, schemaURL string) {
+			tCtx.GetResourceSchemaURLItem().SetSchemaUrl(schemaURL)
+		}),
 	}, options...)
 	return ctxcommon.NewParser(
 		functions,
@@ -163,6 +169,8 @@ func resourceAttrGetter(tCtx TransformContext, key string) (ir.Value, error) {
 		return ir.BoolValue(val.Bool()), nil
 	case pcommon.ValueTypeStr:
 		return ir.StringValue(val.Str()), nil
+	case pcommon.ValueTypeBytes:
+		return ir.BytesValue(val.Bytes().AsRaw()), nil
 	default:
 		return ir.Value{}, vm.ErrTypeMismatch
 	}

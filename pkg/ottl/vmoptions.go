@@ -97,10 +97,38 @@ func WithVMResourceGetter[K any](getter func(K) pcommon.Resource) Option[K] {
 	}
 }
 
+// WithVMResourceSchemaURLGetter sets a direct resource schema URL getter for VM direct field opcodes.
+func WithVMResourceSchemaURLGetter[K any](getter func(K) string) Option[K] {
+	return func(p *Parser[K]) {
+		p.vmResourceSchemaURLGetter = getter
+	}
+}
+
+// WithVMResourceSchemaURLSetter sets a direct resource schema URL setter for VM direct field opcodes.
+func WithVMResourceSchemaURLSetter[K any](setter func(K, string)) Option[K] {
+	return func(p *Parser[K]) {
+		p.vmResourceSchemaURLSetter = setter
+	}
+}
+
 // WithVMScopeGetter sets a direct scope getter for VM direct field opcodes.
 func WithVMScopeGetter[K any](getter func(K) pcommon.InstrumentationScope) Option[K] {
 	return func(p *Parser[K]) {
 		p.vmScopeGetter = getter
+	}
+}
+
+// WithVMScopeSchemaURLGetter sets a direct scope schema URL getter for VM direct field opcodes.
+func WithVMScopeSchemaURLGetter[K any](getter func(K) string) Option[K] {
+	return func(p *Parser[K]) {
+		p.vmScopeSchemaURLGetter = getter
+	}
+}
+
+// WithVMScopeSchemaURLSetter sets a direct scope schema URL setter for VM direct field opcodes.
+func WithVMScopeSchemaURLSetter[K any](setter func(K, string)) Option[K] {
+	return func(p *Parser[K]) {
+		p.vmScopeSchemaURLSetter = setter
 	}
 }
 
