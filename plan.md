@@ -12,7 +12,7 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 | Phase 1: Core VM | ✓ Complete | All ops, gas, errors, stack pool |
 | Phase 2: Compiler | ✓ Complete | AST→bytecode, folding, disasm |
 | Phase 3: pdata Bridge | ✓ Core done | Fast attrs + key direct fields; remaining fields deferred |
-| Phase 4: Stdlib | In progress | VM literals + converter getters + native Int/IsMatch/IsNil/IsType |
+| Phase 4: Stdlib | In progress | VM literals + converter getters + native Int/IsMatch/IsNil/IsType; dynamic IsMatch |
 | Phase 5: Verification | Not started | — |
 
 ## 1. Goals
@@ -240,6 +240,10 @@ Remaining (deferred to future iteration):
 | Function registry adapter | Unpack `Value` → `interface{}` only at boundary |
 | Native opcodes | `INT`, `IS_NIL`, `IS_MATCH` as fast-path instructions |
 | Gradual migration | Only perf-critical functions become native ops |
+
+**Notes:**
+- Added `IS_TYPE` and dynamic `IS_MATCH` (pattern on stack).
+- `IsMap`/`IsList` deferred until VM supports pcommon.Map/Slice values.
 
 **Adapter pattern:**
 ```go

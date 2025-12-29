@@ -1983,3 +1983,26 @@ func TestMicroVMRun_IsMatch(t *testing.T) {
 		t.Fatalf("expected true, got %v", val)
 	}
 }
+
+func TestMicroVMRun_IsMatchDynamic(t *testing.T) {
+	program := &ProgramAny{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+			ir.Encode(ir.OpIsMatchDynamic, 0),
+		},
+		Consts: []ir.Value{
+			ir.StringValue("operationA"),
+			ir.StringValue("operation[AC]"),
+		},
+	}
+	vm := NewMicroVM(2)
+	val, err := vm.Run(program)
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	got, ok := val.Bool()
+	if !ok || !got {
+		t.Fatalf("expected true, got %v", val)
+	}
+}

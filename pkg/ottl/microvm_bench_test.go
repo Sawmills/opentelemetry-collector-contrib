@@ -6,6 +6,7 @@ package ottl
 import (
 	"context"
 	"errors"
+	"regexp"
 	"testing"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
@@ -15,6 +16,77 @@ import (
 )
 
 var benchBoolSink bool
+
+type benchIsMatchArguments[K any] struct {
+	Target  StringLikeGetter[K]
+	Pattern StringGetter[K]
+}
+
+func newBenchIsMatchFactory[K any]() Factory[K] {
+	return NewFactory("IsMatch", &benchIsMatchArguments[K]{}, createBenchIsMatchFunction[K])
+}
+
+func createBenchIsMatchFunction[K any](_ FunctionContext, oArgs Arguments) (ExprFunc[K], error) {
+	args, ok := oArgs.(*benchIsMatchArguments[K])
+	if !ok {
+		return nil, errors.New("IsMatchFactory args must be of type *benchIsMatchArguments[K]")
+	}
+	var cached *regexp.Regexp
+	if pattern, isLiteral := GetLiteralValue(args.Pattern); isLiteral {
+		compiled, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil, err
+		}
+		cached = compiled
+	}
+	return func(ctx context.Context, tCtx K) (any, error) {
+		target, err := args.Target.Get(ctx, tCtx)
+		if err != nil {
+			return nil, err
+		}
+		if target == nil {
+			return false, nil
+		}
+		re := cached
+		if re == nil {
+			pattern, err := args.Pattern.Get(ctx, tCtx)
+			if err != nil {
+				return nil, err
+			}
+			re, err = regexp.Compile(pattern)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return re.MatchString(*target), nil
+	}, nil
+}
+
+type benchIsIntArguments[K any] struct {
+	Target IntGetter[K]
+}
+
+func newBenchIsIntFactory[K any]() Factory[K] {
+	return NewFactory("IsInt", &benchIsIntArguments[K]{}, createBenchIsIntFunction[K])
+}
+
+func createBenchIsIntFunction[K any](_ FunctionContext, oArgs Arguments) (ExprFunc[K], error) {
+	args, ok := oArgs.(*benchIsIntArguments[K])
+	if !ok {
+		return nil, errors.New("IsIntFactory args must be of type *benchIsIntArguments[K]")
+	}
+	return func(ctx context.Context, tCtx K) (any, error) {
+		_, err := args.Target.Get(ctx, tCtx)
+		switch err.(type) {
+		case TypeError:
+			return false, nil
+		case nil:
+			return true, nil
+		default:
+			return false, err
+		}
+	}, nil
+}
 
 func int64p(v int64) *int64 {
 	return &v
@@ -52,6 +124,26 @@ func newBenchParserWithPath(withVM bool, getter func() any) (Parser[any], error)
 		map[string]Factory[any]{},
 		func(path Path[any]) (GetSetter[any], error) {
 			_ = path.Keys()
+			return StandardGetSetter[any]{
+				Getter: func(context.Context, any) (any, error) {
+					return getter(), nil
+				},
+				Setter: func(context.Context, any, any) error { return nil },
+			}, nil
+		},
+		component.TelemetrySettings{Logger: zap.NewNop()},
+		options...,
+	)
+}
+
+func newBenchParserWithPathAndFunctions(withVM bool, functions map[string]Factory[any], getter func() any) (Parser[any], error) {
+	options := []Option[any]{}
+	if withVM {
+		options = append(options, WithVMEnabled[any]())
+	}
+	return NewParser[any](
+		functions,
+		func(Path[any]) (GetSetter[any], error) {
 			return StandardGetSetter[any]{
 				Getter: func(context.Context, any) (any, error) {
 					return getter(), nil
@@ -1008,6 +1100,174 @@ func BenchmarkOTTLMicroVMAddEqSpecialized(b *testing.B) {
 		result, ok := val.Bool()
 		if !ok {
 			b.Fatal("result is not bool")
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLInterpreterIsMatchLiteral(b *testing.B) {
+	functions := CreateFactoryMap[any](newBenchIsMatchFactory[any]())
+	p, err := newBenchParserWithPathAndFunctions(false, functions, func() any {
+		return "operation[AC]"
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	expr, err := parseCondition(`IsMatch("operationA", "operation[AC]")`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonIsMatchLiteral_VM(b *testing.B) {
+	functions := CreateFactoryMap[any](newBenchIsMatchFactory[any]())
+	p, err := newBenchParserWithPathAndFunctions(true, functions, func() any {
+		return "operation[AC]"
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	expr, err := parseCondition(`IsMatch("operationA", "operation[AC]")`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLInterpreterIsMatchDynamic(b *testing.B) {
+	functions := CreateFactoryMap[any](newBenchIsMatchFactory[any]())
+	p, err := newBenchParserWithPathAndFunctions(false, functions, func() any {
+		return "operation[AC]"
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	expr, err := parseCondition(`IsMatch("operationA", attributes["pattern"])`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonIsMatchDynamic_VM(b *testing.B) {
+	functions := CreateFactoryMap[any](newBenchIsMatchFactory[any]())
+	p, err := newBenchParserWithPathAndFunctions(true, functions, func() any {
+		return "operation[AC]"
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	expr, err := parseCondition(`IsMatch("operationA", attributes["pattern"])`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLInterpreterIsInt(b *testing.B) {
+	functions := CreateFactoryMap[any](newBenchIsIntFactory[any]())
+	p, err := newBenchParserWithPathAndFunctions(false, functions, func() any {
+		return int64(1)
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	expr, err := parseCondition(`IsInt(1)`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonIsInt_VM(b *testing.B) {
+	functions := CreateFactoryMap[any](newBenchIsIntFactory[any]())
+	p, err := newBenchParserWithPathAndFunctions(true, functions, func() any {
+		return int64(1)
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	expr, err := parseCondition(`IsInt(1)`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
 		}
 		benchBoolSink = result
 	}

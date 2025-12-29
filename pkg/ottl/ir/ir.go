@@ -270,10 +270,11 @@ const (
 	OpGetMetricIsMonotonic              // Get metric monotonicity; pushes bool or nil to stack
 	OpSetMetricIsMonotonic              // Set metric monotonicity; pops bool from stack
 
-	OpInt     // Convert top of stack to int (OTTL Int converter semantics)
-	OpIsNil   // Check top of stack for nil (TypeNone)
-	OpIsType  // Check top of stack type; arg = ir.Type
-	OpIsMatch // Regex match for string-like target; arg = regex index
+	OpInt            // Convert top of stack to int (OTTL Int converter semantics)
+	OpIsNil          // Check top of stack for nil (TypeNone)
+	OpIsType         // Check top of stack type; arg = ir.Type
+	OpIsMatch        // Regex match for string-like target; arg = regex index
+	OpIsMatchDynamic // Regex match with dynamic pattern; pops pattern + target
 )
 
 // Instruction is a 32-bit fixed-width instruction.
