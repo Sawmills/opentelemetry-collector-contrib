@@ -627,6 +627,29 @@ func TestCompileMicroComparison_DirectFieldMetricTypeOpcode(t *testing.T) {
 	}
 }
 
+func TestCompileMicroComparison_DirectFieldSpanStatusMessageOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "span", Fields: []field{{Name: "status"}, {Name: "message"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("oops")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetSpanStatusMsg {
+		t.Fatalf("expected GET_SPAN_STATUS_MSG, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
 func TestCompileMicroComparison_Unsupported(t *testing.T) {
 	p := newTestParser(t, false)
 	n := isNil(true)

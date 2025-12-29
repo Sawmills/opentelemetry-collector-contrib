@@ -1599,6 +1599,32 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			stack[sp] = ir.Int64Value(int64(metricCtx.GetMetric().Type()))
 			sp++
 
+		case ir.OpGetSpanStatusMsg:
+			spanCtx, ok := any(tCtx).(SpanContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.StringValue(spanCtx.GetSpan().Status().Message())
+			sp++
+
+		case ir.OpSetSpanStatusMsg:
+			spanCtx, ok := any(tCtx).(SpanContext)
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			msg, ok := stack[sp].String()
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			spanCtx.GetSpan().Status().SetMessage(msg)
+
 		default:
 			return ir.Value{}, ErrInvalidOpcode
 		}

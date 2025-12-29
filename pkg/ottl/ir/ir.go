@@ -198,6 +198,8 @@ const (
 	OpGetMetricUnit    // Get metric unit; pushes string to stack
 	OpSetMetricUnit    // Set metric unit; pops string from stack
 	OpGetMetricType    // Get metric type; pushes int to stack
+	OpGetSpanStatusMsg // Get span status message; pushes string to stack
+	OpSetSpanStatusMsg // Set span status message; pops string from stack
 )
 
 // Instruction is a 32-bit fixed-width instruction.
