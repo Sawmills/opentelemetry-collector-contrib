@@ -203,8 +203,16 @@ func (p *Parser[K]) newComparisonEvaluator(comparison *comparison) (BoolExpr[K],
 }
 
 func (p *Parser[K]) newBoolExpr(expr *booleanExpression) (BoolExpr[K], error) {
+	return p.newBoolExprWithOrigText(expr, "")
+}
+
+func (p *Parser[K]) newBoolExprWithOrigText(expr *booleanExpression, origText string) (BoolExpr[K], error) {
 	if expr == nil {
 		return BoolExpr[K]{alwaysTrue[K]}, nil
+	}
+
+	if p.shadowMode && p.vmEnabled {
+		return p.newShadowBoolExpr(expr, origText)
 	}
 
 	if p.vmEnabled {
@@ -225,6 +233,10 @@ func (p *Parser[K]) newBoolExpr(expr *booleanExpression) (BoolExpr[K], error) {
 			}}, nil
 		}
 	}
+	return p.newInterpreterBoolExpr(expr)
+}
+
+func (p *Parser[K]) newInterpreterBoolExpr(expr *booleanExpression) (BoolExpr[K], error) {
 	f, err := p.newBooleanTermEvaluator(expr.Left)
 	if err != nil {
 		return BoolExpr[K]{}, err
@@ -239,6 +251,31 @@ func (p *Parser[K]) newBoolExpr(expr *booleanExpression) (BoolExpr[K], error) {
 	}
 
 	return orFuncs(funcs), nil
+}
+
+func (p *Parser[K]) newShadowBoolExpr(expr *booleanExpression, origText string) (BoolExpr[K], error) {
+	interpExpr, err := p.newInterpreterBoolExpr(expr)
+	if err != nil {
+		return BoolExpr[K]{}, err
+	}
+
+	program, err := p.getOrCompileVMBoolProgram(expr)
+	if err != nil {
+		return interpExpr, nil
+	}
+
+	var vmExpr BoolExpr[K]
+	if len(program.getters) == 0 && len(program.program.AttrKeys) == 0 && !program.needsContext {
+		vmExpr = BoolExpr[K]{func(context.Context, K) (bool, error) {
+			return runBoolVMConstOnly(program)
+		}}
+	} else {
+		vmExpr = BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
+			return p.runBoolVM(ctx, tCtx, program)
+		}}
+	}
+
+	return wrapWithShadow(interpExpr, vmExpr, origText, p.telemetrySettings.Logger), nil
 }
 
 func (p *Parser[K]) logVMError(err error) {

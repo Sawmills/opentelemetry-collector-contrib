@@ -91,6 +91,7 @@ type Parser[K any] struct {
 	vmProgramCache            map[*comparison]*microProgram[K]
 	vmBoolProgramCache        map[*booleanExpression]*microProgram[K]
 	vmProgramCacheMu          sync.Mutex
+	shadowMode                bool
 }
 
 // NewParser creates a new Parser
@@ -178,7 +179,7 @@ func (p *Parser[K]) ParseStatement(statement string) (*Statement[K], error) {
 	if err != nil {
 		return nil, err
 	}
-	expression, err := p.newBoolExpr(parsed.WhereClause)
+	expression, err := p.newBoolExprWithOrigText(parsed.WhereClause, statement)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +222,7 @@ func (p *Parser[K]) ParseCondition(condition string) (*Condition[K], error) {
 	if err != nil {
 		return nil, err
 	}
-	expression, err := p.newBoolExpr(parsed)
+	expression, err := p.newBoolExprWithOrigText(parsed, condition)
 	if err != nil {
 		return nil, err
 	}

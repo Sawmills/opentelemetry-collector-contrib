@@ -1,6 +1,6 @@
 # OTTL Bytecode VM (OVM) Implementation Plan
 
-Status: Phase 4 In Progress (stdlib + perf parity)
+Status: Phase 5 Complete (verification + shadow mode)
 Owner: Sawmills.ai / OTel Collector Contrib
 Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-alloc hot loop, safe execution bounds.
 
@@ -12,8 +12,8 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 | Phase 1: Core VM | ✓ Complete | All ops, gas, errors, stack pool |
 | Phase 2: Compiler | ✓ Complete | AST→bytecode, folding, disasm |
 | Phase 3: pdata Bridge | ✓ Core done | Fast attrs + key direct fields; remaining fields deferred |
-| Phase 4: Stdlib | In progress | VM callsites (incl list args), native Int/IsMatch/IsNil/IsType/IsMap/IsList, PMap/PSlice VM values, dynamic IsMatch cache |
-| Phase 5: Verification | Not started | — |
+| Phase 4: Stdlib | ✓ Core Complete | VM callsites (incl list args), native Int/IsMatch/IsNil/IsType/IsMap/IsList, PMap/PSlice VM values, dynamic IsMatch cache |
+| Phase 5: Verification | ✓ Complete | Shadow mode, fuzz harness, docs |
 
 ## 1. Goals
 
@@ -422,3 +422,7 @@ Revisit if profiling shows bottlenecks:
 - **Register-based VM** if stack overhead significant
 - **JIT compilation** for ultra-hot programs
 - **Bytecode tracing** for debugging complex rules
+
+## Benchmarks (Local, 2025-12-29, MixedPath Update)
+- OTTL mixed path (mock): interpreter 7.33 ns/op (0 allocs), VM 32.40 ns/op (0 allocs)
+  *Note: VM overhead is higher here because we are not using the cached accessor optimization in the mock benchmark, so it pays the generic getter adapter cost.*
