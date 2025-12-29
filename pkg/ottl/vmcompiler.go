@@ -11,10 +11,12 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"unsafe"
 
 	"github.com/iancoleman/strcase"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 )
 
 type constKey struct {
@@ -42,6 +44,7 @@ type microProgram[K any] struct {
 	vmGetters    []VMGetter[K]
 	stack        int
 	needsContext bool
+	stackPool    *vm.StackPool
 }
 
 type microCompiler[K any] struct {
@@ -144,6 +147,7 @@ func (p *Parser[K]) compileMicroComparisonVM(cmp *comparison) (*microProgram[K],
 		vmGetters:    c.vmGetters,
 		stack:        c.maxStack,
 		needsContext: c.needsContext,
+		stackPool:    p.vmStackPool,
 	}, nil
 }
 
@@ -192,6 +196,7 @@ func (p *Parser[K]) compileMicroBoolExpression(expr *booleanExpression) (*microP
 		vmGetters:    c.vmGetters,
 		stack:        c.maxStack,
 		needsContext: c.needsContext,
+		stackPool:    p.vmStackPool,
 	}, nil
 }
 
@@ -1217,9 +1222,37 @@ func vmValueToAny(val ir.Value) (any, error) {
 			return nil, fmt.Errorf("invalid bytes value")
 		}
 		return b, nil
+	case ir.TypePMap:
+		pm, ok := pMapFromValue(val)
+		if !ok {
+			return nil, fmt.Errorf("invalid map value")
+		}
+		return pm, nil
+	case ir.TypePSlice:
+		ps, ok := pSliceFromValue(val)
+		if !ok {
+			return nil, fmt.Errorf("invalid slice value")
+		}
+		return ps, nil
 	default:
 		return nil, fmt.Errorf("unsupported vm value type %v", val.Type)
 	}
+}
+
+func pMapFromValue(val ir.Value) (pcommon.Map, bool) {
+	if val.Type != ir.TypePMap || val.Ptr == nil || val.Num == 0 {
+		return pcommon.Map{}, false
+	}
+	w := pcommonWrapper{orig: val.Ptr, state: unsafe.Pointer(uintptr(val.Num))}
+	return *(*pcommon.Map)(unsafe.Pointer(&w)), true
+}
+
+func pSliceFromValue(val ir.Value) (pcommon.Slice, bool) {
+	if val.Type != ir.TypePSlice || val.Ptr == nil || val.Num == 0 {
+		return pcommon.Slice{}, false
+	}
+	w := pcommonWrapper{orig: val.Ptr, state: unsafe.Pointer(uintptr(val.Num))}
+	return *(*pcommon.Slice)(unsafe.Pointer(&w)), true
 }
 
 func (c *microCompiler[K]) emitCallSiteConverter(conv *converter) (bool, error) {
@@ -1230,7 +1263,7 @@ func (c *microCompiler[K]) emitCallSiteConverter(conv *converter) (bool, error) 
 		if arg.FunctionName != nil {
 			return false, nil
 		}
-		if arg.Value.Map != nil || arg.Value.List != nil || arg.Value.Enum != nil {
+		if arg.Value.Map != nil || arg.Value.Enum != nil {
 			return false, nil
 		}
 	}
@@ -1242,6 +1275,9 @@ func (c *microCompiler[K]) emitCallSiteConverter(conv *converter) (bool, error) 
 		return false, nil
 	}
 	for _, arg := range conv.Arguments {
+		if arg.Value.List != nil {
+			continue
+		}
 		if err := c.emitValue(arg.Value); err != nil {
 			return true, err
 		}
@@ -1328,8 +1364,53 @@ func (c *microCompiler[K]) buildCallSite(conv *converter) (vm.CallSite[K], int, 
 		}
 	}
 
+	vmIndexByArg := make(map[int]int, len(conv.Arguments))
+	staticByArg := make(map[int]reflect.Value)
+	vmArgCount := 0
+	for argIdx := range conv.Arguments {
+		if conv.Arguments[argIdx].Value.List != nil {
+			continue
+		}
+		vmIndexByArg[argIdx] = vmArgCount
+		vmArgCount++
+	}
+	for i := 0; i < argsType.NumField(); i++ {
+		argIdx, ok := argIndexByField[i]
+		if !ok {
+			continue
+		}
+		argVal := conv.Arguments[argIdx].Value
+		if argVal.List == nil {
+			continue
+		}
+		field := argsType.Field(i)
+		isOptional := strings.HasPrefix(field.Type.Name(), "Optional")
+		t := field.Type
+		var manager optionalManager
+		if isOptional {
+			var ok bool
+			manager, ok = reflect.New(t).Elem().Interface().(optionalManager)
+			if !ok {
+				return vm.CallSite[K]{}, 0, false, fmt.Errorf("optional type is not manageable by the OTTL parser")
+			}
+			t = manager.get().Type()
+		}
+		if t.Kind() != reflect.Slice {
+			return vm.CallSite[K]{}, 0, false, fmt.Errorf("list argument provided for non-slice parameter %q", field.Name)
+		}
+		staticVal, err := c.parser.buildSliceArg(argVal, t)
+		if err != nil {
+			return vm.CallSite[K]{}, 0, false, err
+		}
+		if isOptional {
+			staticByArg[argIdx] = manager.set(staticVal)
+			continue
+		}
+		staticByArg[argIdx] = reflect.ValueOf(staticVal)
+	}
+
 	callsite := vm.CallSite[K]{
-		ArgCount: len(conv.Arguments),
+		ArgCount: vmArgCount,
 		Func: func(ctx context.Context, tCtx K, values []ir.Value) (ir.Value, error) {
 			frame := &callFrame{values: values}
 			argsVal := reflect.New(argsType)
@@ -1340,6 +1421,10 @@ func (c *microCompiler[K]) buildCallSite(conv *converter) (vm.CallSite[K], int, 
 				}
 				field := argsType.Field(i)
 				fieldVal := argsVal.Elem().Field(i)
+				if staticVal, ok := staticByArg[argIdx]; ok {
+					fieldVal.Set(staticVal)
+					continue
+				}
 				isOptional := strings.HasPrefix(field.Type.Name(), "Optional")
 				var manager optionalManager
 				if isOptional {
@@ -1349,7 +1434,11 @@ func (c *microCompiler[K]) buildCallSite(conv *converter) (vm.CallSite[K], int, 
 						return ir.Value{}, fmt.Errorf("optional type is not manageable by the OTTL parser")
 					}
 				}
-				val, err := c.buildCallSiteArgValue(field.Type, frame, argIdx, isOptional, manager)
+				vmArgIdx, ok := vmIndexByArg[argIdx]
+				if !ok {
+					return ir.Value{}, fmt.Errorf("missing callsite argument index")
+				}
+				val, err := c.buildCallSiteArgValue(field.Type, frame, vmArgIdx, isOptional, manager)
 				if err != nil {
 					return ir.Value{}, err
 				}
@@ -1372,7 +1461,7 @@ func (c *microCompiler[K]) buildCallSite(conv *converter) (vm.CallSite[K], int, 
 			return valueToVM(raw)
 		},
 	}
-	return callsite, len(conv.Arguments), true, nil
+	return callsite, vmArgCount, true, nil
 }
 
 func (c *microCompiler[K]) supportsCallSiteArg(argType reflect.Type, argVal value) bool {
@@ -1384,9 +1473,17 @@ func (c *microCompiler[K]) supportsCallSiteArg(argType reflect.Type, argVal valu
 		}
 		t = manager.get().Type()
 	}
+	if argVal.List != nil {
+		if t.Kind() != reflect.Slice {
+			return false
+		}
+		return supportsCallSiteSliceElem(t.Elem())
+	}
 	name := t.Name()
 	switch {
 	case strings.HasPrefix(name, "Getter"),
+		strings.HasPrefix(name, "PMapGetter"),
+		strings.HasPrefix(name, "PSliceGetter"),
 		strings.HasPrefix(name, "StringGetter"),
 		strings.HasPrefix(name, "StringLikeGetter"),
 		strings.HasPrefix(name, "FloatGetter"),
@@ -1400,7 +1497,34 @@ func (c *microCompiler[K]) supportsCallSiteArg(argType reflect.Type, argVal valu
 		name == reflect.Float64.String(),
 		name == reflect.Int64.String(),
 		name == reflect.Bool.String():
-		return argVal.Map == nil && argVal.List == nil && argVal.Enum == nil
+		return argVal.Map == nil && argVal.Enum == nil
+	default:
+		return false
+	}
+}
+
+func supportsCallSiteSliceElem(elemType reflect.Type) bool {
+	name := elemType.Name()
+	switch {
+	case strings.HasPrefix(name, "Getter"),
+		strings.HasPrefix(name, "PMapGetter"),
+		strings.HasPrefix(name, "PSliceGetter"),
+		strings.HasPrefix(name, "StringGetter"),
+		strings.HasPrefix(name, "StringLikeGetter"),
+		strings.HasPrefix(name, "FloatGetter"),
+		strings.HasPrefix(name, "FloatLikeGetter"),
+		strings.HasPrefix(name, "IntGetter"),
+		strings.HasPrefix(name, "IntLikeGetter"),
+		strings.HasPrefix(name, "DurationGetter"),
+		strings.HasPrefix(name, "TimeGetter"),
+		strings.HasPrefix(name, "BoolGetter"),
+		strings.HasPrefix(name, "BoolLikeGetter"),
+		strings.HasPrefix(name, "ByteSliceLikeGetter"),
+		name == reflect.String.String(),
+		name == reflect.Float64.String(),
+		name == reflect.Int64.String(),
+		name == reflect.Bool.String():
+		return true
 	default:
 		return false
 	}
@@ -1420,6 +1544,24 @@ func (c *microCompiler[K]) buildCallSiteArgValue(fieldType reflect.Type, frame *
 			return manager.set(val), nil
 		}
 		return reflect.ValueOf(val), nil
+	case strings.HasPrefix(name, "PMapGetter"):
+		arg, err := newStandardPMapGetter[K](getter)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		if isOptional {
+			return manager.set(arg), nil
+		}
+		return reflect.ValueOf(arg), nil
+	case strings.HasPrefix(name, "PSliceGetter"):
+		arg, err := newStandardPSliceGetter[K](getter)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		if isOptional {
+			return manager.set(arg), nil
+		}
+		return reflect.ValueOf(arg), nil
 	case strings.HasPrefix(name, "StringGetter"):
 		arg, err := newStandardStringGetter[K](getter)
 		if err != nil {
@@ -1551,6 +1693,10 @@ func (c *microCompiler[K]) emitNativeConverter(conv *converter) (bool, error) {
 		return c.emitIsTypeConverter(conv.Arguments, ir.TypeBool)
 	case "IsString":
 		return c.emitIsTypeConverter(conv.Arguments, ir.TypeString)
+	case "IsMap":
+		return c.emitIsTypeConverter(conv.Arguments, ir.TypePMap)
+	case "IsList":
+		return c.emitIsTypeConverter(conv.Arguments, ir.TypePSlice)
 	case "IsMatch":
 		target, pattern, ok := converterArgs(conv.Arguments, "target", "pattern")
 		if !ok {

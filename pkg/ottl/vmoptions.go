@@ -21,6 +21,9 @@ const vmEnvVar = "OTELCOL_OTTL_VM"
 func WithVMEnabled[K any]() Option[K] {
 	return func(p *Parser[K]) {
 		p.vmEnabled = true
+		if p.vmStackPool == nil {
+			p.vmStackPool = vm.NewStackPool(defaultMicroVMStackSize)
+		}
 		if p.vmProgramCache == nil {
 			p.vmProgramCache = map[*comparison]*microProgram[K]{}
 		}

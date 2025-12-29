@@ -2035,3 +2035,35 @@ func TestMicroVMRun_Call(t *testing.T) {
 		t.Fatalf("expected true, got %v", val)
 	}
 }
+
+func TestComparePMapEqual(t *testing.T) {
+	left := pcommon.NewMap()
+	left.PutStr("k", "v")
+	right := pcommon.NewMap()
+	right.PutStr("k", "v")
+	val, err := compareOp(ir.OpEq, pMapValue(left), pMapValue(right))
+	if err != nil {
+		t.Fatalf("compare failed: %v", err)
+	}
+	got, ok := val.Bool()
+	if !ok || !got {
+		t.Fatalf("expected true, got %v", val)
+	}
+}
+
+func TestComparePSliceEqual(t *testing.T) {
+	left := pcommon.NewSlice()
+	left.AppendEmpty().SetInt(1)
+	left.AppendEmpty().SetStr("a")
+	right := pcommon.NewSlice()
+	right.AppendEmpty().SetInt(1)
+	right.AppendEmpty().SetStr("a")
+	val, err := compareOp(ir.OpEq, pSliceValue(left), pSliceValue(right))
+	if err != nil {
+		t.Fatalf("compare failed: %v", err)
+	}
+	got, ok := val.Bool()
+	if !ok || !got {
+		t.Fatalf("expected true, got %v", val)
+	}
+}

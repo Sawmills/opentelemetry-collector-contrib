@@ -324,6 +324,66 @@ func TestCompileBoolExpression_CallSite(t *testing.T) {
 	}
 }
 
+func TestCompileBoolExpression_CallSiteListArg(t *testing.T) {
+	type listArgs struct {
+		Items []StringGetter[any]
+	}
+	functions := CreateFactoryMap[any](
+		NewFactory(
+			"ConcatLen",
+			&listArgs{},
+			func(_ FunctionContext, oArgs Arguments) (ExprFunc[any], error) {
+				args, ok := oArgs.(*listArgs)
+				if !ok {
+					return nil, fmt.Errorf("args must be *listArgs")
+				}
+				return func(ctx context.Context, tCtx any) (any, error) {
+					total := 0
+					for _, getter := range args.Items {
+						val, err := getter.Get(ctx, tCtx)
+						if err != nil {
+							return nil, err
+						}
+						total += len(val)
+					}
+					return int64(total), nil
+				}, nil
+			},
+		),
+	)
+	parser, err := NewParser[any](
+		functions,
+		func(Path[any]) (GetSetter[any], error) {
+			return nil, fmt.Errorf("path parsing not supported")
+		},
+		componenttest.NewNopTelemetrySettings(),
+	)
+	if err != nil {
+		t.Fatalf("parser setup failed: %v", err)
+	}
+	expr, err := parseCondition(`ConcatLen(["a","bc"]) == 3`)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	program, err := parser.compileMicroBoolExpression(expr)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.CallSites) != 1 {
+		t.Fatalf("expected 1 callsite, got %d", len(program.program.CallSites))
+	}
+	if got := program.program.CallSites[0].ArgCount; got != 0 {
+		t.Fatalf("expected 0 vm args, got %d", got)
+	}
+	result, err := parser.runBoolVM(context.Background(), nil, program)
+	if err != nil {
+		t.Fatalf("vm run failed: %v", err)
+	}
+	if !result {
+		t.Fatalf("expected true result")
+	}
+}
+
 func TestCompileBoolExpressionConstFold_AllFalse(t *testing.T) {
 	parser, err := NewParser[struct{}](
 		map[string]Factory[struct{}]{},
@@ -477,6 +537,82 @@ func TestCompileMicroComparison_PathEqConstOpcode(t *testing.T) {
 	}
 	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
 		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileBoolExpression_IsMapNative(t *testing.T) {
+	getterParser, err := NewParser[any](
+		map[string]Factory[any]{},
+		func(Path[any]) (GetSetter[any], error) {
+			return StandardGetSetter[any]{
+				Getter: func(context.Context, any) (any, error) {
+					pm := pcommon.NewMap()
+					pm.PutStr("k", "v")
+					return pm, nil
+				},
+				Setter: func(context.Context, any, any) error {
+					return nil
+				},
+			}, nil
+		},
+		component.TelemetrySettings{Logger: zap.NewNop()},
+		WithVMEnabled[any](),
+	)
+	if err != nil {
+		t.Fatalf("parser init failed: %v", err)
+	}
+	expr, err := parseCondition("IsMap(foo)")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	evaluator, err := getterParser.newBoolExpr(expr)
+	if err != nil {
+		t.Fatalf("build evaluator failed: %v", err)
+	}
+	got, err := evaluator.Eval(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("eval failed: %v", err)
+	}
+	if !got {
+		t.Fatalf("expected true, got false")
+	}
+}
+
+func TestCompileBoolExpression_IsListNative(t *testing.T) {
+	getterParser, err := NewParser[any](
+		map[string]Factory[any]{},
+		func(Path[any]) (GetSetter[any], error) {
+			return StandardGetSetter[any]{
+				Getter: func(context.Context, any) (any, error) {
+					ps := pcommon.NewSlice()
+					ps.AppendEmpty().SetInt(1)
+					return ps, nil
+				},
+				Setter: func(context.Context, any, any) error {
+					return nil
+				},
+			}, nil
+		},
+		component.TelemetrySettings{Logger: zap.NewNop()},
+		WithVMEnabled[any](),
+	)
+	if err != nil {
+		t.Fatalf("parser init failed: %v", err)
+	}
+	expr, err := parseCondition("IsList(foo)")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	evaluator, err := getterParser.newBoolExpr(expr)
+	if err != nil {
+		t.Fatalf("build evaluator failed: %v", err)
+	}
+	got, err := evaluator.Eval(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("eval failed: %v", err)
+	}
+	if !got {
+		t.Fatalf("expected true, got false")
 	}
 }
 

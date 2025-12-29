@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"unsafe"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
 
@@ -48,6 +49,10 @@ func valueToVM(val pcommon.Value) (ir.Value, error) {
 		return ir.StringValue(val.Str()), nil
 	case pcommon.ValueTypeBytes:
 		return ir.BytesValue(val.Bytes().AsRaw()), nil
+	case pcommon.ValueTypeMap:
+		return pMapValue(val.Map()), nil
+	case pcommon.ValueTypeSlice:
+		return pSliceValue(val.Slice()), nil
 	default:
 		return ir.Value{}, fmt.Errorf("unsupported pcommon.Value type: %v", val.Type())
 	}
@@ -84,7 +89,52 @@ func SetMapValueFromVM(m pcommon.Map, key string, val ir.Value) error {
 		}
 		m.PutEmptyBytes(key).FromRaw(bytesVal)
 		return nil
+	case ir.TypePMap:
+		pm, ok := pMapFromValue(val)
+		if !ok {
+			return fmt.Errorf("invalid map value")
+		}
+		pm.CopyTo(m.PutEmptyMap(key))
+		return nil
+	case ir.TypePSlice:
+		ps, ok := pSliceFromValue(val)
+		if !ok {
+			return fmt.Errorf("invalid slice value")
+		}
+		ps.CopyTo(m.PutEmptySlice(key))
+		return nil
 	default:
 		return fmt.Errorf("unsupported VM value type: %v", val.Type)
 	}
+}
+
+func pMapValue(val pcommon.Map) ir.Value {
+	w := *(*pcommonWrapper)(unsafe.Pointer(&val))
+	return ir.Value{Type: ir.TypePMap, Num: uint64(uintptr(w.state)), Ptr: w.orig}
+}
+
+func pSliceValue(val pcommon.Slice) ir.Value {
+	w := *(*pcommonWrapper)(unsafe.Pointer(&val))
+	return ir.Value{Type: ir.TypePSlice, Num: uint64(uintptr(w.state)), Ptr: w.orig}
+}
+
+func pMapFromValue(val ir.Value) (pcommon.Map, bool) {
+	if val.Type != ir.TypePMap || val.Ptr == nil || val.Num == 0 {
+		return pcommon.Map{}, false
+	}
+	w := pcommonWrapper{orig: val.Ptr, state: unsafe.Pointer(uintptr(val.Num))}
+	return *(*pcommon.Map)(unsafe.Pointer(&w)), true
+}
+
+func pSliceFromValue(val ir.Value) (pcommon.Slice, bool) {
+	if val.Type != ir.TypePSlice || val.Ptr == nil || val.Num == 0 {
+		return pcommon.Slice{}, false
+	}
+	w := pcommonWrapper{orig: val.Ptr, state: unsafe.Pointer(uintptr(val.Num))}
+	return *(*pcommon.Slice)(unsafe.Pointer(&w)), true
+}
+
+type pcommonWrapper struct {
+	orig  unsafe.Pointer
+	state unsafe.Pointer
 }

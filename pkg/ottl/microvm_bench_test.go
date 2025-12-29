@@ -12,6 +12,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.uber.org/zap"
 )
 
@@ -84,6 +85,61 @@ func createBenchIsIntFunction[K any](_ FunctionContext, oArgs Arguments) (ExprFu
 			return true, nil
 		default:
 			return false, err
+		}
+	}, nil
+}
+
+type benchIsMapArguments[K any] struct {
+	Target PMapGetter[K]
+}
+
+func newBenchIsMapFactory[K any]() Factory[K] {
+	return NewFactory("IsMap", &benchIsMapArguments[K]{}, createBenchIsMapFunction[K])
+}
+
+func createBenchIsMapFunction[K any](_ FunctionContext, oArgs Arguments) (ExprFunc[K], error) {
+	args, ok := oArgs.(*benchIsMapArguments[K])
+	if !ok {
+		return nil, errors.New("IsMapFactory args must be of type *benchIsMapArguments[K]")
+	}
+	return func(ctx context.Context, tCtx K) (any, error) {
+		_, err := args.Target.Get(ctx, tCtx)
+		switch err.(type) {
+		case TypeError:
+			return false, nil
+		case nil:
+			return true, nil
+		default:
+			return false, err
+		}
+	}, nil
+}
+
+type benchIsListArguments[K any] struct {
+	Target Getter[K]
+}
+
+func newBenchIsListFactory[K any]() Factory[K] {
+	return NewFactory("IsList", &benchIsListArguments[K]{}, createBenchIsListFunction[K])
+}
+
+func createBenchIsListFunction[K any](_ FunctionContext, oArgs Arguments) (ExprFunc[K], error) {
+	args, ok := oArgs.(*benchIsListArguments[K])
+	if !ok {
+		return nil, errors.New("IsListFactory args must be of type *benchIsListArguments[K]")
+	}
+	return func(ctx context.Context, tCtx K) (any, error) {
+		val, err := args.Target.Get(ctx, tCtx)
+		if err != nil {
+			return false, err
+		}
+		switch v := val.(type) {
+		case pcommon.Value:
+			return v.Type() == pcommon.ValueTypeSlice, nil
+		case pcommon.Slice:
+			return true, nil
+		default:
+			return false, nil
 		}
 	}, nil
 }
@@ -176,6 +232,33 @@ func newBenchParserWithPathVMGetter(withVM bool, getter func() int64) (Parser[an
 				StandardGetSetter: base,
 				VMGetterFunc: VMGetterFunc[any](func(context.Context, any) (ir.Value, error) {
 					return ir.Int64Value(getter()), nil
+				}),
+			}, nil
+		},
+		component.TelemetrySettings{Logger: zap.NewNop()},
+		options...,
+	)
+}
+
+func newBenchParserWithPathVMGetterAny(withVM bool, functions map[string]Factory[any], getter func() any, vmGetter func() ir.Value) (Parser[any], error) {
+	options := []Option[any]{}
+	if withVM {
+		options = append(options, WithVMEnabled[any]())
+	}
+	return NewParser[any](
+		functions,
+		func(path Path[any]) (GetSetter[any], error) {
+			_ = path.Keys()
+			base := StandardGetSetter[any]{
+				Getter: func(context.Context, any) (any, error) {
+					return getter(), nil
+				},
+				Setter: func(context.Context, any, any) error { return nil },
+			}
+			return StandardVMGetSetter[any]{
+				StandardGetSetter: base,
+				VMGetterFunc: VMGetterFunc[any](func(context.Context, any) (ir.Value, error) {
+					return vmGetter(), nil
 				}),
 			}, nil
 		},
@@ -1255,6 +1338,126 @@ func BenchmarkOTTLComparisonIsInt_VM(b *testing.B) {
 		b.Fatal(err)
 	}
 	expr, err := parseCondition(`IsInt(1)`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLInterpreterIsMap(b *testing.B) {
+	functions := CreateFactoryMap[any](newBenchIsMapFactory[any]())
+	pm := pcommon.NewMap()
+	pm.PutStr("k", "v")
+	p, err := newBenchParserWithPathAndFunctions(false, functions, func() any {
+		return pm
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	expr, err := parseCondition(`IsMap(attributes["foo"])`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonIsMap_VM(b *testing.B) {
+	functions := CreateFactoryMap[any](newBenchIsMapFactory[any]())
+	pm := pcommon.NewMap()
+	pm.PutStr("k", "v")
+	p, err := newBenchParserWithPathVMGetterAny(true, functions, func() any { return pm }, func() ir.Value {
+		return pMapValue(pm)
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	expr, err := parseCondition(`IsMap(attributes["foo"])`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLInterpreterIsList(b *testing.B) {
+	functions := CreateFactoryMap[any](newBenchIsListFactory[any]())
+	ps := pcommon.NewSlice()
+	ps.AppendEmpty().SetInt(1)
+	p, err := newBenchParserWithPathAndFunctions(false, functions, func() any {
+		return ps
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	expr, err := parseCondition(`IsList(attributes["foo"])`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonIsList_VM(b *testing.B) {
+	functions := CreateFactoryMap[any](newBenchIsListFactory[any]())
+	ps := pcommon.NewSlice()
+	ps.AppendEmpty().SetInt(1)
+	p, err := newBenchParserWithPathVMGetterAny(true, functions, func() any { return ps }, func() ir.Value {
+		return pSliceValue(ps)
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	expr, err := parseCondition(`IsList(attributes["foo"])`)
 	if err != nil {
 		b.Fatal(err)
 	}
