@@ -8,6 +8,10 @@ import (
 	"strings"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/ptrace"
 )
 
 const defaultMicroVMStackSize = 32
@@ -62,6 +66,41 @@ func WithVMAttrContextNames[K any](contexts []string) Option[K] {
 			names[ctx] = struct{}{}
 		}
 		p.vmAttrContextNames = names
+	}
+}
+
+// WithVMLogRecordGetter sets a direct log record getter for VM direct field opcodes.
+func WithVMLogRecordGetter[K any](getter func(K) plog.LogRecord) Option[K] {
+	return func(p *Parser[K]) {
+		p.vmLogRecordGetter = getter
+	}
+}
+
+// WithVMSpanGetter sets a direct span getter for VM direct field opcodes.
+func WithVMSpanGetter[K any](getter func(K) ptrace.Span) Option[K] {
+	return func(p *Parser[K]) {
+		p.vmSpanGetter = getter
+	}
+}
+
+// WithVMMetricGetter sets a direct metric getter for VM direct field opcodes.
+func WithVMMetricGetter[K any](getter func(K) pmetric.Metric) Option[K] {
+	return func(p *Parser[K]) {
+		p.vmMetricGetter = getter
+	}
+}
+
+// WithVMResourceGetter sets a direct resource getter for VM direct field opcodes.
+func WithVMResourceGetter[K any](getter func(K) pcommon.Resource) Option[K] {
+	return func(p *Parser[K]) {
+		p.vmResourceGetter = getter
+	}
+}
+
+// WithVMScopeGetter sets a direct scope getter for VM direct field opcodes.
+func WithVMScopeGetter[K any](getter func(K) pcommon.InstrumentationScope) Option[K] {
+	return func(p *Parser[K]) {
+		p.vmScopeGetter = getter
 	}
 }
 

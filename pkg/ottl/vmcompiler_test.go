@@ -650,6 +650,98 @@ func TestCompileMicroComparison_DirectFieldSpanStatusMessageOpcode(t *testing.T)
 	}
 }
 
+func TestCompileMicroComparison_DirectFieldResourceDroppedAttributesCountOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "resource", Fields: []field{{Name: "dropped_attributes_count"}}}}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(3)}},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetResourceDroppedAttributesCount {
+		t.Fatalf("expected GET_RESOURCE_DROPPED_ATTRIBUTES_COUNT, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldScopeNameOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "scope", Fields: []field{{Name: "name"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("lib")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetScopeName {
+		t.Fatalf("expected GET_SCOPE_NAME, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldScopeVersionOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "scope", Fields: []field{{Name: "version"}}}}},
+		Op:    eq,
+		Right: value{String: stringpTest("1.0.0")},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetScopeVersion {
+		t.Fatalf("expected GET_SCOPE_VERSION, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
+func TestCompileMicroComparison_DirectFieldScopeDroppedAttributesCountOpcode(t *testing.T) {
+	p := newTestParser(t, false)
+	cmp := &comparison{
+		Left:  value{Literal: &mathExprLiteral{Path: &path{Context: "scope", Fields: []field{{Name: "dropped_attributes_count"}}}}},
+		Op:    eq,
+		Right: value{Literal: &mathExprLiteral{Int: int64p(5)}},
+	}
+
+	program, err := p.compileMicroComparisonVM(cmp)
+	if err != nil {
+		t.Fatalf("compile failed: %v", err)
+	}
+	if len(program.program.Code) != 2 {
+		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	}
+	if got := program.program.Code[0].Op(); got != ir.OpGetScopeDroppedAttributesCount {
+		t.Fatalf("expected GET_SCOPE_DROPPED_ATTRIBUTES_COUNT, got %v", got)
+	}
+	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
+		t.Fatalf("expected EQ_CONST, got %v", got)
+	}
+}
+
 func TestCompileMicroComparison_Unsupported(t *testing.T) {
 	p := newTestParser(t, false)
 	n := isNil(true)

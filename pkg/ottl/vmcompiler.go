@@ -31,10 +31,11 @@ const (
 const maxInstructionArg = 0x00FFFFFF
 
 type microProgram[K any] struct {
-	program   *vm.Program[K]
-	getters   []Getter[K]
-	vmGetters []VMGetter[K]
-	stack     int
+	program      *vm.Program[K]
+	getters      []Getter[K]
+	vmGetters    []VMGetter[K]
+	stack        int
+	needsContext bool
 }
 
 type microCompiler[K any] struct {
@@ -51,6 +52,7 @@ type microCompiler[K any] struct {
 	attrSetter   vm.AttrSetter[K]
 	stackDepth   int
 	maxStack     int
+	needsContext bool
 }
 
 func vmGasLimitFor[K any](p *Parser[K]) uint64 {
@@ -107,17 +109,23 @@ func (p *Parser[K]) compileMicroComparisonVM(cmp *comparison) (*microProgram[K],
 	}
 	return &microProgram[K]{
 		program: &vm.Program[K]{
-			Code:       c.code,
-			Consts:     c.consts,
-			Accessors:  c.buildAccessors(),
-			AttrKeys:   c.attrKeys,
-			AttrGetter: c.attrGetter,
-			AttrSetter: c.attrSetter,
-			GasLimit:   vmGasLimitFor(p),
+			Code:            c.code,
+			Consts:          c.consts,
+			Accessors:       c.buildAccessors(),
+			AttrKeys:        c.attrKeys,
+			AttrGetter:      c.attrGetter,
+			AttrSetter:      c.attrSetter,
+			LogRecordGetter: p.vmLogRecordGetter,
+			SpanGetter:      p.vmSpanGetter,
+			MetricGetter:    p.vmMetricGetter,
+			ResourceGetter:  p.vmResourceGetter,
+			ScopeGetter:     p.vmScopeGetter,
+			GasLimit:        vmGasLimitFor(p),
 		},
-		getters:   c.getters,
-		vmGetters: c.vmGetters,
-		stack:     c.maxStack,
+		getters:      c.getters,
+		vmGetters:    c.vmGetters,
+		stack:        c.maxStack,
+		needsContext: c.needsContext,
 	}, nil
 }
 
@@ -141,17 +149,23 @@ func (p *Parser[K]) compileMicroBoolExpression(expr *booleanExpression) (*microP
 	}
 	return &microProgram[K]{
 		program: &vm.Program[K]{
-			Code:       c.code,
-			Consts:     c.consts,
-			Accessors:  c.buildAccessors(),
-			AttrKeys:   c.attrKeys,
-			AttrGetter: c.attrGetter,
-			AttrSetter: c.attrSetter,
-			GasLimit:   vmGasLimitFor(p),
+			Code:            c.code,
+			Consts:          c.consts,
+			Accessors:       c.buildAccessors(),
+			AttrKeys:        c.attrKeys,
+			AttrGetter:      c.attrGetter,
+			AttrSetter:      c.attrSetter,
+			LogRecordGetter: p.vmLogRecordGetter,
+			SpanGetter:      p.vmSpanGetter,
+			MetricGetter:    p.vmMetricGetter,
+			ResourceGetter:  p.vmResourceGetter,
+			ScopeGetter:     p.vmScopeGetter,
+			GasLimit:        vmGasLimitFor(p),
 		},
-		getters:   c.getters,
-		vmGetters: c.vmGetters,
-		stack:     c.maxStack,
+		getters:      c.getters,
+		vmGetters:    c.vmGetters,
+		stack:        c.maxStack,
+		needsContext: c.needsContext,
 	}, nil
 }
 
@@ -1039,14 +1053,47 @@ func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
 		return false, nil
 	}
 	hasContext := func(name string) bool {
-		if c.parser == nil || c.parser.pathContextNames == nil {
+		if c.parser == nil {
 			return false
 		}
-		_, ok := c.parser.pathContextNames[name]
-		return ok
+		if c.parser.pathContextNames != nil {
+			if _, ok := c.parser.pathContextNames[name]; ok {
+				return true
+			}
+		}
+		if c.parser.vmAttrContextNames != nil {
+			if _, ok := c.parser.vmAttrContextNames[name]; ok {
+				return true
+			}
+		}
+		return false
 	}
-	spanAllowed := path.Context == "span" || (path.Context == "" && hasContext("span") && !hasContext("metric"))
-	metricAllowed := path.Context == "metric" || (path.Context == "" && hasContext("metric") && !hasContext("span"))
+	contextAllowed := func(name string, conflicts ...string) bool {
+		if path.Context == name {
+			return true
+		}
+		if path.Context != "" {
+			return false
+		}
+		if !hasContext(name) {
+			return false
+		}
+		for _, conflict := range conflicts {
+			if hasContext(conflict) {
+				return false
+			}
+		}
+		return true
+	}
+	spanAllowed := contextAllowed("span", "metric", "scope")
+	metricAllowed := contextAllowed("metric", "span", "scope")
+	resourceAllowed := contextAllowed("resource", "scope")
+	scopeAllowed := contextAllowed("scope", "resource") || path.Context == "instrumentation_scope"
+	emit := func(op ir.Opcode) {
+		c.code = append(c.code, ir.Encode(op, 0))
+		c.needsContext = true
+		c.onPush()
+	}
 
 	switch len(path.Fields) {
 	case 1:
@@ -1057,52 +1104,62 @@ func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
 		if path.Context == "" || path.Context == "log" {
 			switch field.Name {
 			case "body":
-				c.code = append(c.code, ir.Encode(ir.OpGetBody, 0))
-				c.onPush()
+				emit(ir.OpGetBody)
 				return true, nil
 			case "severity_number":
-				c.code = append(c.code, ir.Encode(ir.OpGetSeverity, 0))
-				c.onPush()
+				emit(ir.OpGetSeverity)
 				return true, nil
 			case "time_unix_nano":
-				c.code = append(c.code, ir.Encode(ir.OpGetTimestamp, 0))
-				c.onPush()
+				emit(ir.OpGetTimestamp)
 				return true, nil
 			}
 		}
 		if spanAllowed {
 			switch field.Name {
 			case "name":
-				c.code = append(c.code, ir.Encode(ir.OpGetSpanName, 0))
-				c.onPush()
+				emit(ir.OpGetSpanName)
 				return true, nil
 			case "start_time_unix_nano":
-				c.code = append(c.code, ir.Encode(ir.OpGetSpanStartTime, 0))
-				c.onPush()
+				emit(ir.OpGetSpanStartTime)
 				return true, nil
 			case "end_time_unix_nano":
-				c.code = append(c.code, ir.Encode(ir.OpGetSpanEndTime, 0))
-				c.onPush()
+				emit(ir.OpGetSpanEndTime)
 				return true, nil
 			case "kind":
-				c.code = append(c.code, ir.Encode(ir.OpGetSpanKind, 0))
-				c.onPush()
+				emit(ir.OpGetSpanKind)
 				return true, nil
 			}
 		}
 		if metricAllowed {
 			switch field.Name {
 			case "name":
-				c.code = append(c.code, ir.Encode(ir.OpGetMetricName, 0))
-				c.onPush()
+				emit(ir.OpGetMetricName)
 				return true, nil
 			case "unit":
-				c.code = append(c.code, ir.Encode(ir.OpGetMetricUnit, 0))
-				c.onPush()
+				emit(ir.OpGetMetricUnit)
 				return true, nil
 			case "type":
-				c.code = append(c.code, ir.Encode(ir.OpGetMetricType, 0))
-				c.onPush()
+				emit(ir.OpGetMetricType)
+				return true, nil
+			}
+		}
+		if resourceAllowed {
+			switch field.Name {
+			case "dropped_attributes_count":
+				emit(ir.OpGetResourceDroppedAttributesCount)
+				return true, nil
+			}
+		}
+		if scopeAllowed {
+			switch field.Name {
+			case "name":
+				emit(ir.OpGetScopeName)
+				return true, nil
+			case "version":
+				emit(ir.OpGetScopeVersion)
+				return true, nil
+			case "dropped_attributes_count":
+				emit(ir.OpGetScopeDroppedAttributesCount)
 				return true, nil
 			}
 		}
@@ -1115,12 +1172,10 @@ func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
 		if field.Name == "status" && spanAllowed {
 			switch next.Name {
 			case "code":
-				c.code = append(c.code, ir.Encode(ir.OpGetSpanStatus, 0))
-				c.onPush()
+				emit(ir.OpGetSpanStatus)
 				return true, nil
 			case "message":
-				c.code = append(c.code, ir.Encode(ir.OpGetSpanStatusMsg, 0))
-				c.onPush()
+				emit(ir.OpGetSpanStatusMsg)
 				return true, nil
 			}
 		}

@@ -113,6 +113,12 @@ func NewParser(functions map[string]ottl.Factory[TransformContext], telemetrySet
 		ottl.WithVMAttrGetter[TransformContext](profileAttrGetter),
 		ottl.WithVMAttrSetter[TransformContext](profileAttrSetter),
 		ottl.WithVMAttrContextNames[TransformContext]([]string{ctxprofile.Name}),
+		ottl.WithVMResourceGetter[TransformContext](func(tCtx TransformContext) pcommon.Resource {
+			return tCtx.GetResource()
+		}),
+		ottl.WithVMScopeGetter[TransformContext](func(tCtx TransformContext) pcommon.InstrumentationScope {
+			return tCtx.GetInstrumentationScope()
+		}),
 	}, options...)
 	return ctxcommon.NewParser(
 		functions,

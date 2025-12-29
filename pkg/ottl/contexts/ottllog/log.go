@@ -183,6 +183,15 @@ func NewParser(
 		ottl.WithVMAttrGetter[TransformContext](logAttrGetter),
 		ottl.WithVMAttrSetter[TransformContext](logAttrSetter),
 		ottl.WithVMAttrContextNames[TransformContext]([]string{ctxlog.Name}),
+		ottl.WithVMLogRecordGetter[TransformContext](func(tCtx TransformContext) plog.LogRecord {
+			return tCtx.GetLogRecord()
+		}),
+		ottl.WithVMResourceGetter[TransformContext](func(tCtx TransformContext) pcommon.Resource {
+			return tCtx.GetResource()
+		}),
+		ottl.WithVMScopeGetter[TransformContext](func(tCtx TransformContext) pcommon.InstrumentationScope {
+			return tCtx.GetInstrumentationScope()
+		}),
 	}, options...)
 	return ctxcommon.NewParser(
 		functions,

@@ -192,6 +192,15 @@ func NewParser(
 		ottl.WithVMAttrGetter[TransformContext](spanEventAttrGetter),
 		ottl.WithVMAttrSetter[TransformContext](spanEventAttrSetter),
 		ottl.WithVMAttrContextNames[TransformContext]([]string{ctxspanevent.Name}),
+		ottl.WithVMSpanGetter[TransformContext](func(tCtx TransformContext) ptrace.Span {
+			return tCtx.GetSpan()
+		}),
+		ottl.WithVMResourceGetter[TransformContext](func(tCtx TransformContext) pcommon.Resource {
+			return tCtx.GetResource()
+		}),
+		ottl.WithVMScopeGetter[TransformContext](func(tCtx TransformContext) pcommon.InstrumentationScope {
+			return tCtx.GetInstrumentationScope()
+		}),
 	}, options...)
 	return ctxcommon.NewParser(
 		functions,

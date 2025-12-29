@@ -80,3 +80,53 @@ func BenchmarkOTTLResourceAttributesEq_VM(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkOTTLResourceDroppedAttributesCountEq_Interpreter(b *testing.B) {
+	parser, err := newBenchResourceParser(false)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cond, err := parser.ParseCondition(`dropped_attributes_count == 7`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	tCtx := newBenchResourceContext()
+	tCtx.GetResource().SetDroppedAttributesCount(7)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ok, err := cond.Eval(ctx, tCtx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !ok {
+			b.Fatal("expected true")
+		}
+	}
+}
+
+func BenchmarkOTTLResourceDroppedAttributesCountEq_VM(b *testing.B) {
+	parser, err := newBenchResourceParser(true)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cond, err := parser.ParseCondition(`dropped_attributes_count == 7`)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	tCtx := newBenchResourceContext()
+	tCtx.GetResource().SetDroppedAttributesCount(7)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ok, err := cond.Eval(ctx, tCtx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if !ok {
+			b.Fatal("expected true")
+		}
+	}
+}

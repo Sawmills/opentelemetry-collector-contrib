@@ -146,6 +146,12 @@ func NewParser(
 		ottl.WithVMAttrGetter[TransformContext](scopeAttrGetter),
 		ottl.WithVMAttrSetter[TransformContext](scopeAttrSetter),
 		ottl.WithVMAttrContextNames[TransformContext]([]string{ctxscope.Name}),
+		ottl.WithVMScopeGetter[TransformContext](func(tCtx TransformContext) pcommon.InstrumentationScope {
+			return tCtx.GetInstrumentationScope()
+		}),
+		ottl.WithVMResourceGetter[TransformContext](func(tCtx TransformContext) pcommon.Resource {
+			return tCtx.GetResource()
+		}),
 	}, options...)
 	return ctxcommon.NewParser(
 		functions,
