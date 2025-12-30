@@ -246,6 +246,66 @@ func (p *Parser[K]) tryInline1Inst(program *microProgram[K]) BoolExpr[K] {
 			}
 			return vm.IsMatchValue(attrVal, regex)
 		}}
+
+	case ir.OpAttrIsNil:
+		if int(arg) >= len(program.program.Accessors) || program.program.Accessors[arg] == nil {
+			return BoolExpr[K]{}
+		}
+		accessor := program.program.Accessors[arg]
+		return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
+			attrVal, err := accessor(ctx, tCtx)
+			if err != nil {
+				return false, err
+			}
+			return attrVal.Type == ir.TypeNone, nil
+		}}
+
+	case ir.OpAttrIsNotNil:
+		if int(arg) >= len(program.program.Accessors) || program.program.Accessors[arg] == nil {
+			return BoolExpr[K]{}
+		}
+		accessor := program.program.Accessors[arg]
+		return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
+			attrVal, err := accessor(ctx, tCtx)
+			if err != nil {
+				return false, err
+			}
+			return attrVal.Type != ir.TypeNone, nil
+		}}
+
+	case ir.OpAttrFastIsNil:
+		if int(arg) >= len(program.program.AttrKeys) {
+			return BoolExpr[K]{}
+		}
+		if program.program.AttrGetter == nil {
+			return BoolExpr[K]{}
+		}
+		key := program.program.AttrKeys[arg]
+		getter := program.program.AttrGetter
+		return BoolExpr[K]{func(_ context.Context, tCtx K) (bool, error) {
+			attrVal, err := getter(tCtx, key)
+			if err != nil {
+				return false, err
+			}
+			return attrVal.Type == ir.TypeNone, nil
+		}}
+
+	case ir.OpAttrFastIsNotNil:
+		if int(arg) >= len(program.program.AttrKeys) {
+			return BoolExpr[K]{}
+		}
+		if program.program.AttrGetter == nil {
+			return BoolExpr[K]{}
+		}
+		key := program.program.AttrKeys[arg]
+		getter := program.program.AttrGetter
+		return BoolExpr[K]{func(_ context.Context, tCtx K) (bool, error) {
+			attrVal, err := getter(tCtx, key)
+			if err != nil {
+				return false, err
+			}
+			return attrVal.Type != ir.TypeNone, nil
+		}}
 	}
 
 	return BoolExpr[K]{}
