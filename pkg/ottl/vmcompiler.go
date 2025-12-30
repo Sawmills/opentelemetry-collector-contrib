@@ -2342,15 +2342,18 @@ func (c *microCompiler[K]) buildAccessors() []vm.PathAccessor[K] {
 	return accessors
 }
 
-// peepholeOptimize fuses OpLoadAttr* + OpEqConst/OpNeConst (string) into superinstructions.
+// peepholeOptimize fuses OpLoadAttr* + OpEqConst/OpNeConst (string) into superinstructions,
+// updating jump targets to account for instruction fusion.
 func (c *microCompiler[K]) peepholeOptimize() {
 	if len(c.code) < 2 {
 		return
 	}
 
+	oldToNew := make([]int, len(c.code)+1)
 	optimized := make([]ir.Instruction, 0, len(c.code))
 
 	for i := 0; i < len(c.code); i++ {
+		oldToNew[i] = len(optimized)
 		inst := c.code[i]
 		op := inst.Op()
 
@@ -2381,6 +2384,7 @@ func (c *microCompiler[K]) peepholeOptimize() {
 						}
 						optimized = append(optimized, ir.Encode(fusedOp, packedArg))
 						i++
+						oldToNew[i] = len(optimized)
 						continue
 					}
 				}
@@ -2388,6 +2392,18 @@ func (c *microCompiler[K]) peepholeOptimize() {
 		}
 
 		optimized = append(optimized, inst)
+	}
+	oldToNew[len(c.code)] = len(optimized)
+
+	for i, inst := range optimized {
+		op := inst.Op()
+		if op == ir.OpJump || op == ir.OpJumpIfTrue || op == ir.OpJumpIfFalse {
+			oldTarget := int(inst.Arg())
+			if oldTarget >= 0 && oldTarget <= len(c.code) {
+				newTarget := oldToNew[oldTarget]
+				optimized[i] = ir.Encode(op, uint32(newTarget))
+			}
+		}
 	}
 
 	c.code = optimized
