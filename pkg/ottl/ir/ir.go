@@ -175,6 +175,10 @@ const (
 	OpGtFloat
 	OpGteFloat
 
+	// Specialized string ops (no type check, optimized pointer+length comparison)
+	OpEqString
+	OpNeString
+
 	// Control flow
 	OpJump
 	OpJumpIfTrue
@@ -276,6 +280,12 @@ const (
 	OpIsMatch        // Regex match for string-like target; arg = regex index
 	OpIsMatchDynamic // Regex match with dynamic pattern; pops pattern + target
 	OpCall           // Call function; arg = callsite index
+
+	// Superinstructions (fused operations for common patterns)
+	OpAttrEqConstString     // Load attr (cached) + compare string const; arg = packed(attrIdx, constIdx); pushes bool
+	OpAttrNeConstString     // Load attr (cached) + compare string const (not equal); arg = packed(attrIdx, constIdx); pushes bool
+	OpAttrFastEqConstString // Load attr (fast) + compare string const; arg = packed(keyIdx, constIdx); pushes bool
+	OpAttrFastNeConstString // Load attr (fast) + compare string const (not equal); arg = packed(keyIdx, constIdx); pushes bool
 )
 
 // Instruction is a 32-bit fixed-width instruction.
@@ -295,4 +305,12 @@ func (i Instruction) Arg() uint32 {
 // Encode builds an Instruction from an opcode and argument.
 func Encode(op Opcode, arg uint32) Instruction {
 	return Instruction(uint32(op)<<24 | (arg & 0x00FFFFFF))
+}
+
+func PackAttrConst(attrIdx, constIdx uint32) uint32 {
+	return (attrIdx&0xFFF)<<12 | (constIdx & 0xFFF)
+}
+
+func UnpackAttrConst(arg uint32) (attrIdx, constIdx uint32) {
+	return (arg >> 12) & 0xFFF, arg & 0xFFF
 }

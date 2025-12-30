@@ -278,6 +278,14 @@ func opcodeName(op ir.Opcode) string {
 		return "IS_MATCH_DYNAMIC"
 	case ir.OpCall:
 		return "CALL"
+	case ir.OpAttrEqConstString:
+		return "ATTR_EQ_CONST_STRING"
+	case ir.OpAttrNeConstString:
+		return "ATTR_NE_CONST_STRING"
+	case ir.OpAttrFastEqConstString:
+		return "ATTR_FAST_EQ_CONST_STRING"
+	case ir.OpAttrFastNeConstString:
+		return "ATTR_FAST_NE_CONST_STRING"
 	default:
 		return fmt.Sprintf("OP_%d", op)
 	}

@@ -1577,3 +1577,548 @@ func BenchmarkOTTLComparisonMixedPath_VM(b *testing.B) {
 		benchBoolSink = result
 	}
 }
+
+// Pattern: ((A and B) or (C and D)) and (E or F)
+func BenchmarkOTTLInterpreterDeepBooleanChain(b *testing.B) {
+	p, err := newBenchParser(false)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	buildCmp := func(left, right int64) *comparison {
+		return &comparison{
+			Left:  value{Literal: &mathExprLiteral{Int: int64p(left)}},
+			Op:    eq,
+			Right: value{Literal: &mathExprLiteral{Int: int64p(right)}},
+		}
+	}
+
+	innerAnd1 := &term{
+		Left: &booleanValue{Comparison: buildCmp(1, 1)},
+		Right: []*opAndBooleanValue{
+			{Operator: "and", Value: &booleanValue{Comparison: buildCmp(2, 2)}},
+		},
+	}
+	innerAnd2 := &term{
+		Left: &booleanValue{Comparison: buildCmp(3, 3)},
+		Right: []*opAndBooleanValue{
+			{Operator: "and", Value: &booleanValue{Comparison: buildCmp(4, 4)}},
+		},
+	}
+	innerOr := &booleanExpression{
+		Left: innerAnd1,
+		Right: []*opOrTerm{
+			{Operator: "or", Term: innerAnd2},
+		},
+	}
+	outerOr := &term{
+		Left: &booleanValue{Comparison: buildCmp(5, 5)},
+	}
+	outerOrExpr := &booleanExpression{
+		Left: outerOr,
+		Right: []*opOrTerm{
+			{Operator: "or", Term: &term{Left: &booleanValue{Comparison: buildCmp(6, 6)}}},
+		},
+	}
+
+	boolExpr := &booleanExpression{
+		Left: &term{
+			Left: &booleanValue{SubExpr: innerOr},
+			Right: []*opAndBooleanValue{
+				{Operator: "and", Value: &booleanValue{SubExpr: outerOrExpr}},
+			},
+		},
+	}
+
+	evaluator, err := p.newBoolExpr(boolExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonDeepBooleanChain_VM(b *testing.B) {
+	p, err := newBenchParser(true)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	buildCmp := func(left, right int64) *comparison {
+		return &comparison{
+			Left:  value{Literal: &mathExprLiteral{Int: int64p(left)}},
+			Op:    eq,
+			Right: value{Literal: &mathExprLiteral{Int: int64p(right)}},
+		}
+	}
+
+	innerAnd1 := &term{
+		Left: &booleanValue{Comparison: buildCmp(1, 1)},
+		Right: []*opAndBooleanValue{
+			{Operator: "and", Value: &booleanValue{Comparison: buildCmp(2, 2)}},
+		},
+	}
+	innerAnd2 := &term{
+		Left: &booleanValue{Comparison: buildCmp(3, 3)},
+		Right: []*opAndBooleanValue{
+			{Operator: "and", Value: &booleanValue{Comparison: buildCmp(4, 4)}},
+		},
+	}
+	innerOr := &booleanExpression{
+		Left: innerAnd1,
+		Right: []*opOrTerm{
+			{Operator: "or", Term: innerAnd2},
+		},
+	}
+	outerOr := &term{
+		Left: &booleanValue{Comparison: buildCmp(5, 5)},
+	}
+	outerOrExpr := &booleanExpression{
+		Left: outerOr,
+		Right: []*opOrTerm{
+			{Operator: "or", Term: &term{Left: &booleanValue{Comparison: buildCmp(6, 6)}}},
+		},
+	}
+
+	boolExpr := &booleanExpression{
+		Left: &term{
+			Left: &booleanValue{SubExpr: innerOr},
+			Right: []*opAndBooleanValue{
+				{Operator: "and", Value: &booleanValue{SubExpr: outerOrExpr}},
+			},
+		},
+	}
+
+	evaluator, err := p.newBoolExpr(boolExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+// Pattern: not A and not B and not C and not D
+func BenchmarkOTTLInterpreterManyNots(b *testing.B) {
+	p, err := newBenchParser(false)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	buildNegatedCmp := func(left, right int64) *booleanValue {
+		return &booleanValue{
+			Negation: stringp("not"),
+			Comparison: &comparison{
+				Left:  value{Literal: &mathExprLiteral{Int: int64p(left)}},
+				Op:    eq,
+				Right: value{Literal: &mathExprLiteral{Int: int64p(right)}},
+			},
+		}
+	}
+
+	boolExpr := &booleanExpression{
+		Left: &term{
+			Left: buildNegatedCmp(1, 2),
+			Right: []*opAndBooleanValue{
+				{Operator: "and", Value: buildNegatedCmp(3, 4)},
+				{Operator: "and", Value: buildNegatedCmp(5, 6)},
+				{Operator: "and", Value: buildNegatedCmp(7, 8)},
+			},
+		},
+	}
+
+	evaluator, err := p.newBoolExpr(boolExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonManyNots_VM(b *testing.B) {
+	p, err := newBenchParser(true)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	buildNegatedCmp := func(left, right int64) *booleanValue {
+		return &booleanValue{
+			Negation: stringp("not"),
+			Comparison: &comparison{
+				Left:  value{Literal: &mathExprLiteral{Int: int64p(left)}},
+				Op:    eq,
+				Right: value{Literal: &mathExprLiteral{Int: int64p(right)}},
+			},
+		}
+	}
+
+	boolExpr := &booleanExpression{
+		Left: &term{
+			Left: buildNegatedCmp(1, 2),
+			Right: []*opAndBooleanValue{
+				{Operator: "and", Value: buildNegatedCmp(3, 4)},
+				{Operator: "and", Value: buildNegatedCmp(5, 6)},
+				{Operator: "and", Value: buildNegatedCmp(7, 8)},
+			},
+		},
+	}
+
+	evaluator, err := p.newBoolExpr(boolExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLInterpreterStringEquality(b *testing.B) {
+	p, err := newBenchParserWithPath(false, func() any { return "ERROR" })
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	cmp := &comparison{
+		Left: value{Literal: &mathExprLiteral{
+			Path: &path{Fields: []field{{Name: "attributes", Keys: []key{{String: stringp("level")}}}}},
+		}},
+		Op:    eq,
+		Right: value{String: stringp("ERROR")},
+	}
+
+	evaluator, err := p.newComparisonEvaluator(cmp)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonStringEquality_VM(b *testing.B) {
+	p, err := newBenchParserWithPathVMGetterAny(true, nil, func() any { return "ERROR" }, func() ir.Value {
+		return ir.StringValue("ERROR")
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	cmp := &comparison{
+		Left: value{Literal: &mathExprLiteral{
+			Path: &path{Fields: []field{{Name: "attributes", Keys: []key{{String: stringp("level")}}}}},
+		}},
+		Op:    eq,
+		Right: value{String: stringp("ERROR")},
+	}
+
+	evaluator, err := p.newComparisonEvaluator(cmp)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+// Pattern: level == "ERROR" or level == "WARN" or level == "WARNING"
+func BenchmarkOTTLInterpreterMultipleStringChecks(b *testing.B) {
+	p, err := newBenchParserWithPath(false, func() any { return "WARNING" })
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	buildStringCmp := func(val string) *comparison {
+		return &comparison{
+			Left: value{Literal: &mathExprLiteral{
+				Path: &path{Fields: []field{{Name: "attributes", Keys: []key{{String: stringp("level")}}}}},
+			}},
+			Op:    eq,
+			Right: value{String: stringp(val)},
+		}
+	}
+
+	boolExpr := &booleanExpression{
+		Left: &term{Left: &booleanValue{Comparison: buildStringCmp("ERROR")}},
+		Right: []*opOrTerm{
+			{Operator: "or", Term: &term{Left: &booleanValue{Comparison: buildStringCmp("WARN")}}},
+			{Operator: "or", Term: &term{Left: &booleanValue{Comparison: buildStringCmp("WARNING")}}},
+		},
+	}
+
+	evaluator, err := p.newBoolExpr(boolExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonMultipleStringChecks_VM(b *testing.B) {
+	p, err := newBenchParserWithPathVMGetterAny(true, nil, func() any { return "WARNING" }, func() ir.Value {
+		return ir.StringValue("WARNING")
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	buildStringCmp := func(val string) *comparison {
+		return &comparison{
+			Left: value{Literal: &mathExprLiteral{
+				Path: &path{Fields: []field{{Name: "attributes", Keys: []key{{String: stringp("level")}}}}},
+			}},
+			Op:    eq,
+			Right: value{String: stringp(val)},
+		}
+	}
+
+	boolExpr := &booleanExpression{
+		Left: &term{Left: &booleanValue{Comparison: buildStringCmp("ERROR")}},
+		Right: []*opOrTerm{
+			{Operator: "or", Term: &term{Left: &booleanValue{Comparison: buildStringCmp("WARN")}}},
+			{Operator: "or", Term: &term{Left: &booleanValue{Comparison: buildStringCmp("WARNING")}}},
+		},
+	}
+
+	evaluator, err := p.newBoolExpr(boolExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLInterpreterShortCircuitAnd(b *testing.B) {
+	p, err := newBenchParser(false)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	buildCmp := func(left, right int64) *comparison {
+		return &comparison{
+			Left:  value{Literal: &mathExprLiteral{Int: int64p(left)}},
+			Op:    eq,
+			Right: value{Literal: &mathExprLiteral{Int: int64p(right)}},
+		}
+	}
+
+	boolExpr := &booleanExpression{
+		Left: &term{
+			Left: &booleanValue{Comparison: buildCmp(1, 2)},
+			Right: []*opAndBooleanValue{
+				{Operator: "and", Value: &booleanValue{Comparison: buildCmp(2, 2)}},
+				{Operator: "and", Value: &booleanValue{Comparison: buildCmp(3, 3)}},
+				{Operator: "and", Value: &booleanValue{Comparison: buildCmp(4, 4)}},
+				{Operator: "and", Value: &booleanValue{Comparison: buildCmp(5, 5)}},
+			},
+		},
+	}
+
+	evaluator, err := p.newBoolExpr(boolExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonShortCircuitAnd_VM(b *testing.B) {
+	p, err := newBenchParser(true)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	buildCmp := func(left, right int64) *comparison {
+		return &comparison{
+			Left:  value{Literal: &mathExprLiteral{Int: int64p(left)}},
+			Op:    eq,
+			Right: value{Literal: &mathExprLiteral{Int: int64p(right)}},
+		}
+	}
+
+	boolExpr := &booleanExpression{
+		Left: &term{
+			Left: &booleanValue{Comparison: buildCmp(1, 2)},
+			Right: []*opAndBooleanValue{
+				{Operator: "and", Value: &booleanValue{Comparison: buildCmp(2, 2)}},
+				{Operator: "and", Value: &booleanValue{Comparison: buildCmp(3, 3)}},
+				{Operator: "and", Value: &booleanValue{Comparison: buildCmp(4, 4)}},
+				{Operator: "and", Value: &booleanValue{Comparison: buildCmp(5, 5)}},
+			},
+		},
+	}
+
+	evaluator, err := p.newBoolExpr(boolExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLInterpreterShortCircuitOr(b *testing.B) {
+	p, err := newBenchParser(false)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	buildCmp := func(left, right int64) *comparison {
+		return &comparison{
+			Left:  value{Literal: &mathExprLiteral{Int: int64p(left)}},
+			Op:    eq,
+			Right: value{Literal: &mathExprLiteral{Int: int64p(right)}},
+		}
+	}
+
+	boolExpr := &booleanExpression{
+		Left: &term{Left: &booleanValue{Comparison: buildCmp(1, 1)}},
+		Right: []*opOrTerm{
+			{Operator: "or", Term: &term{Left: &booleanValue{Comparison: buildCmp(2, 3)}}},
+			{Operator: "or", Term: &term{Left: &booleanValue{Comparison: buildCmp(3, 4)}}},
+			{Operator: "or", Term: &term{Left: &booleanValue{Comparison: buildCmp(4, 5)}}},
+			{Operator: "or", Term: &term{Left: &booleanValue{Comparison: buildCmp(5, 6)}}},
+		},
+	}
+
+	evaluator, err := p.newBoolExpr(boolExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonShortCircuitOr_VM(b *testing.B) {
+	p, err := newBenchParser(true)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	buildCmp := func(left, right int64) *comparison {
+		return &comparison{
+			Left:  value{Literal: &mathExprLiteral{Int: int64p(left)}},
+			Op:    eq,
+			Right: value{Literal: &mathExprLiteral{Int: int64p(right)}},
+		}
+	}
+
+	boolExpr := &booleanExpression{
+		Left: &term{Left: &booleanValue{Comparison: buildCmp(1, 1)}},
+		Right: []*opOrTerm{
+			{Operator: "or", Term: &term{Left: &booleanValue{Comparison: buildCmp(2, 3)}}},
+			{Operator: "or", Term: &term{Left: &booleanValue{Comparison: buildCmp(3, 4)}}},
+			{Operator: "or", Term: &term{Left: &booleanValue{Comparison: buildCmp(4, 5)}}},
+			{Operator: "or", Term: &term{Left: &booleanValue{Comparison: buildCmp(5, 6)}}},
+		},
+	}
+
+	evaluator, err := p.newBoolExpr(boolExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
