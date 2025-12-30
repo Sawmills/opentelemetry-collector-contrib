@@ -2122,3 +2122,580 @@ func BenchmarkOTTLComparisonShortCircuitOr_VM(b *testing.B) {
 		benchBoolSink = result
 	}
 }
+
+// =============================================================================
+// Real-World Production Benchmarks (from Sawmills filtersamplingprocessor)
+// =============================================================================
+
+// newBenchParserForRealWorld creates a parser that handles multiple path types
+// used in real production OTTL expressions (attributes, resource.attributes,
+// instrumentation_scope.attributes, body, body.string)
+func newBenchParserForRealWorld(withVM bool, pathValues map[string]any) (Parser[any], error) {
+	functions := CreateFactoryMap[any](
+		newBenchIsMatchFactory[any](),
+		newBenchIsMapFactory[any](),
+	)
+
+	options := []Option[any]{}
+	if withVM {
+		options = append(options, WithVMEnabled[any]())
+	}
+
+	return NewParser[any](
+		functions,
+		func(path Path[any]) (GetSetter[any], error) {
+			// Build the full path string for lookup
+			pathStr := buildPathString(path)
+			return StandardGetSetter[any]{
+				Getter: func(context.Context, any) (any, error) {
+					if val, ok := pathValues[pathStr]; ok {
+						return val, nil
+					}
+					return nil, nil
+				},
+				Setter: func(context.Context, any, any) error { return nil },
+			}, nil
+		},
+		component.TelemetrySettings{Logger: zap.NewNop()},
+		options...,
+	)
+}
+
+// buildPathString constructs a path string like "attributes[level]" or "resource.attributes[key]"
+func buildPathString(path Path[any]) string {
+	result := path.Name()
+	keys := path.Keys()
+	for _, k := range keys {
+		s, err := k.String(context.Background(), nil)
+		if err == nil && s != nil {
+			result += "[" + *s + "]"
+		}
+	}
+	next := path.Next()
+	if next != nil {
+		result += "." + buildPathString(next)
+	}
+	return result
+}
+
+// Real-world production expression from Sawmills filtersamplingprocessor
+// This is a 54-line expression used in actual production filtering
+const realWorldExpr = `(
+	not (
+		attributes["level"] == "ERROR" 
+		or resource.attributes["level"] == "ERROR" 
+		or instrumentation_scope.attributes["level"] == "ERROR" 
+		or (IsMap(body) and body["level"] == "ERROR")
+	) and not (
+		attributes["level"] == "WARN" 
+		or resource.attributes["level"] == "WARN"
+		or instrumentation_scope.attributes["level"] == "WARN" 
+		or (IsMap(body) and body["level"] == "WARN")
+	) and not (
+		attributes["level"] == "WARNING" 
+		or resource.attributes["level"] == "WARNING" 
+		or instrumentation_scope.attributes["level"] == "WARNING" 
+		or (IsMap(body) and body["level"] == "WARNING")
+	) and not (
+		IsMatch(body.string, "(?i)The predictor zombie scan")
+	) and not (
+		IsMatch(body.string, "(?i)Checking for waiting")
+	) 
+	and IsMatch(attributes["service"], "^bigid-ml.*") 
+	and not (
+		IsMatch(attributes["ml_scan_id"], ".*") 
+		or IsMatch(resource.attributes["ml_scan_id"], ".*") 
+		or IsMatch(instrumentation_scope.attributes["ml_scan_id"], ".*") 
+		or (IsMap(body) and IsMatch(body["ml_scan_id"], ".*"))
+	) and not (
+		IsMatch(attributes["scan_id"], ".*") 
+		or IsMatch(resource.attributes["scan_id"], ".*") 
+		or IsMatch(instrumentation_scope.attributes["scan_id"], ".*") 
+		or (IsMap(body) and IsMatch(body["scan_id"], ".*"))
+	) and not (
+		IsMatch(attributes["chunks"], ".*") 
+		or IsMatch(resource.attributes["chunks"], ".*") 
+		or IsMatch(instrumentation_scope.attributes["chunks"], ".*") 
+		or (IsMap(body) and IsMatch(body["chunks"], ".*"))
+	) and not (
+		IsMatch(attributes["training_iteration"], ".*") 
+		or IsMatch(resource.attributes["training_iteration"], ".*") 
+		or IsMatch(instrumentation_scope.attributes["training_iteration"], ".*") 
+		or (IsMap(body) and IsMatch(body["training_iteration"], ".*"))
+	) and not (
+		IsMatch(attributes["queue_status"], ".*") 
+		or IsMatch(resource.attributes["queue_status"], ".*") 
+		or IsMatch(instrumentation_scope.attributes["queue_status"], ".*") 
+		or (IsMap(body) and IsMatch(body["queue_status"], ".*"))
+	) 
+	and not IsMatch(resource.attributes["ddtags"]["pod_name"], "^bigid-ml-worker.*") 
+	and not IsMatch(resource.attributes["ddtags"]["pod_name"], "^bigid-ml-scheduler.*") 
+	and attributes["sawmills"]["index_name"] == nil
+)`
+
+func BenchmarkOTTLInterpreterRealWorld(b *testing.B) {
+	// Set up path values that make the expression return true
+	pathValues := map[string]any{
+		"attributes[level]":                                    "INFO",
+		"resource.attributes[level]":                           "INFO",
+		"instrumentation_scope.attributes[level]":              "INFO",
+		"body[level]":                                          nil,
+		"body.string":                                          "Normal log message",
+		"attributes[service]":                                  "bigid-ml-foo",
+		"attributes[ml_scan_id]":                               nil,
+		"resource.attributes[ml_scan_id]":                      nil,
+		"instrumentation_scope.attributes[ml_scan_id]":         nil,
+		"body[ml_scan_id]":                                     nil,
+		"attributes[scan_id]":                                  nil,
+		"resource.attributes[scan_id]":                         nil,
+		"instrumentation_scope.attributes[scan_id]":            nil,
+		"body[scan_id]":                                        nil,
+		"attributes[chunks]":                                   nil,
+		"resource.attributes[chunks]":                          nil,
+		"instrumentation_scope.attributes[chunks]":             nil,
+		"body[chunks]":                                         nil,
+		"attributes[training_iteration]":                       nil,
+		"resource.attributes[training_iteration]":              nil,
+		"instrumentation_scope.attributes[training_iteration]": nil,
+		"body[training_iteration]":                             nil,
+		"attributes[queue_status]":                             nil,
+		"resource.attributes[queue_status]":                    nil,
+		"instrumentation_scope.attributes[queue_status]":       nil,
+		"body[queue_status]":                                   nil,
+		"resource.attributes[ddtags][pod_name]":                "some-other-pod",
+		"attributes[sawmills][index_name]":                     nil,
+		"body":                                                 "string body", // not a map
+	}
+
+	p, err := newBenchParserForRealWorld(false, pathValues)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	expr, err := parseCondition(realWorldExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonRealWorld_VM(b *testing.B) {
+	// Set up path values that make the expression return true
+	pathValues := map[string]any{
+		"attributes[level]":                                    "INFO",
+		"resource.attributes[level]":                           "INFO",
+		"instrumentation_scope.attributes[level]":              "INFO",
+		"body[level]":                                          nil,
+		"body.string":                                          "Normal log message",
+		"attributes[service]":                                  "bigid-ml-foo",
+		"attributes[ml_scan_id]":                               nil,
+		"resource.attributes[ml_scan_id]":                      nil,
+		"instrumentation_scope.attributes[ml_scan_id]":         nil,
+		"body[ml_scan_id]":                                     nil,
+		"attributes[scan_id]":                                  nil,
+		"resource.attributes[scan_id]":                         nil,
+		"instrumentation_scope.attributes[scan_id]":            nil,
+		"body[scan_id]":                                        nil,
+		"attributes[chunks]":                                   nil,
+		"resource.attributes[chunks]":                          nil,
+		"instrumentation_scope.attributes[chunks]":             nil,
+		"body[chunks]":                                         nil,
+		"attributes[training_iteration]":                       nil,
+		"resource.attributes[training_iteration]":              nil,
+		"instrumentation_scope.attributes[training_iteration]": nil,
+		"body[training_iteration]":                             nil,
+		"attributes[queue_status]":                             nil,
+		"resource.attributes[queue_status]":                    nil,
+		"instrumentation_scope.attributes[queue_status]":       nil,
+		"body[queue_status]":                                   nil,
+		"resource.attributes[ddtags][pod_name]":                "some-other-pod",
+		"attributes[sawmills][index_name]":                     nil,
+		"body":                                                 "string body",
+	}
+
+	p, err := newBenchParserForRealWorld(true, pathValues)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	expr, err := parseCondition(realWorldExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	if _, err := evaluator.Eval(ctx, nil); err != nil {
+		b.Skipf("VM does not support this pattern: %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+// Deep condition benchmark: 4-level nested boolean from Sawmills test suite
+const deepConditionExpr = `(
+	(
+		attributes["k1"] == "v1" and attributes["k2"] == "v2"
+	)
+	or 
+	(
+		attributes["k3"] == "v" and attributes["k4"] == "v"
+	)
+) and (
+	(
+		(attributes["k5"] == "v" and attributes["k9"] == "v9") or (attributes["k6"] == "v")
+	)
+	or
+	(
+		(attributes["k7"] == "v7") or (attributes["k8"] == "v")
+	)
+)`
+
+func BenchmarkOTTLInterpreterDeepCondition(b *testing.B) {
+	pathValues := map[string]any{
+		"attributes[k1]": "v1",
+		"attributes[k2]": "v2",
+		"attributes[k3]": "v3",
+		"attributes[k4]": "v4",
+		"attributes[k5]": "v5",
+		"attributes[k6]": "v6",
+		"attributes[k7]": "v7",
+		"attributes[k8]": "v8",
+		"attributes[k9]": "v9",
+	}
+
+	p, err := newBenchParserForRealWorld(false, pathValues)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	expr, err := parseCondition(deepConditionExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonDeepCondition_VM(b *testing.B) {
+	pathValues := map[string]any{
+		"attributes[k1]": "v1",
+		"attributes[k2]": "v2",
+		"attributes[k3]": "v3",
+		"attributes[k4]": "v4",
+		"attributes[k5]": "v5",
+		"attributes[k6]": "v6",
+		"attributes[k7]": "v7",
+		"attributes[k8]": "v8",
+		"attributes[k9]": "v9",
+	}
+
+	p, err := newBenchParserForRealWorld(true, pathValues)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	expr, err := parseCondition(deepConditionExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	if _, err := evaluator.Eval(ctx, nil); err != nil {
+		b.Skipf("VM does not support this pattern: %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+// Multi-path or-fallback pattern: Check same key across multiple paths (Sawmills pattern)
+const multiPathOrFallbackExpr = `(
+	attributes["level"] == "ERROR" 
+	or resource.attributes["level"] == "ERROR" 
+	or instrumentation_scope.attributes["level"] == "ERROR" 
+	or (IsMap(body) and body["level"] == "ERROR")
+)`
+
+func BenchmarkOTTLInterpreterMultiPathOrFallback(b *testing.B) {
+	pathValues := map[string]any{
+		"attributes[level]":                       "INFO",
+		"resource.attributes[level]":              "INFO",
+		"instrumentation_scope.attributes[level]": "ERROR", // Match on 3rd path
+		"body[level]":                             nil,
+		"body":                                    "string body", // not a map
+	}
+
+	p, err := newBenchParserForRealWorld(false, pathValues)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	expr, err := parseCondition(multiPathOrFallbackExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonMultiPathOrFallback_VM(b *testing.B) {
+	pathValues := map[string]any{
+		"attributes[level]":                       "INFO",
+		"resource.attributes[level]":              "INFO",
+		"instrumentation_scope.attributes[level]": "ERROR",
+		"body[level]":                             nil,
+		"body":                                    "string body",
+	}
+
+	p, err := newBenchParserForRealWorld(true, pathValues)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	expr, err := parseCondition(multiPathOrFallbackExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	if _, err := evaluator.Eval(ctx, nil); err != nil {
+		b.Skipf("VM does not support this pattern: %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+// Nested attribute 3-level access with IsMap guards (Sawmills pattern)
+const nestedAttr3LevelExpr = `(
+	IsMap(attributes["string"]) 
+	and IsMap(attributes["string"]["attribute"]) 
+	and IsMap(attributes["string"]["attribute"]["not"]) 
+	and attributes["string"]["attribute"]["not"]["exist"] == "found"
+)`
+
+func BenchmarkOTTLInterpreterNestedAttr3Level(b *testing.B) {
+	// Simulate nested map structure
+	pathValues := map[string]any{
+		"attributes[string]":                        pcommon.NewMap(),
+		"attributes[string][attribute]":             pcommon.NewMap(),
+		"attributes[string][attribute][not]":        pcommon.NewMap(),
+		"attributes[string][attribute][not][exist]": "found",
+	}
+
+	p, err := newBenchParserForRealWorld(false, pathValues)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	expr, err := parseCondition(nestedAttr3LevelExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonNestedAttr3Level_VM(b *testing.B) {
+	// Simulate nested map structure
+	pathValues := map[string]any{
+		"attributes[string]":                        pcommon.NewMap(),
+		"attributes[string][attribute]":             pcommon.NewMap(),
+		"attributes[string][attribute][not]":        pcommon.NewMap(),
+		"attributes[string][attribute][not][exist]": "found",
+	}
+
+	p, err := newBenchParserForRealWorld(true, pathValues)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	expr, err := parseCondition(nestedAttr3LevelExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+// Range comparison pattern: HTTP status code filtering (common pattern)
+const rangeComparisonExpr = `(
+	(attributes["http.status_code"] >= 400 and attributes["http.status_code"] <= 499) 
+	or (IsMap(body) and (body["http.status_code"] >= 400 and body["http.status_code"] <= 499))
+)`
+
+func BenchmarkOTTLInterpreterRangeComparison(b *testing.B) {
+	pathValues := map[string]any{
+		"attributes[http.status_code]": int64(404),
+		"body[http.status_code]":       nil,
+		"body":                         "string body", // not a map
+	}
+
+	p, err := newBenchParserForRealWorld(false, pathValues)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	expr, err := parseCondition(rangeComparisonExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
+
+func BenchmarkOTTLComparisonRangeComparison_VM(b *testing.B) {
+	pathValues := map[string]any{
+		"attributes[http.status_code]": int64(404),
+		"body[http.status_code]":       nil,
+		"body":                         "string body", // not a map
+	}
+
+	p, err := newBenchParserForRealWorld(true, pathValues)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	expr, err := parseCondition(rangeComparisonExpr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = result
+	}
+}
