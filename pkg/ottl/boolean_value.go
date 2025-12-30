@@ -114,7 +114,6 @@ func runBoolVMConstOnly[K any](program *microProgram[K]) (bool, error) {
 }
 
 func (p *Parser[K]) runBoolVM(ctx context.Context, tCtx K, program *microProgram[K]) (bool, error) {
-	// Use stack-allocated array for common case; fall back to heap for large stacks
 	var stack []ir.Value
 	var holder *vm.StackHolder
 	fromPool := false

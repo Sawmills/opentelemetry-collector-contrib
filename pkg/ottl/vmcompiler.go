@@ -117,6 +117,7 @@ func (p *Parser[K]) compileMicroComparisonVM(cmp *comparison) (*microProgram[K],
 	if err := c.emitComparison(cmp); err != nil {
 		return nil, err
 	}
+	c.peepholeOptimize()
 	if c.maxStack > defaultMicroVMStackSize {
 		return nil, fmt.Errorf("vm stack depth %d exceeds max %d", c.maxStack, defaultMicroVMStackSize)
 	}
@@ -166,6 +167,7 @@ func (p *Parser[K]) compileMicroBoolExpression(expr *booleanExpression) (*microP
 	if err := c.emitBooleanExpression(expr); err != nil {
 		return nil, err
 	}
+	c.peepholeOptimize()
 	if c.maxStack > defaultMicroVMStackSize {
 		return nil, fmt.Errorf("vm stack depth %d exceeds max %d", c.maxStack, defaultMicroVMStackSize)
 	}
@@ -296,8 +298,14 @@ func compareOpcodeTyped(op compareOp, kind valueKind) (ir.Opcode, error) {
 		case gte:
 			return ir.OpGteFloat, nil
 		}
+	case kindString:
+		switch op {
+		case eq:
+			return ir.OpEqString, nil
+		case ne:
+			return ir.OpNeString, nil
+		}
 	}
-	// Fall back to generic opcode
 	return compareOpcode(op)
 }
 
@@ -1078,10 +1086,10 @@ func (c *microCompiler[K]) emitComparison(cmp *comparison) error {
 		return err
 	}
 
-	// Use specialized opcode when both operands have the same known numeric type
 	var op ir.Opcode
-	if leftKind == rightKind && (leftKind == kindInt || leftKind == kindFloat) {
-		op, err = compareOpcodeTyped(cmp.Op, leftKind)
+	mergedKind, _ := mergeKinds(leftKind, rightKind)
+	if mergedKind == kindInt || mergedKind == kindFloat || mergedKind == kindString {
+		op, err = compareOpcodeTyped(cmp.Op, mergedKind)
 	} else {
 		op, err = compareOpcode(cmp.Op)
 	}
@@ -2325,4 +2333,55 @@ func (c *microCompiler[K]) buildAccessors() []vm.PathAccessor[K] {
 		}
 	}
 	return accessors
+}
+
+// peepholeOptimize fuses OpLoadAttr* + OpEqConst/OpNeConst (string) into superinstructions.
+func (c *microCompiler[K]) peepholeOptimize() {
+	if len(c.code) < 2 {
+		return
+	}
+
+	optimized := make([]ir.Instruction, 0, len(c.code))
+
+	for i := 0; i < len(c.code); i++ {
+		inst := c.code[i]
+		op := inst.Op()
+
+		if (op == ir.OpLoadAttrCached || op == ir.OpLoadAttrFast) && i+1 < len(c.code) {
+			nextInst := c.code[i+1]
+			nextOp := nextInst.Op()
+
+			if nextOp == ir.OpEqConst || nextOp == ir.OpNeConst {
+				attrIdx := inst.Arg()
+				constIdx := nextInst.Arg()
+
+				if int(constIdx) < len(c.consts) && c.consts[constIdx].Type == ir.TypeString {
+					if attrIdx <= 0xFFF && constIdx <= 0xFFF {
+						packedArg := ir.PackAttrConst(attrIdx, constIdx)
+						var fusedOp ir.Opcode
+						if op == ir.OpLoadAttrCached {
+							if nextOp == ir.OpEqConst {
+								fusedOp = ir.OpAttrEqConstString
+							} else {
+								fusedOp = ir.OpAttrNeConstString
+							}
+						} else {
+							if nextOp == ir.OpEqConst {
+								fusedOp = ir.OpAttrFastEqConstString
+							} else {
+								fusedOp = ir.OpAttrFastNeConstString
+							}
+						}
+						optimized = append(optimized, ir.Encode(fusedOp, packedArg))
+						i++
+						continue
+					}
+				}
+			}
+		}
+
+		optimized = append(optimized, inst)
+	}
+
+	c.code = optimized
 }

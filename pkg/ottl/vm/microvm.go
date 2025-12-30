@@ -340,7 +340,13 @@ func runProgram[K any](stack []ir.Value, p *Program[K], loader func(uint32) (ir.
 				if stack[sp-1].Type != ir.TypeString {
 					return ir.Value{}, ErrTypeMismatch
 				}
-				result, err = compareStrings(cmpOp, stack[sp-1], constVal)
+				if cmpOp == ir.OpEq {
+					result = ir.BoolValue(stringsEqual(stack[sp-1], constVal))
+				} else if cmpOp == ir.OpNe {
+					result = ir.BoolValue(!stringsEqual(stack[sp-1], constVal))
+				} else {
+					result, err = compareStrings(cmpOp, stack[sp-1], constVal)
+				}
 			case ir.TypeBytes:
 				if stack[sp-1].Type != ir.TypeBytes {
 					return ir.Value{}, ErrTypeMismatch
@@ -578,6 +584,20 @@ func runProgram[K any](stack []ir.Value, p *Program[K], loader func(uint32) (ir.
 			} else {
 				stack[sp-1] = ir.BoolValue(false)
 			}
+
+		case ir.OpEqString:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			stack[sp-1] = ir.BoolValue(stringsEqual(stack[sp-1], stack[sp]))
+
+		case ir.OpNeString:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			stack[sp-1] = ir.BoolValue(!stringsEqual(stack[sp-1], stack[sp]))
 
 		case ir.OpAdd, ir.OpSub, ir.OpMul, ir.OpDiv:
 			if sp < 2 {
@@ -956,6 +976,21 @@ func compareBools(op ir.Opcode, a, b bool) (ir.Value, error) {
 	default:
 		return ir.Value{}, ErrInvalidOpcode
 	}
+}
+
+func stringsEqual(a, b ir.Value) bool {
+	if a.Num != b.Num {
+		return false
+	}
+	if a.Ptr == b.Ptr {
+		return true
+	}
+	if a.Num == 0 {
+		return true
+	}
+	as := unsafe.String((*byte)(a.Ptr), int(a.Num))
+	bs := unsafe.String((*byte)(b.Ptr), int(b.Num))
+	return as == bs
 }
 
 func compareStrings(op ir.Opcode, a, b ir.Value) (ir.Value, error) {
@@ -1363,7 +1398,13 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 				if stack[sp-1].Type != ir.TypeString {
 					return ir.Value{}, ErrTypeMismatch
 				}
-				result, err = compareStrings(cmpOp, stack[sp-1], constVal)
+				if cmpOp == ir.OpEq {
+					result = ir.BoolValue(stringsEqual(stack[sp-1], constVal))
+				} else if cmpOp == ir.OpNe {
+					result = ir.BoolValue(!stringsEqual(stack[sp-1], constVal))
+				} else {
+					result, err = compareStrings(cmpOp, stack[sp-1], constVal)
+				}
 			case ir.TypeBytes:
 				if stack[sp-1].Type != ir.TypeBytes {
 					return ir.Value{}, ErrTypeMismatch
@@ -1638,6 +1679,20 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			a := math.Float64frombits(stack[sp-1].Num)
 			b := math.Float64frombits(stack[sp].Num)
 			stack[sp-1] = ir.BoolValue(a >= b)
+
+		case ir.OpEqString:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			stack[sp-1] = ir.BoolValue(stringsEqual(stack[sp-1], stack[sp]))
+
+		case ir.OpNeString:
+			if sp < 2 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			sp--
+			stack[sp-1] = ir.BoolValue(!stringsEqual(stack[sp-1], stack[sp]))
 
 		case ir.OpAdd, ir.OpSub, ir.OpMul, ir.OpDiv:
 			if sp < 2 {
@@ -3046,6 +3101,96 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			if metric.Type() == pmetric.MetricTypeSum {
 				metric.Sum().SetIsMonotonic(stack[sp].Num != 0)
 			}
+
+		case ir.OpAttrEqConstString:
+			attrIdx, constIdx := ir.UnpackAttrConst(inst.Arg())
+			if int(attrIdx) >= len(p.Accessors) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			if int(constIdx) >= len(consts) {
+				return ir.Value{}, ErrInvalidConst
+			}
+			accessor := p.Accessors[attrIdx]
+			if accessor == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := accessor(ctx, tCtx)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			constVal := consts[constIdx]
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.BoolValue(stringsEqual(attrVal, constVal))
+			sp++
+
+		case ir.OpAttrNeConstString:
+			attrIdx, constIdx := ir.UnpackAttrConst(inst.Arg())
+			if int(attrIdx) >= len(p.Accessors) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			if int(constIdx) >= len(consts) {
+				return ir.Value{}, ErrInvalidConst
+			}
+			accessor := p.Accessors[attrIdx]
+			if accessor == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := accessor(ctx, tCtx)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			constVal := consts[constIdx]
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.BoolValue(!stringsEqual(attrVal, constVal))
+			sp++
+
+		case ir.OpAttrFastEqConstString:
+			keyIdx, constIdx := ir.UnpackAttrConst(inst.Arg())
+			if int(keyIdx) >= len(p.AttrKeys) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			if int(constIdx) >= len(consts) {
+				return ir.Value{}, ErrInvalidConst
+			}
+			if p.AttrGetter == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[keyIdx])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			constVal := consts[constIdx]
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.BoolValue(stringsEqual(attrVal, constVal))
+			sp++
+
+		case ir.OpAttrFastNeConstString:
+			keyIdx, constIdx := ir.UnpackAttrConst(inst.Arg())
+			if int(keyIdx) >= len(p.AttrKeys) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			if int(constIdx) >= len(consts) {
+				return ir.Value{}, ErrInvalidConst
+			}
+			if p.AttrGetter == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[keyIdx])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			constVal := consts[constIdx]
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.BoolValue(!stringsEqual(attrVal, constVal))
+			sp++
 
 		default:
 			return ir.Value{}, ErrInvalidOpcode
