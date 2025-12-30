@@ -242,6 +242,71 @@ func RunWithStackAndLoader(stack []ir.Value, p *ProgramAny, loader func(uint32) 
 // Accessors are called with ctx/tCtx directly, avoiding per-run allocations.
 // Generic over K to eliminate interface{} conversions entirely.
 func RunWithStackAndContext[K any](stack []ir.Value, p *Program[K], ctx context.Context, tCtx K) (ir.Value, error) {
+	if len(p.Code) == 1 {
+		inst := p.Code[0]
+		op := inst.Op()
+		arg := inst.Arg()
+
+		switch op {
+		case ir.OpAttrFastEqConstString:
+			keyIdx, constIdx := ir.UnpackAttrConst(arg)
+			if p.AttrGetter == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[keyIdx])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			return ir.BoolValue(stringsEqual(attrVal, p.Consts[constIdx])), nil
+
+		case ir.OpAttrFastNeConstString:
+			keyIdx, constIdx := ir.UnpackAttrConst(arg)
+			if p.AttrGetter == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[keyIdx])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			return ir.BoolValue(!stringsEqual(attrVal, p.Consts[constIdx])), nil
+
+		case ir.OpAttrEqConstString:
+			attrIdx, constIdx := ir.UnpackAttrConst(arg)
+			if int(attrIdx) >= len(p.Accessors) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			accessor := p.Accessors[attrIdx]
+			if accessor == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := accessor(ctx, tCtx)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			return ir.BoolValue(stringsEqual(attrVal, p.Consts[constIdx])), nil
+
+		case ir.OpAttrNeConstString:
+			attrIdx, constIdx := ir.UnpackAttrConst(arg)
+			if int(attrIdx) >= len(p.Accessors) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			accessor := p.Accessors[attrIdx]
+			if accessor == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := accessor(ctx, tCtx)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			return ir.BoolValue(!stringsEqual(attrVal, p.Consts[constIdx])), nil
+
+		case ir.OpLoadConst:
+			if int(arg) >= len(p.Consts) {
+				return ir.Value{}, ErrInvalidConst
+			}
+			return p.Consts[arg], nil
+		}
+	}
 	return runProgramWithContext(stack, p, ctx, tCtx)
 }
 
