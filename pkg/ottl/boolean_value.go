@@ -113,6 +113,149 @@ func runBoolVMConstOnly[K any](program *microProgram[K]) (bool, error) {
 	return result, nil
 }
 
+func (p *Parser[K]) tryInlineSuperinstruction(program *microProgram[K]) BoolExpr[K] {
+	code := program.program.Code
+
+	if len(code) == 1 {
+		return p.tryInline1Inst(program)
+	}
+	if len(code) == 2 {
+		return p.tryInline2Inst(program)
+	}
+	return BoolExpr[K]{}
+}
+
+func (p *Parser[K]) tryInline1Inst(program *microProgram[K]) BoolExpr[K] {
+	inst := program.program.Code[0]
+	op := inst.Op()
+	arg := inst.Arg()
+
+	switch op {
+	case ir.OpAttrFastEqConstString:
+		if program.program.AttrGetter == nil {
+			return BoolExpr[K]{}
+		}
+		keyIdx, constIdx := ir.UnpackAttrConst(arg)
+		attrGetter := program.program.AttrGetter
+		key := program.program.AttrKeys[keyIdx]
+		constVal := program.program.Consts[constIdx]
+		return BoolExpr[K]{func(_ context.Context, tCtx K) (bool, error) {
+			attrVal, err := attrGetter(tCtx, key)
+			if err != nil {
+				return false, err
+			}
+			return ir.StringsEqual(attrVal, constVal), nil
+		}}
+
+	case ir.OpAttrFastNeConstString:
+		if program.program.AttrGetter == nil {
+			return BoolExpr[K]{}
+		}
+		keyIdx, constIdx := ir.UnpackAttrConst(arg)
+		attrGetter := program.program.AttrGetter
+		key := program.program.AttrKeys[keyIdx]
+		constVal := program.program.Consts[constIdx]
+		return BoolExpr[K]{func(_ context.Context, tCtx K) (bool, error) {
+			attrVal, err := attrGetter(tCtx, key)
+			if err != nil {
+				return false, err
+			}
+			return !ir.StringsEqual(attrVal, constVal), nil
+		}}
+
+	case ir.OpAttrEqConstString:
+		attrIdx, constIdx := ir.UnpackAttrConst(arg)
+		if int(attrIdx) >= len(program.program.Accessors) || program.program.Accessors[attrIdx] == nil {
+			return BoolExpr[K]{}
+		}
+		accessor := program.program.Accessors[attrIdx]
+		constVal := program.program.Consts[constIdx]
+		return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
+			attrVal, err := accessor(ctx, tCtx)
+			if err != nil {
+				return false, err
+			}
+			return ir.StringsEqual(attrVal, constVal), nil
+		}}
+
+	case ir.OpAttrNeConstString:
+		attrIdx, constIdx := ir.UnpackAttrConst(arg)
+		if int(attrIdx) >= len(program.program.Accessors) || program.program.Accessors[attrIdx] == nil {
+			return BoolExpr[K]{}
+		}
+		accessor := program.program.Accessors[attrIdx]
+		constVal := program.program.Consts[constIdx]
+		return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
+			attrVal, err := accessor(ctx, tCtx)
+			if err != nil {
+				return false, err
+			}
+			return !ir.StringsEqual(attrVal, constVal), nil
+		}}
+	}
+
+	return BoolExpr[K]{}
+}
+
+func (p *Parser[K]) tryInline2Inst(program *microProgram[K]) BoolExpr[K] {
+	inst0 := program.program.Code[0]
+	inst1 := program.program.Code[1]
+	op0, arg0 := inst0.Op(), inst0.Arg()
+	op1, arg1 := inst1.Op(), inst1.Arg()
+
+	if op0 == ir.OpLoadAttrCached && op1 == ir.OpEqConst {
+		if int(arg0) >= len(program.program.Accessors) || program.program.Accessors[arg0] == nil {
+			return BoolExpr[K]{}
+		}
+		if int(arg1) >= len(program.program.Consts) {
+			return BoolExpr[K]{}
+		}
+		accessor := program.program.Accessors[arg0]
+		constVal := program.program.Consts[arg1]
+		constType := constVal.Type
+		return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
+			val, err := accessor(ctx, tCtx)
+			if err != nil {
+				return false, err
+			}
+			if val.Type == ir.TypeInt && constType == ir.TypeInt {
+				return int64(val.Num) == int64(constVal.Num), nil
+			}
+			if val.Type == ir.TypeString && constType == ir.TypeString {
+				return ir.StringsEqual(val, constVal), nil
+			}
+			return false, nil
+		}}
+	}
+
+	if op0 == ir.OpLoadAttrCached && op1 == ir.OpNeConst {
+		if int(arg0) >= len(program.program.Accessors) || program.program.Accessors[arg0] == nil {
+			return BoolExpr[K]{}
+		}
+		if int(arg1) >= len(program.program.Consts) {
+			return BoolExpr[K]{}
+		}
+		accessor := program.program.Accessors[arg0]
+		constVal := program.program.Consts[arg1]
+		constType := constVal.Type
+		return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
+			val, err := accessor(ctx, tCtx)
+			if err != nil {
+				return false, err
+			}
+			if val.Type == ir.TypeInt && constType == ir.TypeInt {
+				return int64(val.Num) != int64(constVal.Num), nil
+			}
+			if val.Type == ir.TypeString && constType == ir.TypeString {
+				return !ir.StringsEqual(val, constVal), nil
+			}
+			return true, nil
+		}}
+	}
+
+	return BoolExpr[K]{}
+}
+
 func (p *Parser[K]) runBoolVM(ctx context.Context, tCtx K, program *microProgram[K]) (bool, error) {
 	var stack []ir.Value
 	var holder *vm.StackHolder
@@ -171,6 +314,9 @@ func (p *Parser[K]) newComparisonEvaluator(comparison *comparison) (BoolExpr[K],
 					}
 					return result, nil
 				}}, nil
+			}
+			if inlined := p.tryInlineSuperinstruction(program); inlined.boolExpressionEvaluator != nil {
+				return inlined, nil
 			}
 			return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
 				return p.runBoolVM(ctx, tCtx, program)

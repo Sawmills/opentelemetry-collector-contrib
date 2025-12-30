@@ -132,6 +132,25 @@ func (v Value) Bool() (bool, bool) {
 	return v.Num != 0, true
 }
 
+// StringsEqual compares two string Values for equality using pointer fast-path.
+func StringsEqual(a, b Value) bool {
+	if a.Type != TypeString || b.Type != TypeString {
+		return false
+	}
+	if a.Num != b.Num {
+		return false
+	}
+	if a.Ptr == b.Ptr {
+		return true
+	}
+	if a.Num == 0 {
+		return true
+	}
+	as := unsafe.String((*byte)(a.Ptr), int(a.Num))
+	bs := unsafe.String((*byte)(b.Ptr), int(b.Num))
+	return as == bs
+}
+
 // Opcode is a bytecode opcode.
 type Opcode uint8
 
