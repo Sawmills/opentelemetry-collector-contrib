@@ -300,6 +300,69 @@ func RunWithStackAndContext[K any](stack []ir.Value, p *Program[K], ctx context.
 			}
 			return ir.BoolValue(!stringsEqual(attrVal, p.Consts[constIdx])), nil
 
+		case ir.OpAttrIsMatchConst:
+			attrIdx, regexIdx := ir.UnpackAttrConst(arg)
+			if int(attrIdx) >= len(p.Accessors) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			accessor := p.Accessors[attrIdx]
+			if accessor == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			if int(regexIdx) >= len(p.Regexps) || p.Regexps[regexIdx] == nil {
+				return ir.Value{}, ErrInvalidRegex
+			}
+			attrVal, err := accessor(ctx, tCtx)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if attrVal.Type == ir.TypeString {
+				str, ok := attrVal.String()
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				return ir.BoolValue(p.Regexps[regexIdx].MatchString(str)), nil
+			}
+			target, ok, err := stringLikeFromValue(attrVal)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if !ok {
+				return ir.BoolValue(false), nil
+			}
+			return ir.BoolValue(p.Regexps[regexIdx].MatchString(target)), nil
+
+		case ir.OpAttrFastIsMatchConst:
+			keyIdx, regexIdx := ir.UnpackAttrConst(arg)
+			if int(keyIdx) >= len(p.AttrKeys) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			if p.AttrGetter == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			if int(regexIdx) >= len(p.Regexps) || p.Regexps[regexIdx] == nil {
+				return ir.Value{}, ErrInvalidRegex
+			}
+			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[keyIdx])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if attrVal.Type == ir.TypeString {
+				str, ok := attrVal.String()
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				return ir.BoolValue(p.Regexps[regexIdx].MatchString(str)), nil
+			}
+			target, ok, err := stringLikeFromValue(attrVal)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if !ok {
+				return ir.BoolValue(false), nil
+			}
+			return ir.BoolValue(p.Regexps[regexIdx].MatchString(target)), nil
+
 		case ir.OpLoadConst:
 			if int(arg) >= len(p.Consts) {
 				return ir.Value{}, ErrInvalidConst
@@ -1293,6 +1356,17 @@ func stringFromValue(val ir.Value) (string, error) {
 		return "", ErrTypeMismatch
 	}
 	return str, nil
+}
+
+func IsMatchValue(val ir.Value, regex *regexp.Regexp) (bool, error) {
+	target, ok, err := stringLikeFromValue(val)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+	return regex.MatchString(target), nil
 }
 
 func pcommonValueToVM(val pcommon.Value) (ir.Value, error) {
@@ -3331,6 +3405,85 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 				return ir.Value{}, ErrStackOverflow
 			}
 			stack[sp] = ir.BoolValue(!stringsEqual(attrVal, constVal))
+			sp++
+
+		case ir.OpAttrIsMatchConst:
+			attrIdx, regexIdx := ir.UnpackAttrConst(inst.Arg())
+			if int(attrIdx) >= len(p.Accessors) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			if int(regexIdx) >= len(p.Regexps) || p.Regexps[regexIdx] == nil {
+				return ir.Value{}, ErrInvalidRegex
+			}
+			accessor := p.Accessors[attrIdx]
+			if accessor == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := accessor(ctx, tCtx)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			if attrVal.Type == ir.TypeString {
+				str, ok := attrVal.String()
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				stack[sp] = ir.BoolValue(p.Regexps[regexIdx].MatchString(str))
+				sp++
+				continue
+			}
+			target, ok, err := stringLikeFromValue(attrVal)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if !ok {
+				stack[sp] = ir.BoolValue(false)
+				sp++
+				continue
+			}
+			stack[sp] = ir.BoolValue(p.Regexps[regexIdx].MatchString(target))
+			sp++
+
+		case ir.OpAttrFastIsMatchConst:
+			keyIdx, regexIdx := ir.UnpackAttrConst(inst.Arg())
+			if int(keyIdx) >= len(p.AttrKeys) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			if int(regexIdx) >= len(p.Regexps) || p.Regexps[regexIdx] == nil {
+				return ir.Value{}, ErrInvalidRegex
+			}
+			if p.AttrGetter == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[keyIdx])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			if attrVal.Type == ir.TypeString {
+				str, ok := attrVal.String()
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				stack[sp] = ir.BoolValue(p.Regexps[regexIdx].MatchString(str))
+				sp++
+				continue
+			}
+			target, ok, err := stringLikeFromValue(attrVal)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if !ok {
+				stack[sp] = ir.BoolValue(false)
+				sp++
+				continue
+			}
+			stack[sp] = ir.BoolValue(p.Regexps[regexIdx].MatchString(target))
 			sp++
 
 		default:

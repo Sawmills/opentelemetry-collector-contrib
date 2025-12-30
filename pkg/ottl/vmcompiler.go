@@ -2405,6 +2405,24 @@ func (c *microCompiler[K]) peepholeOptimize() {
 					}
 				}
 			}
+
+			if nextOp == ir.OpIsMatch {
+				attrIdx := inst.Arg()
+				regexIdx := nextInst.Arg()
+				if attrIdx <= 0xFFF && regexIdx <= 0xFFF {
+					packedArg := ir.PackAttrConst(attrIdx, regexIdx)
+					var fusedOp ir.Opcode
+					if op == ir.OpLoadAttrCached {
+						fusedOp = ir.OpAttrIsMatchConst
+					} else {
+						fusedOp = ir.OpAttrFastIsMatchConst
+					}
+					optimized = append(optimized, ir.Encode(fusedOp, packedArg))
+					i++
+					oldToNew[i] = len(optimized)
+					continue
+				}
+			}
 		}
 
 		optimized = append(optimized, inst)

@@ -192,6 +192,60 @@ func (p *Parser[K]) tryInline1Inst(program *microProgram[K]) BoolExpr[K] {
 			}
 			return !ir.StringsEqual(attrVal, constVal), nil
 		}}
+
+	case ir.OpAttrIsMatchConst:
+		attrIdx, regexIdx := ir.UnpackAttrConst(arg)
+		if int(attrIdx) >= len(program.program.Accessors) || program.program.Accessors[attrIdx] == nil {
+			return BoolExpr[K]{}
+		}
+		if int(regexIdx) >= len(program.program.Regexps) || program.program.Regexps[regexIdx] == nil {
+			return BoolExpr[K]{}
+		}
+		accessor := program.program.Accessors[attrIdx]
+		regex := program.program.Regexps[regexIdx]
+		return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
+			attrVal, err := accessor(ctx, tCtx)
+			if err != nil {
+				return false, err
+			}
+			if attrVal.Type == ir.TypeString {
+				str, ok := attrVal.String()
+				if !ok {
+					return false, nil
+				}
+				return regex.MatchString(str), nil
+			}
+			return vm.IsMatchValue(attrVal, regex)
+		}}
+
+	case ir.OpAttrFastIsMatchConst:
+		keyIdx, regexIdx := ir.UnpackAttrConst(arg)
+		if int(keyIdx) >= len(program.program.AttrKeys) {
+			return BoolExpr[K]{}
+		}
+		if int(regexIdx) >= len(program.program.Regexps) || program.program.Regexps[regexIdx] == nil {
+			return BoolExpr[K]{}
+		}
+		if program.program.AttrGetter == nil {
+			return BoolExpr[K]{}
+		}
+		key := program.program.AttrKeys[keyIdx]
+		getter := program.program.AttrGetter
+		regex := program.program.Regexps[regexIdx]
+		return BoolExpr[K]{func(_ context.Context, tCtx K) (bool, error) {
+			attrVal, err := getter(tCtx, key)
+			if err != nil {
+				return false, err
+			}
+			if attrVal.Type == ir.TypeString {
+				str, ok := attrVal.String()
+				if !ok {
+					return false, nil
+				}
+				return regex.MatchString(str), nil
+			}
+			return vm.IsMatchValue(attrVal, regex)
+		}}
 	}
 
 	return BoolExpr[K]{}

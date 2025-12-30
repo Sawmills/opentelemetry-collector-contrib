@@ -305,6 +305,10 @@ const (
 	OpAttrNeConstString     // Load attr (cached) + compare string const (not equal); arg = packed(attrIdx, constIdx); pushes bool
 	OpAttrFastEqConstString // Load attr (fast) + compare string const; arg = packed(keyIdx, constIdx); pushes bool
 	OpAttrFastNeConstString // Load attr (fast) + compare string const (not equal); arg = packed(keyIdx, constIdx); pushes bool
+
+	// IsMatch superinstructions (fused attr load + regex match)
+	OpAttrIsMatchConst     // Load attr (cached) + regex match; arg = packed(attrIdx, regexIdx); pushes bool
+	OpAttrFastIsMatchConst // Load attr (fast) + regex match; arg = packed(keyIdx, regexIdx); pushes bool
 )
 
 // Instruction is a 32-bit fixed-width instruction.
