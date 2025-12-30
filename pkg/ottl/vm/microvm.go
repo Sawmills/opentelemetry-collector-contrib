@@ -862,7 +862,18 @@ func runProgram[K any](stack []ir.Value, p *Program[K], loader func(uint32) (ir.
 			if int(idx) >= len(p.Regexps) || p.Regexps[idx] == nil {
 				return ir.Value{}, ErrInvalidRegex
 			}
-			target, ok, err := stringLikeFromValue(stack[sp-1])
+			// Fast path for TypeString (most common case)
+			val := stack[sp-1]
+			if val.Type == ir.TypeString {
+				str, ok := val.String()
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				stack[sp-1] = ir.BoolValue(p.Regexps[idx].MatchString(str))
+				continue
+			}
+			// Slow path for other string-like types
+			target, ok, err := stringLikeFromValue(val)
 			if err != nil {
 				return ir.Value{}, err
 			}
@@ -1936,7 +1947,18 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			if int(idx) >= len(p.Regexps) || p.Regexps[idx] == nil {
 				return ir.Value{}, ErrInvalidRegex
 			}
-			target, ok, err := stringLikeFromValue(stack[sp-1])
+			// Fast path for TypeString (most common case)
+			val := stack[sp-1]
+			if val.Type == ir.TypeString {
+				str, ok := val.String()
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				stack[sp-1] = ir.BoolValue(p.Regexps[idx].MatchString(str))
+				continue
+			}
+			// Slow path for other string-like types
+			target, ok, err := stringLikeFromValue(val)
 			if err != nil {
 				return ir.Value{}, err
 			}
