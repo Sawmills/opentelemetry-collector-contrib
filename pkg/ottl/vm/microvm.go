@@ -887,15 +887,29 @@ func runProgram[K any](stack []ir.Value, p *Program[K], loader func(uint32) (ir.
 			if sp < 2 {
 				return ir.Value{}, ErrStackUnderflow
 			}
-			pattern, err := stringFromValue(stack[sp-1])
-			if err != nil {
-				return ir.Value{}, err
+			patternVal := stack[sp-1]
+			if patternVal.Type != ir.TypeString {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			pattern, ok := patternVal.String()
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
 			}
 			r, err := dynamicRegexp(p, pattern)
 			if err != nil {
 				return ir.Value{}, fmt.Errorf("the regex pattern supplied to IsMatch '%q' is not a valid pattern: %w", pattern, err)
 			}
-			target, ok, err := stringLikeFromValue(stack[sp-2])
+			targetVal := stack[sp-2]
+			if targetVal.Type == ir.TypeString {
+				str, ok := targetVal.String()
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				stack[sp-2] = ir.BoolValue(r.MatchString(str))
+				sp--
+				continue
+			}
+			target, ok, err := stringLikeFromValue(targetVal)
 			if err != nil {
 				return ir.Value{}, err
 			}
@@ -1972,15 +1986,29 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			if sp < 2 {
 				return ir.Value{}, ErrStackUnderflow
 			}
-			pattern, err := stringFromValue(stack[sp-1])
-			if err != nil {
-				return ir.Value{}, err
+			patternVal := stack[sp-1]
+			if patternVal.Type != ir.TypeString {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			pattern, ok := patternVal.String()
+			if !ok {
+				return ir.Value{}, ErrTypeMismatch
 			}
 			r, err := dynamicRegexp(p, pattern)
 			if err != nil {
 				return ir.Value{}, fmt.Errorf("the regex pattern supplied to IsMatch '%q' is not a valid pattern: %w", pattern, err)
 			}
-			target, ok, err := stringLikeFromValue(stack[sp-2])
+			targetVal := stack[sp-2]
+			if targetVal.Type == ir.TypeString {
+				str, ok := targetVal.String()
+				if !ok {
+					return ir.Value{}, ErrTypeMismatch
+				}
+				stack[sp-2] = ir.BoolValue(r.MatchString(str))
+				sp--
+				continue
+			}
+			target, ok, err := stringLikeFromValue(targetVal)
 			if err != nil {
 				return ir.Value{}, err
 			}
