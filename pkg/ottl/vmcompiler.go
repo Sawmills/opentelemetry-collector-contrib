@@ -2336,7 +2336,22 @@ func (c *microCompiler[K]) buildAccessors() []vm.PathAccessor[K] {
 				if err != nil {
 					return ir.Value{}, err
 				}
-				return valueToVM(raw)
+				switch v := raw.(type) {
+				case nil:
+					return ir.Value{Type: ir.TypeNone}, nil
+				case string:
+					return ir.StringValue(v), nil
+				case int64:
+					return ir.Int64Value(v), nil
+				case float64:
+					return ir.Float64Value(v), nil
+				case bool:
+					return ir.BoolValue(v), nil
+				case []byte:
+					return ir.BytesValue(v), nil
+				default:
+					return valueToVM(raw)
+				}
 			}
 		}
 	}
