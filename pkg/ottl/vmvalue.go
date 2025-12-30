@@ -13,6 +13,9 @@ import (
 )
 
 func valueToVM(val any) (ir.Value, error) {
+	if val == nil {
+		return ir.Value{Type: ir.TypeNone}, nil
+	}
 	switch v := val.(type) {
 	case int64:
 		return ir.Int64Value(v), nil

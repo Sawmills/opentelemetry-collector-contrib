@@ -55,6 +55,31 @@ func newTestParser(t *testing.T, withVM bool) Parser[any] {
 	return p
 }
 
+// newTestParserWithLogGetter creates a test parser with vmLogRecordGetter set,
+// which enables direct log field opcodes (OpGetBody, OpGetSeverity, etc).
+func newTestParserWithLogGetter(t *testing.T, withVM bool) Parser[any] {
+	opts := []Option[any]{
+		WithVMLogRecordGetter[any](func(any) plog.LogRecord {
+			return plog.NewLogRecord()
+		}),
+	}
+	if withVM {
+		opts = append(opts, WithVMEnabled[any]())
+	}
+	p, err := NewParser[any](
+		map[string]Factory[any]{},
+		func(Path[any]) (GetSetter[any], error) {
+			return nil, errors.New("path parsing not supported in test")
+		},
+		component.TelemetrySettings{Logger: zap.NewNop()},
+		opts...,
+	)
+	if err != nil {
+		t.Fatalf("parser init failed: %v", err)
+	}
+	return p
+}
+
 type logTestCtx struct {
 	lr plog.LogRecord
 }
@@ -714,7 +739,7 @@ func TestCompileMicroComparison_AttrFastOpcode(t *testing.T) {
 }
 
 func TestCompileMicroComparison_DirectFieldBodyOpcode(t *testing.T) {
-	p := newTestParser(t, false)
+	p := newTestParserWithLogGetter(t, false)
 	cmp := &comparison{
 		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "body"}}}}},
 		Op:    eq,
@@ -737,7 +762,7 @@ func TestCompileMicroComparison_DirectFieldBodyOpcode(t *testing.T) {
 }
 
 func TestCompileMicroComparison_DirectFieldSeverityOpcode(t *testing.T) {
-	p := newTestParser(t, false)
+	p := newTestParserWithLogGetter(t, false)
 	cmp := &comparison{
 		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "severity_number"}}}}},
 		Op:    eq,
@@ -760,7 +785,7 @@ func TestCompileMicroComparison_DirectFieldSeverityOpcode(t *testing.T) {
 }
 
 func TestCompileMicroComparison_DirectFieldTimestampOpcode(t *testing.T) {
-	p := newTestParser(t, false)
+	p := newTestParserWithLogGetter(t, false)
 	cmp := &comparison{
 		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "time_unix_nano"}}}}},
 		Op:    eq,
@@ -1082,7 +1107,7 @@ func TestCompileMicroComparison_DirectFieldScopeDroppedAttributesCountOpcode(t *
 }
 
 func TestCompileMicroComparison_DirectFieldObservedTimestampOpcode(t *testing.T) {
-	p := newTestParser(t, false)
+	p := newTestParserWithLogGetter(t, false)
 	cmp := &comparison{
 		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "observed_time_unix_nano"}}}}},
 		Op:    eq,
@@ -1105,7 +1130,7 @@ func TestCompileMicroComparison_DirectFieldObservedTimestampOpcode(t *testing.T)
 }
 
 func TestCompileMicroComparison_DirectFieldSeverityTextOpcode(t *testing.T) {
-	p := newTestParser(t, false)
+	p := newTestParserWithLogGetter(t, false)
 	cmp := &comparison{
 		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "severity_text"}}}}},
 		Op:    eq,
@@ -1128,7 +1153,7 @@ func TestCompileMicroComparison_DirectFieldSeverityTextOpcode(t *testing.T) {
 }
 
 func TestCompileMicroComparison_DirectFieldLogFlagsOpcode(t *testing.T) {
-	p := newTestParser(t, false)
+	p := newTestParserWithLogGetter(t, false)
 	cmp := &comparison{
 		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "flags"}}}}},
 		Op:    eq,
@@ -1518,7 +1543,7 @@ func TestCompileMicroComparison_NilLiteralConst(t *testing.T) {
 }
 
 func TestCompileMicroComparison_NilComparisonOpIsNil(t *testing.T) {
-	p := newTestParser(t, false)
+	p := newTestParserWithLogGetter(t, false)
 	n := isNil(true)
 	cmp := &comparison{
 		Left:  value{Literal: &mathExprLiteral{Path: &path{Fields: []field{{Name: "body"}}}}},

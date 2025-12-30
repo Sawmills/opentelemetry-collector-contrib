@@ -1915,7 +1915,8 @@ func (c *microCompiler[K]) emitDirectField(path *path) (bool, error) {
 		if len(field.Keys) != 0 {
 			return false, nil
 		}
-		if path.Context == "" || path.Context == "log" {
+		logAllowed := c.parser != nil && c.parser.vmLogRecordGetter != nil
+		if logAllowed && (path.Context == "" || path.Context == "log") {
 			switch field.Name {
 			case "body":
 				emit(ir.OpGetBody)
