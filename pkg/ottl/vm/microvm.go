@@ -306,6 +306,25 @@ func RunWithStackAndContext[K any](stack []ir.Value, p *Program[K], ctx context.
 			}
 			return p.Consts[arg], nil
 		}
+	} else if len(p.Code) == 2 {
+		inst0 := p.Code[0]
+		inst1 := p.Code[1]
+		op0, arg0 := inst0.Op(), inst0.Arg()
+		op1, arg1 := inst1.Op(), inst1.Arg()
+
+		if op0 == ir.OpLoadAttrCached && op1 == ir.OpEqConst {
+			if int(arg0) >= len(p.Accessors) || p.Accessors[arg0] == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			if int(arg1) >= len(p.Consts) {
+				return ir.Value{}, ErrInvalidConst
+			}
+			val, err := p.Accessors[arg0](ctx, tCtx)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			return compareOp(ir.OpEq, val, p.Consts[arg1])
+		}
 	}
 	return runProgramWithContext(stack, p, ctx, tCtx)
 }
