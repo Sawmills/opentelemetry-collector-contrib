@@ -323,7 +323,14 @@ func RunWithStackAndContext[K any](stack []ir.Value, p *Program[K], ctx context.
 			if err != nil {
 				return ir.Value{}, err
 			}
-			return compareOp(ir.OpEq, val, p.Consts[arg1])
+			constVal := p.Consts[arg1]
+			if val.Type == ir.TypeInt && constVal.Type == ir.TypeInt {
+				return ir.BoolValue(int64(val.Num) == int64(constVal.Num)), nil
+			}
+			if val.Type == ir.TypeString && constVal.Type == ir.TypeString {
+				return ir.BoolValue(stringsEqual(val, constVal)), nil
+			}
+			return compareOp(ir.OpEq, val, constVal)
 		}
 	}
 	return runProgramWithContext(stack, p, ctx, tCtx)
