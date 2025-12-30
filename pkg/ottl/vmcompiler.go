@@ -2319,8 +2319,15 @@ func (c *microCompiler[K]) buildAccessors() []vm.PathAccessor[K] {
 		}
 		// No type assertion needed - K is concrete at compile time
 		if vmGetter != nil {
-			accessors[i] = func(ctx context.Context, tCtx K) (ir.Value, error) {
-				return vmGetter.GetVM(ctx, tCtx)
+			// Fast path: if VMGetterFunc, use directly without interface dispatch.
+			// VMGetterFunc and PathAccessor have identical signatures, so direct cast works.
+			if fn, ok := vmGetter.(VMGetterFunc[K]); ok {
+				accessors[i] = vm.PathAccessor[K](fn)
+			} else {
+				// Fallback: interface dispatch for other VMGetter implementations
+				accessors[i] = func(ctx context.Context, tCtx K) (ir.Value, error) {
+					return vmGetter.GetVM(ctx, tCtx)
+				}
 			}
 		} else {
 			accessors[i] = func(ctx context.Context, tCtx K) (ir.Value, error) {
