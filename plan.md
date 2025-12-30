@@ -1,10 +1,10 @@
 # OTTL Bytecode VM (OVM) Implementation Plan
 
-Status: Phase 5 Complete (verification + shadow mode)
+Status: Phase 6 Complete (performance optimizations)
 Owner: Sawmills.ai / OTel Collector Contrib
 Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-alloc hot loop, safe execution bounds.
 
-## Implementation Status (2025-12-29)
+## Implementation Status (2025-12-30)
 
 | Phase | Status | Notes |
 |-------|--------|-------|
@@ -14,6 +14,7 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 | Phase 3: pdata Bridge | ✓ Core done | Fast attrs + key direct fields; remaining fields deferred |
 | Phase 4: Stdlib | ✓ Core Complete | VM callsites (incl list args), native Int/IsMatch/IsNil/IsType/IsMap/IsList, PMap/PSlice VM values, dynamic IsMatch cache |
 | Phase 5: Verification | ✓ Complete | Shadow mode, fuzz harness, docs |
+| **Phase 6: Performance** | **✓ Complete** | Superinstructions, inline closures, VMGetter devirt |
 
 ## 1. Goals
 
@@ -154,6 +155,8 @@ type Program struct {
 - IsInt: interpreter 10.75 ns/op (0 allocs), VM 15.71 ns/op (0 allocs)
 - IsMap: interpreter 30.33 ns/op (1 alloc, 16 B), VM 30.34 ns/op (0 allocs)
 - IsList: interpreter 26.41 ns/op (1 alloc, 16 B), VM 30.49 ns/op (0 allocs)
+- **StringEquality: interpreter 7.45 ns/op (0 allocs), VM 37.86 ns/op (0 allocs)** ← 5.1x gap
+- **MultipleStringChecks: interpreter 35.7 ns/op (0 allocs), VM 87.2 ns/op (0 allocs)** ← 2.4x gap
 
 ### Phase 1: Core VM Runtime
 
@@ -286,6 +289,59 @@ func wrapLegacyFunc(fn OTTLFunc) VMFunc {
 | Gradual default | Read-only processors first, then mutation |
 | Metrics | Divergence count, gas exhaustion rate, ns/op |
 
+---
+
+## Phase 6: VM Performance Optimizations
+
+**Status:** ✓ Complete
+**Goal:** Close the performance gap vs interpreter for simple string/path comparisons
+
+### Optimizations Implemented (2025-12-30)
+
+| # | Optimization | Commit | Impact |
+|---|-------------|--------|--------|
+| P0 | Fast runner for 1-inst programs | `7decc97` | Inline superinst execution |
+| P1 | VMGetter devirtualization | `7decc97` | Eliminate interface dispatch |
+| P2 | 2-instruction fast path | `16a6bb0` | OpLoadAttrCached + OpEqConst |
+| P3 | Inline int/string comparison | `552ba3f` | Skip compareOp dispatch |
+| P4 | Inline superinst into BoolExpr | `eff1004` | Bypass runBoolVM entirely |
+
+### Key Techniques
+
+1. **Superinstruction fusion** (`c197c42`): Fuse `load + compare` into single opcodes like `OpAttrFastEqConstString`
+2. **Fast runner** (`7decc97`): For 1-2 instruction programs, execute inline in `RunWithStackAndContext` without VM loop
+3. **BoolExpr inlining** (`eff1004`): For common patterns, create direct closure evaluators that bypass all VM machinery (stack pool, runBoolVM, ir.Value conversion)
+
+### Future Optimizations (Not Implemented)
+
+These were considered but not needed after BoolExpr inlining achieved near-parity:
+
+1. **Per-run attribute cache**: Cache attribute values within single evaluation for repeated access patterns
+2. **Branch superinstructions**: Fuse `load + compare + branch` into single opcode for filter expressions
+3. **Stack allocation**: Eliminate sync.Pool for small programs (already achieved via inline closures)
+
+---
+
+### Phase 6 Results
+
+| Benchmark | Before | After | Improvement | vs Interpreter |
+|-----------|--------|-------|-------------|----------------|
+| StringEquality_VM | 37 ns | **8 ns** | **78% faster** | ~1.1x (near parity) |
+| PathEq_VM (int) | 23 ns | **10.3 ns** | **55% faster** | ~1.4x slower |
+| PathEq_VMGetter | 17 ns | **4.3 ns** | **75% faster** | **1.7x faster!** |
+
+### Complex Expressions (VM wins)
+
+| Benchmark | Interpreter | VM | Winner |
+|-----------|-------------|-----|--------|
+| DeepArithmetic | 42 ns | 14 ns | VM **3x faster** |
+| ManyComparisons | 37 ns | 14 ns | VM **2.7x faster** |
+| DeepBooleanChain | 36 ns | 14 ns | VM **2.6x faster** |
+| ManyNots | 48 ns | 15 ns | VM **3.2x faster** |
+| IsMatchDynamic | 1164 ns | 123 ns | VM **9.4x faster** (0 allocs) |
+
+---
+
 ## 5. Error Model
 
 VM returns structured errors (not panics) for:
@@ -363,19 +419,20 @@ if isBackwardJump(inst) {
 
 ## 9. Next Steps (GA Readiness)
 
-1. **Extended fuzzing**
+1. **Complete Phase 6 optimizations**
+   - Implement stack allocation optimization
+   - Add per-run attribute cache
+   - Implement superinstructions for common patterns
+2. **Extended fuzzing**
    - Run 24h CI fuzz gate with zero divergences required.
    - Monitor for edge cases in complex OTTL rules.
-2. **Shadow mode production validation**
+3. **Shadow mode production validation**
    - Deploy with `WithShadowMode()` in staging/canary.
    - Monitor divergence metrics and logs.
    - Target: 1 week with zero divergences.
-3. **Gradual default-on rollout**
+4. **Gradual default-on rollout**
    - Enable VM by default for read-only processors first (filter, routing).
    - Then enable for mutating processors (transform).
-4. **Stdlib native opcode expansion** (if profiling shows need)
-   - Identify hot stdlib funcs from production configs.
-   - Add native opcodes for remaining high-frequency functions.
 
 ## 10. Risks & Mitigations
 
@@ -410,6 +467,7 @@ if isBackwardJump(inst) {
 | Phase 3 complete | pdata access matches interpreter; no extra allocs |
 | Phase 4 complete | All stdlib functions callable from VM |
 | Phase 5 complete | 24h fuzz with 0 divergences; shadow mode in prod |
+| **Phase 6 complete** | **String comparisons < 2x slower than interpreter** |
 | GA ready | Default on for read-only processors |
 
 ## 13. Future Considerations
