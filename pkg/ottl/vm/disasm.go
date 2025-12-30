@@ -290,6 +290,14 @@ func opcodeName(op ir.Opcode) string {
 		return "ATTR_IS_MATCH_CONST"
 	case ir.OpAttrFastIsMatchConst:
 		return "ATTR_FAST_IS_MATCH_CONST"
+	case ir.OpAttrIsNil:
+		return "ATTR_IS_NIL"
+	case ir.OpAttrIsNotNil:
+		return "ATTR_IS_NOT_NIL"
+	case ir.OpAttrFastIsNil:
+		return "ATTR_FAST_IS_NIL"
+	case ir.OpAttrFastIsNotNil:
+		return "ATTR_FAST_IS_NOT_NIL"
 	default:
 		return fmt.Sprintf("OP_%d", op)
 	}

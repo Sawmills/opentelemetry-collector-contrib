@@ -309,6 +309,12 @@ const (
 	// IsMatch superinstructions (fused attr load + regex match)
 	OpAttrIsMatchConst     // Load attr (cached) + regex match; arg = packed(attrIdx, regexIdx); pushes bool
 	OpAttrFastIsMatchConst // Load attr (fast) + regex match; arg = packed(keyIdx, regexIdx); pushes bool
+
+	// Nil check superinstructions (fused attr load + nil check)
+	OpAttrIsNil        // Load attr (cached) + check nil; arg = attrIdx; pushes bool
+	OpAttrIsNotNil     // Load attr (cached) + check not nil; arg = attrIdx; pushes bool
+	OpAttrFastIsNil    // Load attr (fast) + check nil; arg = keyIdx; pushes bool
+	OpAttrFastIsNotNil // Load attr (fast) + check not nil; arg = keyIdx; pushes bool
 )
 
 // Instruction is a 32-bit fixed-width instruction.

@@ -2423,6 +2423,33 @@ func (c *microCompiler[K]) peepholeOptimize() {
 					continue
 				}
 			}
+
+			if nextOp == ir.OpIsNil {
+				attrIdx := inst.Arg()
+				hasNot := i+2 < len(c.code) && c.code[i+2].Op() == ir.OpNot
+				var fusedOp ir.Opcode
+				if op == ir.OpLoadAttrCached {
+					if hasNot {
+						fusedOp = ir.OpAttrIsNotNil
+					} else {
+						fusedOp = ir.OpAttrIsNil
+					}
+				} else {
+					if hasNot {
+						fusedOp = ir.OpAttrFastIsNotNil
+					} else {
+						fusedOp = ir.OpAttrFastIsNil
+					}
+				}
+				optimized = append(optimized, ir.Encode(fusedOp, attrIdx))
+				i++
+				oldToNew[i] = len(optimized)
+				if hasNot {
+					i++
+					oldToNew[i] = len(optimized)
+				}
+				continue
+			}
 		}
 
 		optimized = append(optimized, inst)

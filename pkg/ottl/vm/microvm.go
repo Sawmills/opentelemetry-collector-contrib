@@ -363,6 +363,60 @@ func RunWithStackAndContext[K any](stack []ir.Value, p *Program[K], ctx context.
 			}
 			return ir.BoolValue(p.Regexps[regexIdx].MatchString(target)), nil
 
+		case ir.OpAttrIsNil:
+			if int(arg) >= len(p.Accessors) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			accessor := p.Accessors[arg]
+			if accessor == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := accessor(ctx, tCtx)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			return ir.BoolValue(attrVal.Type == ir.TypeNone), nil
+
+		case ir.OpAttrIsNotNil:
+			if int(arg) >= len(p.Accessors) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			accessor := p.Accessors[arg]
+			if accessor == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := accessor(ctx, tCtx)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			return ir.BoolValue(attrVal.Type != ir.TypeNone), nil
+
+		case ir.OpAttrFastIsNil:
+			if int(arg) >= len(p.AttrKeys) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			if p.AttrGetter == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[arg])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			return ir.BoolValue(attrVal.Type == ir.TypeNone), nil
+
+		case ir.OpAttrFastIsNotNil:
+			if int(arg) >= len(p.AttrKeys) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			if p.AttrGetter == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[arg])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			return ir.BoolValue(attrVal.Type != ir.TypeNone), nil
+
 		case ir.OpLoadConst:
 			if int(arg) >= len(p.Consts) {
 				return ir.Value{}, ErrInvalidConst
@@ -3484,6 +3538,80 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 				continue
 			}
 			stack[sp] = ir.BoolValue(p.Regexps[regexIdx].MatchString(target))
+			sp++
+
+		case ir.OpAttrIsNil:
+			attrIdx := inst.Arg()
+			if int(attrIdx) >= len(p.Accessors) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			accessor := p.Accessors[attrIdx]
+			if accessor == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := accessor(ctx, tCtx)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.BoolValue(attrVal.Type == ir.TypeNone)
+			sp++
+
+		case ir.OpAttrIsNotNil:
+			attrIdx := inst.Arg()
+			if int(attrIdx) >= len(p.Accessors) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			accessor := p.Accessors[attrIdx]
+			if accessor == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := accessor(ctx, tCtx)
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.BoolValue(attrVal.Type != ir.TypeNone)
+			sp++
+
+		case ir.OpAttrFastIsNil:
+			keyIdx := inst.Arg()
+			if int(keyIdx) >= len(p.AttrKeys) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			if p.AttrGetter == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[keyIdx])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.BoolValue(attrVal.Type == ir.TypeNone)
+			sp++
+
+		case ir.OpAttrFastIsNotNil:
+			keyIdx := inst.Arg()
+			if int(keyIdx) >= len(p.AttrKeys) {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			if p.AttrGetter == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[keyIdx])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			if sp >= len(stack) {
+				return ir.Value{}, ErrStackOverflow
+			}
+			stack[sp] = ir.BoolValue(attrVal.Type != ir.TypeNone)
 			sp++
 
 		default:
