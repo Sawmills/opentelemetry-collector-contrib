@@ -56,6 +56,24 @@ The filter processor also allows configuring an optional field, `error_mode`, wh
 
 If not specified, `propagate` will be used.
 
+### VM Runtime Settings
+
+- `OTELCOL_OTTL_VM=true` enables the OTTL bytecode VM (default interpreter).
+- Metrics (when MeterProvider is configured): `ottl_vm_execution_count`, `ottl_vm_error_count{type}`, `ottl_vm_execution_time` (ns), `ottl_vm_shadow_divergence_total{type}` (shadow mode only).
+- Gas limit (per processor): `vm_gas_limit` (uint64); zero uses the default.
+
+Example:
+
+```yaml
+processors:
+  filter/ottl:
+    vm_gas_limit: 15000
+    error_mode: ignore
+    traces:
+      span:
+        - attributes["container.name"] == "app_container_1"
+```
+
 ### Examples
 
 ```yaml
