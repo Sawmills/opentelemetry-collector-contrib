@@ -48,7 +48,9 @@ type Config struct {
 	ProfileStatements []common.ContextStatements `mapstructure:"profile_statements"`
 
 	FlattenData bool `mapstructure:"flatten_data"`
-	logger      *zap.Logger
+	// VMGasLimit sets the gas budget for the OTTL VM. Zero uses the default.
+	VMGasLimit uint64 `mapstructure:"vm_gas_limit"`
+	logger     *zap.Logger
 
 	dataPointFunctions map[string]ottl.Factory[ottldatapoint.TransformContext]
 	logFunctions       map[string]ottl.Factory[ottllog.TransformContext]
@@ -143,6 +145,11 @@ var _ component.Config = (*Config)(nil)
 
 func (c *Config) Validate() error {
 	var errors error
+
+	// Apply VM gas limit globally for all parsers in this processor instance.
+	if c.VMGasLimit > 0 {
+		ottl.SetDefaultVMGasLimit(c.VMGasLimit)
+	}
 
 	if len(c.TraceStatements) > 0 {
 		pc, err := common.NewTraceParserCollection(component.TelemetrySettings{Logger: zap.NewNop()}, common.WithSpanParser(c.spanFunctions), common.WithSpanEventParser(c.spanEventFunctions))
