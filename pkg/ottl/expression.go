@@ -765,12 +765,21 @@ func (g StandardStringLikeGetter[K]) Get(ctx context.Context, tCtx K) (*string, 
 	case []byte:
 		result = hex.EncodeToString(v)
 	case pcommon.Map:
+		// Fast path: use map's AsRaw and avoid allocations when empty
+		if v.Len() == 0 {
+			result = "{}"
+			break
+		}
 		resultBytes, err := json.Marshal(v.AsRaw())
 		if err != nil {
 			return nil, err
 		}
 		result = string(resultBytes)
 	case pcommon.Slice:
+		if v.Len() == 0 {
+			result = "[]"
+			break
+		}
 		resultBytes, err := json.Marshal(v.AsRaw())
 		if err != nil {
 			return nil, err
@@ -779,11 +788,17 @@ func (g StandardStringLikeGetter[K]) Get(ctx context.Context, tCtx K) (*string, 
 	case pcommon.Value:
 		result = v.AsString()
 	default:
-		resultBytes, err := json.Marshal(v)
-		if err != nil {
-			return nil, TypeError(fmt.Sprintf("unsupported type: %T", v))
+		// Attempt direct string formatting without JSON when possible
+		switch t := v.(type) {
+		case fmt.Stringer:
+			result = t.String()
+		default:
+			resultBytes, err := json.Marshal(v)
+			if err != nil {
+				return nil, TypeError(fmt.Sprintf("unsupported type: %T", v))
+			}
+			result = string(resultBytes)
 		}
-		result = string(resultBytes)
 	}
 	return &result, nil
 }

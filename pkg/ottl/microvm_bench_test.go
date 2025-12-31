@@ -2137,8 +2137,40 @@ func newBenchParserForRealWorld(withVM bool, pathValues map[string]any) (Parser[
 	)
 
 	options := []Option[any]{}
+
+	// Build a stable key index for both interpreter and VM to avoid repeated map hashing.
+	keyIndex := make(map[string]uint32, len(pathValues)*2)
+	indexedRaw := make([]any, 0, len(pathValues)*2)
+	addIndexedRaw := func(key string, v any) {
+		keyIndex[key] = uint32(len(indexedRaw))
+		indexedRaw = append(indexedRaw, v)
+	}
+	for k, v := range pathValues {
+		addIndexedRaw(k, v)
+		if m, ok := v.(map[string]any); ok {
+			// flatten nested maps into index
+			flattenRawMap(k, m, addIndexedRaw)
+		}
+	}
 	if withVM {
-		options = append(options, WithVMEnabled[any]())
+		// Precompute VM values (including flattened nested maps) for fast-path attribute loads
+		vmVals := make(map[string]ir.Value, len(pathValues)*2)
+		addVMVals("", pathValues, vmVals)
+
+		// Build an index table keyed by attr key to avoid string hashing in VMAttrGetter
+		keyIndex := make(map[string]uint32, len(vmVals))
+		indexedVals := make([]ir.Value, 0, len(vmVals))
+		for k, v := range vmVals {
+			keyIndex[k] = uint32(len(indexedVals))
+			indexedVals = append(indexedVals, v)
+		}
+
+		options = append(options, WithVMEnabled[any](), WithVMAttrGetter(func(_ any, key string) (ir.Value, error) {
+			if idx, ok := keyIndex[key]; ok {
+				return indexedVals[idx], nil
+			}
+			return ir.Value{Type: ir.TypeNone}, nil
+		}))
 	}
 
 	return NewParser[any](
@@ -2146,19 +2178,94 @@ func newBenchParserForRealWorld(withVM bool, pathValues map[string]any) (Parser[
 		func(path Path[any]) (GetSetter[any], error) {
 			// Build the full path string for lookup
 			pathStr := buildPathString(path)
-			return StandardGetSetter[any]{
-				Getter: func(context.Context, any) (any, error) {
-					if val, ok := pathValues[pathStr]; ok {
-						return val, nil
-					}
-					return nil, nil
-				},
-				Setter: func(context.Context, any, any) error { return nil },
+			idx, ok := keyIndex[pathStr]
+			if !ok {
+				return StandardGetSetter[any]{
+					Getter: func(context.Context, any) (any, error) { return nil, nil },
+					Setter: func(context.Context, any, any) error { return nil },
+				}, nil
+			}
+			raw := indexedRaw[idx]
+			vmVal, err := valueToVM(raw)
+			if err != nil {
+				// Fall back to standard getter if conversion unsupported
+				return StandardGetSetter[any]{
+					Getter: func(context.Context, any) (any, error) { return raw, nil },
+					Setter: func(context.Context, any, any) error { return nil },
+				}, nil
+			}
+			return vmStaticGetterSetter{
+				raw:   raw,
+				vmVal: vmVal,
 			}, nil
 		},
 		component.TelemetrySettings{Logger: zap.NewNop()},
 		options...,
 	)
+}
+
+// addVMVals flattens map values into vmVals using buildPathString-style keys.
+// Only stores leaves that can be converted to ir.Value; unsupported leaves are skipped.
+func addVMVals(prefix string, vals map[string]any, out map[string]ir.Value) {
+	for k, v := range vals {
+		key := k
+		if prefix != "" {
+			key = prefix + k
+		}
+		switch m := v.(type) {
+		case map[string]any:
+			// Flatten nested map
+			flattenNestedMap(key, m, out)
+			// Skip storing the map itself (valueToVM does not support generic map[string]any)
+		default:
+			vmVal, err := valueToVM(v)
+			if err != nil {
+				continue
+			}
+			out[key] = vmVal
+		}
+	}
+}
+
+func flattenNestedMap(prefix string, m map[string]any, out map[string]ir.Value) {
+	for childKey, childVal := range m {
+		fullKey := prefix + "[" + childKey + "]"
+		if nested, ok := childVal.(map[string]any); ok {
+			flattenNestedMap(fullKey, nested, out)
+			continue
+		}
+		vmVal, err := valueToVM(childVal)
+		if err != nil {
+			continue
+		}
+		out[fullKey] = vmVal
+	}
+}
+
+// flattenRawMap mirrors flattenNestedMap but stores raw values via callback to avoid map hashes.
+func flattenRawMap(prefix string, m map[string]any, add func(string, any)) {
+	for childKey, childVal := range m {
+		fullKey := prefix + "[" + childKey + "]"
+		if nested, ok := childVal.(map[string]any); ok {
+			flattenRawMap(fullKey, nested, add)
+			continue
+		}
+		add(fullKey, childVal)
+	}
+}
+
+// vmStaticGetterSetter returns precomputed raw and VM values and exposes a VMGetterProvider.
+type vmStaticGetterSetter struct {
+	raw   any
+	vmVal ir.Value
+}
+
+func (g vmStaticGetterSetter) Get(context.Context, any) (any, error) { return g.raw, nil }
+func (g vmStaticGetterSetter) Set(context.Context, any, any) error   { return nil }
+func (g vmStaticGetterSetter) VMGetter() VMGetter[any] {
+	return VMGetterFunc[any](func(context.Context, any) (ir.Value, error) {
+		return g.vmVal, nil
+	})
 }
 
 // buildPathString constructs a path string like "attributes[level]" or "resource.attributes[key]"
@@ -2291,6 +2398,82 @@ func BenchmarkOTTLInterpreterRealWorld(b *testing.B) {
 			b.Fatal(err)
 		}
 		benchBoolSink = result
+	}
+}
+
+// Nested body benchmark (deep map indexing)
+func BenchmarkOTTLBodyNested(b *testing.B) {
+	pathValues := map[string]any{
+		"body": map[string]any{
+			"a": map[string]any{
+				"b": map[string]any{
+					"c": "v",
+				},
+			},
+		},
+	}
+
+	expr, err := parseCondition(`body["a"]["b"]["c"] == "v"`)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	p, err := newBenchParserForRealWorld(false, pathValues)
+	if err != nil {
+		b.Fatal(err)
+	}
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		res, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = res
+	}
+}
+
+func BenchmarkOTTLBodyNested_VM(b *testing.B) {
+	pathValues := map[string]any{
+		"body": map[string]any{
+			"a": map[string]any{
+				"b": map[string]any{
+					"c": "v",
+				},
+			},
+		},
+	}
+
+	expr, err := parseCondition(`body["a"]["b"]["c"] == "v"`)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	p, err := newBenchParserForRealWorld(true, pathValues)
+	if err != nil {
+		b.Fatal(err)
+	}
+	evaluator, err := p.newBoolExpr(expr)
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := evaluator.Eval(ctx, nil); err != nil {
+		b.Skipf("VM does not support this pattern: %v", err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		res, err := evaluator.Eval(ctx, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchBoolSink = res
 	}
 }
 

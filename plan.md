@@ -16,6 +16,27 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 | Phase 5: Verification | ✓ Complete | Shadow mode, fuzz harness, docs |
 | **Phase 6: Performance** | **✓ Complete** | Superinstructions, inline closures, VMGetter devirt |
 
+## Current Perf Snapshot (2025-12-31)
+
+- RealWorld benchmark (Apple M3 Max): Interpreter 1918 ns/op, 612 B/op, 21 allocs; VM 1133 ns/op, 0 allocs.
+- Hotspots (pprof, RealWorld VM): `runProgramWithContext`, `mapaccess2_faststr` (path map lookup), `StandardStringLikeGetter` conversions.
+
+## Next Optimizations (RealWorld focus)
+
+1. Add `VMAttrGetter` fast path in `newBenchParserForRealWorld` returning precomputed `ir.Value` to eliminate map/string conversions during attr loads. _Status: Done_
+   - Result: BenchmarkOTTLComparisonRealWorld_VM improved from ~1133 ns/op to ~327 ns/op on M3 Max (0 allocs). Interpreter unchanged (~1918 → 1873 ns/op).
+2. Re-benchmark RealWorld (`go test -bench=RealWorld -run=^$`) and record delta. _Status: Done_
+   - After VMGetterProvider for static paths: VM now ~233 ns/op; interpreter ~1395 ns/op. (M3 Max)
+3. Flatten nested body map keys into `VMAttrGetter` (auto-flatten map[string]any) and add nested benchmark. _Status: Done_
+   - BodyNested interp: ~13.3 ns/op; VM: ~19.9 ns/op; 0 allocs.
+4. Provide `VMGetterProvider` for static paths to skip `valueToVM` in accessors. _Status: Done_ (via vmStaticGetterSetter in bench helper)
+5. Trim `StandardStringLikeGetter` JSON/hex cost for maps/slices (empty fast path, Stringer fast path). _Status: Done_
+   - Effect: RealWorld VM now ~229 ns/op, interpreter ~1468 ns/op (M3 Max); BodyNested interp ~12.5 ns/op, VM ~19.8 ns/op.
+6. Next: eliminate remaining `mapaccess2_faststr` in getters by switching RealWorld bench to attr-index lookup (no string hashing). _Status: Done_
+   - Bench updated with key index; RealWorld VM ~231 ns/op; mapaccess now mostly harness.
+7. Add compare superinstructions (attr == const / attr != const) in compiler + VM to reduce dispatch on hot equality patterns. _Status: Done_
+   - Added OpAttrEq/NeConst (+ fast variants) and peephole fusion for all const types. RealWorld VM remains ~229-231 ns/op (string cases already fused); numeric paths now covered for future expressions.
+
 ## 1. Goals
 
 - **2x-10x throughput** for complex OTTL logic

@@ -554,14 +554,11 @@ func TestCompileMicroComparison_PathEqConstOpcode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile failed: %v", err)
 	}
-	if len(program.program.Code) != 2 {
-		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	if len(program.program.Code) != 1 {
+		t.Fatalf("expected 1 instruction, got %d", len(program.program.Code))
 	}
-	if got := program.program.Code[0].Op(); got != ir.OpLoadAttrCached {
-		t.Fatalf("expected LOAD_ATTR_CACHED, got %v", got)
-	}
-	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
-		t.Fatalf("expected EQ_CONST, got %v", got)
+	if got := program.program.Code[0].Op(); got != ir.OpAttrEqConst {
+		t.Fatalf("expected ATTR_EQ_CONST, got %v", got)
 	}
 }
 
@@ -671,14 +668,11 @@ func TestCompileMicroComparison_PathEqConstSwapOpcode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile failed: %v", err)
 	}
-	if len(program.program.Code) != 2 {
-		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	if len(program.program.Code) != 1 {
+		t.Fatalf("expected 1 instruction, got %d", len(program.program.Code))
 	}
-	if got := program.program.Code[0].Op(); got != ir.OpLoadAttrCached {
-		t.Fatalf("expected LOAD_ATTR_CACHED, got %v", got)
-	}
-	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
-		t.Fatalf("expected EQ_CONST, got %v", got)
+	if got := program.program.Code[0].Op(); got != ir.OpAttrEqConst {
+		t.Fatalf("expected ATTR_EQ_CONST, got %v", got)
 	}
 }
 
@@ -724,14 +718,11 @@ func TestCompileMicroComparison_AttrFastOpcode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile failed: %v", err)
 	}
-	if len(program.program.Code) != 2 {
-		t.Fatalf("expected 2 instructions, got %d", len(program.program.Code))
+	if len(program.program.Code) != 1 {
+		t.Fatalf("expected 1 instruction, got %d", len(program.program.Code))
 	}
-	if got := program.program.Code[0].Op(); got != ir.OpLoadAttrFast {
-		t.Fatalf("expected LOAD_ATTR_FAST, got %v", got)
-	}
-	if got := program.program.Code[1].Op(); got != ir.OpEqConst {
-		t.Fatalf("expected EQ_CONST, got %v", got)
+	if got := program.program.Code[0].Op(); got != ir.OpAttrFastEqConst {
+		t.Fatalf("expected ATTR_FAST_EQ_CONST, got %v", got)
 	}
 	if len(program.program.AttrKeys) != 1 || program.program.AttrKeys[0] != "foo" {
 		t.Fatalf("unexpected attr keys: %v", program.program.AttrKeys)
