@@ -66,7 +66,7 @@ func StringValue(v string) Value {
 	if len(v) == 0 {
 		return Value{Type: TypeString}
 	}
-	return Value{Type: TypeString, Ptr: unsafe.Pointer(&v)}
+	return Value{Type: TypeString, Num: uint64(len(v)), Ptr: unsafe.Pointer(&v)}
 }
 
 // BytesValue constructs a byte slice Value without heap allocation.
