@@ -21,6 +21,9 @@ const vmEnvVar = "OTELCOL_OTTL_VM"
 func WithVMEnabled[K any]() Option[K] {
 	return func(p *Parser[K]) {
 		p.vmEnabled = true
+		if p.vmTelemetry == nil {
+			p.vmTelemetry = newVMTelemetry(p.telemetrySettings.MeterProvider, p.telemetrySettings.Logger)
+		}
 		if p.vmStackPool == nil {
 			p.vmStackPool = vm.NewStackPool(defaultMicroVMStackSize)
 		}

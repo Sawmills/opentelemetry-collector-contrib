@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
@@ -40,6 +41,33 @@ func alwaysTrue[K any](context.Context, K) (bool, error) {
 
 func alwaysFalse[K any](context.Context, K) (bool, error) {
 	return false, nil
+}
+
+func (p *Parser[K]) vmBoolExpr(origText string, fn boolExpressionEvaluator[K]) BoolExpr[K] {
+	return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
+		done := p.vmObserver(ctx, origText)
+		result, err := fn(ctx, tCtx)
+		done(err)
+		return result, err
+	}}
+}
+
+func (p *Parser[K]) vmObserver(ctx context.Context, origText string) func(error) {
+	metrics := p.vmTelemetry
+	if metrics == nil {
+		return func(err error) {
+			if err != nil {
+				p.logVMError(err, origText)
+			}
+		}
+	}
+	start := time.Now()
+	return func(err error) {
+		metrics.record(ctx, time.Since(start), err)
+		if err != nil {
+			p.logVMError(err, origText)
+		}
+	}
 }
 
 // builds a function that returns a short-circuited result of ANDing
@@ -401,7 +429,6 @@ func (p *Parser[K]) runBoolVM(ctx context.Context, tCtx K, program *microProgram
 	}
 
 	if err != nil {
-		p.logVMError(err)
 		return false, err
 	}
 	result, ok := val.Bool()
@@ -411,7 +438,7 @@ func (p *Parser[K]) runBoolVM(ctx context.Context, tCtx K, program *microProgram
 	return result, nil
 }
 
-func (p *Parser[K]) newComparisonEvaluator(comparison *comparison) (BoolExpr[K], error) {
+func (p *Parser[K]) newComparisonEvaluator(comparison *comparison, origText string) (BoolExpr[K], error) {
 	if comparison == nil {
 		return BoolExpr[K]{alwaysTrue[K]}, nil
 	}
@@ -420,21 +447,16 @@ func (p *Parser[K]) newComparisonEvaluator(comparison *comparison) (BoolExpr[K],
 		program, err := p.getOrCompileVMProgram(comparison)
 		if err == nil {
 			if len(program.getters) == 0 && len(program.program.AttrKeys) == 0 && !program.needsContext {
-				return BoolExpr[K]{func(context.Context, K) (bool, error) {
-					result, err := runBoolVMConstOnly(program)
-					if err != nil {
-						p.logVMError(err)
-						return false, err
-					}
-					return result, nil
-				}}, nil
+				return p.vmBoolExpr(origText, func(context.Context, K) (bool, error) {
+					return runBoolVMConstOnly(program)
+				}), nil
 			}
 			if inlined := p.tryInlineSuperinstruction(program); inlined.boolExpressionEvaluator != nil {
-				return inlined, nil
+				return p.vmBoolExpr(origText, inlined.boolExpressionEvaluator), nil
 			}
-			return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
+			return p.vmBoolExpr(origText, func(ctx context.Context, tCtx K) (bool, error) {
 				return p.runBoolVM(ctx, tCtx, program)
-			}}, nil
+			}), nil
 		}
 	}
 
@@ -478,31 +500,26 @@ func (p *Parser[K]) newBoolExprWithOrigText(expr *booleanExpression, origText st
 		program, err := p.getOrCompileVMBoolProgram(expr)
 		if err == nil {
 			if len(program.getters) == 0 && len(program.program.AttrKeys) == 0 && !program.needsContext {
-				return BoolExpr[K]{func(context.Context, K) (bool, error) {
-					result, err := runBoolVMConstOnly(program)
-					if err != nil {
-						p.logVMError(err)
-						return false, err
-					}
-					return result, nil
-				}}, nil
+				return p.vmBoolExpr(origText, func(context.Context, K) (bool, error) {
+					return runBoolVMConstOnly(program)
+				}), nil
 			}
-			return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
+			return p.vmBoolExpr(origText, func(ctx context.Context, tCtx K) (bool, error) {
 				return p.runBoolVM(ctx, tCtx, program)
-			}}, nil
+			}), nil
 		}
 	}
-	return p.newInterpreterBoolExpr(expr)
+	return p.newInterpreterBoolExpr(expr, origText)
 }
 
-func (p *Parser[K]) newInterpreterBoolExpr(expr *booleanExpression) (BoolExpr[K], error) {
-	f, err := p.newBooleanTermEvaluator(expr.Left)
+func (p *Parser[K]) newInterpreterBoolExpr(expr *booleanExpression, origText string) (BoolExpr[K], error) {
+	f, err := p.newBooleanTermEvaluator(expr.Left, origText)
 	if err != nil {
 		return BoolExpr[K]{}, err
 	}
 	funcs := []BoolExpr[K]{f}
 	for _, rhs := range expr.Right {
-		f, err := p.newBooleanTermEvaluator(rhs.Term)
+		f, err := p.newBooleanTermEvaluator(rhs.Term, origText)
 		if err != nil {
 			return BoolExpr[K]{}, err
 		}
@@ -513,7 +530,7 @@ func (p *Parser[K]) newInterpreterBoolExpr(expr *booleanExpression) (BoolExpr[K]
 }
 
 func (p *Parser[K]) newShadowBoolExpr(expr *booleanExpression, origText string) (BoolExpr[K], error) {
-	interpExpr, err := p.newInterpreterBoolExpr(expr)
+	interpExpr, err := p.newInterpreterBoolExpr(expr, origText)
 	if err != nil {
 		return BoolExpr[K]{}, err
 	}
@@ -525,37 +542,41 @@ func (p *Parser[K]) newShadowBoolExpr(expr *booleanExpression, origText string) 
 
 	var vmExpr BoolExpr[K]
 	if len(program.getters) == 0 && len(program.program.AttrKeys) == 0 && !program.needsContext {
-		vmExpr = BoolExpr[K]{func(context.Context, K) (bool, error) {
+		vmExpr = p.vmBoolExpr(origText, func(context.Context, K) (bool, error) {
 			return runBoolVMConstOnly(program)
-		}}
+		})
 	} else {
-		vmExpr = BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
+		vmExpr = p.vmBoolExpr(origText, func(ctx context.Context, tCtx K) (bool, error) {
 			return p.runBoolVM(ctx, tCtx, program)
-		}}
+		})
 	}
 
 	return wrapWithShadow(interpExpr, vmExpr, origText, p.telemetrySettings.Logger), nil
 }
 
-func (p *Parser[K]) logVMError(err error) {
+func (p *Parser[K]) logVMError(err error, statement string) {
+	fields := []zap.Field{zap.Error(err)}
+	if statement != "" {
+		fields = append(fields, zap.String("statement", statement))
+	}
 	if errors.Is(err, vm.ErrGasExhausted) {
-		p.telemetrySettings.Logger.Warn("OTTL VM gas exhausted", zap.Error(err))
+		p.telemetrySettings.Logger.Warn("OTTL VM gas exhausted", fields...)
 		return
 	}
-	p.telemetrySettings.Logger.Debug("OTTL VM execution error", zap.Error(err))
+	p.telemetrySettings.Logger.Debug("OTTL VM execution error", fields...)
 }
 
-func (p *Parser[K]) newBooleanTermEvaluator(term *term) (BoolExpr[K], error) {
+func (p *Parser[K]) newBooleanTermEvaluator(term *term, origText string) (BoolExpr[K], error) {
 	if term == nil {
 		return BoolExpr[K]{alwaysTrue[K]}, nil
 	}
-	f, err := p.newBooleanValueEvaluator(term.Left)
+	f, err := p.newBooleanValueEvaluator(term.Left, origText)
 	if err != nil {
 		return BoolExpr[K]{}, err
 	}
 	funcs := []BoolExpr[K]{f}
 	for _, rhs := range term.Right {
-		f, err := p.newBooleanValueEvaluator(rhs.Value)
+		f, err := p.newBooleanValueEvaluator(rhs.Value, origText)
 		if err != nil {
 			return BoolExpr[K]{}, err
 		}
@@ -565,7 +586,7 @@ func (p *Parser[K]) newBooleanTermEvaluator(term *term) (BoolExpr[K], error) {
 	return andFuncs(funcs), nil
 }
 
-func (p *Parser[K]) newBooleanValueEvaluator(value *booleanValue) (BoolExpr[K], error) {
+func (p *Parser[K]) newBooleanValueEvaluator(value *booleanValue, origText string) (BoolExpr[K], error) {
 	if value == nil {
 		return BoolExpr[K]{alwaysTrue[K]}, nil
 	}
@@ -574,7 +595,7 @@ func (p *Parser[K]) newBooleanValueEvaluator(value *booleanValue) (BoolExpr[K], 
 	var err error
 	switch {
 	case value.Comparison != nil:
-		boolExpr, err = p.newComparisonEvaluator(value.Comparison)
+		boolExpr, err = p.newComparisonEvaluator(value.Comparison, origText)
 		if err != nil {
 			return BoolExpr[K]{}, err
 		}
@@ -595,7 +616,7 @@ func (p *Parser[K]) newBooleanValueEvaluator(value *booleanValue) (BoolExpr[K], 
 			return BoolExpr[K]{}, fmt.Errorf("unhandled boolean operation %v", value)
 		}
 	case value.SubExpr != nil:
-		boolExpr, err = p.newBoolExpr(value.SubExpr)
+		boolExpr, err = p.newBoolExprWithOrigText(value.SubExpr, origText)
 		if err != nil {
 			return BoolExpr[K]{}, err
 		}

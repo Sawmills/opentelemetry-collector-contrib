@@ -16,6 +16,7 @@ import (
 
 	"github.com/goccy/go-json"
 	"go.opentelemetry.io/collector/pdata/pcommon"
+	pprofile "go.opentelemetry.io/collector/pdata/pprofile"
 	"golang.org/x/exp/constraints"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/internal/ottlcommon"
@@ -787,6 +788,24 @@ func (g StandardStringLikeGetter[K]) Get(ctx context.Context, tCtx K) (*string, 
 		result = string(resultBytes)
 	case pcommon.Value:
 		result = v.AsString()
+	case pcommon.TraceID:
+		resultBytes, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		result = string(resultBytes)
+	case pcommon.SpanID:
+		resultBytes, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		result = string(resultBytes)
+	case pprofile.ProfileID:
+		resultBytes, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		result = string(resultBytes)
 	default:
 		// Attempt direct string formatting without JSON when possible
 		switch t := v.(type) {
