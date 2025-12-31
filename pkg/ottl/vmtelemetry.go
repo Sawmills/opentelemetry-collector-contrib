@@ -11,6 +11,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 	"go.uber.org/zap"
 )
 
@@ -31,6 +32,9 @@ var (
 
 func newVMTelemetry(mp metric.MeterProvider, logger *zap.Logger) *vmTelemetry {
 	if mp == nil {
+		return nil
+	}
+	if _, ok := mp.(noop.MeterProvider); ok {
 		return nil
 	}
 	meter := mp.Meter("github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm")
