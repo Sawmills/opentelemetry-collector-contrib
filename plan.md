@@ -20,8 +20,8 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 
 - RealWorld benchmark (Apple M3 Max):
   - Interpreter: 1390–1430 ns/op, 610 B/op, 21 allocs
-  - VM: **223–240 ns/op** (latest 226.8 after jump-pop fusion), 0 B/op, 0 allocs
-  - Speedup: **≈6x** (best 6.2x)
+  - VM: **219–240 ns/op** (latest 219.4 after jump-pop fusion cleanup), 0 B/op, 0 allocs
+  - Speedup: **≈6x** (best 6.3x)
 - Hotspots (pprof, RealWorld VM): dispatch loop 59%, mapaccess2_faststr 11%, aeshashbody 7%.
 - PGO: bench-profiled build held at 227 ns/op (no gain); skip PGO.
 - Recent perf wins (all landed): VMAttrGetter fast path, static path VMGetterProvider, nested map flattening, StandardStringLikeGetter fast paths, attr-index lookup, compare superinstructions, telemetry overhead removal.
@@ -33,6 +33,7 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 
 	### 1. Safety & Stability (The "Don't Crash" Rule)
 	- [ ] **Fuzzing Gate**: 24h differential fuzz in CI. Owner: amir. Target: 2026-01-05. (Local 21m + 40m fuzz runs 2025-12-31: PASS, 4.7k interesting inputs. Composite literals force interpreter fallback, list/map fuzz re-enabled.)
+	- [x] **Perf Gate**: RealWorld bench 219.4 ns/op (2025-12-31) after attr-compare fusion cleanup; watch mapaccess in pprof.
 	- [x] **Stack Limit Check**: Deep recursion test to confirm `maxStack` enforcement. Owner: amir. Target: 2026-01-03. (Done 2025-12-31)
 	- [x] **Gas Limit Verification**: Infinite-loop script triggers `ErrGasExhausted`. Owner: amir. Target: 2026-01-03. (Done 2025-12-31)
 
