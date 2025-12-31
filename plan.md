@@ -32,7 +32,7 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 	**Goal:** Ensure safety, observability, and smooth rollout.
 
 	### 1. Safety & Stability (The "Don't Crash" Rule)
-	- [ ] **Fuzzing Gate**: 24h differential fuzz in CI. Owner: amir. Target: 2026-01-05.
+	- [ ] **Fuzzing Gate**: 24h differential fuzz in CI. Owner: amir. Target: 2026-01-05. (Local 3m fuzz run 2025-12-31; list/map literals skipped for now.)
 	- [x] **Stack Limit Check**: Deep recursion test to confirm `maxStack` enforcement. Owner: amir. Target: 2026-01-03. (Done 2025-12-31)
 	- [x] **Gas Limit Verification**: Infinite-loop script triggers `ErrGasExhausted`. Owner: amir. Target: 2026-01-03. (Done 2025-12-31)
 
