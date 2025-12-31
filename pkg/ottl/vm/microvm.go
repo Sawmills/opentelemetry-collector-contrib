@@ -247,6 +247,51 @@ func RunWithStackAndContext[K any](stack []ir.Value, p *Program[K], ctx context.
 		arg := inst.Arg()
 
 		switch op {
+
+		case ir.OpAttrFastEqConstString:
+			keyIdx, constIdx := ir.UnpackAttrConst(arg)
+			if p.AttrGetter == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[keyIdx])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			return ir.BoolValue(stringsEqual(attrVal, p.Consts[constIdx])), nil
+
+		case ir.OpAttrFastNeConstString:
+			keyIdx, constIdx := ir.UnpackAttrConst(arg)
+			if p.AttrGetter == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[keyIdx])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			return ir.BoolValue(!stringsEqual(attrVal, p.Consts[constIdx])), nil
+
+		case ir.OpAttrFastEqConst:
+			keyIdx, constIdx := ir.UnpackAttrConst(arg)
+			if p.AttrGetter == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[keyIdx])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			return ir.BoolValue(attrVal.Type == p.Consts[constIdx].Type && attrVal.Num == p.Consts[constIdx].Num), nil
+
+		case ir.OpAttrFastNeConst:
+			keyIdx, constIdx := ir.UnpackAttrConst(arg)
+			if p.AttrGetter == nil {
+				return ir.Value{}, ErrInvalidAccessor
+			}
+			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[keyIdx])
+			if err != nil {
+				return ir.Value{}, err
+			}
+			return ir.BoolValue(!(attrVal.Type == p.Consts[constIdx].Type && attrVal.Num == p.Consts[constIdx].Num)), nil
+
 		case ir.OpAttrEqConstJumpIfFalsePop:
 			attrIdx, constIdx := ir.UnpackAttrConst(arg)
 			if int(attrIdx) >= len(p.Accessors) {
@@ -374,50 +419,6 @@ func RunWithStackAndContext[K any](stack []ir.Value, p *Program[K], ctx context.
 				return ir.BoolValue(false), nil
 			}
 			return ir.BoolValue(true), nil
-
-		case ir.OpAttrFastEqConstString:
-			keyIdx, constIdx := ir.UnpackAttrConst(arg)
-			if p.AttrGetter == nil {
-				return ir.Value{}, ErrInvalidAccessor
-			}
-			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[keyIdx])
-			if err != nil {
-				return ir.Value{}, err
-			}
-			return ir.BoolValue(stringsEqual(attrVal, p.Consts[constIdx])), nil
-
-		case ir.OpAttrFastNeConstString:
-			keyIdx, constIdx := ir.UnpackAttrConst(arg)
-			if p.AttrGetter == nil {
-				return ir.Value{}, ErrInvalidAccessor
-			}
-			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[keyIdx])
-			if err != nil {
-				return ir.Value{}, err
-			}
-			return ir.BoolValue(!stringsEqual(attrVal, p.Consts[constIdx])), nil
-
-		case ir.OpAttrFastEqConst:
-			keyIdx, constIdx := ir.UnpackAttrConst(arg)
-			if p.AttrGetter == nil {
-				return ir.Value{}, ErrInvalidAccessor
-			}
-			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[keyIdx])
-			if err != nil {
-				return ir.Value{}, err
-			}
-			return ir.BoolValue(attrVal.Type == p.Consts[constIdx].Type && attrVal.Num == p.Consts[constIdx].Num), nil
-
-		case ir.OpAttrFastNeConst:
-			keyIdx, constIdx := ir.UnpackAttrConst(arg)
-			if p.AttrGetter == nil {
-				return ir.Value{}, ErrInvalidAccessor
-			}
-			attrVal, err := p.AttrGetter(tCtx, p.AttrKeys[keyIdx])
-			if err != nil {
-				return ir.Value{}, err
-			}
-			return ir.BoolValue(!(attrVal.Type == p.Consts[constIdx].Type && attrVal.Num == p.Consts[constIdx].Num)), nil
 
 		case ir.OpAttrEqConstString:
 			attrIdx, constIdx := ir.UnpackAttrConst(arg)
