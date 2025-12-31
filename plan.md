@@ -54,7 +54,7 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 
 	### 5. Documentation
 	- [x] **Feature Flag**: Document `OTELCOL_OTTL_VM=true`. Owner: amir. Target: 2026-01-04. (Docs updated 2025-12-31)
-	- [ ] **Limitations**: Document known semantic differences (e.g. float precision). Owner: amir. Target: 2026-01-04.
+	- [x] **Limitations**: Document known semantic differences (e.g. float precision). Owner: amir. Target: 2026-01-04. (Docs updated 2025-12-31)
 
 	## 1. Goals
 
