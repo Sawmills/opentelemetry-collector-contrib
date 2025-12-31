@@ -1,6 +1,6 @@
 # OTTL Bytecode VM (OVM) Implementation Plan
 
-Status: Phase 6 Complete (performance optimizations)
+Status: Phase 7 In Progress (rollout/doc/fuzz)
 Owner: Sawmills.ai / OTel Collector Contrib
 Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-alloc hot loop, safe execution bounds.
 
@@ -19,12 +19,12 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 ## Current Perf Snapshot (2025-12-31)
 
 - RealWorld benchmark (Apple M3 Max):
-  - Interpreter: 1431 ns/op, 610 B/op, 21 allocs
-  - VM: **227 ns/op**, 0 B/op, 0 allocs
-  - Speedup: **6.3x**
+  - Interpreter: 1390–1430 ns/op, 610 B/op, 21 allocs
+  - VM: **236–244 ns/op**, 0 B/op, 0 allocs
+  - Speedup: **≈6x**
 - Hotspots (pprof, RealWorld VM): dispatch loop 59%, mapaccess2_faststr 11%, aeshashbody 7%.
 - PGO: bench-profiled build held at 227 ns/op (no gain); skip PGO.
-- Recent perf wins (all landed): VMAttrGetter fast path, static path VMGetterProvider, nested map flattening, StandardStringLikeGetter fast paths, attr-index lookup, compare superinstructions.
+- Recent perf wins (all landed): VMAttrGetter fast path, static path VMGetterProvider, nested map flattening, StandardStringLikeGetter fast paths, attr-index lookup, compare superinstructions, telemetry overhead removal.
 
 	## Phase 7: Production Readiness (Next Steps)
 
@@ -41,18 +41,19 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 	  - `ottl_vm_execution_count`
 	  - `ottl_vm_error_count{type}`
 	  - `ottl_vm_execution_time`
+	  - `ottl_vm_shadow_divergence_total{type}` (shadow mode)
 	- [x] **Logs**: Ensure error logs include rule names/indices for debugging. Owner: amir. Target: 2026-01-06. (Done 2025-12-31)
 
 	### 3. Debuggability
 	- [x] **Shadow Mode**: Implement `Compare(ctx, input)` dual-run + divergence log. Owner: amir. Target: 2026-01-08. (telemetry counter added 2025-12-31)
-	- [ ] **Disassembler**: Verify `Program.String()` output readability. Owner: amir. Target: 2026-01-04.
+	- [x] **Disassembler**: Verify `Program.String()` output readability. Owner: amir. Target: 2026-01-04. (Header/columns done 2025-12-31)
 
 	### 4. Integration
 	- [ ] **Collector Integration**: Wire VM default path into `transformprocessor`, `filterprocessor`. Owner: amir. Target: 2026-01-09.
 	- [x] **Configuration**: Expose `gas_limit` in processor config. Owner: amir. Target: 2026-01-04. (Done 2025-12-31)
 
 	### 5. Documentation
-	- [ ] **Feature Flag**: Document `OTELCOL_OTTL_VM_ENABLED=true`. Owner: amir. Target: 2026-01-04.
+	- [x] **Feature Flag**: Document `OTELCOL_OTTL_VM=true`. Owner: amir. Target: 2026-01-04. (Docs updated 2025-12-31)
 	- [ ] **Limitations**: Document known semantic differences (e.g. float precision). Owner: amir. Target: 2026-01-04.
 
 	## 1. Goals
