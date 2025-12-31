@@ -19,6 +19,7 @@ type vmTelemetry struct {
 	execCount metric.Int64Counter
 	errCount  metric.Int64Counter
 	execTime  metric.Float64Histogram
+	divCount  metric.Int64Counter
 	logger    *zap.Logger
 }
 
@@ -54,11 +55,17 @@ func newVMTelemetry(mp metric.MeterProvider, logger *zap.Logger) *vmTelemetry {
 		logger.Debug("OTTL VM telemetry disabled: latency histogram", zap.Error(err))
 		return nil
 	}
+	divCount, err := meter.Int64Counter("ottl_vm_shadow_divergence_total")
+	if err != nil {
+		logger.Debug("OTTL VM telemetry disabled: divergence counter", zap.Error(err))
+		return nil
+	}
 
 	return &vmTelemetry{
 		execCount: execCount,
 		errCount:  errCount,
 		execTime:  execTime,
+		divCount:  divCount,
 		logger:    logger,
 	}
 }
@@ -85,4 +92,15 @@ func vmErrorAttr(err error) attribute.KeyValue {
 	default:
 		return errTypeOther
 	}
+}
+
+func (m *vmTelemetry) recordDivergence(ctx context.Context, err bool) {
+	if m == nil {
+		return
+	}
+	if err {
+		m.divCount.Add(ctx, 1, metric.WithAttributes(attribute.String("type", "error")))
+		return
+	}
+	m.divCount.Add(ctx, 1, metric.WithAttributes(attribute.String("type", "result")))
 }

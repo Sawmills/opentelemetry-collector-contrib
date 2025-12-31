@@ -44,7 +44,7 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 	- [x] **Logs**: Ensure error logs include rule names/indices for debugging. Owner: amir. Target: 2026-01-06. (Done 2025-12-31)
 
 	### 3. Debuggability
-	- [ ] **Shadow Mode**: Implement `Compare(ctx, input)` dual-run + divergence log. Owner: amir. Target: 2026-01-08.
+	- [x] **Shadow Mode**: Implement `Compare(ctx, input)` dual-run + divergence log. Owner: amir. Target: 2026-01-08. (telemetry counter added 2025-12-31)
 	- [ ] **Disassembler**: Verify `Program.String()` output readability. Owner: amir. Target: 2026-01-04.
 
 	### 4. Integration
@@ -461,7 +461,7 @@ if isBackwardJump(inst) {
 
 1. Observability: metrics + error logs landed (2025-12-31); verify in CI.
 2. Hardening: stack/gas tests done (2025-12-31); 24h differential fuzz gate pending; finish by 2026-01-05.
-3. Debuggability: `Compare(ctx,input)` shadow mode + readable disassembler; finish by 2026-01-08.
+3. Debuggability: shadow divergence metric added (2025-12-31); remaining: `Compare(ctx,input)` helper + readable disassembler; target 2026-01-08.
 4. Integration: enable VM path in transform/filter processors; add `gas_limit` config knob; finish by 2026-01-09.
 5. Docs: feature flag + limitations page; finish by 2026-01-04.
 
