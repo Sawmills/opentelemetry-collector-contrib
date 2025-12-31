@@ -125,6 +125,7 @@ Both achieve **0 allocs/op** for core arithmetic, logic, and comparisons.
 
 - Not all stdlib functions have native VM opcodes yet (they fall back to the interpreter path)
 - Shadow mode is recommended during initial rollout to verify correctness
+- Floating point behavior follows Go (IEEE754); beware NaN/Inf and tiny precision diffs vs other runtimes
 - Report any divergences as bugs
 
 ### Status
