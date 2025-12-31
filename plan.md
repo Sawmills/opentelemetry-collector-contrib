@@ -33,8 +33,8 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 
 	### 1. Safety & Stability (The "Don't Crash" Rule)
 	- [ ] **Fuzzing Gate**: 24h differential fuzz in CI. Owner: amir. Target: 2026-01-05.
-	- [ ] **Stack Limit Check**: Deep recursion test to confirm `maxStack` enforcement. Owner: amir. Target: 2026-01-03.
-	- [ ] **Gas Limit Verification**: Infinite-loop script triggers `ErrGasExhausted`. Owner: amir. Target: 2026-01-03.
+	- [x] **Stack Limit Check**: Deep recursion test to confirm `maxStack` enforcement. Owner: amir. Target: 2026-01-03. (Done 2025-12-31)
+	- [x] **Gas Limit Verification**: Infinite-loop script triggers `ErrGasExhausted`. Owner: amir. Target: 2026-01-03. (Done 2025-12-31)
 
 	### 2. Observability
 	- [x] **Metrics**: Add counters for execution, errors, and histogram for latency. Owner: amir. Target: 2026-01-06. (Done 2025-12-31)
@@ -460,7 +460,7 @@ if isBackwardJump(inst) {
 ## 9. Next Steps (GA Readiness)
 
 1. Observability: metrics + error logs landed (2025-12-31); verify in CI.
-2. Hardening: stack/gas limit tests + 24h differential fuzz gate; finish by 2026-01-05.
+2. Hardening: stack/gas tests done (2025-12-31); 24h differential fuzz gate pending; finish by 2026-01-05.
 3. Debuggability: `Compare(ctx,input)` shadow mode + readable disassembler; finish by 2026-01-08.
 4. Integration: enable VM path in transform/filter processors; add `gas_limit` config knob; finish by 2026-01-09.
 5. Docs: feature flag + limitations page; finish by 2026-01-04.
