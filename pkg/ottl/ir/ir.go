@@ -209,6 +209,8 @@ const (
 	OpJump
 	OpJumpIfTrue
 	OpJumpIfFalse
+	OpJumpIfTruePop  // Pop top of stack if true; otherwise jump
+	OpJumpIfFalsePop // Pop top of stack if false; otherwise jump
 	OpPop
 	OpNot
 

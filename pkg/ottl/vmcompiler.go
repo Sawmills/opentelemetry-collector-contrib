@@ -1194,9 +1194,8 @@ func (c *microCompiler[K]) emitBooleanExpression(expr *booleanExpression) error 
 		if rhs == nil || rhs.Term == nil {
 			return fmt.Errorf("invalid or term")
 		}
-		jumpIdx := c.emitJumpIfTrue()
+		jumpIdx := c.emitJumpIfTruePop()
 		jumps = append(jumps, jumpIdx)
-		c.emitPop()
 		if err := c.emitTerm(rhs.Term); err != nil {
 			return err
 		}
@@ -1216,9 +1215,8 @@ func (c *microCompiler[K]) emitTerm(term *term) error {
 		if rhs == nil || rhs.Value == nil {
 			return fmt.Errorf("invalid and term")
 		}
-		jumpIdx := c.emitJumpIfFalse()
+		jumpIdx := c.emitJumpIfFalsePop()
 		jumps = append(jumps, jumpIdx)
-		c.emitPop()
 		if err := c.emitBooleanValue(rhs.Value); err != nil {
 			return err
 		}
@@ -2380,8 +2378,20 @@ func (c *microCompiler[K]) emitJumpIfTrue() int {
 	return len(c.code) - 1
 }
 
+func (c *microCompiler[K]) emitJumpIfTruePop() int {
+	c.code = append(c.code, ir.Encode(ir.OpJumpIfTruePop, 0))
+	c.onPop()
+	return len(c.code) - 1
+}
+
 func (c *microCompiler[K]) emitJumpIfFalse() int {
 	c.code = append(c.code, ir.Encode(ir.OpJumpIfFalse, 0))
+	return len(c.code) - 1
+}
+
+func (c *microCompiler[K]) emitJumpIfFalsePop() int {
+	c.code = append(c.code, ir.Encode(ir.OpJumpIfFalsePop, 0))
+	c.onPop()
 	return len(c.code) - 1
 }
 
@@ -2684,7 +2694,7 @@ func (c *microCompiler[K]) peepholeOptimize() {
 
 	for i, inst := range optimized {
 		op := inst.Op()
-		if op == ir.OpJump || op == ir.OpJumpIfTrue || op == ir.OpJumpIfFalse {
+		if op == ir.OpJump || op == ir.OpJumpIfTrue || op == ir.OpJumpIfFalse || op == ir.OpJumpIfTruePop || op == ir.OpJumpIfFalsePop {
 			oldTarget := int(inst.Arg())
 			if oldTarget >= 0 && oldTarget <= len(c.code) {
 				newTarget := oldToNew[oldTarget]

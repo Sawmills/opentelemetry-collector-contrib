@@ -922,6 +922,30 @@ func runProgram[K any](stack []ir.Value, p *Program[K], loader func(uint32) (ir.
 				ip = target - 1
 			}
 
+		case ir.OpJumpIfTruePop:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			val := stack[sp-1]
+			if val.Type != ir.TypeBool {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if val.Num != 0 {
+				target := int(inst.Arg())
+				if target < 0 || target > codeLen {
+					return ir.Value{}, ErrInvalidJump
+				}
+				if target <= ip {
+					if gas <= BackwardJumpPenaltyGas {
+						return ir.Value{}, ErrGasExhausted
+					}
+					gas -= BackwardJumpPenaltyGas
+				}
+				ip = target - 1
+			} else {
+				sp--
+			}
+
 		case ir.OpJumpIfFalse:
 			if sp < 1 {
 				return ir.Value{}, ErrStackUnderflow
@@ -942,6 +966,30 @@ func runProgram[K any](stack []ir.Value, p *Program[K], loader func(uint32) (ir.
 					gas -= BackwardJumpPenaltyGas
 				}
 				ip = target - 1
+			}
+
+		case ir.OpJumpIfFalsePop:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			val := stack[sp-1]
+			if val.Type != ir.TypeBool {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if val.Num == 0 {
+				target := int(inst.Arg())
+				if target < 0 || target > codeLen {
+					return ir.Value{}, ErrInvalidJump
+				}
+				if target <= ip {
+					if gas <= BackwardJumpPenaltyGas {
+						return ir.Value{}, ErrGasExhausted
+					}
+					gas -= BackwardJumpPenaltyGas
+				}
+				ip = target - 1
+			} else {
+				sp--
 			}
 
 		case ir.OpDup:
@@ -2018,6 +2066,30 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 				ip = target - 1
 			}
 
+		case ir.OpJumpIfTruePop:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			val := stack[sp-1]
+			if val.Type != ir.TypeBool {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if val.Num != 0 {
+				target := int(inst.Arg())
+				if target < 0 || target > codeLen {
+					return ir.Value{}, ErrInvalidJump
+				}
+				if target <= ip {
+					if gas <= BackwardJumpPenaltyGas {
+						return ir.Value{}, ErrGasExhausted
+					}
+					gas -= BackwardJumpPenaltyGas
+				}
+				ip = target - 1
+			} else {
+				sp--
+			}
+
 		case ir.OpJumpIfFalse:
 			if sp < 1 {
 				return ir.Value{}, ErrStackUnderflow
@@ -2038,6 +2110,30 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 					gas -= BackwardJumpPenaltyGas
 				}
 				ip = target - 1
+			}
+
+		case ir.OpJumpIfFalsePop:
+			if sp < 1 {
+				return ir.Value{}, ErrStackUnderflow
+			}
+			val := stack[sp-1]
+			if val.Type != ir.TypeBool {
+				return ir.Value{}, ErrTypeMismatch
+			}
+			if val.Num == 0 {
+				target := int(inst.Arg())
+				if target < 0 || target > codeLen {
+					return ir.Value{}, ErrInvalidJump
+				}
+				if target <= ip {
+					if gas <= BackwardJumpPenaltyGas {
+						return ir.Value{}, ErrGasExhausted
+					}
+					gas -= BackwardJumpPenaltyGas
+				}
+				ip = target - 1
+			} else {
+				sp--
 			}
 
 		case ir.OpDup:
