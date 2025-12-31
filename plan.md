@@ -20,8 +20,8 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 
 - RealWorld benchmark (Apple M3 Max):
   - Interpreter: 1390–1430 ns/op, 610 B/op, 21 allocs
-  - VM: **236–244 ns/op**, 0 B/op, 0 allocs
-  - Speedup: **≈6x**
+  - VM: **223–240 ns/op** (latest 223.3), 0 B/op, 0 allocs
+  - Speedup: **≈6x** (best 6.2x)
 - Hotspots (pprof, RealWorld VM): dispatch loop 59%, mapaccess2_faststr 11%, aeshashbody 7%.
 - PGO: bench-profiled build held at 227 ns/op (no gain); skip PGO.
 - Recent perf wins (all landed): VMAttrGetter fast path, static path VMGetterProvider, nested map flattening, StandardStringLikeGetter fast paths, attr-index lookup, compare superinstructions, telemetry overhead removal.

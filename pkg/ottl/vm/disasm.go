@@ -118,6 +118,10 @@ func opcodeName(op ir.Opcode) string {
 		return "JUMP_IF_TRUE"
 	case ir.OpJumpIfFalse:
 		return "JUMP_IF_FALSE"
+	case ir.OpJumpIfTruePop:
+		return "JUMP_IF_TRUE_POP"
+	case ir.OpJumpIfFalsePop:
+		return "JUMP_IF_FALSE_POP"
 	case ir.OpPop:
 		return "POP"
 	case ir.OpNot:
