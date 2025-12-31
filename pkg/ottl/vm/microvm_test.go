@@ -1656,6 +1656,21 @@ func TestMicroVMRun_BackwardJumpGasExhausted(t *testing.T) {
 	}
 }
 
+func TestRunWithStackAndContext_GasExhausted(t *testing.T) {
+	program := &ProgramAny{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpJump, 0),
+		},
+		GasLimit: 1,
+	}
+
+	stack := make([]ir.Value, 1)
+	_, err := RunWithStackAndContext(stack, program, context.Background(), any(nil))
+	if err != ErrGasExhausted {
+		t.Fatalf("expected ErrGasExhausted, got %v", err)
+	}
+}
+
 func TestMicroVMRun_DivIntByZero(t *testing.T) {
 	program := &ProgramAny{
 		Code: []ir.Instruction{
@@ -1789,6 +1804,26 @@ func TestMicroVMRun_DupStackOverflow(t *testing.T) {
 
 	vm := NewMicroVM(1)
 	_, err := vm.Run(program)
+	if err != ErrStackOverflow {
+		t.Fatalf("expected ErrStackOverflow, got %v", err)
+	}
+}
+
+func TestRunWithStackAndContext_StackOverflow(t *testing.T) {
+	program := &ProgramAny{
+		Code: []ir.Instruction{
+			ir.Encode(ir.OpLoadConst, 0),
+			ir.Encode(ir.OpLoadConst, 1),
+			ir.Encode(ir.OpAdd, 0),
+		},
+		Consts: []ir.Value{
+			ir.Int64Value(1),
+			ir.Int64Value(2),
+		},
+	}
+
+	stack := make([]ir.Value, 1)
+	_, err := RunWithStackAndContext(stack, program, context.Background(), any(nil))
 	if err != ErrStackOverflow {
 		t.Fatalf("expected ErrStackOverflow, got %v", err)
 	}
