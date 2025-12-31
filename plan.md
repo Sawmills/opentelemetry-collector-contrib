@@ -58,10 +58,10 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 	- [x] **Limitations**: Document known semantic differences (e.g. float precision). Owner: amir. Target: 2026-01-04. (Docs updated 2025-12-31)
 
 	### 6. Immediate Queue (2026-01-01)
-	- Prune unused attr-compare+jump opcodes (no emitter) to keep IR lean.
-	- pprof RealWorld VM; if mapaccess2_faststr >5%, prototype string-key cache; else skip.
-	- After decision: go test ./... + RealWorld bench; commit.
-	- Run 1h fuzz gate once code settled.
+	- [x] Prune unused attr-compare+jump opcodes (no emitter) to keep IR lean. (2026-01-01)
+	- [ ] pprof RealWorld VM; if mapaccess2_faststr >5%, prototype string-key cache; else skip.
+	- [ ] After decision: go test ./... + RealWorld bench; commit.
+	- [ ] Run 1h fuzz gate once code settled.
 
 	## 1. Goals
 
