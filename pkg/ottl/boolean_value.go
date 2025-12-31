@@ -43,31 +43,37 @@ func alwaysFalse[K any](context.Context, K) (bool, error) {
 	return false, nil
 }
 
-func (p *Parser[K]) vmBoolExpr(origText string, fn boolExpressionEvaluator[K]) BoolExpr[K] {
-	return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
-		done := p.vmObserver(ctx, origText)
-		result, err := fn(ctx, tCtx)
-		done(err)
-		return result, err
-	}}
+type vmRunObserver[K any] struct {
+	metrics *vmTelemetry
+	start   int64
+	ctx     context.Context
+	parser  *Parser[K]
+	stmt    string
 }
 
-func (p *Parser[K]) vmObserver(ctx context.Context, origText string) func(error) {
-	metrics := p.vmTelemetry
-	if metrics == nil {
-		return func(err error) {
-			if err != nil {
-				p.logVMError(err, origText)
-			}
-		}
+func (o vmRunObserver[K]) Finish(err error) {
+	if o.metrics != nil {
+		o.metrics.record(o.ctx, time.Duration(time.Now().UnixNano()-o.start), err)
 	}
-	start := time.Now()
-	return func(err error) {
-		metrics.record(ctx, time.Since(start), err)
-		if err != nil {
-			p.logVMError(err, origText)
-		}
+	if err != nil {
+		o.parser.logVMError(err, o.stmt)
 	}
+}
+
+func (p *Parser[K]) vmStart(ctx context.Context, origText string) vmRunObserver[K] {
+	if p.vmTelemetry == nil {
+		return vmRunObserver[K]{parser: p, ctx: ctx, stmt: origText}
+	}
+	return vmRunObserver[K]{metrics: p.vmTelemetry, start: time.Now().UnixNano(), ctx: ctx, parser: p, stmt: origText}
+}
+
+func (p *Parser[K]) vmBoolExpr(origText string, fn boolExpressionEvaluator[K]) BoolExpr[K] {
+	return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
+		obs := p.vmStart(ctx, origText)
+		result, err := fn(ctx, tCtx)
+		obs.Finish(err)
+		return result, err
+	}}
 }
 
 // builds a function that returns a short-circuited result of ANDing
