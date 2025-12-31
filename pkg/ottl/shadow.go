@@ -34,6 +34,7 @@ type shadowBoolExpr[K any] struct {
 	vmExpr      BoolExpr[K]
 	origText    string
 	logger      *zap.Logger
+	telemetry   *vmTelemetry
 }
 
 func (s *shadowBoolExpr[K]) Eval(ctx context.Context, tCtx K) (bool, error) {
@@ -48,6 +49,9 @@ func (s *shadowBoolExpr[K]) Eval(ctx context.Context, tCtx K) (bool, error) {
 func (s *shadowBoolExpr[K]) compareAndLog(interpResult bool, interpErr error, vmResult bool, vmErr error) {
 	if !errorsEquivalent(interpErr, vmErr) {
 		globalShadowMetrics.divergenceTotal.Add(1)
+		if s.telemetry != nil {
+			s.telemetry.recordDivergence(context.Background(), true)
+		}
 		s.logger.Warn("OTTL shadow mode: error divergence",
 			zap.String("statement", s.origText),
 			zap.Error(interpErr),
@@ -62,6 +66,9 @@ func (s *shadowBoolExpr[K]) compareAndLog(interpResult bool, interpErr error, vm
 
 	if interpResult != vmResult {
 		globalShadowMetrics.divergenceTotal.Add(1)
+		if s.telemetry != nil {
+			s.telemetry.recordDivergence(context.Background(), false)
+		}
 		s.logger.Warn("OTTL shadow mode: result divergence",
 			zap.String("statement", s.origText),
 			zap.Bool("interpreter_result", interpResult),
@@ -102,12 +109,13 @@ func errorsHaveSameType(a, b error) bool {
 	return aType == bType
 }
 
-func wrapWithShadow[K any](interpreter, vmExpr BoolExpr[K], origText string, logger *zap.Logger) BoolExpr[K] {
+func wrapWithShadow[K any](interpreter, vmExpr BoolExpr[K], origText string, logger *zap.Logger, telemetry *vmTelemetry) BoolExpr[K] {
 	shadow := &shadowBoolExpr[K]{
 		interpreter: interpreter,
 		vmExpr:      vmExpr,
 		origText:    origText,
 		logger:      logger,
+		telemetry:   telemetry,
 	}
 	return BoolExpr[K]{shadow.Eval}
 }

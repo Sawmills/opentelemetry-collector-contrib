@@ -557,7 +557,7 @@ func (p *Parser[K]) newShadowBoolExpr(expr *booleanExpression, origText string) 
 		})
 	}
 
-	return wrapWithShadow(interpExpr, vmExpr, origText, p.telemetrySettings.Logger), nil
+	return wrapWithShadow(interpExpr, vmExpr, origText, p.telemetrySettings.Logger, p.vmTelemetry), nil
 }
 
 func (p *Parser[K]) logVMError(err error, statement string) {
