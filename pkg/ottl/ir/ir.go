@@ -328,16 +328,6 @@ const (
 	OpAttrIsNotNil     // Load attr (cached) + check not nil; arg = attrIdx; pushes bool
 	OpAttrFastIsNil    // Load attr (fast) + check nil; arg = keyIdx; pushes bool
 	OpAttrFastIsNotNil // Load attr (fast) + check not nil; arg = keyIdx; pushes bool
-
-	// Superinstructions: attr compare const + conditional jump (consumes bool)
-	OpAttrEqConstJumpIfFalsePop            // cached attr == const, jump-if-false-pop; arg = packed(attrIdx,constIdx)
-	OpAttrNeConstJumpIfFalsePop            // cached attr != const, jump-if-false-pop
-	OpAttrFastEqConstJumpIfFalsePop        // fast attr == const, jump-if-false-pop; arg = packed(keyIdx,constIdx)
-	OpAttrFastNeConstJumpIfFalsePop        // fast attr != const, jump-if-false-pop
-	OpAttrEqConstStringJumpIfFalsePop      // cached attr == const string, jump-if-false-pop
-	OpAttrNeConstStringJumpIfFalsePop      // cached attr != const string, jump-if-false-pop
-	OpAttrFastEqConstStringJumpIfFalsePop  // fast attr == const string, jump-if-false-pop
-	OpAttrFastNeConstStringJumpIfFalsePop  // fast attr != const string, jump-if-false-pop
 )
 
 // Instruction is a 32-bit fixed-width instruction.

@@ -2635,54 +2635,6 @@ func (c *microCompiler[K]) peepholeOptimize() {
 									fusedOp = ir.OpAttrFastNeConst
 								}
 							}
-						case ir.OpJumpIfFalsePop:
-							// pattern: LOAD_ATTR*, EQ/NE const already folded => Attr*Eq/NeConst* ; then JumpIfFalsePop => fused compare+jump
-							// look ahead one more to get compare opcode
-							if i+2 < len(c.code) {
-								compare := c.code[i+1].Op()
-								if compare == ir.OpEqConst || compare == ir.OpNeConst {
-									// reuse constIdx from compare instruction
-									constIdx = c.code[i+1].Arg()
-									if int(constIdx) < len(c.consts) {
-										constVal = c.consts[constIdx]
-										packedArg = ir.PackAttrConst(attrIdx, constIdx)
-										if isCached {
-											if compare == ir.OpEqConst {
-												if constVal.Type == ir.TypeString {
-													fusedOp = ir.OpAttrEqConstStringJumpIfFalsePop
-												} else {
-													fusedOp = ir.OpAttrEqConstJumpIfFalsePop
-												}
-											} else {
-												if constVal.Type == ir.TypeString {
-													fusedOp = ir.OpAttrNeConstStringJumpIfFalsePop
-												} else {
-													fusedOp = ir.OpAttrNeConstJumpIfFalsePop
-												}
-											}
-										} else {
-											if compare == ir.OpEqConst {
-												if constVal.Type == ir.TypeString {
-													fusedOp = ir.OpAttrFastEqConstStringJumpIfFalsePop
-												} else {
-													fusedOp = ir.OpAttrFastEqConstJumpIfFalsePop
-												}
-											} else {
-												if constVal.Type == ir.TypeString {
-													fusedOp = ir.OpAttrFastNeConstStringJumpIfFalsePop
-												} else {
-													fusedOp = ir.OpAttrFastNeConstJumpIfFalsePop
-												}
-											}
-										}
-										optimized = append(optimized, ir.Encode(fusedOp, packedArg))
-										i += 2
-										oldToNew[i] = len(optimized)
-										continue
-									}
-								}
-							}
-							// fall through if pattern not matched
 						}
 						optimized = append(optimized, ir.Encode(fusedOp, packedArg))
 						i++
