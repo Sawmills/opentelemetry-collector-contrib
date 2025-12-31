@@ -98,8 +98,13 @@ func (v Value) String() (string, bool) {
 	if v.Type != TypeString {
 		return "", false
 	}
+	// Guard against corrupted length values that would panic unsafe.String.
 	if v.Num == 0 {
 		return "", true
+	}
+	// In practice len cannot exceed max int.
+	if v.Num > uint64(^uint(0)>>1) {
+		return "", false
 	}
 	if v.Ptr == nil {
 		return "", false
@@ -117,6 +122,9 @@ func (v Value) Bytes() ([]byte, bool) {
 			return nil, true
 		}
 		return []byte{}, true
+	}
+	if v.Num > uint64(^uint(0)>>1) {
+		return nil, false
 	}
 	if v.Ptr == nil {
 		return nil, false
@@ -305,6 +313,10 @@ const (
 	OpAttrNeConstString     // Load attr (cached) + compare string const (not equal); arg = packed(attrIdx, constIdx); pushes bool
 	OpAttrFastEqConstString // Load attr (fast) + compare string const; arg = packed(keyIdx, constIdx); pushes bool
 	OpAttrFastNeConstString // Load attr (fast) + compare string const (not equal); arg = packed(keyIdx, constIdx); pushes bool
+	OpAttrEqConst          // Load attr (cached) + compare numeric/bool const; arg = packed(attrIdx, constIdx); pushes bool
+	OpAttrNeConst          // Load attr (cached) + compare numeric/bool const (not equal); arg = packed(attrIdx, constIdx); pushes bool
+	OpAttrFastEqConst      // Load attr (fast) + compare numeric/bool const; arg = packed(keyIdx, constIdx); pushes bool
+	OpAttrFastNeConst      // Load attr (fast) + compare numeric/bool const (not equal); arg = packed(keyIdx, constIdx); pushes bool
 
 	// IsMatch superinstructions (fused attr load + regex match)
 	OpAttrIsMatchConst     // Load attr (cached) + regex match; arg = packed(attrIdx, regexIdx); pushes bool

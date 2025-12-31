@@ -1,0 +1,2 @@
+go test fuzz v1
+string("IsMatch(.1E22,\"000000\")")

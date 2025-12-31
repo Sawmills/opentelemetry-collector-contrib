@@ -1021,25 +1021,25 @@ func (c *microCompiler[K]) emitBooleanValue(val *booleanValue) error {
 	if val == nil {
 		return fmt.Errorf("boolean value is nil")
 	}
+	var err error
 	switch {
 	case val.Comparison != nil:
-		if err := c.emitComparison(val.Comparison); err != nil {
-			return err
-		}
+		err = c.emitComparison(val.Comparison)
 	case val.ConstExpr != nil:
 		if val.ConstExpr.Boolean != nil {
 			c.emitLoadConst(ir.BoolValue(bool(*val.ConstExpr.Boolean)))
 		} else if val.ConstExpr.Converter != nil {
-			return c.emitConverter(val.ConstExpr.Converter)
+			err = c.emitConverter(val.ConstExpr.Converter)
 		} else {
-			return fmt.Errorf("boolean converter unsupported in micro compiler")
+			err = fmt.Errorf("boolean converter unsupported in micro compiler")
 		}
 	case val.SubExpr != nil:
-		if err := c.emitBooleanExpression(val.SubExpr); err != nil {
-			return err
-		}
+		err = c.emitBooleanExpression(val.SubExpr)
 	default:
-		return fmt.Errorf("unsupported boolean value in micro compiler")
+		err = fmt.Errorf("unsupported boolean value in micro compiler")
+	}
+	if err != nil {
+		return err
 	}
 	if val.Negation != nil {
 		c.code = append(c.code, ir.Encode(ir.OpNot, 0))
@@ -2381,21 +2381,38 @@ func (c *microCompiler[K]) peepholeOptimize() {
 				attrIdx := inst.Arg()
 				constIdx := nextInst.Arg()
 
-				if int(constIdx) < len(c.consts) && c.consts[constIdx].Type == ir.TypeString {
+				if int(constIdx) < len(c.consts) {
+					constVal := c.consts[constIdx]
 					if attrIdx <= 0xFFF && constIdx <= 0xFFF {
 						packedArg := ir.PackAttrConst(attrIdx, constIdx)
 						var fusedOp ir.Opcode
 						if op == ir.OpLoadAttrCached {
 							if nextOp == ir.OpEqConst {
-								fusedOp = ir.OpAttrEqConstString
+								if constVal.Type == ir.TypeString {
+									fusedOp = ir.OpAttrEqConstString
+								} else {
+									fusedOp = ir.OpAttrEqConst
+								}
 							} else {
-								fusedOp = ir.OpAttrNeConstString
+								if constVal.Type == ir.TypeString {
+									fusedOp = ir.OpAttrNeConstString
+								} else {
+									fusedOp = ir.OpAttrNeConst
+								}
 							}
 						} else {
 							if nextOp == ir.OpEqConst {
-								fusedOp = ir.OpAttrFastEqConstString
+								if constVal.Type == ir.TypeString {
+									fusedOp = ir.OpAttrFastEqConstString
+								} else {
+									fusedOp = ir.OpAttrFastEqConst
+								}
 							} else {
-								fusedOp = ir.OpAttrFastNeConstString
+								if constVal.Type == ir.TypeString {
+									fusedOp = ir.OpAttrFastNeConstString
+								} else {
+									fusedOp = ir.OpAttrFastNeConst
+								}
 							}
 						}
 						optimized = append(optimized, ir.Encode(fusedOp, packedArg))

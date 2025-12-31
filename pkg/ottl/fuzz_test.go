@@ -6,6 +6,7 @@ package ottl
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
@@ -62,16 +63,61 @@ func FuzzDifferentialVM(f *testing.F) {
 	f.Add(`nil == nil`)
 	f.Add(`1 == nil`)
 	f.Add(`nil != 1`)
+	f.Add(`attributes["missing"] == nil`)
+	f.Add(`attributes["missing"] != nil`)
+
+	// Real-world complex expression
+	f.Add(realWorldExpr)
+
+	// IsMatch patterns
+	f.Add(`IsMatch(attributes["service"], "^bigid-ml.*")`)
+	f.Add(`IsMatch("test", ".*")`)
+	f.Add(`IsMatch(attributes["service"], ".*") and attributes["level"] == "ERROR"`)
 
 	f.Fuzz(func(t *testing.T, statement string) {
+		// Avoid pathological inputs that create extremely deep parse trees and slow the harness.
+		if len(statement) > 2000 {
+			t.Skip("statement too large")
+		}
+
+		functions := CreateFactoryMap[any](
+			newBenchIsMatchFactory[any](),
+			newBenchIsMapFactory[any](),
+		)
+
+		getter := func(path Path[any]) (GetSetter[any], error) {
+			pathStr := buildPathString(path)
+			return StandardGetSetter[any]{
+				Getter: func(context.Context, any) (any, error) {
+					if strings.Contains(pathStr, "nil") || strings.Contains(pathStr, "missing") {
+						return nil, nil
+					}
+					if strings.Contains(pathStr, "level") {
+						return "ERROR", nil
+					}
+					if strings.Contains(pathStr, "service") {
+						return "bigid-ml-worker", nil
+					}
+					if strings.Contains(pathStr, "map") || strings.Contains(pathStr, "body") {
+						return map[string]any{
+							"level":      "ERROR",
+							"ml_scan_id": "123",
+							"string":     "The predictor zombie scan failed",
+						}, nil
+					}
+					if strings.Contains(pathStr, "int") {
+						return int64(123), nil
+					}
+					// Default string value for anything else to allow string comparisons
+					return "some-value", nil
+				},
+				Setter: func(context.Context, any, any) error { return nil },
+			}, nil
+		}
+
 		pInt, err := NewParser[any](
-			map[string]Factory[any]{},
-			func(Path[any]) (GetSetter[any], error) {
-				return StandardGetSetter[any]{
-					Getter: func(context.Context, any) (any, error) { return nil, nil },
-					Setter: func(context.Context, any, any) error { return nil },
-				}, nil
-			},
+			functions,
+			getter,
 			component.TelemetrySettings{Logger: zap.NewNop()},
 		)
 		if err != nil {
@@ -79,13 +125,8 @@ func FuzzDifferentialVM(f *testing.F) {
 		}
 
 		pVM, err := NewParser[any](
-			map[string]Factory[any]{},
-			func(Path[any]) (GetSetter[any], error) {
-				return StandardGetSetter[any]{
-					Getter: func(context.Context, any) (any, error) { return nil, nil },
-					Setter: func(context.Context, any, any) error { return nil },
-				}, nil
-			},
+			functions,
+			getter,
 			component.TelemetrySettings{Logger: zap.NewNop()},
 			WithVMEnabled[any](),
 		)
