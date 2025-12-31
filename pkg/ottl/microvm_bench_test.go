@@ -346,7 +346,7 @@ func BenchmarkOTTLInterpreterAddEq(b *testing.B) {
 		Right: value{Literal: &mathExprLiteral{Int: int64p(3)}},
 	}
 
-	evaluator, err := p.newComparisonEvaluator(cmp)
+	evaluator, err := p.newComparisonEvaluator(cmp, "")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -389,7 +389,7 @@ func BenchmarkOTTLComparisonAddEq_VM(b *testing.B) {
 		Right: value{Literal: &mathExprLiteral{Int: int64p(3)}},
 	}
 
-	evaluator, err := p.newComparisonEvaluator(cmp)
+	evaluator, err := p.newComparisonEvaluator(cmp, "")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -463,7 +463,7 @@ func BenchmarkOTTLInterpreterFloatMulEq(b *testing.B) {
 		Right: value{Literal: &mathExprLiteral{Float: float64p(3.0)}},
 	}
 
-	evaluator, err := p.newComparisonEvaluator(cmp)
+	evaluator, err := p.newComparisonEvaluator(cmp, "")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -504,7 +504,7 @@ func BenchmarkOTTLComparisonFloatMulEq_VM(b *testing.B) {
 		Right: value{Literal: &mathExprLiteral{Float: float64p(3.0)}},
 	}
 
-	evaluator, err := p.newComparisonEvaluator(cmp)
+	evaluator, err := p.newComparisonEvaluator(cmp, "")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -571,7 +571,7 @@ func BenchmarkOTTLInterpreterPathEq(b *testing.B) {
 		Right: value{Literal: &mathExprLiteral{Int: int64p(7)}},
 	}
 
-	evaluator, err := p.newComparisonEvaluator(cmp)
+	evaluator, err := p.newComparisonEvaluator(cmp, "")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -605,7 +605,7 @@ func BenchmarkOTTLComparisonPathEq_VM(b *testing.B) {
 		Right: value{Literal: &mathExprLiteral{Int: int64p(7)}},
 	}
 
-	evaluator, err := p.newComparisonEvaluator(cmp)
+	evaluator, err := p.newComparisonEvaluator(cmp, "")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -639,7 +639,7 @@ func BenchmarkOTTLComparisonPathEq_VMGetter(b *testing.B) {
 		Right: value{Literal: &mathExprLiteral{Int: int64p(7)}},
 	}
 
-	evaluator, err := p.newComparisonEvaluator(cmp)
+	evaluator, err := p.newComparisonEvaluator(cmp, "")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -858,7 +858,7 @@ func BenchmarkOTTLInterpreterDeepArithmetic(b *testing.B) {
 		Right: value{Literal: &mathExprLiteral{Int: int64p(7)}},
 	}
 
-	evaluator, err := p.newComparisonEvaluator(cmp)
+	evaluator, err := p.newComparisonEvaluator(cmp, "")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -921,7 +921,7 @@ func BenchmarkOTTLComparisonDeepArithmetic_VM(b *testing.B) {
 		Right: value{Literal: &mathExprLiteral{Int: int64p(7)}},
 	}
 
-	evaluator, err := p.newComparisonEvaluator(cmp)
+	evaluator, err := p.newComparisonEvaluator(cmp, "")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -1515,7 +1515,7 @@ func BenchmarkOTTLInterpreterMixedPath(b *testing.B) {
 		Right: value{Literal: &mathExprLiteral{Int: int64p(2)}},
 	}
 
-	evaluator, err := p.newComparisonEvaluator(cmp)
+	evaluator, err := p.newComparisonEvaluator(cmp, "")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -1561,7 +1561,7 @@ func BenchmarkOTTLComparisonMixedPath_VM(b *testing.B) {
 		Right: value{Literal: &mathExprLiteral{Int: int64p(2)}},
 	}
 
-	evaluator, err := p.newComparisonEvaluator(cmp)
+	evaluator, err := p.newComparisonEvaluator(cmp, "")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -1820,7 +1820,7 @@ func BenchmarkOTTLInterpreterStringEquality(b *testing.B) {
 		Right: value{String: stringp("ERROR")},
 	}
 
-	evaluator, err := p.newComparisonEvaluator(cmp)
+	evaluator, err := p.newComparisonEvaluator(cmp, "")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -1853,7 +1853,7 @@ func BenchmarkOTTLComparisonStringEquality_VM(b *testing.B) {
 		Right: value{String: stringp("ERROR")},
 	}
 
-	evaluator, err := p.newComparisonEvaluator(cmp)
+	evaluator, err := p.newComparisonEvaluator(cmp, "")
 	if err != nil {
 		b.Fatal(err)
 	}

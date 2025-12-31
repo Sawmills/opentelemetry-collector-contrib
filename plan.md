@@ -18,26 +18,45 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 
 ## Current Perf Snapshot (2025-12-31)
 
-- RealWorld benchmark (Apple M3 Max): Interpreter 1918 ns/op, 612 B/op, 21 allocs; VM 1133 ns/op, 0 allocs.
-- Hotspots (pprof, RealWorld VM): `runProgramWithContext`, `mapaccess2_faststr` (path map lookup), `StandardStringLikeGetter` conversions.
+- RealWorld benchmark (Apple M3 Max):
+  - Interpreter: 1431 ns/op, 610 B/op, 21 allocs
+  - VM: **227 ns/op**, 0 B/op, 0 allocs
+  - Speedup: **6.3x**
+- Hotspots (pprof, RealWorld VM): dispatch loop 59%, mapaccess2_faststr 11%, aeshashbody 7%.
+- PGO: bench-profiled build held at 227 ns/op (no gain); skip PGO.
+- Recent perf wins (all landed): VMAttrGetter fast path, static path VMGetterProvider, nested map flattening, StandardStringLikeGetter fast paths, attr-index lookup, compare superinstructions.
 
-## Next Optimizations (RealWorld focus)
+	## Phase 7: Production Readiness (Next Steps)
 
-1. Add `VMAttrGetter` fast path in `newBenchParserForRealWorld` returning precomputed `ir.Value` to eliminate map/string conversions during attr loads. _Status: Done_
-   - Result: BenchmarkOTTLComparisonRealWorld_VM improved from ~1133 ns/op to ~327 ns/op on M3 Max (0 allocs). Interpreter unchanged (~1918 → 1873 ns/op).
-2. Re-benchmark RealWorld (`go test -bench=RealWorld -run=^$`) and record delta. _Status: Done_
-   - After VMGetterProvider for static paths: VM now ~233 ns/op; interpreter ~1395 ns/op. (M3 Max)
-3. Flatten nested body map keys into `VMAttrGetter` (auto-flatten map[string]any) and add nested benchmark. _Status: Done_
-   - BodyNested interp: ~13.3 ns/op; VM: ~19.9 ns/op; 0 allocs.
-4. Provide `VMGetterProvider` for static paths to skip `valueToVM` in accessors. _Status: Done_ (via vmStaticGetterSetter in bench helper)
-5. Trim `StandardStringLikeGetter` JSON/hex cost for maps/slices (empty fast path, Stringer fast path). _Status: Done_
-   - Effect: RealWorld VM now ~229 ns/op, interpreter ~1468 ns/op (M3 Max); BodyNested interp ~12.5 ns/op, VM ~19.8 ns/op.
-6. Next: eliminate remaining `mapaccess2_faststr` in getters by switching RealWorld bench to attr-index lookup (no string hashing). _Status: Done_
-   - Bench updated with key index; RealWorld VM ~231 ns/op; mapaccess now mostly harness.
-7. Add compare superinstructions (attr == const / attr != const) in compiler + VM to reduce dispatch on hot equality patterns. _Status: Done_
-   - Added OpAttrEq/NeConst (+ fast variants) and peephole fusion for all const types. RealWorld VM remains ~229-231 ns/op (string cases already fused); numeric paths now covered for future expressions.
+	**Status:** 🚧 In Progress
+	**Goal:** Ensure safety, observability, and smooth rollout.
 
-## 1. Goals
+	### 1. Safety & Stability (The "Don't Crash" Rule)
+	- [ ] **Fuzzing Gate**: 24h differential fuzz in CI. Owner: amir. Target: 2026-01-05.
+	- [ ] **Stack Limit Check**: Deep recursion test to confirm `maxStack` enforcement. Owner: amir. Target: 2026-01-03.
+	- [ ] **Gas Limit Verification**: Infinite-loop script triggers `ErrGasExhausted`. Owner: amir. Target: 2026-01-03.
+
+	### 2. Observability
+	- [x] **Metrics**: Add counters for execution, errors, and histogram for latency. Owner: amir. Target: 2026-01-06. (Done 2025-12-31)
+	  - `ottl_vm_execution_count`
+	  - `ottl_vm_error_count{type}`
+	  - `ottl_vm_execution_time`
+	- [x] **Logs**: Ensure error logs include rule names/indices for debugging. Owner: amir. Target: 2026-01-06. (Done 2025-12-31)
+
+	### 3. Debuggability
+	- [ ] **Shadow Mode**: Implement `Compare(ctx, input)` dual-run + divergence log. Owner: amir. Target: 2026-01-08.
+	- [ ] **Disassembler**: Verify `Program.String()` output readability. Owner: amir. Target: 2026-01-04.
+
+	### 4. Integration
+	- [ ] **Collector Integration**: Wire VM default path into `transformprocessor`, `filterprocessor`. Owner: amir. Target: 2026-01-09.
+	- [ ] **Configuration**: Expose `gas_limit` in processor config. Owner: amir. Target: 2026-01-04.
+
+	### 5. Documentation
+	- [ ] **Feature Flag**: Document `OTELCOL_OTTL_VM_ENABLED=true`. Owner: amir. Target: 2026-01-04.
+	- [ ] **Limitations**: Document known semantic differences (e.g. float precision). Owner: amir. Target: 2026-01-04.
+
+	## 1. Goals
+
 
 - **2x-10x throughput** for complex OTTL logic
 - **0 allocs/op** for arithmetic/logic/compare operations
@@ -440,26 +459,17 @@ if isBackwardJump(inst) {
 
 ## 9. Next Steps (GA Readiness)
 
-1. **Complete Phase 6 optimizations**
-   - Implement stack allocation optimization
-   - Add per-run attribute cache
-   - Implement superinstructions for common patterns
-2. **Extended fuzzing**
-   - Run 24h CI fuzz gate with zero divergences required.
-   - Monitor for edge cases in complex OTTL rules.
-3. **Shadow mode production validation**
-   - Deploy with `WithShadowMode()` in staging/canary.
-   - Monitor divergence metrics and logs.
-   - Target: 1 week with zero divergences.
-4. **Gradual default-on rollout**
-   - Enable VM by default for read-only processors first (filter, routing).
-   - Then enable for mutating processors (transform).
+1. Observability: metrics + error logs landed (2025-12-31); verify in CI.
+2. Hardening: stack/gas limit tests + 24h differential fuzz gate; finish by 2026-01-05.
+3. Debuggability: `Compare(ctx,input)` shadow mode + readable disassembler; finish by 2026-01-08.
+4. Integration: enable VM path in transform/filter processors; add `gas_limit` config knob; finish by 2026-01-09.
+5. Docs: feature flag + limitations page; finish by 2026-01-04.
 
 ## 10. Risks & Mitigations
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| pdata lookup dominates runtime | VM gains erased | Path compilation + cached accessors (Phase 3) |
+| pdata lookup dominates runtime | VM gains erased | Path compilation + cached accessors (Phase 3, done) |
 | GC pressure from Value slices | Latency spikes | Stack reuse via `sync.Pool`; Ptr only to long-lived data |
 | Debuggability of bytecode | Hard to troubleshoot | Disassembler required; tracing mode (future) |
 | Semantic drift | Silent bugs | Differential fuzzing gate; dual-run shadow mode |
@@ -488,7 +498,7 @@ if isBackwardJump(inst) {
 | Phase 3 complete | pdata access matches interpreter; no extra allocs |
 | Phase 4 complete | All stdlib functions callable from VM |
 | Phase 5 complete | 24h fuzz with 0 divergences; shadow mode in prod |
-| **Phase 6 complete** | **String comparisons < 2x slower than interpreter** |
+| **Phase 6 complete** | **String comparisons at parity or faster than interpreter** |
 | GA ready | Default on for read-only processors |
 
 ## 13. Future Considerations

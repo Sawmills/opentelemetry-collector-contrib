@@ -510,7 +510,7 @@ func TestCompileMicroComparison_PathGetter(t *testing.T) {
 		Right: value{Literal: &mathExprLiteral{Int: int64p(7)}},
 	}
 
-	evaluator, err := getterParser.newComparisonEvaluator(cmp)
+	evaluator, err := getterParser.newComparisonEvaluator(cmp, "")
 	if err != nil {
 		t.Fatalf("build evaluator failed: %v", err)
 	}

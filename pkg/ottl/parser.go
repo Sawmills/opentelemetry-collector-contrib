@@ -74,6 +74,7 @@ type Parser[K any] struct {
 	telemetrySettings         component.TelemetrySettings
 	pathContextNames          map[string]struct{}
 	vmEnabled                 bool
+	vmTelemetry               *vmTelemetry
 	vmGasLimit                uint64
 	vmAttrGetter              vm.AttrGetter[K]
 	vmAttrSetter              vm.AttrSetter[K]
