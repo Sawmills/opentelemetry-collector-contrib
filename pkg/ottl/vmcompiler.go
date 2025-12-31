@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	json "github.com/goccy/go-json"
 	"github.com/iancoleman/strcase"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
@@ -390,7 +391,7 @@ func inferValueKind(val value) (valueKind, error) {
 	case val.Map != nil:
 		return kindUnknown, fmt.Errorf("map literals unsupported in micro compiler")
 	case val.List != nil:
-		return kindUnknown, fmt.Errorf("list literals unsupported in micro compiler")
+		return kindUnknown, nil
 	default:
 		return kindUnknown, fmt.Errorf("unsupported value in micro compiler")
 	}
@@ -505,6 +506,13 @@ func foldValueConst(val value) (ir.Value, bool, error) {
 		return ir.BytesValue([]byte(*val.Bytes)), true, nil
 	case val.IsNil != nil:
 		return ir.Value{Type: ir.TypeNone}, true, nil
+	case val.List != nil:
+		if s, ok, err := marshalListLiteral(val.List); err != nil {
+			return ir.Value{}, false, err
+		} else if ok {
+			return ir.StringValue(s), true, nil
+		}
+		return ir.Value{}, false, nil
 	case val.Literal != nil:
 		return foldMathExprLiteralConst(val.Literal)
 	case val.MathExpression != nil:
@@ -541,6 +549,32 @@ func foldMathExpressionConst(expr *mathExpression) (ir.Value, bool, error) {
 	default:
 		return ir.Value{}, false, nil
 	}
+}
+
+func marshalListLiteral(lit *list) (string, bool, error) {
+	if lit == nil {
+		return "", false, nil
+	}
+	items := make([]any, 0, len(lit.Values))
+	for _, v := range lit.Values {
+		folded, ok, err := foldValueConst(v)
+		if err != nil {
+			return "", false, err
+		}
+		if !ok {
+			return "", false, nil
+		}
+		val, err := VMValueToAny(folded)
+		if err != nil {
+			return "", false, err
+		}
+		items = append(items, val)
+	}
+	b, err := json.Marshal(items)
+	if err != nil {
+		return "", false, err
+	}
+	return string(b), true, nil
 }
 
 func foldMathExpressionNumber(expr *mathExpression) (foldedNumber, bool, error) {
@@ -961,6 +995,12 @@ func (c *microCompiler[K]) emitValue(val value) error {
 	case val.Map != nil:
 		return fmt.Errorf("map literals unsupported in micro compiler")
 	case val.List != nil:
+		if s, ok, err := marshalListLiteral(val.List); err != nil {
+			return err
+		} else if ok {
+			c.emitLoadConst(ir.StringValue(s))
+			return nil
+		}
 		return fmt.Errorf("list literals unsupported in micro compiler")
 	default:
 		return fmt.Errorf("unsupported value in micro compiler")

@@ -809,6 +809,10 @@ func (g StandardStringLikeGetter[K]) Get(ctx context.Context, tCtx K) (*string, 
 	default:
 		// Attempt direct string formatting without JSON when possible
 		switch t := v.(type) {
+		case float64:
+			result = strconv.FormatFloat(t, 'g', -1, 64)
+		case float32:
+			result = strconv.FormatFloat(float64(t), 'g', -1, 32)
 		case fmt.Stringer:
 			result = t.String()
 		default:

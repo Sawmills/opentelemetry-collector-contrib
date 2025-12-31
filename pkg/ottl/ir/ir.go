@@ -40,6 +40,9 @@ var (
 	emptyByte  byte
 )
 
+// cap defensive string lengths to avoid runaway unsafe.String on corrupted values
+const maxStringLen = 16 << 20 // 16 MiB
+
 // Int64Value constructs an int Value.
 func Int64Value(v int64) Value {
 	return Value{Type: TypeInt, Num: uint64(v)}
@@ -63,7 +66,7 @@ func StringValue(v string) Value {
 	if len(v) == 0 {
 		return Value{Type: TypeString}
 	}
-	return Value{Type: TypeString, Num: uint64(len(v)), Ptr: unsafe.Pointer(unsafe.StringData(v))}
+	return Value{Type: TypeString, Ptr: unsafe.Pointer(&v)}
 }
 
 // BytesValue constructs a byte slice Value without heap allocation.
@@ -98,18 +101,14 @@ func (v Value) String() (string, bool) {
 	if v.Type != TypeString {
 		return "", false
 	}
-	// Guard against corrupted length values that would panic unsafe.String.
-	if v.Num == 0 {
+	if v.Ptr == nil {
 		return "", true
 	}
-	// In practice len cannot exceed max int.
-	if v.Num > uint64(^uint(0)>>1) {
+	s := *(*string)(v.Ptr)
+	if len(s) > maxStringLen {
 		return "", false
 	}
-	if v.Ptr == nil {
-		return "", false
-	}
-	return unsafe.String((*byte)(v.Ptr), int(v.Num)), true
+	return s, true
 }
 
 // Bytes returns the byte slice payload when TypeBytes.
@@ -313,10 +312,10 @@ const (
 	OpAttrNeConstString     // Load attr (cached) + compare string const (not equal); arg = packed(attrIdx, constIdx); pushes bool
 	OpAttrFastEqConstString // Load attr (fast) + compare string const; arg = packed(keyIdx, constIdx); pushes bool
 	OpAttrFastNeConstString // Load attr (fast) + compare string const (not equal); arg = packed(keyIdx, constIdx); pushes bool
-	OpAttrEqConst          // Load attr (cached) + compare numeric/bool const; arg = packed(attrIdx, constIdx); pushes bool
-	OpAttrNeConst          // Load attr (cached) + compare numeric/bool const (not equal); arg = packed(attrIdx, constIdx); pushes bool
-	OpAttrFastEqConst      // Load attr (fast) + compare numeric/bool const; arg = packed(keyIdx, constIdx); pushes bool
-	OpAttrFastNeConst      // Load attr (fast) + compare numeric/bool const (not equal); arg = packed(keyIdx, constIdx); pushes bool
+	OpAttrEqConst           // Load attr (cached) + compare numeric/bool const; arg = packed(attrIdx, constIdx); pushes bool
+	OpAttrNeConst           // Load attr (cached) + compare numeric/bool const (not equal); arg = packed(attrIdx, constIdx); pushes bool
+	OpAttrFastEqConst       // Load attr (fast) + compare numeric/bool const; arg = packed(keyIdx, constIdx); pushes bool
+	OpAttrFastNeConst       // Load attr (fast) + compare numeric/bool const (not equal); arg = packed(keyIdx, constIdx); pushes bool
 
 	// IsMatch superinstructions (fused attr load + regex match)
 	OpAttrIsMatchConst     // Load attr (cached) + regex match; arg = packed(attrIdx, regexIdx); pushes bool
