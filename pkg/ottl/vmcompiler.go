@@ -2596,7 +2596,7 @@ func (c *microCompiler[K]) peepholeOptimize() {
 			nextInst := c.code[i+1]
 			nextOp := nextInst.Op()
 
-			if nextOp == ir.OpEqConst || nextOp == ir.OpNeConst {
+			if nextOp == ir.OpEqConst || nextOp == ir.OpNeConst || nextOp == ir.OpJumpIfFalsePop {
 				attrIdx := inst.Arg()
 				constIdx := nextInst.Arg()
 
@@ -2605,8 +2605,10 @@ func (c *microCompiler[K]) peepholeOptimize() {
 					if attrIdx <= 0xFFF && constIdx <= 0xFFF {
 						packedArg := ir.PackAttrConst(attrIdx, constIdx)
 						var fusedOp ir.Opcode
-						if op == ir.OpLoadAttrCached {
-							if nextOp == ir.OpEqConst {
+						isCached := op == ir.OpLoadAttrCached
+						switch nextOp {
+						case ir.OpEqConst:
+							if isCached {
 								if constVal.Type == ir.TypeString {
 									fusedOp = ir.OpAttrEqConstString
 								} else {
@@ -2614,17 +2616,17 @@ func (c *microCompiler[K]) peepholeOptimize() {
 								}
 							} else {
 								if constVal.Type == ir.TypeString {
-									fusedOp = ir.OpAttrNeConstString
-								} else {
-									fusedOp = ir.OpAttrNeConst
-								}
-							}
-						} else {
-							if nextOp == ir.OpEqConst {
-								if constVal.Type == ir.TypeString {
 									fusedOp = ir.OpAttrFastEqConstString
 								} else {
 									fusedOp = ir.OpAttrFastEqConst
+								}
+							}
+						case ir.OpNeConst:
+							if isCached {
+								if constVal.Type == ir.TypeString {
+									fusedOp = ir.OpAttrNeConstString
+								} else {
+									fusedOp = ir.OpAttrNeConst
 								}
 							} else {
 								if constVal.Type == ir.TypeString {
@@ -2633,6 +2635,54 @@ func (c *microCompiler[K]) peepholeOptimize() {
 									fusedOp = ir.OpAttrFastNeConst
 								}
 							}
+						case ir.OpJumpIfFalsePop:
+							// pattern: LOAD_ATTR*, EQ/NE const already folded => Attr*Eq/NeConst* ; then JumpIfFalsePop => fused compare+jump
+							// look ahead one more to get compare opcode
+							if i+2 < len(c.code) {
+								compare := c.code[i+1].Op()
+								if compare == ir.OpEqConst || compare == ir.OpNeConst {
+									// reuse constIdx from compare instruction
+									constIdx = c.code[i+1].Arg()
+									if int(constIdx) < len(c.consts) {
+										constVal = c.consts[constIdx]
+										packedArg = ir.PackAttrConst(attrIdx, constIdx)
+										if isCached {
+											if compare == ir.OpEqConst {
+												if constVal.Type == ir.TypeString {
+													fusedOp = ir.OpAttrEqConstStringJumpIfFalsePop
+												} else {
+													fusedOp = ir.OpAttrEqConstJumpIfFalsePop
+												}
+											} else {
+												if constVal.Type == ir.TypeString {
+													fusedOp = ir.OpAttrNeConstStringJumpIfFalsePop
+												} else {
+													fusedOp = ir.OpAttrNeConstJumpIfFalsePop
+												}
+											}
+										} else {
+											if compare == ir.OpEqConst {
+												if constVal.Type == ir.TypeString {
+													fusedOp = ir.OpAttrFastEqConstStringJumpIfFalsePop
+												} else {
+													fusedOp = ir.OpAttrFastEqConstJumpIfFalsePop
+												}
+											} else {
+												if constVal.Type == ir.TypeString {
+													fusedOp = ir.OpAttrFastNeConstStringJumpIfFalsePop
+												} else {
+													fusedOp = ir.OpAttrFastNeConstJumpIfFalsePop
+												}
+											}
+										}
+										optimized = append(optimized, ir.Encode(fusedOp, packedArg))
+										i += 2
+										oldToNew[i] = len(optimized)
+										continue
+									}
+								}
+							}
+							// fall through if pattern not matched
 						}
 						optimized = append(optimized, ir.Encode(fusedOp, packedArg))
 						i++
