@@ -17,10 +17,21 @@ import (
 const defaultMicroVMStackSize = 32
 const vmEnvVar = "OTELCOL_OTTL_VM"
 
+var defaultVMGasLimit uint64
+
+// SetDefaultVMGasLimit sets a package-wide default VM gas limit that applies when
+// WithVMEnabled/WithVMEnabledFromEnv are used and no per-parser gas limit is provided.
+func SetDefaultVMGasLimit(limit uint64) {
+	defaultVMGasLimit = limit
+}
+
 // WithVMEnabled enables the experimental VM execution path for supported comparisons.
 func WithVMEnabled[K any]() Option[K] {
 	return func(p *Parser[K]) {
 		p.vmEnabled = true
+		if p.vmGasLimit == 0 && defaultVMGasLimit > 0 {
+			p.vmGasLimit = defaultVMGasLimit
+		}
 		if p.vmTelemetry == nil {
 			p.vmTelemetry = newVMTelemetry(p.telemetrySettings.MeterProvider, p.telemetrySettings.Logger)
 		}

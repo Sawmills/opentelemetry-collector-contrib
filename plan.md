@@ -49,7 +49,7 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 
 	### 4. Integration
 	- [ ] **Collector Integration**: Wire VM default path into `transformprocessor`, `filterprocessor`. Owner: amir. Target: 2026-01-09.
-	- [ ] **Configuration**: Expose `gas_limit` in processor config. Owner: amir. Target: 2026-01-04.
+	- [x] **Configuration**: Expose `gas_limit` in processor config. Owner: amir. Target: 2026-01-04. (Done 2025-12-31)
 
 	### 5. Documentation
 	- [ ] **Feature Flag**: Document `OTELCOL_OTTL_VM_ENABLED=true`. Owner: amir. Target: 2026-01-04.
