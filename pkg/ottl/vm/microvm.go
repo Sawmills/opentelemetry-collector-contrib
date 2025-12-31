@@ -1612,6 +1612,23 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 	scopeGetter := p.ScopeGetter
 	scopeSchemaURLGetter := p.ScopeSchemaURLGetter
 	scopeSchemaURLSetter := p.ScopeSchemaURLSetter
+	lastFastKey := -1
+	var lastFastVal ir.Value
+	getFastAttr := func(idx uint32) (ir.Value, error) {
+		if p.AttrGetter == nil {
+			return ir.Value{}, ErrInvalidAccessor
+		}
+		if int(idx) == lastFastKey {
+			return lastFastVal, nil
+		}
+		val, err := p.AttrGetter(tCtx, p.AttrKeys[idx])
+		if err != nil {
+			return ir.Value{}, err
+		}
+		lastFastKey = int(idx)
+		lastFastVal = val
+		return val, nil
+	}
 
 	for ip := 0; ip < codeLen; ip++ {
 		if gas == 0 {
@@ -1742,10 +1759,7 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			if int(idx) >= len(p.AttrKeys) {
 				return ir.Value{}, ErrInvalidAccessor
 			}
-			if p.AttrGetter == nil {
-				return ir.Value{}, ErrInvalidAccessor
-			}
-			vmVal, err := p.AttrGetter(tCtx, p.AttrKeys[idx])
+			vmVal, err := getFastAttr(idx)
 			if err != nil {
 				return ir.Value{}, err
 			}
@@ -1771,6 +1785,7 @@ func runProgramWithContext[K any](stack []ir.Value, p *Program[K], ctx context.C
 			if err := p.AttrSetter(tCtx, p.AttrKeys[idx], val); err != nil {
 				return ir.Value{}, err
 			}
+			lastFastKey = -1
 
 		case ir.OpSetAttrCached:
 			idx := inst.Arg()
