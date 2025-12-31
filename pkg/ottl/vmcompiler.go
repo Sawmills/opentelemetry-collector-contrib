@@ -155,6 +155,9 @@ func (p *Parser[K]) compileMicroBoolExpression(expr *booleanExpression) (*microP
 	if expr == nil {
 		return nil, fmt.Errorf("boolean expression is nil")
 	}
+	if containsCompositeLiteral(expr) {
+		return nil, fmt.Errorf("composite literals unsupported in micro compiler")
+	}
 	c := &microCompiler[K]{
 		parser:        p,
 		constIndex:    map[constKey]uint32{},
@@ -199,6 +202,172 @@ func (p *Parser[K]) compileMicroBoolExpression(expr *booleanExpression) (*microP
 		needsContext: c.needsContext,
 		stackPool:    p.vmStackPool,
 	}, nil
+}
+
+func containsCompositeLiteral(expr *booleanExpression) bool {
+	found := false
+
+	var walkValue func(v value)
+	var walkMathExpression func(me *mathExpression)
+	var walkMathValue func(mv *mathValue)
+	var walkMathExprLiteral func(lit *mathExprLiteral)
+	var walkConverter func(c *converter)
+	var walkConstExpr func(ce *constExpr)
+	var walkArgument func(a *argument)
+	var walkAddSubTerm func(ast *addSubTerm)
+	var walkBooleanValue func(bv *booleanValue)
+	var walkTerm func(t *term)
+	var walkBooleanExpression func(be *booleanExpression)
+
+	walkMathExpression = func(me *mathExpression) {
+		if found || me == nil {
+			return
+		}
+		if me.Left != nil {
+			walkAddSubTerm(me.Left)
+		}
+		for _, rhs := range me.Right {
+			if rhs != nil && rhs.Term != nil {
+				walkAddSubTerm(rhs.Term)
+			}
+		}
+	}
+
+	walkValue = func(v value) {
+		if found {
+			return
+		}
+		if v.Map != nil || v.List != nil {
+			found = true
+			return
+		}
+		if v.MathExpression != nil {
+			walkMathExpression(v.MathExpression)
+		}
+	}
+
+	walkMathValue = func(mv *mathValue) {
+		if found || mv == nil {
+			return
+		}
+		if mv.Literal != nil {
+			walkMathExprLiteral(mv.Literal)
+		}
+		if mv.SubExpression != nil {
+			walkMathExpression(mv.SubExpression)
+		}
+	}
+
+	walkMathExprLiteral = func(lit *mathExprLiteral) {
+		if found || lit == nil {
+			return
+		}
+		if lit.Editor != nil {
+			for _, arg := range lit.Editor.Arguments {
+				walkArgument(&arg)
+			}
+		}
+		if lit.Converter != nil {
+			for _, arg := range lit.Converter.Arguments {
+				walkArgument(&arg)
+			}
+		}
+	}
+
+	walkConverter = func(c *converter) {
+		if found || c == nil {
+			return
+		}
+		for i := range c.Arguments {
+			walkArgument(&c.Arguments[i])
+		}
+		for i := range c.Keys {
+			k := c.Keys[i]
+			if k.MathExpression != nil {
+				walkMathExpression(k.MathExpression)
+			}
+			if k.Expression != nil {
+				walkMathExprLiteral(k.Expression)
+			}
+		}
+	}
+
+	walkConstExpr = func(ce *constExpr) {
+		if found || ce == nil {
+			return
+		}
+		if ce.Converter != nil {
+			walkConverter(ce.Converter)
+		}
+	}
+
+	walkArgument = func(a *argument) {
+		if found || a == nil {
+			return
+		}
+		walkValue(a.Value)
+	}
+
+	walkAddSubTerm = func(ast *addSubTerm) {
+		if found || ast == nil {
+			return
+		}
+		if ast.Left != nil {
+			walkMathValue(ast.Left)
+		}
+		for _, rhs := range ast.Right {
+			if rhs != nil && rhs.Value != nil {
+				walkMathValue(rhs.Value)
+			}
+		}
+	}
+
+	walkBooleanValue = func(bv *booleanValue) {
+		if found || bv == nil {
+			return
+		}
+		if bv.Comparison != nil {
+			walkValue(bv.Comparison.Left)
+			walkValue(bv.Comparison.Right)
+		}
+		if bv.ConstExpr != nil {
+			walkConstExpr(bv.ConstExpr)
+		}
+		if bv.SubExpr != nil {
+			walkBooleanExpression(bv.SubExpr)
+		}
+	}
+
+	walkTerm = func(t *term) {
+		if found || t == nil {
+			return
+		}
+		if t.Left != nil {
+			walkBooleanValue(t.Left)
+		}
+		for _, rhs := range t.Right {
+			if rhs != nil && rhs.Value != nil {
+				walkBooleanValue(rhs.Value)
+			}
+		}
+	}
+
+	walkBooleanExpression = func(be *booleanExpression) {
+		if found || be == nil {
+			return
+		}
+		if be.Left != nil {
+			walkTerm(be.Left)
+		}
+		for _, rhs := range be.Right {
+			if rhs != nil && rhs.Term != nil {
+				walkTerm(rhs.Term)
+			}
+		}
+	}
+
+	walkBooleanExpression(expr)
+	return found
 }
 
 func (p *Parser[K]) compileMicroFunctionCall(ed editor) (*microProgram[K], error) {

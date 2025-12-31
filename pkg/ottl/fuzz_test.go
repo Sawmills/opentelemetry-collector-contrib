@@ -75,10 +75,6 @@ func FuzzDifferentialVM(f *testing.F) {
 	f.Add(`IsMatch(attributes["service"], ".*") and attributes["level"] == "ERROR"`)
 
 	f.Fuzz(func(t *testing.T, statement string) {
-		// Skip list/map literals for now; VM path does not yet handle them.
-		if strings.Contains(statement, "[") || strings.Contains(statement, "{") {
-			return
-		}
 		// Avoid pathological inputs that create extremely deep parse trees and slow the harness.
 		if len(statement) > 2000 {
 			t.Skip("statement too large")

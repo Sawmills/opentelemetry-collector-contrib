@@ -498,6 +498,12 @@ func (p *Parser[K]) newBoolExprWithOrigText(expr *booleanExpression, origText st
 		return BoolExpr[K]{alwaysTrue[K]}, nil
 	}
 
+	if containsCompositeLiteral(expr) {
+		noVM := *p
+		noVM.vmEnabled = false
+		return noVM.newInterpreterBoolExpr(expr, origText)
+	}
+
 	if p.shadowMode && p.vmEnabled {
 		return p.newShadowBoolExpr(expr, origText)
 	}
