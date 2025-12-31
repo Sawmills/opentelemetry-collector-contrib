@@ -115,15 +115,11 @@ Shadow mode always returns the interpreter result (for safety) but logs warnings
 
 ### Performance Characteristics
 
-The VM excels at:
-- Deep arithmetic expressions (3x faster)
-- Many comparisons/boolean logic (2.5x faster)
-- Dynamic regex patterns in `IsMatch` (9x faster, 0 allocs vs 22 allocs)
+- Typical filter rule (“RealWorld” bench, M3 Max): Interpreter ~1.4µs (21 allocs), VM ~0.24µs (0 allocs).
+- VM wins most on deep arithmetic/boolean chains and dynamic regex (`IsMatch` ~9x faster, 0 allocs vs 22).
+- For very simple single-path lookups, interpreter can still be comparable.
 
-The interpreter may be faster for:
-- Simple single-path lookups (due to VM dispatch overhead)
-
-Both achieve **0 allocs/op** for core arithmetic, logic, and comparison operations.
+Both achieve **0 allocs/op** for core arithmetic, logic, and comparisons.
 
 ### Current Limitations
 
@@ -134,6 +130,12 @@ Both achieve **0 allocs/op** for core arithmetic, logic, and comparison operatio
 ### Status
 
 This feature is **experimental**. The VM is functionally complete for most use cases but is being validated through shadow mode deployments before becoming the default.
+
+### Runtime Configuration & Telemetry
+
+- `OTELCOL_OTTL_VM=true` enables VM from env.
+- Transform processor config supports `vm_gas_limit` to cap per-program gas.
+- Metrics (emitted when MeterProvider is set): `ottl_vm_execution_count`, `ottl_vm_error_count{type}`, `ottl_vm_execution_time` (ns), `ottl_vm_shadow_divergence_total{type}`.
 
 ## Troubleshooting
 
