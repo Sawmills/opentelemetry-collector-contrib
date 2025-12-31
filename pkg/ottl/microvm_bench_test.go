@@ -46,7 +46,8 @@ func createBenchIsMatchFunction[K any](_ FunctionContext, oArgs Arguments) (Expr
 			return nil, err
 		}
 		if target == nil {
-			return false, nil
+			empty := ""
+			target = &empty
 		}
 		re := cached
 		if re == nil {
