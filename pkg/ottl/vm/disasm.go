@@ -16,20 +16,28 @@ func Disassemble[K any](p *Program[K]) string {
 		return ""
 	}
 	var b strings.Builder
+	b.WriteString("ip   opcode         arg    ; meta\n")
 	for i, inst := range p.Code {
 		op := inst.Op()
 		name := opcodeName(op)
+		arg := inst.Arg()
 		if op == ir.OpLoadConst {
-			idx := inst.Arg()
-			fmt.Fprintf(&b, "%03d %-12s %d", i, name, idx)
-			if int(idx) < len(p.Consts) {
+			fmt.Fprintf(&b, "%03d %-14s %6d", i, name, arg)
+			if int(arg) < len(p.Consts) {
 				b.WriteString(" ; ")
-				b.WriteString(formatConst(p.Consts[idx]))
+				b.WriteString(formatConst(p.Consts[arg]))
 			}
 		} else if op == ir.OpLoadGetter {
-			fmt.Fprintf(&b, "%03d %-12s %d", i, name, inst.Arg())
+			fmt.Fprintf(&b, "%03d %-14s %6d", i, name, arg)
+		} else if strings.HasPrefix(name, "ATTR_FAST") || strings.HasPrefix(name, "ATTR_EQ") || strings.HasPrefix(name, "ATTR_NE") {
+			keyIdx, constIdx := ir.UnpackAttrConst(arg)
+			fmt.Fprintf(&b, "%03d %-14s %6d ; key=%d const=%d", i, name, arg, keyIdx, constIdx)
+			if int(constIdx) < len(p.Consts) {
+				b.WriteString(" ")
+				b.WriteString(formatConst(p.Consts[constIdx]))
+			}
 		} else {
-			fmt.Fprintf(&b, "%03d %-12s %d", i, name, inst.Arg())
+			fmt.Fprintf(&b, "%03d %-14s %6d", i, name, arg)
 		}
 		if i < len(p.Code)-1 {
 			b.WriteByte('\n')

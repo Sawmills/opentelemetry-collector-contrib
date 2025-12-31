@@ -26,12 +26,12 @@ func TestDisassemble(t *testing.T) {
 	}
 
 	got := Disassemble(program)
-	lines := strings.Split(got, "\n")
-	if len(lines) != len(program.Code) {
-		t.Fatalf("expected %d lines, got %d", len(program.Code), len(lines))
+	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+	if len(lines) != len(program.Code)+1 { // header + instructions
+		t.Fatalf("expected %d lines, got %d", len(program.Code)+1, len(lines))
 	}
 	wantOps := []string{"LOAD_CONST", "NOT", "JUMP_IF_TRUE", "LOAD_CONST", "EQ"}
-	for i, line := range lines {
+	for i, line := range lines[1:] {
 		fields := strings.Fields(line)
 		if len(fields) < 3 {
 			t.Fatalf("expected fields in line %q", line)
@@ -40,10 +40,10 @@ func TestDisassemble(t *testing.T) {
 			t.Fatalf("expected opcode %q at %d, got %q", wantOps[i], i, fields[1])
 		}
 	}
-	if !strings.Contains(lines[0], "; true") {
-		t.Fatalf("expected const comment for true, got %q", lines[0])
+	if !strings.Contains(lines[1], "; true") {
+		t.Fatalf("expected const comment for true, got %q", lines[1])
 	}
-	if !strings.Contains(lines[3], "; false") {
-		t.Fatalf("expected const comment for false, got %q", lines[3])
+	if !strings.Contains(lines[4], "; false") {
+		t.Fatalf("expected const comment for false, got %q", lines[4])
 	}
 }
