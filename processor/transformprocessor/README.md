@@ -73,6 +73,28 @@ The top-level `error_mode` can be overridden at statement group level, offering 
 | silent     | The processor ignores errors returned by statements, does not log the error, and continues on to the next statement.                        |
 | propagate  | The processor returns the error up the pipeline.  This will result in the payload being dropped from the collector.                         |
 
+
+### VM Runtime Settings
+
+- `OTELCOL_OTTL_VM=true` enables the OTTL bytecode VM (default interpreter).
+- `vm_gas_limit` (uint64): optional per-processor gas budget for the VM; zero = default.
+
+Example:
+
+```yaml
+transform:
+  vm_gas_limit: 15000
+  error_mode: ignore
+  log_statements:
+    - set(log.severity_text, "FAIL") where log.body == "request failed"
+```
+
+Metrics emitted when a MeterProvider is configured:
+- `ottl_vm_execution_count`
+- `ottl_vm_error_count{type}`
+- `ottl_vm_execution_time` (ns)
+- `ottl_vm_shadow_divergence_total{type}` (only in shadow mode)
+
 ### Basic Config
 
 > [!NOTE]
