@@ -50,7 +50,7 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 	- [x] **Disassembler**: Verify `Program.String()` output readability. Owner: amir. Target: 2026-01-04. (Header/columns done 2025-12-31)
 
 	### 4. Integration
-	- [ ] **Collector Integration**: Wire VM default path into `transformprocessor`, `filterprocessor`. Owner: amir. Target: 2026-01-09.
+	- [x] **Collector Integration**: Wire VM default path into `transformprocessor`, `filterprocessor`. Owner: amir. Target: 2026-01-09. (VM default on; per-processor gas limit exposed.)
 	- [x] **Configuration**: Expose `gas_limit` in processor config. Owner: amir. Target: 2026-01-04. (Done 2025-12-31)
 
 	### 5. Documentation

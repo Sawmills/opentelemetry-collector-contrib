@@ -36,6 +36,9 @@ type Config struct {
 	// The default value is `propagate`.
 	ErrorMode ottl.ErrorMode `mapstructure:"error_mode"`
 
+	// VMGasLimit sets the gas budget for the OTTL VM. Zero uses the default.
+	VMGasLimit uint64 `mapstructure:"vm_gas_limit"`
+
 	Metrics MetricFilters `mapstructure:"metrics"`
 
 	Logs LogFilters `mapstructure:"logs"`
@@ -321,6 +324,10 @@ func (cfg *Config) Validate() error {
 	}
 	if (cfg.Logs.ResourceConditions != nil || cfg.Logs.LogConditions != nil) && (cfg.Logs.Include != nil || cfg.Logs.Exclude != nil) {
 		return errors.New("cannot use ottl conditions and include/exclude for logs at the same time")
+	}
+
+	if cfg.VMGasLimit > 0 {
+		ottl.SetDefaultVMGasLimit(cfg.VMGasLimit)
 	}
 
 	var errors error
