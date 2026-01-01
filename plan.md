@@ -61,6 +61,7 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 	- [x] Prune unused attr-compare+jump opcodes (no emitter) to keep IR lean. (2026-01-01)
 	- [x] pprof RealWorld VM; if mapaccess2_faststr >5%, prototype string-key cache; else skip. (mapaccess2_faststr 11% of CPU @ 221.8 ns/op)
 	- [ ] Prototype path-key cache to cut mapaccess2_faststr; measure and keep only if ≥3% win.
+	- [x] Prototype ran (2-slot cache); RealWorld 253 ns/op (+12%). Reverted. Mark skipped unless new idea emerges.
 	- [ ] After decision: go test ./... + RealWorld bench; commit.
 	- [ ] Run 1h fuzz gate once code settled.
 
