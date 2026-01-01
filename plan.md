@@ -63,7 +63,7 @@ Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-a
 	- [ ] Prototype path-key cache to cut mapaccess2_faststr; measure and keep only if ≥3% win.
 	- [x] Prototype ran (2-slot cache); RealWorld 253 ns/op (+12%). Reverted. Mark skipped unless new idea emerges.
 	- [ ] After decision: go test ./... + RealWorld bench; commit.
-	- [ ] Run 1h fuzz gate once code settled.
+	- [ ] Run 1h fuzz gate once code settled. (In progress: 2026-01-01)
 
 	## 1. Goals
 
