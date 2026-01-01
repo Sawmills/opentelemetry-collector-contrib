@@ -55,6 +55,7 @@ components:
     - exporter/honeycombmarker
     - exporter/influxdb
     - exporter/kafka
+    - exporter/kedascaler
     - exporter/loadbalancing
     - exporter/logicmonitor
     - exporter/logzio
@@ -190,10 +191,12 @@ components:
     - processor/groupbyattrs
     - processor/groupbytrace
     - processor/hetznerdetector
+    - processor/hotreloadprocessor
     - processor/interval
     - processor/isolationforest
     - processor/k8sattributes
     - processor/logdedup
+    - processor/logstometricsprocessor
     - processor/logstransform
     - processor/metricsgeneration
     - processor/metricstarttime
@@ -241,6 +244,7 @@ components:
     - receiver/collectd
     - receiver/couchdb
     - receiver/datadog
+    - receiver/datadoglog
     - receiver/docker_stats
     - receiver/elasticsearch
     - receiver/envoyals
