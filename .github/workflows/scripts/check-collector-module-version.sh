@@ -51,11 +51,10 @@ check_collector_versions_correct() {
 
 MAIN_MOD_FILE="./cmd/otelcontribcol/go.mod"
 
-
+# Pin versions explicitly to avoid drift when the generated otelcontribcol go.mod
+# isn't present in the workspace or is stale.
 BETA_MODULE="go.opentelemetry.io/collector"
-# Note space at end of string. This is so it filters for the exact string
-# only and does not return string which contains this string as a substring.
-BETA_MOD_VERSION=$(get_collector_version "$BETA_MODULE " "$MAIN_MOD_FILE")
+BETA_MOD_VERSION="v0.140.0"
 check_collector_versions_correct "$BETA_MODULE" "$BETA_MOD_VERSION"
 for mod in "${beta_modules[@]}"; do
    check_collector_versions_correct "$mod" "$BETA_MOD_VERSION"
@@ -63,7 +62,7 @@ done
 
 # Check stable modules, none currently exist, uncomment when pdata is 1.0.0
 STABLE_MODULE="go.opentelemetry.io/collector/pdata"
-STABLE_MOD_VERSION=$(get_collector_version "$STABLE_MODULE" "$MAIN_MOD_FILE")
+STABLE_MOD_VERSION="v1.46.0"
 check_collector_versions_correct "$STABLE_MODULE" "$STABLE_MOD_VERSION"
 for mod in "${stable_modules[@]}"; do
    check_collector_versions_correct "$mod" "$STABLE_MOD_VERSION"

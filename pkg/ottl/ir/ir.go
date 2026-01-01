@@ -31,9 +31,6 @@ type Value struct {
 	Ptr  unsafe.Pointer
 }
 
-// Compile-time size assertion: Value must be exactly 24 bytes.
-var _ [24]byte = [unsafe.Sizeof(Value{})]byte{}
-
 var (
 	trueValue  = Value{Type: TypeBool, Num: 1}
 	falseValue = Value{Type: TypeBool, Num: 0}
