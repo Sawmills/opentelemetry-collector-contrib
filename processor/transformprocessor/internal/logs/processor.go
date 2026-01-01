@@ -24,7 +24,11 @@ type Processor struct {
 }
 
 func NewProcessor(contextStatements []common.ContextStatements, errorMode ottl.ErrorMode, flatMode bool, settings component.TelemetrySettings, logFunctions map[string]ottl.Factory[ottllog.TransformContext]) (*Processor, error) {
-	pc, err := common.NewLogParserCollection(settings, common.WithLogParser(logFunctions), common.WithLogErrorMode(errorMode))
+	return NewProcessorWithGas(contextStatements, errorMode, flatMode, settings, logFunctions, 0)
+}
+
+func NewProcessorWithGas(contextStatements []common.ContextStatements, errorMode ottl.ErrorMode, flatMode bool, settings component.TelemetrySettings, logFunctions map[string]ottl.Factory[ottllog.TransformContext], vmGasLimit uint64) (*Processor, error) {
+	pc, err := common.NewLogParserCollectionWithGas(settings, vmGasLimit, common.WithLogParserWithGas(logFunctions, vmGasLimit), common.WithLogErrorMode(errorMode))
 	if err != nil {
 		return nil, err
 	}

@@ -58,8 +58,16 @@ type LogParserCollection ottl.ParserCollection[LogsConsumer]
 type LogParserCollectionOption ottl.ParserCollectionOption[LogsConsumer]
 
 func WithLogParser(functions map[string]ottl.Factory[ottllog.TransformContext]) LogParserCollectionOption {
+	return WithLogParserWithGas(functions, 0)
+}
+
+func WithLogParserWithGas(functions map[string]ottl.Factory[ottllog.TransformContext], vmGasLimit uint64) LogParserCollectionOption {
 	return func(pc *ottl.ParserCollection[LogsConsumer]) error {
-		logParser, err := ottllog.NewParser(functions, pc.Settings, ottllog.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottllog.TransformContext]())
+		parserOpts := []ottl.Option[ottllog.TransformContext]{ottllog.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottllog.TransformContext]()}
+		if vmGasLimit > 0 {
+			parserOpts = append(parserOpts, ottl.WithVMGasLimit[ottllog.TransformContext](vmGasLimit))
+		}
+		logParser, err := ottllog.NewParser(functions, pc.Settings, parserOpts...)
 		if err != nil {
 			return err
 		}
@@ -72,8 +80,12 @@ func WithLogErrorMode(errorMode ottl.ErrorMode) LogParserCollectionOption {
 }
 
 func NewLogParserCollection(settings component.TelemetrySettings, options ...LogParserCollectionOption) (*LogParserCollection, error) {
+	return NewLogParserCollectionWithGas(settings, 0, options...)
+}
+
+func NewLogParserCollectionWithGas(settings component.TelemetrySettings, vmGasLimit uint64, options ...LogParserCollectionOption) (*LogParserCollection, error) {
 	pcOptions := []ottl.ParserCollectionOption[LogsConsumer]{
-		withCommonContextParsers[LogsConsumer](),
+		withCommonContextParsers[LogsConsumer](vmGasLimit),
 		ottl.EnableParserCollectionModifiedPathsLogging[LogsConsumer](true),
 	}
 

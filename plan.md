@@ -4,6 +4,10 @@ Status: Phase 7 In Progress (rollout/doc/fuzz)
 Owner: Sawmills.ai / OTel Collector Contrib
 Scope: Replace AST-walking OTTL interpreter with stack-based bytecode VM, zero-alloc hot loop, safe execution bounds.
 
+2026-01-01 updates:
+- Fixed PR feedback: per-processor `vm_gas_limit` (no global bleed) for transform/filter; StringValue uses data pointer; inline fast paths now bounds-check + handle float/bool.
+- Tests: `cd pkg/ottl && go test ./...`; `cd processor/filterprocessor && go test ./...`; `cd processor/transformprocessor && go test ./...` (all pass).
+
 ## Implementation Status (2025-12-30)
 
 | Phase | Status | Notes |

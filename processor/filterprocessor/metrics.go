@@ -21,6 +21,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter/filtermetric"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter/filterottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter/filterset"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottldatapoint"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlmetric"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlresource"
@@ -40,6 +41,17 @@ func newFilterMetricProcessor(set processor.Settings, cfg *Config) (*filterMetri
 		logger: set.Logger,
 	}
 
+	var (
+		resourceOpts  []ottl.Option[ottlresource.TransformContext]
+		metricOpts    []ottl.Option[ottlmetric.TransformContext]
+		dataPointOpts []ottl.Option[ottldatapoint.TransformContext]
+	)
+	if cfg.VMGasLimit > 0 {
+		resourceOpts = append(resourceOpts, ottl.WithVMGasLimit[ottlresource.TransformContext](cfg.VMGasLimit))
+		metricOpts = append(metricOpts, ottl.WithVMGasLimit[ottlmetric.TransformContext](cfg.VMGasLimit))
+		dataPointOpts = append(dataPointOpts, ottl.WithVMGasLimit[ottldatapoint.TransformContext](cfg.VMGasLimit))
+	}
+
 	fpt, err := newFilterTelemetry(set, pipeline.SignalMetrics)
 	if err != nil {
 		return nil, fmt.Errorf("error creating filter processor telemetry: %w", err)
@@ -48,21 +60,21 @@ func newFilterMetricProcessor(set processor.Settings, cfg *Config) (*filterMetri
 
 	if cfg.Metrics.ResourceConditions != nil || cfg.Metrics.MetricConditions != nil || cfg.Metrics.DataPointConditions != nil {
 		if cfg.Metrics.ResourceConditions != nil {
-			fsp.skipResourceExpr, err = filterottl.NewBoolExprForResource(cfg.Metrics.ResourceConditions, cfg.resourceFunctions, cfg.ErrorMode, set.TelemetrySettings)
+			fsp.skipResourceExpr, err = filterottl.NewBoolExprForResourceWithOptions(cfg.Metrics.ResourceConditions, cfg.resourceFunctions, cfg.ErrorMode, set.TelemetrySettings, resourceOpts)
 			if err != nil {
 				return nil, err
 			}
 		}
 
 		if cfg.Metrics.MetricConditions != nil {
-			fsp.skipMetricExpr, err = filterottl.NewBoolExprForMetric(cfg.Metrics.MetricConditions, cfg.metricFunctions, cfg.ErrorMode, set.TelemetrySettings)
+			fsp.skipMetricExpr, err = filterottl.NewBoolExprForMetricWithOptions(cfg.Metrics.MetricConditions, cfg.metricFunctions, cfg.ErrorMode, set.TelemetrySettings, metricOpts)
 			if err != nil {
 				return nil, err
 			}
 		}
 
 		if cfg.Metrics.DataPointConditions != nil {
-			fsp.skipDataPointExpr, err = filterottl.NewBoolExprForDataPoint(cfg.Metrics.DataPointConditions, cfg.dataPointFunctions, cfg.ErrorMode, set.TelemetrySettings)
+			fsp.skipDataPointExpr, err = filterottl.NewBoolExprForDataPointWithOptions(cfg.Metrics.DataPointConditions, cfg.dataPointFunctions, cfg.ErrorMode, set.TelemetrySettings, dataPointOpts)
 			if err != nil {
 				return nil, err
 			}

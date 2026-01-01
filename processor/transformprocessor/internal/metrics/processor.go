@@ -23,7 +23,11 @@ type Processor struct {
 }
 
 func NewProcessor(contextStatements []common.ContextStatements, errorMode ottl.ErrorMode, settings component.TelemetrySettings, metricFunctions map[string]ottl.Factory[ottlmetric.TransformContext], dataPointFunctions map[string]ottl.Factory[ottldatapoint.TransformContext]) (*Processor, error) {
-	pc, err := common.NewMetricParserCollection(settings, common.WithMetricParser(metricFunctions), common.WithDataPointParser(dataPointFunctions), common.WithMetricErrorMode(errorMode))
+	return NewProcessorWithGas(contextStatements, errorMode, settings, metricFunctions, dataPointFunctions, 0)
+}
+
+func NewProcessorWithGas(contextStatements []common.ContextStatements, errorMode ottl.ErrorMode, settings component.TelemetrySettings, metricFunctions map[string]ottl.Factory[ottlmetric.TransformContext], dataPointFunctions map[string]ottl.Factory[ottldatapoint.TransformContext], vmGasLimit uint64) (*Processor, error) {
+	pc, err := common.NewMetricParserCollectionWithGas(settings, vmGasLimit, common.WithMetricParserWithGas(metricFunctions, vmGasLimit), common.WithDataPointParserWithGas(dataPointFunctions, vmGasLimit), common.WithMetricErrorMode(errorMode))
 	if err != nil {
 		return nil, err
 	}

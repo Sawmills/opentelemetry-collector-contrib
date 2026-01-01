@@ -16,6 +16,7 @@ import (
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter/expr"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter/filterottl"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlprofile"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlresource"
 )
@@ -32,6 +33,15 @@ func newFilterProfilesProcessor(set processor.Settings, cfg *Config) (*filterPro
 		logger: set.Logger,
 	}
 
+	var (
+		resourceOpts []ottl.Option[ottlresource.TransformContext]
+		profileOpts  []ottl.Option[ottlprofile.TransformContext]
+	)
+	if cfg.VMGasLimit > 0 {
+		resourceOpts = append(resourceOpts, ottl.WithVMGasLimit[ottlresource.TransformContext](cfg.VMGasLimit))
+		profileOpts = append(profileOpts, ottl.WithVMGasLimit[ottlprofile.TransformContext](cfg.VMGasLimit))
+	}
+
 	fpt, err := newFilterTelemetry(set, xpipeline.SignalProfiles)
 	if err != nil {
 		return nil, fmt.Errorf("error creating filter processor telemetry: %w", err)
@@ -39,14 +49,14 @@ func newFilterProfilesProcessor(set processor.Settings, cfg *Config) (*filterPro
 	fpp.telemetry = fpt
 
 	if cfg.Profiles.ResourceConditions != nil {
-		fpp.skipResourceExpr, err = filterottl.NewBoolExprForResource(cfg.Profiles.ResourceConditions, cfg.resourceFunctions, cfg.ErrorMode, set.TelemetrySettings)
+		fpp.skipResourceExpr, err = filterottl.NewBoolExprForResourceWithOptions(cfg.Profiles.ResourceConditions, cfg.resourceFunctions, cfg.ErrorMode, set.TelemetrySettings, resourceOpts)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	if cfg.Profiles.ProfileConditions != nil {
-		fpp.skipProfileExpr, err = filterottl.NewBoolExprForProfile(cfg.Profiles.ProfileConditions, cfg.profileFunctions, cfg.ErrorMode, set.TelemetrySettings)
+		fpp.skipProfileExpr, err = filterottl.NewBoolExprForProfileWithOptions(cfg.Profiles.ProfileConditions, cfg.profileFunctions, cfg.ErrorMode, set.TelemetrySettings, profileOpts)
 		if err != nil {
 			return nil, err
 		}
