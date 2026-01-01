@@ -17,6 +17,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter/expr"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter/filterottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter/filterspan"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlresource"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlspan"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlspanevent"
@@ -36,6 +37,17 @@ func newFilterSpansProcessor(set processor.Settings, cfg *Config) (*filterSpanPr
 		logger: set.Logger,
 	}
 
+	var (
+		resourceOpts  []ottl.Option[ottlresource.TransformContext]
+		spanOpts      []ottl.Option[ottlspan.TransformContext]
+		spanEventOpts []ottl.Option[ottlspanevent.TransformContext]
+	)
+	if cfg.VMGasLimit > 0 {
+		resourceOpts = append(resourceOpts, ottl.WithVMGasLimit[ottlresource.TransformContext](cfg.VMGasLimit))
+		spanOpts = append(spanOpts, ottl.WithVMGasLimit[ottlspan.TransformContext](cfg.VMGasLimit))
+		spanEventOpts = append(spanEventOpts, ottl.WithVMGasLimit[ottlspanevent.TransformContext](cfg.VMGasLimit))
+	}
+
 	fpt, err := newFilterTelemetry(set, pipeline.SignalTraces)
 	if err != nil {
 		return nil, fmt.Errorf("error creating filter processor telemetry: %w", err)
@@ -44,20 +56,20 @@ func newFilterSpansProcessor(set processor.Settings, cfg *Config) (*filterSpanPr
 
 	if cfg.Traces.ResourceConditions != nil || cfg.Traces.SpanConditions != nil || cfg.Traces.SpanEventConditions != nil {
 		if cfg.Traces.ResourceConditions != nil {
-			fsp.skipResourceExpr, err = filterottl.NewBoolExprForResource(cfg.Traces.ResourceConditions, cfg.resourceFunctions, cfg.ErrorMode, set.TelemetrySettings)
+			fsp.skipResourceExpr, err = filterottl.NewBoolExprForResourceWithOptions(cfg.Traces.ResourceConditions, cfg.resourceFunctions, cfg.ErrorMode, set.TelemetrySettings, resourceOpts)
 			if err != nil {
 				return nil, err
 			}
 		}
 
 		if cfg.Traces.SpanConditions != nil {
-			fsp.skipSpanExpr, err = filterottl.NewBoolExprForSpan(cfg.Traces.SpanConditions, cfg.spanFunctions, cfg.ErrorMode, set.TelemetrySettings)
+			fsp.skipSpanExpr, err = filterottl.NewBoolExprForSpanWithOptions(cfg.Traces.SpanConditions, cfg.spanFunctions, cfg.ErrorMode, set.TelemetrySettings, spanOpts)
 			if err != nil {
 				return nil, err
 			}
 		}
 		if cfg.Traces.SpanEventConditions != nil {
-			fsp.skipSpanEventExpr, err = filterottl.NewBoolExprForSpanEvent(cfg.Traces.SpanEventConditions, cfg.spanEventFunctions, cfg.ErrorMode, set.TelemetrySettings)
+			fsp.skipSpanEventExpr, err = filterottl.NewBoolExprForSpanEventWithOptions(cfg.Traces.SpanEventConditions, cfg.spanEventFunctions, cfg.ErrorMode, set.TelemetrySettings, spanEventOpts)
 			if err != nil {
 				return nil, err
 			}

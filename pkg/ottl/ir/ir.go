@@ -63,7 +63,7 @@ func StringValue(v string) Value {
 	if len(v) == 0 {
 		return Value{Type: TypeString}
 	}
-	return Value{Type: TypeString, Num: uint64(len(v)), Ptr: unsafe.Pointer(&v)}
+	return Value{Type: TypeString, Num: uint64(len(v)), Ptr: unsafe.Pointer(unsafe.StringData(v))}
 }
 
 // BytesValue constructs a byte slice Value without heap allocation.
@@ -98,14 +98,19 @@ func (v Value) String() (string, bool) {
 	if v.Type != TypeString {
 		return "", false
 	}
-	if v.Ptr == nil {
-		return "", true
-	}
-	s := *(*string)(v.Ptr)
-	if len(s) > maxStringLen {
+	if v.Num == 0 {
+		if v.Ptr == nil {
+			return "", true
+		}
 		return "", false
 	}
-	return s, true
+	if v.Ptr == nil {
+		return "", false
+	}
+	if v.Num > maxStringLen {
+		return "", false
+	}
+	return unsafe.String((*byte)(v.Ptr), int(v.Num)), true
 }
 
 // Bytes returns the byte slice payload when TypeBytes.

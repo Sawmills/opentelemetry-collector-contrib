@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
@@ -170,6 +171,12 @@ func (p *Parser[K]) tryInline1Inst(program *microProgram[K]) BoolExpr[K] {
 			return BoolExpr[K]{}
 		}
 		keyIdx, constIdx := ir.UnpackAttrConst(arg)
+		if int(keyIdx) >= len(program.program.AttrKeys) {
+			return BoolExpr[K]{}
+		}
+		if int(constIdx) >= len(program.program.Consts) {
+			return BoolExpr[K]{}
+		}
 		attrGetter := program.program.AttrGetter
 		key := program.program.AttrKeys[keyIdx]
 		constVal := program.program.Consts[constIdx]
@@ -186,6 +193,12 @@ func (p *Parser[K]) tryInline1Inst(program *microProgram[K]) BoolExpr[K] {
 			return BoolExpr[K]{}
 		}
 		keyIdx, constIdx := ir.UnpackAttrConst(arg)
+		if int(keyIdx) >= len(program.program.AttrKeys) {
+			return BoolExpr[K]{}
+		}
+		if int(constIdx) >= len(program.program.Consts) {
+			return BoolExpr[K]{}
+		}
 		attrGetter := program.program.AttrGetter
 		key := program.program.AttrKeys[keyIdx]
 		constVal := program.program.Consts[constIdx]
@@ -200,6 +213,9 @@ func (p *Parser[K]) tryInline1Inst(program *microProgram[K]) BoolExpr[K] {
 	case ir.OpAttrEqConstString:
 		attrIdx, constIdx := ir.UnpackAttrConst(arg)
 		if int(attrIdx) >= len(program.program.Accessors) || program.program.Accessors[attrIdx] == nil {
+			return BoolExpr[K]{}
+		}
+		if int(constIdx) >= len(program.program.Consts) {
 			return BoolExpr[K]{}
 		}
 		accessor := program.program.Accessors[attrIdx]
@@ -217,6 +233,9 @@ func (p *Parser[K]) tryInline1Inst(program *microProgram[K]) BoolExpr[K] {
 		if int(attrIdx) >= len(program.program.Accessors) || program.program.Accessors[attrIdx] == nil {
 			return BoolExpr[K]{}
 		}
+		if int(constIdx) >= len(program.program.Consts) {
+			return BoolExpr[K]{}
+		}
 		accessor := program.program.Accessors[attrIdx]
 		constVal := program.program.Consts[constIdx]
 		return BoolExpr[K]{func(ctx context.Context, tCtx K) (bool, error) {
@@ -230,6 +249,9 @@ func (p *Parser[K]) tryInline1Inst(program *microProgram[K]) BoolExpr[K] {
 	case ir.OpAttrIsMatchConst:
 		attrIdx, regexIdx := ir.UnpackAttrConst(arg)
 		if int(attrIdx) >= len(program.program.Accessors) || program.program.Accessors[attrIdx] == nil {
+			return BoolExpr[K]{}
+		}
+		if int(regexIdx) >= len(program.program.Regexps) {
 			return BoolExpr[K]{}
 		}
 		if int(regexIdx) >= len(program.program.Regexps) || program.program.Regexps[regexIdx] == nil {
@@ -255,6 +277,9 @@ func (p *Parser[K]) tryInline1Inst(program *microProgram[K]) BoolExpr[K] {
 	case ir.OpAttrFastIsMatchConst:
 		keyIdx, regexIdx := ir.UnpackAttrConst(arg)
 		if int(keyIdx) >= len(program.program.AttrKeys) {
+			return BoolExpr[K]{}
+		}
+		if int(regexIdx) >= len(program.program.Regexps) {
 			return BoolExpr[K]{}
 		}
 		if int(regexIdx) >= len(program.program.Regexps) || program.program.Regexps[regexIdx] == nil {
@@ -366,13 +391,18 @@ func (p *Parser[K]) tryInline2Inst(program *microProgram[K]) BoolExpr[K] {
 			if err != nil {
 				return false, err
 			}
-			if val.Type == ir.TypeInt && constType == ir.TypeInt {
+			switch {
+			case val.Type == ir.TypeInt && constType == ir.TypeInt:
 				return int64(val.Num) == int64(constVal.Num), nil
-			}
-			if val.Type == ir.TypeString && constType == ir.TypeString {
+			case val.Type == ir.TypeFloat && constType == ir.TypeFloat:
+				return math.Float64frombits(val.Num) == math.Float64frombits(constVal.Num), nil
+			case val.Type == ir.TypeBool && constType == ir.TypeBool:
+				return val.Num != 0 && constVal.Num != 0 || (val.Num == 0 && constVal.Num == 0), nil
+			case val.Type == ir.TypeString && constType == ir.TypeString:
 				return ir.StringsEqual(val, constVal), nil
+			default:
+				return false, nil
 			}
-			return false, nil
 		}}
 	}
 
@@ -391,13 +421,18 @@ func (p *Parser[K]) tryInline2Inst(program *microProgram[K]) BoolExpr[K] {
 			if err != nil {
 				return false, err
 			}
-			if val.Type == ir.TypeInt && constType == ir.TypeInt {
+			switch {
+			case val.Type == ir.TypeInt && constType == ir.TypeInt:
 				return int64(val.Num) != int64(constVal.Num), nil
-			}
-			if val.Type == ir.TypeString && constType == ir.TypeString {
+			case val.Type == ir.TypeFloat && constType == ir.TypeFloat:
+				return math.Float64frombits(val.Num) != math.Float64frombits(constVal.Num), nil
+			case val.Type == ir.TypeBool && constType == ir.TypeBool:
+				return (val.Num != 0) != (constVal.Num != 0), nil
+			case val.Type == ir.TypeString && constType == ir.TypeString:
 				return !ir.StringsEqual(val, constVal), nil
+			default:
+				return true, nil
 			}
-			return true, nil
 		}}
 	}
 

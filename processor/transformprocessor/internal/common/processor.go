@@ -192,13 +192,21 @@ type baseContext interface {
 	ProfilesConsumer
 }
 
-func withCommonContextParsers[R any]() ottl.ParserCollectionOption[R] {
+func withCommonContextParsers[R any](vmGasLimit uint64) ottl.ParserCollectionOption[R] {
 	return func(pc *ottl.ParserCollection[R]) error {
-		rp, err := ottlresource.NewParser(ResourceFunctions(), pc.Settings, ottlresource.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottlresource.TransformContext]())
+		parserOptsResource := []ottl.Option[ottlresource.TransformContext]{ottlresource.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottlresource.TransformContext]()}
+		if vmGasLimit > 0 {
+			parserOptsResource = append(parserOptsResource, ottl.WithVMGasLimit[ottlresource.TransformContext](vmGasLimit))
+		}
+		rp, err := ottlresource.NewParser(ResourceFunctions(), pc.Settings, parserOptsResource...)
 		if err != nil {
 			return err
 		}
-		sp, err := ottlscope.NewParser(ScopeFunctions(), pc.Settings, ottlscope.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottlscope.TransformContext]())
+		parserOptsScope := []ottl.Option[ottlscope.TransformContext]{ottlscope.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottlscope.TransformContext]()}
+		if vmGasLimit > 0 {
+			parserOptsScope = append(parserOptsScope, ottl.WithVMGasLimit[ottlscope.TransformContext](vmGasLimit))
+		}
+		sp, err := ottlscope.NewParser(ScopeFunctions(), pc.Settings, parserOptsScope...)
 		if err != nil {
 			return err
 		}
