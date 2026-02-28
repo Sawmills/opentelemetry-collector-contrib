@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
@@ -85,4 +86,24 @@ func TestConfigValidate(t *testing.T) {
 			require.EqualError(t, err, tt.expectedErr)
 		})
 	}
+}
+
+func TestConfigValidatePayloadCompression(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	require.NoError(t, cfg.Validate())
+
+	queueSettings := cfg.QueueSettings.Get()
+	queueSettings.PayloadCompression = QueuePayloadCompressionSnappy
+	cfg.QueueSettings = configoptional.Some(*queueSettings)
+	require.NoError(t, cfg.Validate())
+
+	queueSettings = cfg.QueueSettings.Get()
+	queueSettings.PayloadCompression = QueuePayloadCompressionZstd
+	cfg.QueueSettings = configoptional.Some(*queueSettings)
+	require.NoError(t, cfg.Validate())
+
+	queueSettings = cfg.QueueSettings.Get()
+	queueSettings.PayloadCompression = QueuePayloadCompression("invalid")
+	cfg.QueueSettings = configoptional.Some(*queueSettings)
+	require.Error(t, cfg.Validate())
 }
