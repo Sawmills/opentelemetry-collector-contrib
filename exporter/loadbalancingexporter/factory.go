@@ -39,12 +39,18 @@ func createDefaultConfig() component.Config {
 	otlpFactory := otlpexporter.NewFactory()
 	otlpDefaultCfg := otlpFactory.CreateDefaultConfig().(*otlpexporter.Config)
 	otlpDefaultCfg.ClientConfig.Endpoint = "placeholder:4317"
+	queueCfg := exporterhelper.NewDefaultQueueConfig()
+	queueCfg.Enabled = false
 
 	return &Config{
 		// By default we disable resilience options on loadbalancing exporter level
 		// to maintain compatibility with workflow in previous versions
 		Protocol: Protocol{
 			OTLP: *otlpDefaultCfg,
+		},
+		QueueSettings: QueueSettings{
+			QueueBatchConfig:   queueCfg,
+			PayloadCompression: QueuePayloadCompressionNone,
 		},
 	}
 }
@@ -76,7 +82,10 @@ func buildExporterResilienceOptions(options []exporterhelper.Option, cfg *Config
 		options = append(options, exporterhelper.WithTimeout(cfg.TimeoutSettings))
 	}
 	if cfg.QueueSettings.Enabled {
-		options = append(options, exporterhelper.WithQueue(cfg.QueueSettings))
+		options = append(options, exporterhelper.WithQueue(cfg.QueueSettings.QueueBatchConfig))
+		if cfg.QueueSettings.PayloadCompression != "" && cfg.QueueSettings.PayloadCompression != QueuePayloadCompressionNone {
+			options = append(options, exporterhelper.WithQueueBatchPayloadCodec(newQueuePayloadCodec(cfg.QueueSettings.PayloadCompression)))
+		}
 	}
 	if cfg.Enabled {
 		options = append(options, exporterhelper.WithRetry(cfg.BackOffConfig))

@@ -218,15 +218,24 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
-		cfg.QueueSettings = exporterhelper.NewDefaultQueueConfig()
+		cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
 
 		assert.Len(t, buildExporterResilienceOptions(o, cfg), 2)
+	})
+	t.Run("Should have timeout, queue and compression options when compression is enabled", func(t *testing.T) {
+		o := []exporterhelper.Option{}
+		cfg := createDefaultConfig().(*Config)
+		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
+		cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
+		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
+
+		assert.Len(t, buildExporterResilienceOptions(o, cfg), 3)
 	})
 	t.Run("Should have all resilience options if defined", func(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
-		cfg.QueueSettings = exporterhelper.NewDefaultQueueConfig()
+		cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
 		cfg.BackOffConfig = configretry.NewDefaultBackOffConfig()
 
 		assert.Len(t, buildExporterResilienceOptions(o, cfg), 3)

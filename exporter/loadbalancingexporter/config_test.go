@@ -25,3 +25,17 @@ func TestLoadConfig(t *testing.T) {
 	require.NoError(t, sub.Unmarshal(cfg))
 	require.NotNil(t, cfg)
 }
+
+func TestConfigValidatePayloadCompression(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	require.NoError(t, cfg.Validate())
+
+	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
+	require.NoError(t, cfg.Validate())
+
+	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionZstd
+	require.NoError(t, cfg.Validate())
+
+	cfg.QueueSettings.PayloadCompression = QueuePayloadCompression("invalid")
+	require.Error(t, cfg.Validate())
+}
