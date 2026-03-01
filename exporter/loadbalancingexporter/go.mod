@@ -7,6 +7,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/servicediscovery v1.39.23
 	github.com/aws/smithy-go v1.24.1
 	github.com/goccy/go-json v0.10.5
+	github.com/golang/snappy v1.0.0
+	github.com/klauspost/compress v1.18.4
 	github.com/open-telemetry/opentelemetry-collector-contrib/internal/exp/metrics v0.146.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/batchpersignal v0.146.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden v0.146.0
@@ -72,17 +74,16 @@ require (
 	github.com/go-openapi/swag v0.23.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
-	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7 // indirect
 	github.com/hashicorp/go-version v1.8.0 // indirect
+	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.18.4 // indirect
 	github.com/knadh/koanf/maps v0.1.2 // indirect
 	github.com/knadh/koanf/providers/confmap v1.0.0 // indirect
 	github.com/knadh/koanf/v2 v2.3.2 // indirect
@@ -214,3 +215,5 @@ replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden => ../../pkg/golden
 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/internal/exp/metrics => ../../internal/exp/metrics
+
+replace go.opentelemetry.io/collector/exporter/exporterhelper => ../../../opentelemetry-collector/exporter/exporterhelper

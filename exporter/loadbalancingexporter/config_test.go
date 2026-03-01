@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
+	"go.opentelemetry.io/collector/exporter/exporterhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
 )
@@ -92,6 +93,10 @@ func TestConfigValidatePayloadCompression(t *testing.T) {
 	cfg := createDefaultConfig().(*Config)
 	require.NoError(t, cfg.Validate())
 
+	cfg.QueueSettings = configoptional.Some(QueueSettings{
+		QueueBatchConfig:   exporterhelper.NewDefaultQueueConfig(),
+		PayloadCompression: QueuePayloadCompressionNone,
+	})
 	queueSettings := cfg.QueueSettings.Get()
 	queueSettings.PayloadCompression = QueuePayloadCompressionSnappy
 	cfg.QueueSettings = configoptional.Some(*queueSettings)

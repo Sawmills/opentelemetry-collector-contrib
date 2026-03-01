@@ -98,7 +98,6 @@ func (c *Config) Validate() error {
 
 	return nil
 }
-}
 
 // Protocol holds the individual protocol-specific settings. Only OTLP is supported at the moment.
 type Protocol struct {
