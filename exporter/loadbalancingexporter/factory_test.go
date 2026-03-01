@@ -218,9 +218,10 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
-		queueSettings := cfg.QueueSettings.Get()
-		queueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
-		cfg.QueueSettings = configoptional.Some(*queueSettings)
+		cfg.QueueSettings = configoptional.Some(QueueSettings{
+			QueueBatchConfig:   exporterhelper.NewDefaultQueueConfig(),
+			PayloadCompression: QueuePayloadCompressionNone,
+		})
 
 		assert.Len(t, buildExporterResilienceOptions(o, cfg), 2)
 	})
@@ -228,10 +229,10 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
-		queueSettings := cfg.QueueSettings.Get()
-		queueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
-		queueSettings.PayloadCompression = QueuePayloadCompressionSnappy
-		cfg.QueueSettings = configoptional.Some(*queueSettings)
+		cfg.QueueSettings = configoptional.Some(QueueSettings{
+			QueueBatchConfig:   exporterhelper.NewDefaultQueueConfig(),
+			PayloadCompression: QueuePayloadCompressionSnappy,
+		})
 
 		assert.Len(t, buildExporterResilienceOptions(o, cfg), 3)
 	})
@@ -239,9 +240,10 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
-		queueSettings := cfg.QueueSettings.Get()
-		queueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
-		cfg.QueueSettings = configoptional.Some(*queueSettings)
+		cfg.QueueSettings = configoptional.Some(QueueSettings{
+			QueueBatchConfig:   exporterhelper.NewDefaultQueueConfig(),
+			PayloadCompression: QueuePayloadCompressionNone,
+		})
 		cfg.BackOffConfig = configretry.NewDefaultBackOffConfig()
 
 		assert.Len(t, buildExporterResilienceOptions(o, cfg), 3)
