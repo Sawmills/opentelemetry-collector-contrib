@@ -1,5 +1,7 @@
 github.com/Masterminds/semver/v3 v3.4.0 h1:Zog+i5UMtVoCU8oKka5P7i9q9HgrJeGzI9SA1Xbatp0=
 github.com/Masterminds/semver/v3 v3.4.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lprf4nC11bSS5beM=
+github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.146.2-0.20260301203434-6e3d2c393fbb h1:RlX2KZZpZm/30PeuyJQkfCqkFstVnvgTsD7mUXee334=
+github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.146.2-0.20260301203434-6e3d2c393fbb/go.mod h1:XTGhImGtbbG33ua7Ij3JJtkUKGW6JptyFREEh/0zB/Y=
 github.com/aws/aws-sdk-go-v2 v1.41.2 h1:LuT2rzqNQsauaGkPK/7813XxcZ3o3yePY0Iy891T2ls=
 github.com/aws/aws-sdk-go-v2 v1.41.2/go.mod h1:IvvlAZQXvTXznUPfRVfryiG1fbzE2NGK6m9u39YQ+S4=
 github.com/aws/aws-sdk-go-v2/config v1.32.10 h1:9DMthfO6XWZYLfzZglAgW5Fyou2nRI5CuV44sTedKBI=
