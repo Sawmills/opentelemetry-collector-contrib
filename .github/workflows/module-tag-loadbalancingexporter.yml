@@ -13,9 +13,6 @@ on:
         required: false
         type: string
 
-permissions:
-  contents: write
-
 concurrency:
   group: module-tag-loadbalancingexporter-${{ github.ref }}
   cancel-in-progress: false
@@ -23,6 +20,8 @@ concurrency:
 jobs:
   tag-module:
     if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     env:
       MODULE_PREFIX: exporter/loadbalancingexporter
@@ -74,5 +73,5 @@ jobs:
           NEW_TAG="${TAG_PREFIX}${NEXT_INDEX}"
 
           echo "Creating ${NEW_TAG} at ${GITHUB_SHA}"
-          git tag "${NEW_TAG}" "${GITHUB_SHA}"
+          git tag -a "${NEW_TAG}" "${GITHUB_SHA}" -m "Sawmills release ${NEW_TAG}"
           git push origin "${NEW_TAG}"
