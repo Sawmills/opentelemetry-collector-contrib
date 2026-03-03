@@ -236,6 +236,17 @@ service:
         - loadbalancing
 ```
 
+To compress payloads in an in-memory sending queue, set:
+
+```yaml
+exporters:
+  loadbalancing:
+    sending_queue:
+      enabled: true
+      payload_compression: zstd
+      compress_in_memory: true
+```
+
 Kubernetes resolver example (For a more specific example: [example/k8s-resolver](./example/k8s-resolver/README.md))
 > [!IMPORTANT]
 > The k8s resolver requires proper permissions. See [the full example](./example/k8s-resolver/README.md) for more information.
