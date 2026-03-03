@@ -4,6 +4,7 @@
 package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter"
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/servicediscovery/types"
@@ -37,7 +38,7 @@ const (
 type Config struct {
 	TimeoutSettings           exporterhelper.TimeoutConfig `mapstructure:",squash"`
 	configretry.BackOffConfig `mapstructure:"retry_on_failure"`
-	QueueSettings             exporterhelper.QueueBatchConfig `mapstructure:"sending_queue"`
+	QueueSettings             QueueSettings `mapstructure:"sending_queue"`
 
 	Protocol Protocol         `mapstructure:"protocol"`
 	Resolver ResolverSettings `mapstructure:"resolver"`
@@ -50,6 +51,45 @@ type Config struct {
 	// Supports all attributes available (both resource and span), as well as the pseudo attributes "span.kind" and
 	// "span.name".
 	RoutingAttributes []string `mapstructure:"routing_attributes"`
+}
+
+type QueueSettings struct {
+	exporterhelper.QueueBatchConfig `mapstructure:",squash"`
+	PayloadCompression              QueuePayloadCompression `mapstructure:"payload_compression"`
+	CompressInMemory                bool                    `mapstructure:"compress_in_memory"`
+}
+
+type QueuePayloadCompression string
+
+const (
+	QueuePayloadCompressionNone   QueuePayloadCompression = "none"
+	QueuePayloadCompressionSnappy QueuePayloadCompression = "snappy"
+	QueuePayloadCompressionZstd   QueuePayloadCompression = "zstd"
+)
+
+func (q QueueSettings) Validate() error {
+	if err := q.QueueBatchConfig.Validate(); err != nil {
+		return err
+	}
+	switch q.PayloadCompression {
+	case "", QueuePayloadCompressionNone, QueuePayloadCompressionSnappy, QueuePayloadCompressionZstd:
+		// Valid payload compression value.
+	default:
+		return fmt.Errorf("sending_queue.payload_compression must be one of [none, snappy, zstd], found %q", q.PayloadCompression)
+	}
+
+	if q.CompressInMemory && !q.Enabled {
+		return fmt.Errorf("sending_queue.compress_in_memory requires sending_queue.enabled=true")
+	}
+	if q.CompressInMemory && (q.PayloadCompression == "" || q.PayloadCompression == QueuePayloadCompressionNone) {
+		return fmt.Errorf("sending_queue.compress_in_memory requires sending_queue.payload_compression to be set to snappy or zstd")
+	}
+
+	return nil
+}
+
+func (cfg *Config) Validate() error {
+	return cfg.QueueSettings.Validate()
 }
 
 // Protocol holds the individual protocol-specific settings. Only OTLP is supported at the moment.
