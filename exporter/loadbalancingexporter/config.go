@@ -56,6 +56,7 @@ type Config struct {
 type QueueSettings struct {
 	exporterhelper.QueueBatchConfig `mapstructure:",squash"`
 	PayloadCompression              QueuePayloadCompression `mapstructure:"payload_compression"`
+	CompressInMemory                bool                    `mapstructure:"compress_in_memory"`
 }
 
 type QueuePayloadCompression string
@@ -72,10 +73,19 @@ func (q QueueSettings) Validate() error {
 	}
 	switch q.PayloadCompression {
 	case "", QueuePayloadCompressionNone, QueuePayloadCompressionSnappy, QueuePayloadCompressionZstd:
-		return nil
+		// Valid payload compression value.
 	default:
 		return fmt.Errorf("sending_queue.payload_compression must be one of [none, snappy, zstd], found %q", q.PayloadCompression)
 	}
+
+	if q.CompressInMemory && !q.Enabled {
+		return fmt.Errorf("sending_queue.compress_in_memory requires sending_queue.enabled=true")
+	}
+	if q.CompressInMemory && (q.PayloadCompression == "" || q.PayloadCompression == QueuePayloadCompressionNone) {
+		return fmt.Errorf("sending_queue.compress_in_memory requires sending_queue.payload_compression to be set to snappy or zstd")
+	}
+
+	return nil
 }
 
 func (cfg *Config) Validate() error {

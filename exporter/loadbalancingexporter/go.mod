@@ -218,4 +218,4 @@ replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden => 
 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/internal/exp/metrics => ../../internal/exp/metrics
 
-replace go.opentelemetry.io/collector/exporter/exporterhelper => github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.140.1-0.20260302004235-8ffd61d257fd
+replace go.opentelemetry.io/collector/exporter/exporterhelper => github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.140.1-0.20260303212412-92b47b11df4d

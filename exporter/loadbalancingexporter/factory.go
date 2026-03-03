@@ -52,6 +52,7 @@ func createDefaultConfig() component.Config {
 		QueueSettings: QueueSettings{
 			QueueBatchConfig:   queueCfg,
 			PayloadCompression: QueuePayloadCompressionNone,
+			CompressInMemory:   false,
 		},
 	}
 }
@@ -86,6 +87,9 @@ func buildExporterResilienceOptions(options []exporterhelper.Option, cfg *Config
 		options = append(options, exporterhelper.WithQueue(cfg.QueueSettings.QueueBatchConfig))
 		if payloadCodec != nil {
 			options = append(options, exporterhelper.WithQueueBatchPayloadCodec(payloadCodec))
+			if cfg.QueueSettings.CompressInMemory {
+				options = append(options, exporterhelper.WithQueueBatchInMemoryEncoding(true))
+			}
 		}
 	}
 	if cfg.Enabled {

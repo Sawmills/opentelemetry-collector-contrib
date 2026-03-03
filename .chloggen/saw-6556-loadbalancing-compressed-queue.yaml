@@ -7,7 +7,7 @@ change_type: enhancement
 component: exporter/loadbalancing
 
 # A brief description of the change.  Surround your text with quotes ("") if it needs to start with a backtick (`).
-note: Add optional sending queue payload compression (snappy or zstd) for the loadbalancing exporter, disabled by default.
+note: Add optional sending queue payload compression (snappy or zstd) for the loadbalancing exporter, with an opt-in mode to store in-memory queue entries as encoded payloads.
 
 # Mandatory: One or more tracking issues related to the change. You can use the PR number here if no issue exists.
 issues: [6556]
@@ -17,6 +17,7 @@ issues: [6556]
 # Use pipe (|) for multiline entries.
 subtext: |
   Persistent queue payloads are encoded with a queue header and decoded on dequeue.
+  In-memory queue compression is opt-in via `sending_queue.compress_in_memory`.
   Zstd encoder/decoder resources are cleaned up on exporter shutdown.
 
 # If your change doesn't affect end users or the exported elements of any package,
