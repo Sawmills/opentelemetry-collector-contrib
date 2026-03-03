@@ -83,5 +83,7 @@ jobs:
           NEW_TAG="${TAG_PREFIX}${NEXT_INDEX}"
 
           echo "Creating ${NEW_TAG} at ${GITHUB_SHA}"
+          GIT_COMMITTER_NAME="github-actions[bot]" \
+          GIT_COMMITTER_EMAIL="41898282+github-actions[bot]@users.noreply.github.com" \
           git tag -a "${NEW_TAG}" "${GITHUB_SHA}" -m "Sawmills release ${NEW_TAG}"
           git push origin "${NEW_TAG}"
