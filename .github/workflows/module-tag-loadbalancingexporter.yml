@@ -1,0 +1,67 @@
+name: Module Tag - loadbalancingexporter
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - exporter/loadbalancingexporter/**
+  workflow_dispatch:
+    inputs:
+      base_version:
+        description: Base semver (without v), e.g. 0.136.0
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: module-tag-loadbalancingexporter-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tag-module:
+    runs-on: ubuntu-latest
+    env:
+      MODULE_PREFIX: exporter/loadbalancingexporter
+      DEFAULT_BASE_VERSION: "0.136.0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute and create next module tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --tags --force
+
+          BASE_VERSION="${{ github.event.inputs.base_version }}"
+          if [[ -z "${BASE_VERSION}" ]]; then
+            BASE_VERSION="${DEFAULT_BASE_VERSION}"
+          fi
+
+          TAG_PREFIX="${MODULE_PREFIX}/v${BASE_VERSION}-sawmills."
+
+          # Idempotency: do not create another tag if this commit was already tagged.
+          if git tag --points-at "${GITHUB_SHA}" --list "${TAG_PREFIX}*" | grep -q .; then
+            echo "Commit ${GITHUB_SHA} already has ${TAG_PREFIX}* tag. Nothing to do."
+            exit 0
+          fi
+
+          LAST_TAG="$(git tag --list "${TAG_PREFIX}*" --sort=-v:refname | head -n1)"
+          if [[ -z "${LAST_TAG}" ]]; then
+            NEXT_INDEX=1
+          else
+            LAST_INDEX="${LAST_TAG##*.}"
+            NEXT_INDEX=$((LAST_INDEX + 1))
+          fi
+
+          NEW_TAG="${TAG_PREFIX}${NEXT_INDEX}"
+
+          echo "Creating ${NEW_TAG} at ${GITHUB_SHA}"
+          git tag "${NEW_TAG}" "${GITHUB_SHA}"
+          git push origin "${NEW_TAG}"
