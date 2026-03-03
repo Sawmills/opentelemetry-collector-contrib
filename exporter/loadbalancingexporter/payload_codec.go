@@ -19,6 +19,7 @@ var (
 )
 
 const (
+	queuePayloadCodecNone   byte = 0
 	queuePayloadCodecSnappy byte = 1
 	queuePayloadCodecZstd   byte = 2
 )
@@ -56,9 +57,15 @@ func (c *queuePayloadCodec) Encode(payload []byte) ([]byte, error) {
 
 func (c *queuePayloadCodec) Decode(payload []byte) ([]byte, error) {
 	if len(payload) < 5 {
+		if c.compression == QueuePayloadCompressionNone {
+			return payload, nil
+		}
 		return nil, errInvalidCompressedPayload
 	}
 	if payload[0] != queuePayloadMagic[0] || payload[1] != queuePayloadMagic[1] || payload[2] != queuePayloadMagic[2] {
+		if c.compression == QueuePayloadCompressionNone {
+			return payload, nil
+		}
 		return nil, errInvalidCompressedPayload
 	}
 	if payload[3] != queuePayloadVersion {
@@ -70,6 +77,8 @@ func (c *queuePayloadCodec) Decode(payload []byte) ([]byte, error) {
 
 func (c *queuePayloadCodec) compress(codecID byte, payload []byte) ([]byte, error) {
 	switch codecID {
+	case queuePayloadCodecNone:
+		return payload, nil
 	case queuePayloadCodecSnappy:
 		return snappy.Encode(nil, payload), nil
 	case queuePayloadCodecZstd:
@@ -84,6 +93,8 @@ func (c *queuePayloadCodec) compress(codecID byte, payload []byte) ([]byte, erro
 
 func (c *queuePayloadCodec) decompress(codecID byte, payload []byte) ([]byte, error) {
 	switch codecID {
+	case queuePayloadCodecNone:
+		return payload, nil
 	case queuePayloadCodecSnappy:
 		return snappy.Decode(nil, payload)
 	case queuePayloadCodecZstd:
@@ -128,6 +139,8 @@ func (c *queuePayloadCodec) Close() error {
 
 func codecIDForCompression(compression QueuePayloadCompression) (byte, error) {
 	switch compression {
+	case QueuePayloadCompressionNone:
+		return queuePayloadCodecNone, nil
 	case QueuePayloadCompressionSnappy:
 		return queuePayloadCodecSnappy, nil
 	case QueuePayloadCompressionZstd:

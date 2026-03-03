@@ -52,7 +52,6 @@ func createDefaultConfig() component.Config {
 		QueueSettings: QueueSettings{
 			QueueBatchConfig:   queueCfg,
 			PayloadCompression: QueuePayloadCompressionNone,
-			CompressInMemory:   false,
 		},
 	}
 }
@@ -172,7 +171,7 @@ func newQueuePayloadCodecIfEnabled(cfg *Config) *queuePayloadCodec {
 	if !cfg.QueueSettings.Enabled {
 		return nil
 	}
-	if cfg.QueueSettings.PayloadCompression == "" || cfg.QueueSettings.PayloadCompression == QueuePayloadCompressionNone {
+	if cfg.QueueSettings.PayloadCompression == "" {
 		return nil
 	}
 

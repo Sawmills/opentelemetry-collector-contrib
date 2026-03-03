@@ -14,6 +14,7 @@ func TestQueuePayloadCodecRoundTrip(t *testing.T) {
 		name        string
 		compression QueuePayloadCompression
 	}{
+		{name: "none", compression: QueuePayloadCompressionNone},
 		{name: "snappy", compression: QueuePayloadCompressionSnappy},
 		{name: "zstd", compression: QueuePayloadCompressionZstd},
 	}
@@ -52,4 +53,26 @@ func TestQueuePayloadCodecDecodeRejectsInvalidPayload(t *testing.T) {
 	encoded[3] = 0xFF
 	_, err = codec.Decode(encoded)
 	require.ErrorContains(t, err, "unsupported version")
+}
+
+func TestQueuePayloadCodecNoneDecodeLegacyRawPayload(t *testing.T) {
+	codec := newQueuePayloadCodec(QueuePayloadCompressionNone)
+	raw := []byte("legacy-raw-payload")
+
+	decoded, err := codec.Decode(raw)
+	require.NoError(t, err)
+	require.Equal(t, raw, decoded)
+}
+
+func TestQueuePayloadCodecNoneDecodeCompressedPayload(t *testing.T) {
+	snappyCodec := newQueuePayloadCodec(QueuePayloadCompressionSnappy)
+	noneCodec := newQueuePayloadCodec(QueuePayloadCompressionNone)
+	original := []byte("payload written before compression mode switched to none")
+
+	encoded, err := snappyCodec.Encode(original)
+	require.NoError(t, err)
+
+	decoded, err := noneCodec.Decode(encoded)
+	require.NoError(t, err)
+	require.Equal(t, original, decoded)
 }

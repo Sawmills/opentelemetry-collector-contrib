@@ -220,7 +220,7 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
 		cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg, nil), 2)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodecIfEnabled(cfg)), 3)
 	})
 	t.Run("Should have timeout, queue and compression options when compression is enabled", func(t *testing.T) {
 		o := []exporterhelper.Option{}
@@ -249,6 +249,21 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionNone
 		cfg.BackOffConfig = configretry.NewDefaultBackOffConfig()
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg, nil), 3)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodecIfEnabled(cfg)), 4)
+	})
+}
+
+func TestNewQueuePayloadCodecIfEnabled(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	cfg.QueueSettings.Enabled = true
+
+	t.Run("legacy empty string disables codec", func(t *testing.T) {
+		cfg.QueueSettings.PayloadCompression = ""
+		assert.Nil(t, newQueuePayloadCodecIfEnabled(cfg))
+	})
+
+	t.Run("explicit none enables compatibility codec", func(t *testing.T) {
+		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionNone
+		assert.NotNil(t, newQueuePayloadCodecIfEnabled(cfg))
 	})
 }
