@@ -205,14 +205,14 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 	t.Run("Shouldn't have resilience options by default", func(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
-		assert.Empty(t, buildExporterResilienceOptions(o, cfg))
+		assert.Empty(t, buildExporterResilienceOptions(o, cfg, nil))
 	})
 	t.Run("Should have timeout option if defined", func(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg), 1)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, nil), 1)
 	})
 	t.Run("Should have timeout and queue options if defined", func(t *testing.T) {
 		o := []exporterhelper.Option{}
@@ -220,7 +220,7 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
 		cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg), 2)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, nil), 2)
 	})
 	t.Run("Should have timeout, queue and compression options when compression is enabled", func(t *testing.T) {
 		o := []exporterhelper.Option{}
@@ -229,15 +229,16 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
 		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg), 3)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodec(cfg.QueueSettings.PayloadCompression)), 3)
 	})
 	t.Run("Should have all resilience options if defined", func(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
 		cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
+		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionNone
 		cfg.BackOffConfig = configretry.NewDefaultBackOffConfig()
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg), 3)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, nil), 3)
 	})
 }

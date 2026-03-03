@@ -45,4 +45,11 @@ func TestQueuePayloadCodecDecodeRejectsInvalidPayload(t *testing.T) {
 	encoded[0] = 'x'
 	_, err = codec.Decode(encoded)
 	require.Error(t, err)
+
+	encoded, err = codec.Encode([]byte("hello"))
+	require.NoError(t, err)
+
+	encoded[3] = 0xFF
+	_, err = codec.Decode(encoded)
+	require.ErrorContains(t, err, "unsupported version")
 }

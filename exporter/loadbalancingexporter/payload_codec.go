@@ -26,6 +26,7 @@ const (
 type queuePayloadCodec struct {
 	compression QueuePayloadCompression
 	zstdOnce    sync.Once
+	closeOnce   sync.Once
 	zstdEnc     *zstd.Encoder
 	zstdDec     *zstd.Decoder
 	zstdErr     error
@@ -102,8 +103,27 @@ func (c *queuePayloadCodec) initZstd() error {
 			return
 		}
 		c.zstdDec, c.zstdErr = zstd.NewReader(nil)
+		if c.zstdErr != nil {
+			if closeErr := c.zstdEnc.Close(); closeErr != nil {
+				c.zstdErr = errors.Join(c.zstdErr, closeErr)
+			}
+			c.zstdEnc = nil
+		}
 	})
 	return c.zstdErr
+}
+
+func (c *queuePayloadCodec) Close() error {
+	var closeErr error
+	c.closeOnce.Do(func() {
+		if c.zstdDec != nil {
+			c.zstdDec.Close()
+		}
+		if c.zstdEnc != nil {
+			closeErr = c.zstdEnc.Close()
+		}
+	})
+	return closeErr
 }
 
 func codecIDForCompression(compression QueuePayloadCompression) (byte, error) {
