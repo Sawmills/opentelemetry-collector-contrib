@@ -26,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MODULE_PREFIX: exporter/loadbalancingexporter
+      # Intentionally pinned to SAW-6556 backport line.
       DEFAULT_BASE_VERSION: "0.136.0"
     steps:
       - name: Checkout
@@ -39,8 +40,6 @@ jobs:
           INPUT_BASE_VERSION: ${{ github.event.inputs.base_version }}
         run: |
           set -euo pipefail
-
-          git fetch --tags --force
 
           BASE_VERSION="${INPUT_BASE_VERSION}"
           if [[ -z "${BASE_VERSION}" ]]; then
@@ -59,11 +58,16 @@ jobs:
             exit 0
           fi
 
-          LAST_TAG="$(git tag --list "${TAG_PREFIX}*" --sort=-v:refname | head -n1)"
+          readarray -t MATCHING_TAGS < <(git tag --list "${TAG_PREFIX}*" --sort=-v:refname)
+          LAST_TAG="${MATCHING_TAGS[0]:-}"
           if [[ -z "${LAST_TAG}" ]]; then
             NEXT_INDEX=1
           else
             LAST_INDEX="${LAST_TAG##*.}"
+            if [[ ! "${LAST_INDEX}" =~ ^[0-9]+$ ]]; then
+              echo "Unexpected non-numeric tag suffix: ${LAST_INDEX} (tag: ${LAST_TAG})"
+              exit 1
+            fi
             NEXT_INDEX=$((LAST_INDEX + 1))
           fi
 
