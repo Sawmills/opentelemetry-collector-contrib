@@ -4,7 +4,7 @@
 change_type: enhancement
 
 # The name of the component, or a single word describing the area of concern, (e.g. filelogreceiver)
-component: core
+component: all
 
 # A brief description of the change.  Surround your text with quotes ("") if it needs to start with a backtick (`).
 note: Update dependencies to v0.136.0 and v0.136.1, including improvements to kedascalerexporter error handling and datadog log processing optimization
