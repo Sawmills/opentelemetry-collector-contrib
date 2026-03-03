@@ -22,6 +22,7 @@ concurrency:
 
 jobs:
   tag-module:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:
       MODULE_PREFIX: exporter/loadbalancingexporter
@@ -34,14 +35,20 @@ jobs:
 
       - name: Compute and create next module tag
         shell: bash
+        env:
+          INPUT_BASE_VERSION: ${{ github.event.inputs.base_version }}
         run: |
           set -euo pipefail
 
           git fetch --tags --force
 
-          BASE_VERSION="${{ github.event.inputs.base_version }}"
+          BASE_VERSION="${INPUT_BASE_VERSION}"
           if [[ -z "${BASE_VERSION}" ]]; then
             BASE_VERSION="${DEFAULT_BASE_VERSION}"
+          fi
+          if [[ ! "${BASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid base_version '${BASE_VERSION}'. Expected format: X.Y.Z"
+            exit 1
           fi
 
           TAG_PREFIX="${MODULE_PREFIX}/v${BASE_VERSION}-sawmills."
