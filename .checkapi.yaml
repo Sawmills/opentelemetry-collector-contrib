@@ -7,6 +7,7 @@ ignored_paths:
   - extension/encoding
   - extension/opampcustommessages
   - extension/storage
+  - exporter/kedascalerexporter # pre-existing exported helper constructors; tracked for API cleanup
   - pkg/batchperresourceattr
   - pkg/batchpersignal
   - pkg/core/xidutils
@@ -42,6 +43,7 @@ ignored_paths:
   - extension/sumologicextension # 40655
   - extension/k8sleaderelector # 43992
   - processor/filterprocessor # 43994
+  - processor/hotreloadprocessor # pre-existing exported helper constructor; tracked for API cleanup
   - processor/transformprocessor # 43994
   - receiver/aerospikereceiver # 43995
   - receiver/carbonreceiver

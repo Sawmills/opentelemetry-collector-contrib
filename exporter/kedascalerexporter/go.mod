@@ -11,11 +11,11 @@ require (
 	github.com/prometheus/prometheus v0.307.3
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/collector/component v1.46.0
-	go.opentelemetry.io/collector/component/componentstatus v0.136.1-0.20250925151503-069408608b28
+	go.opentelemetry.io/collector/component/componentstatus v0.140.0
 	go.opentelemetry.io/collector/component/componenttest v0.140.0
-	go.opentelemetry.io/collector/config/configgrpc v0.136.1-0.20250925151503-069408608b28
-	go.opentelemetry.io/collector/config/confighttp v0.136.1-0.20250925151503-069408608b28
-	go.opentelemetry.io/collector/config/confignet v1.42.1-0.20250925151503-069408608b28
+	go.opentelemetry.io/collector/config/configgrpc v0.140.0
+	go.opentelemetry.io/collector/config/confighttp v0.140.0
+	go.opentelemetry.io/collector/config/confignet v1.46.0
 	go.opentelemetry.io/collector/confmap v1.46.0
 	go.opentelemetry.io/collector/exporter v1.46.0
 	go.opentelemetry.io/collector/exporter/exporterhelper v0.140.0
@@ -66,7 +66,7 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
-	github.com/google/go-tpm v0.9.6 // indirect
+	github.com/google/go-tpm v0.9.7 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
@@ -74,7 +74,7 @@ require (
 	github.com/grafana/regexp v0.0.0-20250905093917-f7b3be9d1853 // indirect
 	github.com/hashicorp/go-version v1.7.0 // indirect
 	github.com/jpillora/backoff v1.0.0 // indirect
-	github.com/klauspost/compress v1.18.0 // indirect
+	github.com/klauspost/compress v1.18.1 // indirect
 	github.com/knadh/koanf/maps v0.1.2 // indirect
 	github.com/knadh/koanf/providers/confmap v1.0.0 // indirect
 	github.com/knadh/koanf/v2 v2.3.0 // indirect
@@ -100,13 +100,13 @@ require (
 	github.com/rs/cors v1.11.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/collector/client v1.46.0 // indirect
-	go.opentelemetry.io/collector/config/configauth v0.136.1-0.20250925151503-069408608b28 // indirect
-	go.opentelemetry.io/collector/config/configcompression v1.42.1-0.20250925151503-069408608b28 // indirect
-	go.opentelemetry.io/collector/config/configmiddleware v1.42.1-0.20250925151503-069408608b28 // indirect
-	go.opentelemetry.io/collector/config/configopaque v1.42.1-0.20250925151503-069408608b28 // indirect
+	go.opentelemetry.io/collector/config/configauth v1.46.0 // indirect
+	go.opentelemetry.io/collector/config/configcompression v1.46.0 // indirect
+	go.opentelemetry.io/collector/config/configmiddleware v1.46.0 // indirect
+	go.opentelemetry.io/collector/config/configopaque v1.46.0 // indirect
 	go.opentelemetry.io/collector/config/configoptional v1.46.0 // indirect
 	go.opentelemetry.io/collector/config/configretry v1.46.0 // indirect
-	go.opentelemetry.io/collector/config/configtls v1.42.1-0.20250925151503-069408608b28 // indirect
+	go.opentelemetry.io/collector/config/configtls v1.46.0 // indirect
 	go.opentelemetry.io/collector/confmap/xconfmap v0.140.0 // indirect
 	go.opentelemetry.io/collector/consumer v1.46.0 // indirect
 	go.opentelemetry.io/collector/consumer/consumererror v0.140.0 // indirect
@@ -114,8 +114,8 @@ require (
 	go.opentelemetry.io/collector/consumer/xconsumer v0.140.0 // indirect
 	go.opentelemetry.io/collector/exporter/xexporter v0.140.0 // indirect
 	go.opentelemetry.io/collector/extension v1.46.0 // indirect
-	go.opentelemetry.io/collector/extension/extensionauth v1.42.1-0.20250925151503-069408608b28 // indirect
-	go.opentelemetry.io/collector/extension/extensionmiddleware v0.136.1-0.20250925151503-069408608b28 // indirect
+	go.opentelemetry.io/collector/extension/extensionauth v1.46.0 // indirect
+	go.opentelemetry.io/collector/extension/extensionmiddleware v0.140.0 // indirect
 	go.opentelemetry.io/collector/extension/xextension v0.140.0 // indirect
 	go.opentelemetry.io/collector/featuregate v1.46.0 // indirect
 	go.opentelemetry.io/collector/pdata/pprofile v0.140.0 // indirect

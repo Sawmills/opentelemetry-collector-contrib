@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package encryption
+package encryption // import "github.com/open-telemetry/opentelemetry-collector-contrib/processor/hotreloadprocessor/internal/encryption"
 
 import (
 	"crypto/aes"

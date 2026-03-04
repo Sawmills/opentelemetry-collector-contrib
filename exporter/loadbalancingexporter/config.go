@@ -4,12 +4,14 @@
 package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter"
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/servicediscovery/types"
 	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
+	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	"go.opentelemetry.io/collector/exporter/otlpexporter"
 )
@@ -59,6 +61,43 @@ type QueueSettings struct {
 	CompressInMemory                bool                    `mapstructure:"compress_in_memory"`
 }
 
+func (q *QueueSettings) Unmarshal(conf *confmap.Conf) error {
+	if conf == nil {
+		return nil
+	}
+
+	// QueueBatchConfig has its own Unmarshal implementation that rejects unknown fields.
+	// Parse the queue payload compression fields separately so they can coexist with queue settings.
+	queueCfg := conf.ToStringMap()
+	payloadRaw, hasPayload := queueCfg["payload_compression"]
+	compressRaw, hasCompressInMemory := queueCfg["compress_in_memory"]
+	delete(queueCfg, "payload_compression")
+	delete(queueCfg, "compress_in_memory")
+
+	queueConf := confmap.NewFromStringMap(queueCfg)
+	if err := queueConf.Unmarshal(&q.QueueBatchConfig); err != nil {
+		return err
+	}
+
+	if hasPayload {
+		payload, ok := payloadRaw.(string)
+		if !ok {
+			return errors.New("sending_queue.payload_compression must be a string")
+		}
+		q.PayloadCompression = QueuePayloadCompression(payload)
+	}
+
+	if hasCompressInMemory {
+		compressInMemory, ok := compressRaw.(bool)
+		if !ok {
+			return errors.New("sending_queue.compress_in_memory must be a bool")
+		}
+		q.CompressInMemory = compressInMemory
+	}
+
+	return nil
+}
+
 type QueuePayloadCompression string
 
 const (
@@ -79,10 +118,10 @@ func (q QueueSettings) Validate() error {
 	}
 
 	if q.CompressInMemory && !q.Enabled {
-		return fmt.Errorf("sending_queue.compress_in_memory requires sending_queue.enabled=true")
+		return errors.New("sending_queue.compress_in_memory requires sending_queue.enabled=true")
 	}
 	if q.CompressInMemory && (q.PayloadCompression == "" || q.PayloadCompression == QueuePayloadCompressionNone) {
-		return fmt.Errorf("sending_queue.compress_in_memory requires sending_queue.payload_compression to be set to snappy or zstd")
+		return errors.New("sending_queue.compress_in_memory requires sending_queue.payload_compression to be set to snappy or zstd")
 	}
 
 	return nil
