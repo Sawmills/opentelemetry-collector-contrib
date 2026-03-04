@@ -4,6 +4,7 @@
 package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter"
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -81,7 +82,7 @@ func (q *QueueSettings) Unmarshal(conf *confmap.Conf) error {
 	if hasPayload {
 		payload, ok := payloadRaw.(string)
 		if !ok {
-			return fmt.Errorf("sending_queue.payload_compression must be a string")
+			return errors.New("sending_queue.payload_compression must be a string")
 		}
 		q.PayloadCompression = QueuePayloadCompression(payload)
 	}
@@ -89,7 +90,7 @@ func (q *QueueSettings) Unmarshal(conf *confmap.Conf) error {
 	if hasCompressInMemory {
 		compressInMemory, ok := compressRaw.(bool)
 		if !ok {
-			return fmt.Errorf("sending_queue.compress_in_memory must be a bool")
+			return errors.New("sending_queue.compress_in_memory must be a bool")
 		}
 		q.CompressInMemory = compressInMemory
 	}
@@ -117,10 +118,10 @@ func (q QueueSettings) Validate() error {
 	}
 
 	if q.CompressInMemory && !q.Enabled {
-		return fmt.Errorf("sending_queue.compress_in_memory requires sending_queue.enabled=true")
+		return errors.New("sending_queue.compress_in_memory requires sending_queue.enabled=true")
 	}
 	if q.CompressInMemory && (q.PayloadCompression == "" || q.PayloadCompression == QueuePayloadCompressionNone) {
-		return fmt.Errorf("sending_queue.compress_in_memory requires sending_queue.payload_compression to be set to snappy or zstd")
+		return errors.New("sending_queue.compress_in_memory requires sending_queue.payload_compression to be set to snappy or zstd")
 	}
 
 	return nil
