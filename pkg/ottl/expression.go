@@ -16,9 +16,12 @@ import (
 
 	"github.com/goccy/go-json"
 	"go.opentelemetry.io/collector/pdata/pcommon"
+	pprofile "go.opentelemetry.io/collector/pdata/pprofile"
 	"golang.org/x/exp/constraints"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/internal/ottlcommon"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 )
 
 // ExprFunc is a function in OTTL
@@ -38,6 +41,29 @@ func (e Expr[K]) Eval(ctx context.Context, tCtx K) (any, error) {
 type Getter[K any] interface {
 	// Get retrieves a value of type 'Any' and returns an error if there are any issues during retrieval.
 	Get(ctx context.Context, tCtx K) (any, error)
+}
+
+// VMGetter retrieves a value as a VM-native type.
+type VMGetter[K any] interface {
+	GetVM(ctx context.Context, tCtx K) (ir.Value, error)
+}
+
+// VMGetterFunc is a function adapter for VMGetter.
+type VMGetterFunc[K any] func(ctx context.Context, tCtx K) (ir.Value, error)
+
+func (f VMGetterFunc[K]) GetVM(ctx context.Context, tCtx K) (ir.Value, error) {
+	return f(ctx, tCtx)
+}
+
+// VMGetterProvider exposes a VMGetter for optimized VM execution.
+type VMGetterProvider[K any] interface {
+	VMGetter() VMGetter[K]
+}
+
+// VMAttrSetterProvider exposes fast attribute setters for literal keys.
+type VMAttrSetterProvider[K any] interface {
+	VMAttrKey() (string, bool)
+	VMAttrSetter() vm.AttrSetter[K]
 }
 
 // Setter allows setting an untyped value on a predefined field within some data at runtime.
@@ -65,6 +91,27 @@ func (path StandardGetSetter[K]) Get(ctx context.Context, tCtx K) (any, error) {
 
 func (path StandardGetSetter[K]) Set(ctx context.Context, tCtx K, val any) error {
 	return path.Setter(ctx, tCtx, val)
+}
+
+// StandardVMGetSetter augments StandardGetSetter with a VM-optimized getter.
+type StandardVMGetSetter[K any] struct {
+	StandardGetSetter[K]
+	VMGetterFunc     VMGetterFunc[K]
+	VMAttrKeyValue   string
+	VMAttrKeySet     bool
+	VMAttrSetterFunc vm.AttrSetter[K]
+}
+
+func (s StandardVMGetSetter[K]) VMGetter() VMGetter[K] {
+	return s.VMGetterFunc
+}
+
+func (s StandardVMGetSetter[K]) VMAttrKey() (string, bool) {
+	return s.VMAttrKeyValue, s.VMAttrKeySet
+}
+
+func (s StandardVMGetSetter[K]) VMAttrSetter() vm.AttrSetter[K] {
+	return s.VMAttrSetterFunc
 }
 
 type exprGetter[K any] struct {
@@ -719,12 +766,21 @@ func (g StandardStringLikeGetter[K]) Get(ctx context.Context, tCtx K) (*string, 
 	case []byte:
 		result = hex.EncodeToString(v)
 	case pcommon.Map:
+		// Fast path: use map's AsRaw and avoid allocations when empty
+		if v.Len() == 0 {
+			result = "{}"
+			break
+		}
 		resultBytes, err := json.Marshal(v.AsRaw())
 		if err != nil {
 			return nil, err
 		}
 		result = string(resultBytes)
 	case pcommon.Slice:
+		if v.Len() == 0 {
+			result = "[]"
+			break
+		}
 		resultBytes, err := json.Marshal(v.AsRaw())
 		if err != nil {
 			return nil, err
@@ -732,12 +788,40 @@ func (g StandardStringLikeGetter[K]) Get(ctx context.Context, tCtx K) (*string, 
 		result = string(resultBytes)
 	case pcommon.Value:
 		result = v.AsString()
-	default:
+	case pcommon.TraceID:
 		resultBytes, err := json.Marshal(v)
 		if err != nil {
-			return nil, TypeError(fmt.Sprintf("unsupported type: %T", v))
+			return nil, err
 		}
 		result = string(resultBytes)
+	case pcommon.SpanID:
+		resultBytes, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		result = string(resultBytes)
+	case pprofile.ProfileID:
+		resultBytes, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		result = string(resultBytes)
+	default:
+		// Attempt direct string formatting without JSON when possible
+		switch t := v.(type) {
+		case float64:
+			result = strconv.FormatFloat(t, 'g', -1, 64)
+		case float32:
+			result = strconv.FormatFloat(float64(t), 'g', -1, 32)
+		case fmt.Stringer:
+			result = t.String()
+		default:
+			resultBytes, err := json.Marshal(v)
+			if err != nil {
+				return nil, TypeError(fmt.Sprintf("unsupported type: %T", v))
+			}
+			result = string(resultBytes)
+		}
 	}
 	return &result, nil
 }

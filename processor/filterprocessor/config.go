@@ -23,6 +23,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlmetric"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlprofile"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlresource"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlscope"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlspan"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlspanevent"
 )
@@ -35,6 +36,9 @@ type Config struct {
 	// `propagate` means the processor returns the error up the pipeline.  This will result in the payload being dropped from the collector.
 	// The default value is `propagate`.
 	ErrorMode ottl.ErrorMode `mapstructure:"error_mode"`
+
+	// VMGasLimit sets the gas budget for the OTTL VM. Zero uses the default.
+	VMGasLimit uint64 `mapstructure:"vm_gas_limit"`
 
 	Metrics MetricFilters `mapstructure:"metrics"`
 
@@ -323,55 +327,76 @@ func (cfg *Config) Validate() error {
 		return errors.New("cannot use ottl conditions and include/exclude for logs at the same time")
 	}
 
+	var (
+		resourceOpts  []ottl.Option[ottlresource.TransformContext]
+		scopeOpts     []ottl.Option[ottlscope.TransformContext]
+		spanOpts      []ottl.Option[ottlspan.TransformContext]
+		spanEventOpts []ottl.Option[ottlspanevent.TransformContext]
+		metricOpts    []ottl.Option[ottlmetric.TransformContext]
+		dataPointOpts []ottl.Option[ottldatapoint.TransformContext]
+		logOpts       []ottl.Option[ottllog.TransformContext]
+		profileOpts   []ottl.Option[ottlprofile.TransformContext]
+	)
+	if cfg.VMGasLimit > 0 {
+		resourceOpts = append(resourceOpts, ottl.WithVMGasLimit[ottlresource.TransformContext](cfg.VMGasLimit))
+		scopeOpts = append(scopeOpts, ottl.WithVMGasLimit[ottlscope.TransformContext](cfg.VMGasLimit))
+		spanOpts = append(spanOpts, ottl.WithVMGasLimit[ottlspan.TransformContext](cfg.VMGasLimit))
+		spanEventOpts = append(spanEventOpts, ottl.WithVMGasLimit[ottlspanevent.TransformContext](cfg.VMGasLimit))
+		metricOpts = append(metricOpts, ottl.WithVMGasLimit[ottlmetric.TransformContext](cfg.VMGasLimit))
+		dataPointOpts = append(dataPointOpts, ottl.WithVMGasLimit[ottldatapoint.TransformContext](cfg.VMGasLimit))
+		logOpts = append(logOpts, ottl.WithVMGasLimit[ottllog.TransformContext](cfg.VMGasLimit))
+		profileOpts = append(profileOpts, ottl.WithVMGasLimit[ottlprofile.TransformContext](cfg.VMGasLimit))
+	}
+
 	var errors error
 
 	if cfg.Traces.ResourceConditions != nil {
-		_, err := filterottl.NewBoolExprForResource(cfg.Metrics.ResourceConditions, cfg.resourceFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()})
+		_, err := filterottl.NewBoolExprForResourceWithOptions(cfg.Metrics.ResourceConditions, cfg.resourceFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()}, resourceOpts)
 		errors = multierr.Append(errors, err)
 	}
 
 	if cfg.Traces.SpanConditions != nil {
-		_, err := filterottl.NewBoolExprForSpan(cfg.Traces.SpanConditions, cfg.spanFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()})
+		_, err := filterottl.NewBoolExprForSpanWithOptions(cfg.Traces.SpanConditions, cfg.spanFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()}, spanOpts)
 		errors = multierr.Append(errors, err)
 	}
 
 	if cfg.Traces.SpanEventConditions != nil {
-		_, err := filterottl.NewBoolExprForSpanEvent(cfg.Traces.SpanEventConditions, cfg.spanEventFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()})
+		_, err := filterottl.NewBoolExprForSpanEventWithOptions(cfg.Traces.SpanEventConditions, cfg.spanEventFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()}, spanEventOpts)
 		errors = multierr.Append(errors, err)
 	}
 
 	if cfg.Metrics.ResourceConditions != nil {
-		_, err := filterottl.NewBoolExprForResource(cfg.Metrics.ResourceConditions, cfg.resourceFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()})
+		_, err := filterottl.NewBoolExprForResourceWithOptions(cfg.Metrics.ResourceConditions, cfg.resourceFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()}, resourceOpts)
 		errors = multierr.Append(errors, err)
 	}
 
 	if cfg.Metrics.MetricConditions != nil {
-		_, err := filterottl.NewBoolExprForMetric(cfg.Metrics.MetricConditions, cfg.metricFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()})
+		_, err := filterottl.NewBoolExprForMetricWithOptions(cfg.Metrics.MetricConditions, cfg.metricFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()}, metricOpts)
 		errors = multierr.Append(errors, err)
 	}
 
 	if cfg.Metrics.DataPointConditions != nil {
-		_, err := filterottl.NewBoolExprForDataPoint(cfg.Metrics.DataPointConditions, cfg.dataPointFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()})
+		_, err := filterottl.NewBoolExprForDataPointWithOptions(cfg.Metrics.DataPointConditions, cfg.dataPointFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()}, dataPointOpts)
 		errors = multierr.Append(errors, err)
 	}
 
 	if cfg.Logs.ResourceConditions != nil {
-		_, err := filterottl.NewBoolExprForResource(cfg.Metrics.ResourceConditions, cfg.resourceFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()})
+		_, err := filterottl.NewBoolExprForResourceWithOptions(cfg.Metrics.ResourceConditions, cfg.resourceFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()}, resourceOpts)
 		errors = multierr.Append(errors, err)
 	}
 
 	if cfg.Logs.LogConditions != nil {
-		_, err := filterottl.NewBoolExprForLog(cfg.Logs.LogConditions, cfg.logFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()})
+		_, err := filterottl.NewBoolExprForLogWithOptions(cfg.Logs.LogConditions, cfg.logFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()}, logOpts)
 		errors = multierr.Append(errors, err)
 	}
 
 	if cfg.Profiles.ResourceConditions != nil {
-		_, err := filterottl.NewBoolExprForResource(cfg.Metrics.ResourceConditions, cfg.resourceFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()})
+		_, err := filterottl.NewBoolExprForResourceWithOptions(cfg.Metrics.ResourceConditions, cfg.resourceFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()}, resourceOpts)
 		errors = multierr.Append(errors, err)
 	}
 
 	if cfg.Profiles.ProfileConditions != nil {
-		_, err := filterottl.NewBoolExprForProfile(cfg.Profiles.ProfileConditions, cfg.profileFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()})
+		_, err := filterottl.NewBoolExprForProfileWithOptions(cfg.Profiles.ProfileConditions, cfg.profileFunctions, ottl.PropagateError, component.TelemetrySettings{Logger: zap.NewNop()}, profileOpts)
 		errors = multierr.Append(errors, err)
 	}
 

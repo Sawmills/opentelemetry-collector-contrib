@@ -6,9 +6,12 @@ package ctxresource // import "github.com/open-telemetry/opentelemetry-collector
 import (
 	"context"
 
+	"go.opentelemetry.io/collector/pdata/pcommon"
+
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxerror"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxutil"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 )
 
 func PathGetSetter[K Context](path ottl.Path[K]) (ottl.GetSetter[K], error) {
@@ -41,8 +44,8 @@ func accessResourceAttributes[K Context]() ottl.StandardGetSetter[K] {
 	}
 }
 
-func accessResourceAttributesKey[K Context](keys []ottl.Key[K]) ottl.StandardGetSetter[K] {
-	return ottl.StandardGetSetter[K]{
+func accessResourceAttributesKey[K Context](keys []ottl.Key[K]) ottl.GetSetter[K] {
+	getSetter := ottl.StandardGetSetter[K]{
 		Getter: func(ctx context.Context, tCtx K) (any, error) {
 			return ctxutil.GetMapValue[K](ctx, tCtx, tCtx.GetResource().Attributes(), keys)
 		},
@@ -50,6 +53,32 @@ func accessResourceAttributesKey[K Context](keys []ottl.Key[K]) ottl.StandardGet
 			return ctxutil.SetMapValue[K](ctx, tCtx, tCtx.GetResource().Attributes(), keys, val)
 		},
 	}
+	if vmGetter, ok := ctxutil.VMGetterForMapLiteralKey(keys, func(tCtx K) pcommon.Map {
+		return tCtx.GetResource().Attributes()
+	}); ok {
+		literalKey, ok := literalStringKeyFromKeys(keys)
+		return ottl.StandardVMGetSetter[K]{
+			StandardGetSetter: getSetter,
+			VMGetterFunc:      vmGetter,
+			VMAttrKeyValue:    literalKey,
+			VMAttrKeySet:      ok,
+			VMAttrSetterFunc: func(tCtx K, key string, val ir.Value) error {
+				return ctxutil.SetMapValueFromVM(tCtx.GetResource().Attributes(), key, val)
+			},
+		}
+	}
+	return getSetter
+}
+
+func literalStringKeyFromKeys[K any](keys []ottl.Key[K]) (string, bool) {
+	if len(keys) != 1 {
+		return "", false
+	}
+	literal, ok := keys[0].(ottl.LiteralStringKey)
+	if !ok {
+		return "", false
+	}
+	return literal.LiteralString()
 }
 
 func accessResourceDroppedAttributesCount[K Context]() ottl.StandardGetSetter[K] {

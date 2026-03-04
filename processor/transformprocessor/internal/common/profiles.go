@@ -56,8 +56,16 @@ type ProfileParserCollection ottl.ParserCollection[ProfilesConsumer]
 type ProfileParserCollectionOption ottl.ParserCollectionOption[ProfilesConsumer]
 
 func WithProfileParser(functions map[string]ottl.Factory[ottlprofile.TransformContext]) ProfileParserCollectionOption {
+	return WithProfileParserWithGas(functions, 0)
+}
+
+func WithProfileParserWithGas(functions map[string]ottl.Factory[ottlprofile.TransformContext], vmGasLimit uint64) ProfileParserCollectionOption {
 	return func(pc *ottl.ParserCollection[ProfilesConsumer]) error {
-		profileParser, err := ottlprofile.NewParser(functions, pc.Settings, ottlprofile.EnablePathContextNames())
+		parserOpts := []ottl.Option[ottlprofile.TransformContext]{ottlprofile.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottlprofile.TransformContext]()}
+		if vmGasLimit > 0 {
+			parserOpts = append(parserOpts, ottl.WithVMGasLimit[ottlprofile.TransformContext](vmGasLimit))
+		}
+		profileParser, err := ottlprofile.NewParser(functions, pc.Settings, parserOpts...)
 		if err != nil {
 			return err
 		}
@@ -70,8 +78,12 @@ func WithProfileErrorMode(errorMode ottl.ErrorMode) ProfileParserCollectionOptio
 }
 
 func NewProfileParserCollection(settings component.TelemetrySettings, options ...ProfileParserCollectionOption) (*ProfileParserCollection, error) {
+	return NewProfileParserCollectionWithGas(settings, 0, options...)
+}
+
+func NewProfileParserCollectionWithGas(settings component.TelemetrySettings, vmGasLimit uint64, options ...ProfileParserCollectionOption) (*ProfileParserCollection, error) {
 	pcOptions := []ottl.ParserCollectionOption[ProfilesConsumer]{
-		withCommonContextParsers[ProfilesConsumer](),
+		withCommonContextParsers[ProfilesConsumer](vmGasLimit),
 		ottl.EnableParserCollectionModifiedPathsLogging[ProfilesConsumer](true),
 	}
 

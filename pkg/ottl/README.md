@@ -18,6 +18,7 @@ This package implements everything necessary to use OTTL in a Collector componen
 
 - [Getting Started](#getting-started)
 - [Where to use OTTL](#where-to-use-ottl)
+- [Experimental VM Mode](#experimental-vm-mode)
 - [Troubleshooting](#troubleshooting)
 - [Resources](#resources)
 
@@ -72,6 +73,70 @@ There is a lot more OTTL can do, like nested functions, arithmetic, indexing, an
 - To remove data from your pipeline, use the [filter processor](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/processor/filterprocessor/README.md).
 - To select spans to be sampled, use the [tail sampling processor](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/processor/tailsamplingprocessor/README.md).
 - To route data between pipelines, use the [routing connector](https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/connector/routingconnector/README.md).
+
+## Experimental VM Mode
+
+OTTL includes an experimental bytecode VM that can improve performance for complex expressions. The VM compiles OTTL statements into bytecode and executes them on a stack-based virtual machine, achieving zero allocations for core operations.
+
+### Enabling VM Mode
+
+**Via Environment Variable:**
+
+```bash
+export OTELCOL_OTTL_VM=true
+```
+
+**Programmatically (for component developers):**
+
+```go
+parser, err := ottl.NewParser(
+    functions,
+    pathParser,
+    settings,
+    ottl.WithVMEnabled[K](),
+)
+```
+
+### Shadow Mode (Verification)
+
+During rollout, you can enable shadow mode to run both the interpreter and VM simultaneously, comparing results to detect any divergences:
+
+```go
+parser, err := ottl.NewParser(
+    functions,
+    pathParser,
+    settings,
+    ottl.WithVMEnabled[K](),
+    ottl.WithShadowMode[K](),
+)
+```
+
+Shadow mode always returns the interpreter result (for safety) but logs warnings if the VM produces different results.
+
+### Performance Characteristics
+
+- Typical filter rule (“RealWorld” bench, M3 Max): Interpreter ~1.4µs (21 allocs), VM ~0.24µs (0 allocs).
+- VM wins most on deep arithmetic/boolean chains and dynamic regex (`IsMatch` ~9x faster, 0 allocs vs 22).
+- For very simple single-path lookups, interpreter can still be comparable.
+
+Both achieve **0 allocs/op** for core arithmetic, logic, and comparisons.
+
+### Current Limitations
+
+- Not all stdlib functions have native VM opcodes yet (they fall back to the interpreter path)
+- Shadow mode is recommended during initial rollout to verify correctness
+- Floating point behavior follows Go (IEEE754); beware NaN/Inf and tiny precision diffs vs other runtimes
+- Report any divergences as bugs
+
+### Status
+
+This feature is **experimental**. The VM is functionally complete for most use cases but is being validated through shadow mode deployments before becoming the default.
+
+### Runtime Configuration & Telemetry
+
+- `OTELCOL_OTTL_VM=true` enables VM from env.
+- Transform processor config supports `vm_gas_limit` to cap per-program gas.
+- Metrics (emitted when MeterProvider is set): `ottl_vm_execution_count`, `ottl_vm_error_count{type}`, `ottl_vm_execution_time` (ns), `ottl_vm_shadow_divergence_total{type}`.
 
 ## Troubleshooting
 

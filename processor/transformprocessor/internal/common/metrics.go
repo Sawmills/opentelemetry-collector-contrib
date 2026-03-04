@@ -168,8 +168,16 @@ type MetricParserCollection ottl.ParserCollection[MetricsConsumer]
 type MetricParserCollectionOption ottl.ParserCollectionOption[MetricsConsumer]
 
 func WithMetricParser(functions map[string]ottl.Factory[ottlmetric.TransformContext]) MetricParserCollectionOption {
+	return WithMetricParserWithGas(functions, 0)
+}
+
+func WithMetricParserWithGas(functions map[string]ottl.Factory[ottlmetric.TransformContext], vmGasLimit uint64) MetricParserCollectionOption {
 	return func(pc *ottl.ParserCollection[MetricsConsumer]) error {
-		metricParser, err := ottlmetric.NewParser(functions, pc.Settings, ottlmetric.EnablePathContextNames())
+		parserOpts := []ottl.Option[ottlmetric.TransformContext]{ottlmetric.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottlmetric.TransformContext]()}
+		if vmGasLimit > 0 {
+			parserOpts = append(parserOpts, ottl.WithVMGasLimit[ottlmetric.TransformContext](vmGasLimit))
+		}
+		metricParser, err := ottlmetric.NewParser(functions, pc.Settings, parserOpts...)
 		if err != nil {
 			return err
 		}
@@ -178,8 +186,16 @@ func WithMetricParser(functions map[string]ottl.Factory[ottlmetric.TransformCont
 }
 
 func WithDataPointParser(functions map[string]ottl.Factory[ottldatapoint.TransformContext]) MetricParserCollectionOption {
+	return WithDataPointParserWithGas(functions, 0)
+}
+
+func WithDataPointParserWithGas(functions map[string]ottl.Factory[ottldatapoint.TransformContext], vmGasLimit uint64) MetricParserCollectionOption {
 	return func(pc *ottl.ParserCollection[MetricsConsumer]) error {
-		dataPointParser, err := ottldatapoint.NewParser(functions, pc.Settings, ottldatapoint.EnablePathContextNames())
+		parserOpts := []ottl.Option[ottldatapoint.TransformContext]{ottldatapoint.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottldatapoint.TransformContext]()}
+		if vmGasLimit > 0 {
+			parserOpts = append(parserOpts, ottl.WithVMGasLimit[ottldatapoint.TransformContext](vmGasLimit))
+		}
+		dataPointParser, err := ottldatapoint.NewParser(functions, pc.Settings, parserOpts...)
 		if err != nil {
 			return err
 		}
@@ -192,8 +208,12 @@ func WithMetricErrorMode(errorMode ottl.ErrorMode) MetricParserCollectionOption 
 }
 
 func NewMetricParserCollection(settings component.TelemetrySettings, options ...MetricParserCollectionOption) (*MetricParserCollection, error) {
+	return NewMetricParserCollectionWithGas(settings, 0, options...)
+}
+
+func NewMetricParserCollectionWithGas(settings component.TelemetrySettings, vmGasLimit uint64, options ...MetricParserCollectionOption) (*MetricParserCollection, error) {
 	pcOptions := []ottl.ParserCollectionOption[MetricsConsumer]{
-		withCommonContextParsers[MetricsConsumer](),
+		withCommonContextParsers[MetricsConsumer](vmGasLimit),
 		ottl.EnableParserCollectionModifiedPathsLogging[MetricsConsumer](true),
 	}
 

@@ -13,6 +13,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxerror"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxutil"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 )
 
 func PathGetSetter[K Context](path ottl.Path[K]) (ottl.GetSetter[K], error) {
@@ -117,8 +118,8 @@ func accessAttributes[K Context]() ottl.StandardGetSetter[K] {
 	}
 }
 
-func accessAttributesKey[K Context](key []ottl.Key[K]) ottl.StandardGetSetter[K] {
-	return ottl.StandardGetSetter[K]{
+func accessAttributesKey[K Context](key []ottl.Key[K]) ottl.GetSetter[K] {
+	getSetter := ottl.StandardGetSetter[K]{
 		Getter: func(ctx context.Context, tCtx K) (any, error) {
 			switch dp := tCtx.GetDataPoint().(type) {
 			case pmetric.NumberDataPoint:
@@ -146,6 +147,53 @@ func accessAttributesKey[K Context](key []ottl.Key[K]) ottl.StandardGetSetter[K]
 			return nil
 		},
 	}
+	if vmGetter, ok := ctxutil.VMGetterForMapLiteralKey(key, func(tCtx K) pcommon.Map {
+		switch dp := tCtx.GetDataPoint().(type) {
+		case pmetric.NumberDataPoint:
+			return dp.Attributes()
+		case pmetric.HistogramDataPoint:
+			return dp.Attributes()
+		case pmetric.ExponentialHistogramDataPoint:
+			return dp.Attributes()
+		case pmetric.SummaryDataPoint:
+			return dp.Attributes()
+		default:
+			return pcommon.NewMap()
+		}
+	}); ok {
+		literalKey, ok := literalStringKeyFromKeys(key)
+		return ottl.StandardVMGetSetter[K]{
+			StandardGetSetter: getSetter,
+			VMGetterFunc:      vmGetter,
+			VMAttrKeyValue:    literalKey,
+			VMAttrKeySet:      ok,
+			VMAttrSetterFunc: func(tCtx K, key string, val ir.Value) error {
+				switch dp := tCtx.GetDataPoint().(type) {
+				case pmetric.NumberDataPoint:
+					return ctxutil.SetMapValueFromVM(dp.Attributes(), key, val)
+				case pmetric.HistogramDataPoint:
+					return ctxutil.SetMapValueFromVM(dp.Attributes(), key, val)
+				case pmetric.ExponentialHistogramDataPoint:
+					return ctxutil.SetMapValueFromVM(dp.Attributes(), key, val)
+				case pmetric.SummaryDataPoint:
+					return ctxutil.SetMapValueFromVM(dp.Attributes(), key, val)
+				}
+				return nil
+			},
+		}
+	}
+	return getSetter
+}
+
+func literalStringKeyFromKeys[K any](keys []ottl.Key[K]) (string, bool) {
+	if len(keys) != 1 {
+		return "", false
+	}
+	literal, ok := keys[0].(ottl.LiteralStringKey)
+	if !ok {
+		return "", false
+	}
+	return literal.LiteralString()
 }
 
 func accessStartTimeUnixNano[K Context]() ottl.StandardGetSetter[K] {

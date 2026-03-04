@@ -12,8 +12,12 @@ import (
 	"sync"
 
 	"github.com/alecthomas/participle/v2"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.uber.org/zap"
 )
 
@@ -64,11 +68,31 @@ func (c *Condition[K]) Eval(ctx context.Context, tCtx K) (bool, error) {
 // Parser provides the means to parse OTTL StatementSequence and Conditions given a specific set of functions,
 // a PathExpressionParser, and an EnumParser.
 type Parser[K any] struct {
-	functions         map[string]Factory[K]
-	pathParser        PathExpressionParser[K]
-	enumParser        EnumParser
-	telemetrySettings component.TelemetrySettings
-	pathContextNames  map[string]struct{}
+	functions                 map[string]Factory[K]
+	pathParser                PathExpressionParser[K]
+	enumParser                EnumParser
+	telemetrySettings         component.TelemetrySettings
+	pathContextNames          map[string]struct{}
+	vmEnabled                 bool
+	vmTelemetry               *vmTelemetry
+	vmGasLimit                uint64
+	vmAttrGetter              vm.AttrGetter[K]
+	vmAttrSetter              vm.AttrSetter[K]
+	vmAttrContextNames        map[string]struct{}
+	vmStackPool               *vm.StackPool
+	vmLogRecordGetter         func(K) plog.LogRecord
+	vmSpanGetter              func(K) ptrace.Span
+	vmMetricGetter            func(K) pmetric.Metric
+	vmResourceGetter          func(K) pcommon.Resource
+	vmResourceSchemaURLGetter func(K) string
+	vmResourceSchemaURLSetter func(K, string)
+	vmScopeGetter             func(K) pcommon.InstrumentationScope
+	vmScopeSchemaURLGetter    func(K) string
+	vmScopeSchemaURLSetter    func(K, string)
+	vmProgramCache            map[*comparison]*microProgram[K]
+	vmBoolProgramCache        map[*booleanExpression]*microProgram[K]
+	vmProgramCacheMu          sync.Mutex
+	shadowMode                bool
 }
 
 // NewParser creates a new Parser
@@ -156,7 +180,7 @@ func (p *Parser[K]) ParseStatement(statement string) (*Statement[K], error) {
 	if err != nil {
 		return nil, err
 	}
-	expression, err := p.newBoolExpr(parsed.WhereClause)
+	expression, err := p.newBoolExprWithOrigText(parsed.WhereClause, statement)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +223,7 @@ func (p *Parser[K]) ParseCondition(condition string) (*Condition[K], error) {
 	if err != nil {
 		return nil, err
 	}
-	expression, err := p.newBoolExpr(parsed)
+	expression, err := p.newBoolExprWithOrigText(parsed, condition)
 	if err != nil {
 		return nil, err
 	}

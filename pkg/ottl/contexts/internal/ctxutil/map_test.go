@@ -444,3 +444,60 @@ func Test_GetMapKeyName(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkGetMapValue_LiteralKeys_Mixed(b *testing.B) {
+	m := pcommon.NewMap()
+	slice := m.PutEmptySlice("foo")
+	elem := slice.AppendEmpty()
+	elem.SetEmptyMap().PutStr("bar", "baz")
+
+	keys := []ottl.Key[any]{
+		&literalKey{S: ottltest.Strp("foo")},
+		&literalKey{I: ottltest.Intp(0)},
+		&literalKey{S: ottltest.Strp("bar")},
+	}
+
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		val, err := ctxutil.GetMapValue[any](ctx, nil, m, keys)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if val != "baz" {
+			b.Fatalf("unexpected value %v", val)
+		}
+	}
+}
+
+type literalKey struct {
+	S *string
+	I *int64
+}
+
+func (k *literalKey) String(_ context.Context, _ any) (*string, error) {
+	return k.S, nil
+}
+
+func (k *literalKey) Int(_ context.Context, _ any) (*int64, error) {
+	return k.I, nil
+}
+
+func (k *literalKey) ExpressionGetter(context.Context, any) (ottl.Getter[any], error) {
+	return nil, nil
+}
+
+func (k *literalKey) LiteralString() (string, bool) {
+	if k.S == nil {
+		return "", false
+	}
+	return *k.S, true
+}
+
+func (k *literalKey) LiteralInt() (int64, bool) {
+	if k.I == nil {
+		return 0, false
+	}
+	return *k.I, true
+}

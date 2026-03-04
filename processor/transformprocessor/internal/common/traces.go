@@ -96,8 +96,16 @@ type TraceParserCollection ottl.ParserCollection[TracesConsumer]
 type TraceParserCollectionOption ottl.ParserCollectionOption[TracesConsumer]
 
 func WithSpanParser(functions map[string]ottl.Factory[ottlspan.TransformContext]) TraceParserCollectionOption {
+	return WithSpanParserWithGas(functions, 0)
+}
+
+func WithSpanParserWithGas(functions map[string]ottl.Factory[ottlspan.TransformContext], vmGasLimit uint64) TraceParserCollectionOption {
 	return func(pc *ottl.ParserCollection[TracesConsumer]) error {
-		parser, err := ottlspan.NewParser(functions, pc.Settings, ottlspan.EnablePathContextNames())
+		parserOpts := []ottl.Option[ottlspan.TransformContext]{ottlspan.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottlspan.TransformContext]()}
+		if vmGasLimit > 0 {
+			parserOpts = append(parserOpts, ottl.WithVMGasLimit[ottlspan.TransformContext](vmGasLimit))
+		}
+		parser, err := ottlspan.NewParser(functions, pc.Settings, parserOpts...)
 		if err != nil {
 			return err
 		}
@@ -106,8 +114,16 @@ func WithSpanParser(functions map[string]ottl.Factory[ottlspan.TransformContext]
 }
 
 func WithSpanEventParser(functions map[string]ottl.Factory[ottlspanevent.TransformContext]) TraceParserCollectionOption {
+	return WithSpanEventParserWithGas(functions, 0)
+}
+
+func WithSpanEventParserWithGas(functions map[string]ottl.Factory[ottlspanevent.TransformContext], vmGasLimit uint64) TraceParserCollectionOption {
 	return func(pc *ottl.ParserCollection[TracesConsumer]) error {
-		parser, err := ottlspanevent.NewParser(functions, pc.Settings, ottlspanevent.EnablePathContextNames())
+		parserOpts := []ottl.Option[ottlspanevent.TransformContext]{ottlspanevent.EnablePathContextNames(), ottl.WithVMEnabledFromEnv[ottlspanevent.TransformContext]()}
+		if vmGasLimit > 0 {
+			parserOpts = append(parserOpts, ottl.WithVMGasLimit[ottlspanevent.TransformContext](vmGasLimit))
+		}
+		parser, err := ottlspanevent.NewParser(functions, pc.Settings, parserOpts...)
 		if err != nil {
 			return err
 		}
@@ -120,8 +136,12 @@ func WithTraceErrorMode(errorMode ottl.ErrorMode) TraceParserCollectionOption {
 }
 
 func NewTraceParserCollection(settings component.TelemetrySettings, options ...TraceParserCollectionOption) (*TraceParserCollection, error) {
+	return NewTraceParserCollectionWithGas(settings, 0, options...)
+}
+
+func NewTraceParserCollectionWithGas(settings component.TelemetrySettings, vmGasLimit uint64, options ...TraceParserCollectionOption) (*TraceParserCollection, error) {
 	pcOptions := []ottl.ParserCollectionOption[TracesConsumer]{
-		withCommonContextParsers[TracesConsumer](),
+		withCommonContextParsers[TracesConsumer](vmGasLimit),
 		ottl.EnableParserCollectionModifiedPathsLogging[TracesConsumer](true),
 	}
 

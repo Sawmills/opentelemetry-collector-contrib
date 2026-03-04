@@ -23,7 +23,11 @@ type Processor struct {
 }
 
 func NewProcessor(contextStatements []common.ContextStatements, errorMode ottl.ErrorMode, settings component.TelemetrySettings, spanFunctions map[string]ottl.Factory[ottlspan.TransformContext], spanEventFunctions map[string]ottl.Factory[ottlspanevent.TransformContext]) (*Processor, error) {
-	pc, err := common.NewTraceParserCollection(settings, common.WithSpanParser(spanFunctions), common.WithSpanEventParser(spanEventFunctions), common.WithTraceErrorMode(errorMode))
+	return NewProcessorWithGas(contextStatements, errorMode, settings, spanFunctions, spanEventFunctions, 0)
+}
+
+func NewProcessorWithGas(contextStatements []common.ContextStatements, errorMode ottl.ErrorMode, settings component.TelemetrySettings, spanFunctions map[string]ottl.Factory[ottlspan.TransformContext], spanEventFunctions map[string]ottl.Factory[ottlspanevent.TransformContext], vmGasLimit uint64) (*Processor, error) {
+	pc, err := common.NewTraceParserCollectionWithGas(settings, vmGasLimit, common.WithSpanParserWithGas(spanFunctions, vmGasLimit), common.WithSpanEventParserWithGas(spanEventFunctions, vmGasLimit), common.WithTraceErrorMode(errorMode))
 	if err != nil {
 		return nil, err
 	}

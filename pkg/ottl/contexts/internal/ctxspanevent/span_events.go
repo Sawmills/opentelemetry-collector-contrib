@@ -12,6 +12,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxerror"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxutil"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 )
 
 func PathGetSetter[K Context](path ottl.Path[K]) (ottl.GetSetter[K], error) {
@@ -90,8 +91,8 @@ func accessSpanEventAttributes[K Context]() ottl.StandardGetSetter[K] {
 	}
 }
 
-func accessSpanEventAttributesKey[K Context](key []ottl.Key[K]) ottl.StandardGetSetter[K] {
-	return ottl.StandardGetSetter[K]{
+func accessSpanEventAttributesKey[K Context](key []ottl.Key[K]) ottl.GetSetter[K] {
+	getSetter := ottl.StandardGetSetter[K]{
 		Getter: func(ctx context.Context, tCtx K) (any, error) {
 			return ctxutil.GetMapValue[K](ctx, tCtx, tCtx.GetSpanEvent().Attributes(), key)
 		},
@@ -99,6 +100,32 @@ func accessSpanEventAttributesKey[K Context](key []ottl.Key[K]) ottl.StandardGet
 			return ctxutil.SetMapValue[K](ctx, tCtx, tCtx.GetSpanEvent().Attributes(), key, val)
 		},
 	}
+	if vmGetter, ok := ctxutil.VMGetterForMapLiteralKey(key, func(tCtx K) pcommon.Map {
+		return tCtx.GetSpanEvent().Attributes()
+	}); ok {
+		literalKey, ok := literalStringKeyFromKeys(key)
+		return ottl.StandardVMGetSetter[K]{
+			StandardGetSetter: getSetter,
+			VMGetterFunc:      vmGetter,
+			VMAttrKeyValue:    literalKey,
+			VMAttrKeySet:      ok,
+			VMAttrSetterFunc: func(tCtx K, key string, val ir.Value) error {
+				return ctxutil.SetMapValueFromVM(tCtx.GetSpanEvent().Attributes(), key, val)
+			},
+		}
+	}
+	return getSetter
+}
+
+func literalStringKeyFromKeys[K any](keys []ottl.Key[K]) (string, bool) {
+	if len(keys) != 1 {
+		return "", false
+	}
+	literal, ok := keys[0].(ottl.LiteralStringKey)
+	if !ok {
+		return "", false
+	}
+	return literal.LiteralString()
 }
 
 func accessSpanEventDroppedAttributeCount[K Context]() ottl.StandardGetSetter[K] {

@@ -48,7 +48,9 @@ type Config struct {
 	ProfileStatements []common.ContextStatements `mapstructure:"profile_statements"`
 
 	FlattenData bool `mapstructure:"flatten_data"`
-	logger      *zap.Logger
+	// VMGasLimit sets the gas budget for the OTTL VM. Zero uses the default.
+	VMGasLimit uint64 `mapstructure:"vm_gas_limit"`
+	logger     *zap.Logger
 
 	dataPointFunctions map[string]ottl.Factory[ottldatapoint.TransformContext]
 	logFunctions       map[string]ottl.Factory[ottllog.TransformContext]
@@ -145,7 +147,7 @@ func (c *Config) Validate() error {
 	var errors error
 
 	if len(c.TraceStatements) > 0 {
-		pc, err := common.NewTraceParserCollection(component.TelemetrySettings{Logger: zap.NewNop()}, common.WithSpanParser(c.spanFunctions), common.WithSpanEventParser(c.spanEventFunctions))
+		pc, err := common.NewTraceParserCollectionWithGas(component.TelemetrySettings{Logger: zap.NewNop()}, c.VMGasLimit, common.WithSpanParserWithGas(c.spanFunctions, c.VMGasLimit), common.WithSpanEventParserWithGas(c.spanEventFunctions, c.VMGasLimit))
 		if err != nil {
 			return err
 		}
@@ -158,7 +160,7 @@ func (c *Config) Validate() error {
 	}
 
 	if len(c.MetricStatements) > 0 {
-		pc, err := common.NewMetricParserCollection(component.TelemetrySettings{Logger: zap.NewNop()}, common.WithMetricParser(c.metricFunctions), common.WithDataPointParser(c.dataPointFunctions))
+		pc, err := common.NewMetricParserCollectionWithGas(component.TelemetrySettings{Logger: zap.NewNop()}, c.VMGasLimit, common.WithMetricParserWithGas(c.metricFunctions, c.VMGasLimit), common.WithDataPointParserWithGas(c.dataPointFunctions, c.VMGasLimit))
 		if err != nil {
 			return err
 		}
@@ -171,7 +173,7 @@ func (c *Config) Validate() error {
 	}
 
 	if len(c.LogStatements) > 0 {
-		pc, err := common.NewLogParserCollection(component.TelemetrySettings{Logger: zap.NewNop()}, common.WithLogParser(c.logFunctions))
+		pc, err := common.NewLogParserCollectionWithGas(component.TelemetrySettings{Logger: zap.NewNop()}, c.VMGasLimit, common.WithLogParserWithGas(c.logFunctions, c.VMGasLimit))
 		if err != nil {
 			return err
 		}
@@ -184,7 +186,7 @@ func (c *Config) Validate() error {
 	}
 
 	if len(c.ProfileStatements) > 0 {
-		pc, err := common.NewProfileParserCollection(component.TelemetrySettings{Logger: zap.NewNop()}, common.WithProfileParser(c.profileFunctions))
+		pc, err := common.NewProfileParserCollectionWithGas(component.TelemetrySettings{Logger: zap.NewNop()}, c.VMGasLimit, common.WithProfileParserWithGas(c.profileFunctions, c.VMGasLimit))
 		if err != nil {
 			return err
 		}

@@ -6,11 +6,13 @@ package ctxmetric // import "github.com/open-telemetry/opentelemetry-collector-c
 import (
 	"context"
 
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxerror"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/internal/ctxutil"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 )
 
 func PathGetSetter[K Context](path ottl.Path[K]) (ottl.GetSetter[K], error) {
@@ -207,8 +209,8 @@ func accessMetadata[K Context]() ottl.StandardGetSetter[K] {
 	}
 }
 
-func accessMetadataKey[K Context](keys []ottl.Key[K]) ottl.StandardGetSetter[K] {
-	return ottl.StandardGetSetter[K]{
+func accessMetadataKey[K Context](keys []ottl.Key[K]) ottl.GetSetter[K] {
+	getSetter := ottl.StandardGetSetter[K]{
 		Getter: func(ctx context.Context, tCtx K) (any, error) {
 			return ctxutil.GetMapValue(ctx, tCtx, tCtx.GetMetric().Metadata(), keys)
 		},
@@ -216,4 +218,30 @@ func accessMetadataKey[K Context](keys []ottl.Key[K]) ottl.StandardGetSetter[K] 
 			return ctxutil.SetMapValue(ctx, tCtx, tCtx.GetMetric().Metadata(), keys, val)
 		},
 	}
+	if vmGetter, ok := ctxutil.VMGetterForMapLiteralKey(keys, func(tCtx K) pcommon.Map {
+		return tCtx.GetMetric().Metadata()
+	}); ok {
+		literalKey, ok := literalStringKeyFromKeys(keys)
+		return ottl.StandardVMGetSetter[K]{
+			StandardGetSetter: getSetter,
+			VMGetterFunc:      vmGetter,
+			VMAttrKeyValue:    literalKey,
+			VMAttrKeySet:      ok,
+			VMAttrSetterFunc: func(tCtx K, key string, val ir.Value) error {
+				return ctxutil.SetMapValueFromVM(tCtx.GetMetric().Metadata(), key, val)
+			},
+		}
+	}
+	return getSetter
+}
+
+func literalStringKeyFromKeys[K any](keys []ottl.Key[K]) (string, bool) {
+	if len(keys) != 1 {
+		return "", false
+	}
+	literal, ok := keys[0].(ottl.LiteralStringKey)
+	if !ok {
+		return "", false
+	}
+	return literal.LiteralString()
 }

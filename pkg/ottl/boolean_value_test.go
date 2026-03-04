@@ -5,6 +5,7 @@ package ottl
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +14,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component/componenttest"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ir"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ottltest"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/vm"
 )
 
 // valueFor is a test helper to eliminate a lot of tedium in writing tests of Comparisons.
@@ -173,7 +176,7 @@ func Test_newComparisonEvaluator(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			comp := comparisonHelper(tt.l, tt.r, tt.op)
-			evaluator, err := p.newComparisonEvaluator(comp)
+			evaluator, err := p.newComparisonEvaluator(comp, "")
 			require.NoError(t, err)
 			result, err := evaluator.Eval(t.Context(), tt.item)
 			require.NoError(t, err)
@@ -209,12 +212,118 @@ func Test_newConditionEvaluator_invalid(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := p.newComparisonEvaluator(tt.comparison)
+			_, err := p.newComparisonEvaluator(tt.comparison, "")
 			assert.Error(t, err)
 		})
 	}
 }
 
+func Test_tryInline2Inst_floatAndBoolAndBounds(t *testing.T) {
+	parser := &Parser[struct{}]{}
+
+	makeProgram := func(constVal ir.Value, op ir.Opcode, accessorVal ir.Value, constIdx uint32) *microProgram[struct{}] {
+		code := []ir.Instruction{
+			ir.Encode(ir.OpLoadAttrCached, 0),
+			ir.Encode(op, constIdx),
+		}
+		accessor := func(context.Context, struct{}) (ir.Value, error) { return accessorVal, nil }
+		return &microProgram[struct{}]{
+			program: &vm.Program[struct{}]{
+				Code:      code,
+				Consts:    []ir.Value{constVal},
+				Accessors: []vm.PathAccessor[struct{}]{accessor},
+			},
+		}
+	}
+
+	t.Run("float eq/ne", func(t *testing.T) {
+		pEqual := makeProgram(ir.Float64Value(1.5), ir.OpEqConst, ir.Float64Value(1.5), 0)
+		b := parser.tryInline2Inst(pEqual)
+		require.NotNil(t, b.boolExpressionEvaluator)
+		res, err := b.Eval(context.Background(), struct{}{})
+		require.NoError(t, err)
+		assert.True(t, res)
+
+		pNe := makeProgram(ir.Float64Value(2.5), ir.OpNeConst, ir.Float64Value(1.5), 0)
+		b = parser.tryInline2Inst(pNe)
+		require.NotNil(t, b.boolExpressionEvaluator)
+		res, err = b.Eval(context.Background(), struct{}{})
+		require.NoError(t, err)
+		assert.True(t, res)
+	})
+
+	t.Run("bool eq/ne", func(t *testing.T) {
+		pEqual := makeProgram(ir.BoolValue(true), ir.OpEqConst, ir.BoolValue(true), 0)
+		b := parser.tryInline2Inst(pEqual)
+		require.NotNil(t, b.boolExpressionEvaluator)
+		res, err := b.Eval(context.Background(), struct{}{})
+		require.NoError(t, err)
+		assert.True(t, res)
+
+		pNe := makeProgram(ir.BoolValue(false), ir.OpNeConst, ir.BoolValue(true), 0)
+		b = parser.tryInline2Inst(pNe)
+		require.NotNil(t, b.boolExpressionEvaluator)
+		res, err = b.Eval(context.Background(), struct{}{})
+		require.NoError(t, err)
+		assert.True(t, res)
+	})
+
+	t.Run("invalid const index returns empty", func(t *testing.T) {
+		code := []ir.Instruction{
+			ir.Encode(ir.OpLoadAttrCached, 0),
+			ir.Encode(ir.OpEqConst, 5),
+		}
+		prog := &microProgram[struct{}]{
+			program: &vm.Program[struct{}]{
+				Code:      code,
+				Consts:    []ir.Value{ir.BoolValue(true)},
+				Accessors: []vm.PathAccessor[struct{}]{func(context.Context, struct{}) (ir.Value, error) { return ir.BoolValue(true), nil }},
+			},
+		}
+		b := parser.tryInline2Inst(prog)
+		assert.Nil(t, b.boolExpressionEvaluator)
+	})
+
+	t.Run("accessor error propagated", func(t *testing.T) {
+		code := []ir.Instruction{
+			ir.Encode(ir.OpLoadAttrCached, 0),
+			ir.Encode(ir.OpEqConst, 0),
+		}
+		sentinel := errors.New("boom")
+		prog := &microProgram[struct{}]{
+			program: &vm.Program[struct{}]{
+				Code:   code,
+				Consts: []ir.Value{ir.BoolValue(true)},
+				Accessors: []vm.PathAccessor[struct{}]{
+					func(context.Context, struct{}) (ir.Value, error) { return ir.Value{}, sentinel },
+				},
+			},
+		}
+		b := parser.tryInline2Inst(prog)
+		require.NotNil(t, b.boolExpressionEvaluator)
+		_, err := b.Eval(context.Background(), struct{}{})
+		assert.ErrorIs(t, err, sentinel)
+	})
+}
+
+func Test_tryInline1Inst_outOfBoundsAttrKey(t *testing.T) {
+	parser := &Parser[struct{}]{}
+	code := []ir.Instruction{
+		ir.Encode(ir.OpAttrFastEqConstString, ir.PackAttrConst(5, 0)),
+	}
+	prog := &microProgram[struct{}]{
+		program: &vm.Program[struct{}]{
+			Code:     code,
+			Consts:   []ir.Value{ir.StringValue("foo")},
+			AttrKeys: []string{}, // missing key index
+			AttrGetter: func(struct{}, string) (ir.Value, error) {
+				return ir.StringValue("foo"), nil
+			},
+		},
+	}
+	b := parser.tryInline1Inst(prog)
+	assert.Nil(t, b.boolExpressionEvaluator)
+}
 func True() (ExprFunc[any], error) {
 	return func(context.Context, any) (any, error) {
 		return true, nil

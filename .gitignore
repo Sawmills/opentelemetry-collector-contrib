@@ -33,6 +33,8 @@ dist/
 *.sw[op]
 *.DS_Store
 __debug_bin*
+*.test
+cpu_*.out
 
 # Coverage
 coverage/*

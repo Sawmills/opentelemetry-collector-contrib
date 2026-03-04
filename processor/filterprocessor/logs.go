@@ -18,6 +18,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter/filterconfig"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter/filterlog"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/filter/filterottl"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottllog"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlresource"
 )
@@ -34,6 +35,15 @@ func newFilterLogsProcessor(set processor.Settings, cfg *Config) (*filterLogProc
 		logger: set.Logger,
 	}
 
+	var (
+		resourceOpts []ottl.Option[ottlresource.TransformContext]
+		logOpts      []ottl.Option[ottllog.TransformContext]
+	)
+	if cfg.VMGasLimit > 0 {
+		resourceOpts = append(resourceOpts, ottl.WithVMGasLimit[ottlresource.TransformContext](cfg.VMGasLimit))
+		logOpts = append(logOpts, ottl.WithVMGasLimit[ottllog.TransformContext](cfg.VMGasLimit))
+	}
+
 	fpt, err := newFilterTelemetry(set, pipeline.SignalLogs)
 	if err != nil {
 		return nil, fmt.Errorf("error creating filter processor telemetry: %w", err)
@@ -42,14 +52,14 @@ func newFilterLogsProcessor(set processor.Settings, cfg *Config) (*filterLogProc
 
 	if cfg.Logs.ResourceConditions != nil || cfg.Logs.LogConditions != nil {
 		if cfg.Logs.ResourceConditions != nil {
-			flp.skipResourceExpr, err = filterottl.NewBoolExprForResource(cfg.Logs.ResourceConditions, cfg.resourceFunctions, cfg.ErrorMode, set.TelemetrySettings)
+			flp.skipResourceExpr, err = filterottl.NewBoolExprForResourceWithOptions(cfg.Logs.ResourceConditions, cfg.resourceFunctions, cfg.ErrorMode, set.TelemetrySettings, resourceOpts)
 			if err != nil {
 				return nil, err
 			}
 		}
 
 		if cfg.Logs.LogConditions != nil {
-			flp.skipLogRecordExpr, err = filterottl.NewBoolExprForLog(cfg.Logs.LogConditions, cfg.logFunctions, cfg.ErrorMode, set.TelemetrySettings)
+			flp.skipLogRecordExpr, err = filterottl.NewBoolExprForLogWithOptions(cfg.Logs.LogConditions, cfg.logFunctions, cfg.ErrorMode, set.TelemetrySettings, logOpts)
 			if err != nil {
 				return nil, err
 			}

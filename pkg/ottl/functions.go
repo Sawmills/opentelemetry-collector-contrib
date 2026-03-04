@@ -282,6 +282,16 @@ type Key[K any] interface {
 	ExpressionGetter(context.Context, K) (Getter[K], error)
 }
 
+// LiteralStringKey provides fast access to literal string keys.
+type LiteralStringKey interface {
+	LiteralString() (string, bool)
+}
+
+// LiteralIntKey provides fast access to literal int keys.
+type LiteralIntKey interface {
+	LiteralInt() (int64, bool)
+}
+
 var _ Key[any] = &baseKey[any]{}
 
 type baseKey[K any] struct {
@@ -302,6 +312,20 @@ func (k *baseKey[K]) ExpressionGetter(_ context.Context, _ K) (Getter[K], error)
 	return k.g, nil
 }
 
+func (k *baseKey[K]) LiteralString() (string, bool) {
+	if k.s == nil {
+		return "", false
+	}
+	return *k.s, true
+}
+
+func (k *baseKey[K]) LiteralInt() (int64, bool) {
+	if k.i == nil {
+		return 0, false
+	}
+	return *k.i, true
+}
+
 func (p *Parser[K]) parsePath(ip *basePath[K]) (GetSetter[K], error) {
 	g, err := p.pathParser(ip)
 	if err != nil {
@@ -315,7 +339,16 @@ func (p *Parser[K]) parsePath(ip *basePath[K]) (GetSetter[K], error) {
 }
 
 func (p *Parser[K]) newFunctionCall(ed editor) (Expr[K], error) {
+	// NOTE: Shadow mode is intentionally NOT applied to function calls.
+	// Function calls may be mutating editors (set, delete, etc.) and running
+	// both interpreter and VM would cause double mutation.
+	// Shadow mode only applies to BoolExpr conditions (where clauses).
+	return p.newInterpreterFunctionCall(ed)
+}
+
+func (p *Parser[K]) newInterpreterFunctionCall(ed editor) (Expr[K], error) {
 	f, ok := p.functions[ed.Function]
+
 	if !ok {
 		return Expr[K]{}, fmt.Errorf("undefined function %q", ed.Function)
 	}
