@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
@@ -51,4 +52,34 @@ func TestConfigValidateCompressInMemory(t *testing.T) {
 
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
 	require.NoError(t, cfg.Validate())
+}
+
+func TestLoadConfigWithQueueCompression(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	conf := confmap.NewFromStringMap(map[string]any{
+		"protocol": map[string]any{
+			"otlp": map[string]any{
+				"endpoint": "localhost:4317",
+				"tls": map[string]any{
+					"insecure": true,
+				},
+			},
+		},
+		"resolver": map[string]any{
+			"static": map[string]any{
+				"hostnames": []string{"localhost:4317"},
+			},
+		},
+		"sending_queue": map[string]any{
+			"enabled":             true,
+			"queue_size":          1000,
+			"num_consumers":       2,
+			"payload_compression": "zstd",
+			"compress_in_memory":  true,
+		},
+	})
+
+	require.NoError(t, conf.Unmarshal(cfg))
+	require.Equal(t, QueuePayloadCompressionZstd, cfg.QueueSettings.PayloadCompression)
+	require.True(t, cfg.QueueSettings.CompressInMemory)
 }
