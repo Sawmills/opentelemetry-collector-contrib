@@ -1,5 +1,5 @@
-github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.140.1-0.20260303212412-92b47b11df4d h1:no8qSZ8DgrYUZfD1Se0K++Ih1CFRA/tZFAOaR9X3YOE=
-github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.140.1-0.20260303212412-92b47b11df4d/go.mod h1:OMSquxnWfU6bY9AVL61MP5cdxheYvBD4T/TQXe4/Dtw=
+github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.140.1-sawmills.1 h1:DIQtZp5cRqk7dKefDxVv6++o0HcI1mpI78LxapQv8Ww=
+github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.140.1-sawmills.1/go.mod h1:OMSquxnWfU6bY9AVL61MP5cdxheYvBD4T/TQXe4/Dtw=
 github.com/aws/aws-sdk-go-v2 v1.39.6 h1:2JrPCVgWJm7bm83BDwY5z8ietmeJUbh3O2ACnn+Xsqk=
 github.com/aws/aws-sdk-go-v2 v1.39.6/go.mod h1:c9pm7VwuW0UPxAEYGyTmyurVcNrbF6Rt/wixFqDhcjE=
 github.com/aws/aws-sdk-go-v2/config v1.31.19 h1:qdUtOw4JhZr2YcKO3g0ho/IcFXfXrrb8xlX05Y6EvSw=
