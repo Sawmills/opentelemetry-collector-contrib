@@ -95,11 +95,11 @@ func buildExporterResilienceOptions(
 		options = append(options, exporterhelper.WithTimeout(cfg.TimeoutSettings))
 	}
 	if cfg.QueueSettings.Enabled {
-		if payloadCodec != nil {
-			options = append(options, exporterhelper.WithQueueBatchPayloadCodec(payloadCodec))
-		}
-		if cfg.QueueSettings.CompressInMemory {
-			options = append(options, exporterhelper.WithQueueBatchInMemoryEncoding(true))
+		if payloadCodec != nil && qbs.Encoding != nil {
+			qbs.Encoding = payloadCodecEncoding{
+				encoding: qbs.Encoding,
+				codec:    payloadCodec,
+			}
 		}
 		options = append(options, xexporterhelper.WithQueueBatch(cfg.QueueSettings.QueueBatchConfig, qbs))
 	}
