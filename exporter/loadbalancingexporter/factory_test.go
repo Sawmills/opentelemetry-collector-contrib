@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
+	"go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper"
 	"go.opentelemetry.io/collector/exporter/exportertest"
 	"go.opentelemetry.io/collector/exporter/otlpexporter"
 	"go.opentelemetry.io/collector/otelcol/otelcoltest"
@@ -211,17 +212,21 @@ func TestWrappedExporterHasEndpointAttribute(t *testing.T) {
 }
 
 func TestBuildExporterResilienceOptions(t *testing.T) {
+	newSettings := func() xexporterhelper.QueueBatchSettings {
+		return xexporterhelper.NewLogsQueueBatchSettings()
+	}
+
 	t.Run("Shouldn't have resilience options by default", func(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
-		assert.Empty(t, buildExporterResilienceOptions(o, cfg, nil))
+		assert.Empty(t, buildExporterResilienceOptions(o, cfg, nil, newSettings()))
 	})
 	t.Run("Should have timeout option if defined", func(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg, nil), 1)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, nil, newSettings()), 1)
 	})
 	t.Run("Should have timeout and queue options if defined", func(t *testing.T) {
 		o := []exporterhelper.Option{}
@@ -229,7 +234,7 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
 		cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodecIfEnabled(cfg)), 3)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodecIfEnabled(cfg), newSettings()), 2)
 	})
 	t.Run("Should have timeout, queue and compression options when compression is enabled", func(t *testing.T) {
 		o := []exporterhelper.Option{}
@@ -238,7 +243,7 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
 		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodec(cfg.QueueSettings.PayloadCompression)), 3)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodec(cfg.QueueSettings.PayloadCompression), newSettings()), 2)
 	})
 	t.Run("Should include in-memory queue compression option when enabled", func(t *testing.T) {
 		o := []exporterhelper.Option{}
@@ -248,7 +253,7 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
 		cfg.QueueSettings.CompressInMemory = true
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodec(cfg.QueueSettings.PayloadCompression)), 4)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodec(cfg.QueueSettings.PayloadCompression), newSettings()), 2)
 	})
 	t.Run("Should have all resilience options if defined", func(t *testing.T) {
 		o := []exporterhelper.Option{}
@@ -258,7 +263,7 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionNone
 		cfg.BackOffConfig = configretry.NewDefaultBackOffConfig()
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodecIfEnabled(cfg)), 4)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodecIfEnabled(cfg), newSettings()), 3)
 	})
 }
 
