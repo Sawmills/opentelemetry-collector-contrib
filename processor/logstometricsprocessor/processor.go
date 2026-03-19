@@ -5,6 +5,7 @@ package logstometricsprocessor // import "github.com/open-telemetry/opentelemetr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -87,10 +88,10 @@ type connectorHost interface {
 	GetConnectors() map[component.ID]component.Component
 }
 
-func (p *logsToMetricsProcessor) Start(ctx context.Context, host component.Host) error {
+func (p *logsToMetricsProcessor) Start(_ context.Context, host component.Host) error {
 	ch, ok := host.(connectorHost)
 	if !ok {
-		return fmt.Errorf("host does not support GetConnectors() method")
+		return errors.New("host does not support GetConnectors() method")
 	}
 
 	connectors := ch.GetConnectors()
@@ -128,7 +129,7 @@ func (p *logsToMetricsProcessor) Shutdown(context.Context) error {
 	return nil
 }
 
-func (p *logsToMetricsProcessor) Capabilities() consumer.Capabilities {
+func (*logsToMetricsProcessor) Capabilities() consumer.Capabilities {
 	return consumer.Capabilities{MutatesData: false}
 }
 

@@ -24,13 +24,13 @@ func Tracer(settings component.TelemetrySettings) trace.Tracer {
 // TelemetryBuilder provides an interface for components to report telemetry
 // as defined in metadata and user config.
 type TelemetryBuilder struct {
-	meter                                      metric.Meter
-	ProcessorLogstometricsLogsProcessed     metric.Int64Counter
-	ProcessorLogstometricsMetricsExtracted  metric.Int64Counter
+	meter                                    metric.Meter
+	ProcessorLogstometricsLogsProcessed      metric.Int64Counter
+	ProcessorLogstometricsMetricsExtracted   metric.Int64Counter
 	ProcessorLogstometricsErrors             metric.Int64Counter
 	ProcessorLogstometricsLogsDropped        metric.Int64Counter
 	ProcessorLogstometricsProcessingDuration metric.Int64Histogram
-	level                                      configtelemetry.Level
+	level                                    configtelemetry.Level
 }
 
 // telemetryBuilderOption applies changes to default builder.
@@ -118,4 +118,3 @@ func (b *TelemetryBuilder) RecordProcessorLogstometricsProcessingDuration(ctx co
 func (b *TelemetryBuilder) Shutdown() {
 	// No-op for now
 }
-
