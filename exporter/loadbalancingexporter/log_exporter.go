@@ -165,9 +165,6 @@ func (e *logExporterImp) consumeLogsBatched(ctx context.Context, ld plog.Logs) e
 		for range 2 {
 			err = e.batcher.Enqueue(ctx, ep, batch.exp, batch.logs)
 			if !errors.Is(err, errLogBatcherExporterStopping) {
-				if err != nil {
-					errs = multierr.Append(errs, err)
-				}
 				break
 			}
 		}
