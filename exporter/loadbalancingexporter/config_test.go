@@ -52,7 +52,7 @@ func TestConfigValidateCompressInMemory(t *testing.T) {
 	require.ErrorContains(t, cfg.Validate(), "sending_queue.compress_in_memory requires sending_queue.payload_compression")
 
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
-	require.NoError(t, cfg.Validate())
+	require.ErrorContains(t, cfg.Validate(), "sending_queue.compress_in_memory is not supported")
 }
 
 func TestConfigValidateLogBatcher(t *testing.T) {

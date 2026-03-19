@@ -131,6 +131,9 @@ func (q QueueSettings) Validate() error {
 	if q.CompressInMemory && (q.PayloadCompression == "" || q.PayloadCompression == QueuePayloadCompressionNone) {
 		return errors.New("sending_queue.compress_in_memory requires sending_queue.payload_compression to be set to snappy or zstd")
 	}
+	if q.CompressInMemory {
+		return errors.New("sending_queue.compress_in_memory is not supported by this exporter helper version; use sending_queue.payload_compression instead")
+	}
 
 	return nil
 }

@@ -424,17 +424,22 @@ func TestConsumeLogLegacyPathIgnoresStoppingGate(t *testing.T) {
 	assert.Equal(t, int64(1), logsConsumed.Load())
 }
 
-func TestConsumeLogsBatchedReturnsStoppingErrorAfterRetries(t *testing.T) {
+func TestEnqueueEndpointBatchesReroutesStoppingExporterOnce(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
+	logsConsumed := atomic.Int64{}
 	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
 	require.NoError(t, err)
 
-	exp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
-	exp.markStopping()
+	stoppingExp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	stoppingExp.markStopping()
+	liveExp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+		logsConsumed.Add(int64(ld.LogRecordCount()))
+		return nil
+	}), "endpoint-2:4317")
 
-	lb.ring = newHashRing([]string{"endpoint-1"})
+	lb.ring = newHashRing([]string{"endpoint-2"})
 	lb.exporters = map[string]*wrappedExporter{
-		"endpoint-1:4317": exp,
+		"endpoint-2:4317": liveExp,
 	}
 
 	p, err := newLogsExporter(ts, simpleConfig())
@@ -446,9 +451,20 @@ func TestConsumeLogsBatchedReturnsStoppingErrorAfterRetries(t *testing.T) {
 		flushInterval: time.Hour,
 	}, p.consumeBatch)
 	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, p.batcher.Shutdown(t.Context()))
+	}()
 
-	err = p.consumeLogsBatched(t.Context(), simpleLogs())
-	require.ErrorIs(t, err, errLogBatcherExporterStopping)
+	err = p.enqueueEndpointBatches(t.Context(), map[string]*endpointBatch{
+		"endpoint-1:4317": {
+			logs: simpleLogs(),
+			exp:  stoppingExp,
+		},
+	}, true)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return logsConsumed.Load() == 1
+	}, time.Second, 10*time.Millisecond)
 }
 
 // this test validates that exporter is can concurrently change the endpoints while consuming logs.

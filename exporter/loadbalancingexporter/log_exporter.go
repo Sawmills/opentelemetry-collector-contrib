@@ -127,6 +127,11 @@ type endpointBatch struct {
 // the original resource/scope hierarchy. This avoids the N×resource/scope
 // duplication that per-record wrapping would cause in the batcher.
 func (e *logExporterImp) consumeLogsBatched(ctx context.Context, ld plog.Logs) error {
+	batches, errs := e.groupLogsByEndpoint(ld)
+	return multierr.Append(errs, e.enqueueEndpointBatches(ctx, batches, true))
+}
+
+func (e *logExporterImp) groupLogsByEndpoint(ld plog.Logs) (map[string]*endpointBatch, error) {
 	batches := make(map[string]*endpointBatch)
 	var errs error
 
@@ -160,13 +165,19 @@ func (e *logExporterImp) consumeLogsBatched(ctx context.Context, ld plog.Logs) e
 		}
 	}
 
+	return batches, errs
+}
+
+func (e *logExporterImp) enqueueEndpointBatches(ctx context.Context, batches map[string]*endpointBatch, retryOnStopping bool) error {
+	var errs error
+
 	for ep, batch := range batches {
-		var err error
-		for range 2 {
-			err = e.batcher.Enqueue(ctx, ep, batch.exp, batch.logs)
-			if !errors.Is(err, errLogBatcherExporterStopping) {
-				break
-			}
+		err := e.batcher.Enqueue(ctx, ep, batch.exp, batch.logs)
+		if errors.Is(err, errLogBatcherExporterStopping) && retryOnStopping {
+			reroutedBatches, rerouteErr := e.groupLogsByEndpoint(batch.logs)
+			errs = multierr.Append(errs, rerouteErr)
+			errs = multierr.Append(errs, e.enqueueEndpointBatches(ctx, reroutedBatches, false))
+			continue
 		}
 		if err != nil {
 			errs = multierr.Append(errs, err)
