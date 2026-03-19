@@ -134,12 +134,19 @@ func (e *logExporterImp) consumeLogRecord(resourceLogs plog.ResourceLogs, scopeL
 		balancingKey = random()
 	}
 
-	le, endpoint, err := e.loadBalancer.exporterAndEndpoint(balancingKey[:])
-	if err != nil {
-		return err
+	logs := singleLogRecord(resourceLogs, scopeLogs, record)
+	for range 2 {
+		le, endpoint, err := e.loadBalancer.exporterAndEndpoint(balancingKey[:])
+		if err != nil {
+			return err
+		}
+		err = e.batcher.Enqueue(endpointWithPort(endpoint), le, logs)
+		if !errors.Is(err, errLogBatcherExporterStopping) {
+			return err
+		}
 	}
 
-	return e.batcher.Enqueue(endpointWithPort(endpoint), le, singleLogRecord(resourceLogs, scopeLogs, record))
+	return errLogBatcherExporterStopping
 }
 
 func (e *logExporterImp) consumeLog(ctx context.Context, ld plog.Logs) error {

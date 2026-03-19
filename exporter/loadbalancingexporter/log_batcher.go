@@ -30,6 +30,8 @@ const (
 	defaultLogBatchFlushTimeout = 100 * time.Millisecond
 )
 
+var errLogBatcherExporterStopping = errors.New("log batcher exporter is stopping")
+
 type logBatcherSettings struct {
 	maxRecords    int
 	maxBytes      int
@@ -77,6 +79,7 @@ type backendLogBatcher struct {
 
 	requests chan logBatcherRequest
 	done     chan struct{}
+	inflight sync.WaitGroup
 
 	pendingRecords atomic.Int64
 	pendingBytes   atomic.Int64
@@ -124,7 +127,12 @@ func newLogBatcher(
 }
 
 func (b *logBatcher) Enqueue(endpoint string, exp *wrappedExporter, logs plog.Logs) error {
-	backend := b.getOrCreateBackend(endpoint, exp)
+	backend, err := b.getOrCreateBackend(endpoint, exp)
+	if err != nil {
+		return err
+	}
+	backend.inflight.Add(1)
+	defer backend.inflight.Done()
 	select {
 	case backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: logs}:
 		return nil
@@ -146,6 +154,7 @@ func (b *logBatcher) Remove(ctx context.Context, endpoint string, exp *wrappedEx
 	if exp != nil {
 		backend.setExporter(exp)
 	}
+	backend.inflight.Wait()
 	return backend.stopAndFlush(ctx, logFlushReasonResolverChange)
 }
 
@@ -181,13 +190,13 @@ func (b *logBatcher) snapshotPending() []logBatcherPending {
 	return pending
 }
 
-func (b *logBatcher) getOrCreateBackend(endpoint string, exp *wrappedExporter) *backendLogBatcher {
+func (b *logBatcher) getOrCreateBackend(endpoint string, exp *wrappedExporter) (*backendLogBatcher, error) {
 	b.mu.RLock()
 	backend, ok := b.backends[endpoint]
 	b.mu.RUnlock()
 	if ok {
 		backend.setExporter(exp)
-		return backend
+		return backend, nil
 	}
 
 	b.mu.Lock()
@@ -195,12 +204,15 @@ func (b *logBatcher) getOrCreateBackend(endpoint string, exp *wrappedExporter) *
 	backend, ok = b.backends[endpoint]
 	if ok {
 		backend.setExporter(exp)
-		return backend
+		return backend, nil
+	}
+	if exp != nil && exp.isStopping() {
+		return nil, errLogBatcherExporterStopping
 	}
 
 	backend = newBackendLogBatcher(endpoint, exp, b.logger, b.settings, b.telemetry, b.send)
 	b.backends[endpoint] = backend
-	return backend
+	return backend, nil
 }
 
 func newBackendLogBatcher(

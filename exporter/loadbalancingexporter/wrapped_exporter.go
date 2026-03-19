@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/exporter"
@@ -21,6 +22,7 @@ import (
 type wrappedExporter struct {
 	component.Component
 	consumeWG sync.WaitGroup
+	stopping  atomic.Bool
 
 	// we store the attributes here for both cases, to avoid new allocations on the hot path
 	endpointAttr attribute.Set
@@ -39,8 +41,17 @@ func newWrappedExporter(exp component.Component, identifier string) *wrappedExpo
 }
 
 func (we *wrappedExporter) Shutdown(ctx context.Context) error {
+	we.stopping.Store(true)
 	we.consumeWG.Wait()
 	return we.Component.Shutdown(ctx)
+}
+
+func (we *wrappedExporter) markStopping() {
+	we.stopping.Store(true)
+}
+
+func (we *wrappedExporter) isStopping() bool {
+	return we.stopping.Load()
 }
 
 func (we *wrappedExporter) ConsumeTraces(ctx context.Context, td ptrace.Traces) error {
