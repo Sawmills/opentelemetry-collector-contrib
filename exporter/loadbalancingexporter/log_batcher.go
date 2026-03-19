@@ -126,7 +126,7 @@ func newLogBatcher(
 	return lb, nil
 }
 
-func (b *logBatcher) Enqueue(endpoint string, exp *wrappedExporter, logs plog.Logs) error {
+func (b *logBatcher) Enqueue(ctx context.Context, endpoint string, exp *wrappedExporter, logs plog.Logs) error {
 	backend, err := b.getOrCreateBackend(endpoint, exp)
 	if err != nil {
 		return err
@@ -136,6 +136,8 @@ func (b *logBatcher) Enqueue(endpoint string, exp *wrappedExporter, logs plog.Lo
 	select {
 	case backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: logs}:
 		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	case <-backend.done:
 		return errors.New("log batcher backend is stopped")
 	}
@@ -304,7 +306,7 @@ func (b *backendLogBatcher) run() {
 				if pendingRecords >= b.settings.maxRecords || pendingBytes >= b.settings.maxBytes {
 					b.telemetry.overflowTotal.Add(context.Background(), 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
 					if err := b.flush(context.Background(), &pending, &pendingRecords, &pendingBytes, logFlushReasonSize, timer, &timerC); err != nil {
-						b.logger.Debug("failed to flush log batch", zap.Error(err))
+						b.logger.Warn("failed to flush log batch", zap.String("reason", logFlushReasonSize), zap.Error(err))
 					}
 				}
 			case logBatcherRequestFlushAndStop:
@@ -314,7 +316,7 @@ func (b *backendLogBatcher) run() {
 			}
 		case <-timerC:
 			if err := b.flush(context.Background(), &pending, &pendingRecords, &pendingBytes, logFlushReasonTimeout, timer, &timerC); err != nil {
-				b.logger.Debug("failed to flush log batch", zap.Error(err))
+				b.logger.Warn("failed to flush log batch", zap.String("reason", logFlushReasonTimeout), zap.Error(err))
 			}
 		}
 	}
@@ -357,6 +359,7 @@ func (b *backendLogBatcher) flush(
 	err := b.send(ctx, b.exporter(), drained, reason)
 	if err != nil {
 		b.telemetry.flushErrors.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
+		b.telemetry.droppedRecords.Add(ctx, int64(records), metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
 	}
 	return err
 }

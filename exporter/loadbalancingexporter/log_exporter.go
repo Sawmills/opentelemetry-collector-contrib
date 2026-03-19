@@ -119,7 +119,7 @@ func (e *logExporterImp) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
 			scopeLogs := resourceLogs.ScopeLogs().At(j)
 			for k := 0; k < scopeLogs.LogRecords().Len(); k++ {
 				record := scopeLogs.LogRecords().At(k)
-				errs = multierr.Append(errs, e.consumeLogRecord(resourceLogs, scopeLogs, record))
+				errs = multierr.Append(errs, e.consumeLogRecord(ctx, resourceLogs, scopeLogs, record))
 			}
 		}
 	}
@@ -127,7 +127,7 @@ func (e *logExporterImp) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
 	return errs
 }
 
-func (e *logExporterImp) consumeLogRecord(resourceLogs plog.ResourceLogs, scopeLogs plog.ScopeLogs, record plog.LogRecord) error {
+func (e *logExporterImp) consumeLogRecord(ctx context.Context, resourceLogs plog.ResourceLogs, scopeLogs plog.ScopeLogs, record plog.LogRecord) error {
 	traceID := record.TraceID()
 	balancingKey := traceID
 	if traceID == pcommon.NewTraceIDEmpty() {
@@ -140,7 +140,7 @@ func (e *logExporterImp) consumeLogRecord(resourceLogs plog.ResourceLogs, scopeL
 		if err != nil {
 			return err
 		}
-		err = e.batcher.Enqueue(endpointWithPort(endpoint), le, logs)
+		err = e.batcher.Enqueue(ctx, endpointWithPort(endpoint), le, logs)
 		if !errors.Is(err, errLogBatcherExporterStopping) {
 			return err
 		}

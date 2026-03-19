@@ -130,9 +130,9 @@ func TestLogBatcherDoesNotBlockOtherBackends(t *testing.T) {
 		return nil
 	}), "endpoint-2:4317")
 
-	require.NoError(t, batcher.Enqueue("endpoint-1:4317", firstExporter, simpleLogs()))
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", firstExporter, simpleLogs()))
 	<-firstStarted
-	require.NoError(t, batcher.Enqueue("endpoint-2:4317", secondExporter, simpleLogs()))
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-2:4317", secondExporter, simpleLogs()))
 
 	require.Eventually(t, func() bool {
 		return secondCalls.Load() == 1
