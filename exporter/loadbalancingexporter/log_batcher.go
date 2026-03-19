@@ -334,18 +334,46 @@ func (b *backendLogBatcher) run() {
 	pendingBytes := 0
 	pendingRecords := 0
 	sizer := &plog.ProtoMarshaler{}
+	var nextReq *logBatcherRequest
 
 	for {
+		if nextReq != nil {
+			req := *nextReq
+			nextReq = nil
+			switch req.kind {
+			case logBatcherRequestEnqueue:
+				pendingRecords += b.mergeQueuedRequests(&pending, req, &nextReq)
+				// Track max_bytes using the actual serialized merged OTLP payload.
+				// Resource/scope dedup during merge means chunk sizes are not additive.
+				pendingBytes = sizer.LogsSize(pending)
+				b.pendingRecords.Store(int64(pendingRecords))
+				b.pendingBytes.Store(int64(pendingBytes))
+				if pendingRecords > 0 && timerC == nil {
+					timer.Reset(b.settings.flushInterval)
+					timerC = timer.C
+				}
+				if pendingRecords >= b.settings.maxRecords || pendingBytes >= b.settings.maxBytes {
+					b.telemetry.overflowTotal.Add(context.Background(), 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
+					if err := b.flush(context.Background(), &pending, &pendingRecords, &pendingBytes, logFlushReasonSize, timer, &timerC); err != nil {
+						b.logger.Warn("failed to flush log batch", zap.String("reason", logFlushReasonSize), zap.Error(err))
+					}
+				}
+			case logBatcherRequestFlushAndStop:
+				err := b.flush(req.ctx, &pending, &pendingRecords, &pendingBytes, req.reason, timer, &timerC)
+				req.done <- err
+				return
+			}
+			continue
+		}
+
 		select {
 		case req := <-b.requests:
 			switch req.kind {
 			case logBatcherRequestEnqueue:
-				recordCount := req.logs.LogRecordCount()
-				pending = mergeLogs(pending, req.logs)
+				pendingRecords += b.mergeQueuedRequests(&pending, req, &nextReq)
 				// Track max_bytes using the actual serialized merged OTLP payload.
 				// Resource/scope dedup during merge means chunk sizes are not additive.
 				pendingBytes = sizer.LogsSize(pending)
-				pendingRecords += recordCount
 				b.pendingRecords.Store(int64(pendingRecords))
 				b.pendingBytes.Store(int64(pendingBytes))
 				if pendingRecords > 0 && timerC == nil {
@@ -367,6 +395,25 @@ func (b *backendLogBatcher) run() {
 			if err := b.flush(context.Background(), &pending, &pendingRecords, &pendingBytes, logFlushReasonTimeout, timer, &timerC); err != nil {
 				b.logger.Warn("failed to flush log batch", zap.String("reason", logFlushReasonTimeout), zap.Error(err))
 			}
+		}
+	}
+}
+
+func (b *backendLogBatcher) mergeQueuedRequests(pending *plog.Logs, first logBatcherRequest, nextReq **logBatcherRequest) int {
+	recordCount := first.logs.LogRecordCount()
+	*pending = mergeLogs(*pending, first.logs)
+
+	for {
+		select {
+		case req := <-b.requests:
+			if req.kind != logBatcherRequestEnqueue {
+				*nextReq = &req
+				return recordCount
+			}
+			recordCount += req.logs.LogRecordCount()
+			*pending = mergeLogs(*pending, req.logs)
+		default:
+			return recordCount
 		}
 	}
 }
