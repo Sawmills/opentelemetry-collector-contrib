@@ -340,27 +340,7 @@ func (b *backendLogBatcher) run() {
 		if nextReq != nil {
 			req := *nextReq
 			nextReq = nil
-			switch req.kind {
-			case logBatcherRequestEnqueue:
-				pendingRecords += b.mergeQueuedRequests(&pending, req, &nextReq)
-				// Track max_bytes using the actual serialized merged OTLP payload.
-				// Resource/scope dedup during merge means chunk sizes are not additive.
-				pendingBytes = sizer.LogsSize(pending)
-				b.pendingRecords.Store(int64(pendingRecords))
-				b.pendingBytes.Store(int64(pendingBytes))
-				if pendingRecords > 0 && timerC == nil {
-					timer.Reset(b.settings.flushInterval)
-					timerC = timer.C
-				}
-				if pendingRecords >= b.settings.maxRecords || pendingBytes >= b.settings.maxBytes {
-					b.telemetry.overflowTotal.Add(context.Background(), 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
-					if err := b.flush(context.Background(), &pending, &pendingRecords, &pendingBytes, logFlushReasonSize, timer, &timerC); err != nil {
-						b.logger.Warn("failed to flush log batch", zap.String("reason", logFlushReasonSize), zap.Error(err))
-					}
-				}
-			case logBatcherRequestFlushAndStop:
-				err := b.flush(req.ctx, &pending, &pendingRecords, &pendingBytes, req.reason, timer, &timerC)
-				req.done <- err
+			if b.handleRequest(req, sizer, &pending, &pendingRecords, &pendingBytes, &nextReq, timer, &timerC) {
 				return
 			}
 			continue
@@ -368,27 +348,7 @@ func (b *backendLogBatcher) run() {
 
 		select {
 		case req := <-b.requests:
-			switch req.kind {
-			case logBatcherRequestEnqueue:
-				pendingRecords += b.mergeQueuedRequests(&pending, req, &nextReq)
-				// Track max_bytes using the actual serialized merged OTLP payload.
-				// Resource/scope dedup during merge means chunk sizes are not additive.
-				pendingBytes = sizer.LogsSize(pending)
-				b.pendingRecords.Store(int64(pendingRecords))
-				b.pendingBytes.Store(int64(pendingBytes))
-				if pendingRecords > 0 && timerC == nil {
-					timer.Reset(b.settings.flushInterval)
-					timerC = timer.C
-				}
-				if pendingRecords >= b.settings.maxRecords || pendingBytes >= b.settings.maxBytes {
-					b.telemetry.overflowTotal.Add(context.Background(), 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
-					if err := b.flush(context.Background(), &pending, &pendingRecords, &pendingBytes, logFlushReasonSize, timer, &timerC); err != nil {
-						b.logger.Warn("failed to flush log batch", zap.String("reason", logFlushReasonSize), zap.Error(err))
-					}
-				}
-			case logBatcherRequestFlushAndStop:
-				err := b.flush(req.ctx, &pending, &pendingRecords, &pendingBytes, req.reason, timer, &timerC)
-				req.done <- err
+			if b.handleRequest(req, sizer, &pending, &pendingRecords, &pendingBytes, &nextReq, timer, &timerC) {
 				return
 			}
 		case <-timerC:
@@ -399,11 +359,47 @@ func (b *backendLogBatcher) run() {
 	}
 }
 
+func (b *backendLogBatcher) handleRequest(
+	req logBatcherRequest,
+	sizer *plog.ProtoMarshaler,
+	pending *plog.Logs,
+	pendingRecords *int,
+	pendingBytes *int,
+	nextReq **logBatcherRequest,
+	timer *time.Timer,
+	timerC *<-chan time.Time,
+) bool {
+	switch req.kind {
+	case logBatcherRequestEnqueue:
+		*pendingRecords += b.mergeQueuedRequests(pending, req, nextReq)
+		// Track max_bytes using the actual serialized merged OTLP payload.
+		// Resource/scope dedup during merge means chunk sizes are not additive.
+		*pendingBytes = sizer.LogsSize(*pending)
+		b.pendingRecords.Store(int64(*pendingRecords))
+		b.pendingBytes.Store(int64(*pendingBytes))
+		if *pendingRecords > 0 && *timerC == nil {
+			timer.Reset(b.settings.flushInterval)
+			*timerC = timer.C
+		}
+		if *pendingRecords >= b.settings.maxRecords || *pendingBytes >= b.settings.maxBytes {
+			b.telemetry.overflowTotal.Add(context.Background(), 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
+			if err := b.flush(context.Background(), pending, pendingRecords, pendingBytes, logFlushReasonSize, timer, timerC); err != nil {
+				b.logger.Warn("failed to flush log batch", zap.String("reason", logFlushReasonSize), zap.Error(err))
+			}
+		}
+	case logBatcherRequestFlushAndStop:
+		err := b.flush(req.ctx, pending, pendingRecords, pendingBytes, req.reason, timer, timerC)
+		req.done <- err
+		return true
+	}
+	return false
+}
+
 func (b *backendLogBatcher) mergeQueuedRequests(pending *plog.Logs, first logBatcherRequest, nextReq **logBatcherRequest) int {
 	recordCount := first.logs.LogRecordCount()
 	*pending = mergeLogs(*pending, first.logs)
 
-	for {
+	for i := 0; i < cap(b.requests); i++ {
 		select {
 		case req := <-b.requests:
 			if req.kind != logBatcherRequestEnqueue {
@@ -416,6 +412,8 @@ func (b *backendLogBatcher) mergeQueuedRequests(pending *plog.Logs, first logBat
 			return recordCount
 		}
 	}
+
+	return recordCount
 }
 
 func (b *backendLogBatcher) flush(

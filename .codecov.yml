@@ -480,6 +480,10 @@ component_management:
     name: processor_groupbytrace
     paths:
     - processor/groupbytraceprocessor/**
+  - component_id: processor_hotreload
+    name: processor_hotreload
+    paths:
+    - processor/hotreloadprocessor/**
   - component_id: processor_interval
     name: processor_interval
     paths:
@@ -496,6 +500,10 @@ component_management:
     name: processor_logdedup
     paths:
     - processor/logdedupprocessor/**
+  - component_id: processor_logstometrics
+    name: processor_logstometrics
+    paths:
+    - processor/logstometricsprocessor/**
   - component_id: processor_logstransform
     name: processor_logstransform
     paths:
