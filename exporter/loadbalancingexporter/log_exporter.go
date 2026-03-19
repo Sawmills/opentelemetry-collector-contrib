@@ -112,41 +112,67 @@ func (e *logExporterImp) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
 		return errs
 	}
 
+	return e.consumeLogsBatched(ctx, ld)
+}
+
+// endpointBatch holds logs grouped for a single backend endpoint,
+// with resource/scope structures properly deduplicated.
+type endpointBatch struct {
+	logs plog.Logs
+	exp  *wrappedExporter
+}
+
+// consumeLogsBatched routes each log record to its target endpoint via the
+// load balancer, grouping records into per-endpoint plog.Logs that preserve
+// the original resource/scope hierarchy. This avoids the N×resource/scope
+// duplication that per-record wrapping would cause in the batcher.
+func (e *logExporterImp) consumeLogsBatched(ctx context.Context, ld plog.Logs) error {
+	batches := make(map[string]*endpointBatch)
 	var errs error
+
 	for i := 0; i < ld.ResourceLogs().Len(); i++ {
-		resourceLogs := ld.ResourceLogs().At(i)
-		for j := 0; j < resourceLogs.ScopeLogs().Len(); j++ {
-			scopeLogs := resourceLogs.ScopeLogs().At(j)
-			for k := 0; k < scopeLogs.LogRecords().Len(); k++ {
-				record := scopeLogs.LogRecords().At(k)
-				errs = multierr.Append(errs, e.consumeLogRecord(ctx, resourceLogs, scopeLogs, record))
+		rl := ld.ResourceLogs().At(i)
+		for j := 0; j < rl.ScopeLogs().Len(); j++ {
+			sl := rl.ScopeLogs().At(j)
+			for k := 0; k < sl.LogRecords().Len(); k++ {
+				rec := sl.LogRecords().At(k)
+
+				traceID := rec.TraceID()
+				balancingKey := traceID
+				if traceID == pcommon.NewTraceIDEmpty() {
+					balancingKey = random()
+				}
+
+				le, endpoint, err := e.loadBalancer.exporterAndEndpoint(balancingKey[:])
+				if err != nil {
+					errs = multierr.Append(errs, err)
+					continue
+				}
+				ep := endpointWithPort(endpoint)
+				batch, ok := batches[ep]
+				if !ok {
+					batch = &endpointBatch{logs: plog.NewLogs(), exp: le}
+					batches[ep] = batch
+				}
+				batch.exp = le
+				insertLogRecord(batch.logs, rl, sl, rec)
+			}
+		}
+	}
+
+	for ep, batch := range batches {
+		for range 2 {
+			err := e.batcher.Enqueue(ctx, ep, batch.exp, batch.logs)
+			if !errors.Is(err, errLogBatcherExporterStopping) {
+				if err != nil {
+					errs = multierr.Append(errs, err)
+				}
+				break
 			}
 		}
 	}
 
 	return errs
-}
-
-func (e *logExporterImp) consumeLogRecord(ctx context.Context, resourceLogs plog.ResourceLogs, scopeLogs plog.ScopeLogs, record plog.LogRecord) error {
-	traceID := record.TraceID()
-	balancingKey := traceID
-	if traceID == pcommon.NewTraceIDEmpty() {
-		balancingKey = random()
-	}
-
-	logs := singleLogRecord(resourceLogs, scopeLogs, record)
-	for range 2 {
-		le, endpoint, err := e.loadBalancer.exporterAndEndpoint(balancingKey[:])
-		if err != nil {
-			return err
-		}
-		err = e.batcher.Enqueue(ctx, endpointWithPort(endpoint), le, logs)
-		if !errors.Is(err, errLogBatcherExporterStopping) {
-			return err
-		}
-	}
-
-	return errLogBatcherExporterStopping
 }
 
 func (e *logExporterImp) consumeLog(ctx context.Context, ld plog.Logs) error {
@@ -186,19 +212,47 @@ func (e *logExporterImp) consumeBatch(ctx context.Context, le *wrappedExporter, 
 	return err
 }
 
-func singleLogRecord(resourceLogs plog.ResourceLogs, scopeLogs plog.ScopeLogs, record plog.LogRecord) plog.Logs {
-	logs := plog.NewLogs()
+// insertLogRecord adds a log record into the destination plog.Logs, reusing
+// existing ResourceLogs/ScopeLogs entries when their attributes match. This
+// avoids creating duplicate resource/scope hierarchies for records that share
+// the same origin.
+func insertLogRecord(dest plog.Logs, srcRL plog.ResourceLogs, srcSL plog.ScopeLogs, rec plog.LogRecord) {
+	targetRL := findOrCreateResourceLogs(dest, srcRL)
+	targetSL := findOrCreateScopeLogs(targetRL, srcSL)
+	rec.CopyTo(targetSL.LogRecords().AppendEmpty())
+}
 
-	targetResourceLogs := logs.ResourceLogs().AppendEmpty()
-	resourceLogs.Resource().CopyTo(targetResourceLogs.Resource())
-	targetResourceLogs.SetSchemaUrl(resourceLogs.SchemaUrl())
+func findOrCreateResourceLogs(dest plog.Logs, src plog.ResourceLogs) plog.ResourceLogs {
+	srcRes := src.Resource()
+	srcSchema := src.SchemaUrl()
+	for i := 0; i < dest.ResourceLogs().Len(); i++ {
+		rl := dest.ResourceLogs().At(i)
+		if rl.SchemaUrl() == srcSchema && rl.Resource().Attributes().Equal(srcRes.Attributes()) {
+			return rl
+		}
+	}
+	rl := dest.ResourceLogs().AppendEmpty()
+	srcRes.CopyTo(rl.Resource())
+	rl.SetSchemaUrl(srcSchema)
+	return rl
+}
 
-	targetScopeLogs := targetResourceLogs.ScopeLogs().AppendEmpty()
-	scopeLogs.Scope().CopyTo(targetScopeLogs.Scope())
-	targetScopeLogs.SetSchemaUrl(scopeLogs.SchemaUrl())
-
-	record.CopyTo(targetScopeLogs.LogRecords().AppendEmpty())
-	return logs
+func findOrCreateScopeLogs(rl plog.ResourceLogs, src plog.ScopeLogs) plog.ScopeLogs {
+	srcScope := src.Scope()
+	srcSchema := src.SchemaUrl()
+	for i := 0; i < rl.ScopeLogs().Len(); i++ {
+		sl := rl.ScopeLogs().At(i)
+		if sl.SchemaUrl() == srcSchema &&
+			sl.Scope().Name() == srcScope.Name() &&
+			sl.Scope().Version() == srcScope.Version() &&
+			sl.Scope().Attributes().Equal(srcScope.Attributes()) {
+			return sl
+		}
+	}
+	sl := rl.ScopeLogs().AppendEmpty()
+	srcScope.CopyTo(sl.Scope())
+	sl.SetSchemaUrl(srcSchema)
+	return sl
 }
 
 func traceIDFromLogs(ld plog.Logs) pcommon.TraceID {
