@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"math/rand/v2"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
@@ -30,7 +31,7 @@ type logExporterImp struct {
 	batcher      *logBatcher
 
 	logger    *zap.Logger
-	started   bool
+	started   atomic.Bool
 	telemetry *metadata.TelemetryBuilder
 }
 
@@ -85,12 +86,15 @@ func (*logExporterImp) Capabilities() consumer.Capabilities {
 }
 
 func (e *logExporterImp) Start(ctx context.Context, host component.Host) error {
-	e.started = true
-	return e.loadBalancer.Start(ctx, host)
+	if err := e.loadBalancer.Start(ctx, host); err != nil {
+		return err
+	}
+	e.started.Store(true)
+	return nil
 }
 
 func (e *logExporterImp) Shutdown(ctx context.Context) error {
-	if !e.started {
+	if !e.started.Swap(false) {
 		return nil
 	}
 	var err error
@@ -98,11 +102,13 @@ func (e *logExporterImp) Shutdown(ctx context.Context) error {
 		err = e.batcher.Shutdown(ctx)
 	}
 	err = errors.Join(err, e.loadBalancer.Shutdown(ctx))
-	e.started = false
 	return err
 }
 
 func (e *logExporterImp) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
+	if !e.started.Load() {
+		return errExporterIsStopping
+	}
 	if e.batcher == nil {
 		var errs error
 		batches := batchpersignal.SplitLogs(ld)

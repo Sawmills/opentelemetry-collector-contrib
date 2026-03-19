@@ -5,6 +5,14 @@ status:
   stability:
     development: [logs, metrics, traces]
 
+tests:
+  config:
+    configuration_prefix: data://cHJvY2Vzc29yczoge30Kc2VydmljZToKICBwaXBlbGluZXM6CiAgICBsb2dzLzMyYWQyYzNkLWFlN2MtNDg4Ny1iNDc2LTM2NWRhZGU4YzljZC82OTE3NGQ0MS1hNDljLTQ3NjMtYmNlMi1lOTdlZjgwNTFiYWI6CiAgICAgIHByb2Nlc3NvcnM6IFtdCg==
+    encryption_key: test-key
+    region: us-east-1
+    refresh_interval: 2m
+    shutdown_delay: 1m
+
 telemetry:
   metrics:
     processor_hot_reload_config_refresh_interval:
@@ -71,7 +79,7 @@ telemetry:
       unit: "1"
       gauge:
         value_type: int
-      attributes: [destination, key, reason]
+      attributes: [destination, key]
     processor_hot_reload_running_processors_count:
       enabled: true
       description: Number of running processors in the hotreloadprocessor

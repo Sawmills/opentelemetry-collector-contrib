@@ -124,6 +124,14 @@ func TestLogExporterShutdown(t *testing.T) {
 	assert.NoError(t, res)
 }
 
+func TestLogExporterConsumeLogsReturnsStoppingErrorWhenNotStarted(t *testing.T) {
+	p, err := newLogsExporter(exportertest.NewNopSettings(metadata.Type), simpleConfig())
+	require.NoError(t, err)
+
+	err = p.ConsumeLogs(t.Context(), simpleLogs())
+	require.ErrorIs(t, err, errExporterIsStopping)
+}
+
 func TestConsumeLogs(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
