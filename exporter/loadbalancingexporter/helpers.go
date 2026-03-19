@@ -14,8 +14,18 @@ func mergeTraces(t1, t2 ptrace.Traces) ptrace.Traces {
 	return t1
 }
 
-// mergeLogs concatenates two plog.Logs into a single plog.Logs.
+// mergeLogs combines two plog.Logs into a single plog.Logs while reusing
+// matching resource/scope structures so serialized size reflects the true
+// merged OTLP payload.
 func mergeLogs(l1, l2 plog.Logs) plog.Logs {
-	l2.ResourceLogs().MoveAndAppendTo(l1.ResourceLogs())
+	for i := 0; i < l2.ResourceLogs().Len(); i++ {
+		srcRL := l2.ResourceLogs().At(i)
+		for j := 0; j < srcRL.ScopeLogs().Len(); j++ {
+			srcSL := srcRL.ScopeLogs().At(j)
+			for k := 0; k < srcSL.LogRecords().Len(); k++ {
+				insertLogRecord(l1, srcRL, srcSL, srcSL.LogRecords().At(k))
+			}
+		}
+	}
 	return l1
 }

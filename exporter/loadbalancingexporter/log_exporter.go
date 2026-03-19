@@ -133,6 +133,7 @@ func (e *logExporterImp) consumeLogsBatched(ctx context.Context, ld plog.Logs) e
 
 func (e *logExporterImp) groupLogsByEndpoint(ld plog.Logs) (map[string]*endpointBatch, error) {
 	batches := make(map[string]*endpointBatch)
+	emptyTraceFallbackKeys := make(map[[2]int]pcommon.TraceID)
 	var errs error
 
 	for i := 0; i < ld.ResourceLogs().Len(); i++ {
@@ -145,7 +146,12 @@ func (e *logExporterImp) groupLogsByEndpoint(ld plog.Logs) (map[string]*endpoint
 				traceID := rec.TraceID()
 				balancingKey := traceID
 				if traceID == pcommon.NewTraceIDEmpty() {
-					balancingKey = random()
+					scopeKey := [2]int{i, j}
+					balancingKey = emptyTraceFallbackKeys[scopeKey]
+					if balancingKey == pcommon.NewTraceIDEmpty() {
+						balancingKey = random()
+						emptyTraceFallbackKeys[scopeKey] = balancingKey
+					}
 				}
 
 				le, endpoint, err := e.loadBalancer.exporterAndEndpoint(balancingKey[:])

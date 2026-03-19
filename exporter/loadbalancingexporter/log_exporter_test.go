@@ -398,6 +398,31 @@ func TestLogsWithoutTraceID(t *testing.T) {
 	assert.Len(t, sink.AllLogs(), 1)
 }
 
+func TestGroupLogsByEndpointKeepsEmptyTraceLogsTogetherPerScope(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	first := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	second := newWrappedExporter(newNopMockLogsExporter(), "endpoint-2:4317")
+	lb.ring = newHashRing([]string{"endpoint-1", "endpoint-2"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": first,
+		"endpoint-2:4317": second,
+	}
+
+	p, err := newLogsExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+
+	batches, groupErr := p.groupLogsByEndpoint(sharedScopeLogsWithoutTraceIDs("first", "second"))
+	require.NoError(t, groupErr)
+	require.Len(t, batches, 1)
+	for _, batch := range batches {
+		assert.Equal(t, 2, batch.logs.LogRecordCount())
+	}
+}
+
 func TestConsumeLogLegacyPathIgnoresStoppingGate(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	logsConsumed := atomic.Int64{}
@@ -750,6 +775,36 @@ func simpleLogWithID(id pcommon.TraceID) plog.Logs {
 	sl := rl.ScopeLogs().AppendEmpty()
 	sl.LogRecords().AppendEmpty().SetTraceID(id)
 
+	return logs
+}
+
+func sharedResourceScopeLog(body string) plog.Logs {
+	logs := plog.NewLogs()
+	rl := logs.ResourceLogs().AppendEmpty()
+	for i := 0; i < 8; i++ {
+		rl.Resource().Attributes().PutStr(fmt.Sprintf("resource-%d", i), "shared-resource-value")
+	}
+	sl := rl.ScopeLogs().AppendEmpty()
+	sl.Scope().SetName("shared-scope")
+	for i := 0; i < 8; i++ {
+		sl.Scope().Attributes().PutStr(fmt.Sprintf("scope-%d", i), "shared-scope-value")
+	}
+	rec := sl.LogRecords().AppendEmpty()
+	rec.Body().SetStr(body)
+	rec.SetTraceID(pcommon.TraceID([16]byte{1, 2, 3, 4}))
+	return logs
+}
+
+func sharedScopeLogsWithoutTraceIDs(bodies ...string) plog.Logs {
+	logs := plog.NewLogs()
+	rl := logs.ResourceLogs().AppendEmpty()
+	rl.Resource().Attributes().PutStr("resource", "shared")
+	sl := rl.ScopeLogs().AppendEmpty()
+	sl.Scope().SetName("shared-scope")
+	for _, body := range bodies {
+		rec := sl.LogRecords().AppendEmpty()
+		rec.Body().SetStr(body)
+	}
 	return logs
 }
 
