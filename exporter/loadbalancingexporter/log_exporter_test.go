@@ -424,6 +424,33 @@ func TestConsumeLogLegacyPathIgnoresStoppingGate(t *testing.T) {
 	assert.Equal(t, int64(1), logsConsumed.Load())
 }
 
+func TestConsumeLogsBatchedReturnsStoppingErrorAfterRetries(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	exp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	exp.markStopping()
+
+	lb.ring = newHashRing([]string{"endpoint-1"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": exp,
+	}
+
+	p, err := newLogsExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.batcher, err = newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    1,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, p.consumeBatch)
+	require.NoError(t, err)
+
+	err = p.consumeLogsBatched(t.Context(), simpleLogs())
+	require.ErrorIs(t, err, errLogBatcherExporterStopping)
+}
+
 // this test validates that exporter is can concurrently change the endpoints while consuming logs.
 func TestConsumeLogs_ConcurrentResolverChange(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
