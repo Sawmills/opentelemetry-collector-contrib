@@ -221,20 +221,6 @@ func newTestLogsExporter(
 	return p, lb
 }
 
-func traceIDForEndpoint(t *testing.T, lb *loadBalancer, endpoint string) pcommon.TraceID {
-	t.Helper()
-	for i := 0; i < 255; i++ {
-		id := pcommon.TraceID([16]byte{byte(i)})
-		_, actual, err := lb.exporterAndEndpoint(id[:])
-		require.NoError(t, err)
-		if actual == endpoint {
-			return id
-		}
-	}
-	t.Fatalf("no traceID found for endpoint %s", endpoint)
-	return pcommon.NewTraceIDEmpty()
-}
-
 func logsWithTraceIDs(ids ...pcommon.TraceID) plog.Logs {
 	logs := plog.NewLogs()
 	for _, id := range ids {
