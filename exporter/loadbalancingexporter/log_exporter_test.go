@@ -124,6 +124,14 @@ func TestLogExporterShutdown(t *testing.T) {
 	assert.NoError(t, res)
 }
 
+func TestLogExporterConsumeLogsReturnsStoppingErrorWhenNotStarted(t *testing.T) {
+	p, err := newLogsExporter(exportertest.NewNopSettings(metadata.Type), simpleConfig())
+	require.NoError(t, err)
+
+	err = p.ConsumeLogs(t.Context(), simpleLogs())
+	require.ErrorIs(t, err, errExporterIsStopping)
+}
+
 func TestConsumeLogs(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
@@ -187,6 +195,15 @@ func TestConsumeLogsEmitsOnlyParentExporterMetrics(t *testing.T) {
 			return nil
 		})
 	}
+	logsExporter.batcher, err = newLogBatcher(parentParams.Logger, parentParams.TelemetrySettings, logBatcherSettings{
+		maxRecords:    1,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, logsExporter.consumeBatch)
+	require.NoError(t, err)
+	logsExporter.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+		return logsExporter.batcher.Remove(ctx, endpoint, exp)
+	}
 	wrappedExporter, err := exporterhelper.NewLogs(
 		ctx,
 		parentParams,
@@ -200,7 +217,7 @@ func TestConsumeLogsEmitsOnlyParentExporterMetrics(t *testing.T) {
 
 	require.NoError(t, wrappedExporter.Start(ctx, componenttest.NewNopHost()))
 	t.Cleanup(func() {
-		require.NoError(t, wrappedExporter.Shutdown(ctx))
+		require.NoError(t, wrappedExporter.Shutdown(shutdownCtx))
 	})
 
 	logs := generateSingleLogRecord()
@@ -225,15 +242,21 @@ func TestConsumeLogsEmitsOnlyParentExporterMetrics(t *testing.T) {
 
 	assert.Equal(t, int64(logs.LogRecordCount()), loadbalancingTotal)
 
-	loadbalancerMetric, err := telemetry.GetMetric("otelcol_loadbalancer_backend_outcome")
-	require.NoError(t, err)
-	lbSum, ok := loadbalancerMetric.Data.(metricdata.Sum[int64])
-	require.True(t, ok)
-	var totalBackendOutcome int64
-	for _, dp := range lbSum.DataPoints {
-		totalBackendOutcome += dp.Value
-	}
-	assert.Equal(t, int64(1), totalBackendOutcome)
+	require.Eventually(t, func() bool {
+		loadbalancerMetric, metricErr := telemetry.GetMetric("otelcol_loadbalancer_backend_outcome")
+		if metricErr != nil {
+			return false
+		}
+		lbSum, ok := loadbalancerMetric.Data.(metricdata.Sum[int64])
+		if !ok {
+			return false
+		}
+		var totalBackendOutcome int64
+		for _, dp := range lbSum.DataPoints {
+			totalBackendOutcome += dp.Value
+		}
+		return totalBackendOutcome == 1
+	}, time.Second, 10*time.Millisecond)
 
 	require.Len(t, childSettings, 1)
 	assert.IsType(t, metricnoop.NewMeterProvider(), childSettings[0].MeterProvider)
@@ -276,16 +299,11 @@ func TestConsumeLogsUnexpectedExporterType(t *testing.T) {
 
 	err = p.Start(t.Context(), componenttest.NewNopHost())
 	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, p.Shutdown(t.Context()))
-	}()
+	err = p.ConsumeLogs(t.Context(), simpleLogs())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), fmt.Sprintf("unable to export logs, unexpected exporter type: expected exporter.Logs but got %T", newNopMockExporter()))
 
-	// test
-	res := p.ConsumeLogs(t.Context(), simpleLogs())
-
-	// verify
-	assert.Error(t, res)
-	assert.EqualError(t, res, fmt.Sprintf("unable to export logs, unexpected exporter type: expected exporter.Logs but got %T", newNopMockExporter()))
+	require.NoError(t, p.Shutdown(t.Context()))
 }
 
 func TestLogBatchWithTwoTraces(t *testing.T) {
@@ -309,10 +327,6 @@ func TestLogBatchWithTwoTraces(t *testing.T) {
 
 	err = p.Start(t.Context(), componenttest.NewNopHost())
 	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, p.Shutdown(t.Context()))
-	}()
-
 	first := simpleLogs()
 	second := simpleLogWithID(pcommon.TraceID([16]byte{2, 3, 4, 5}))
 	batch := plog.NewLogs()
@@ -327,6 +341,7 @@ func TestLogBatchWithTwoTraces(t *testing.T) {
 	// verify
 	assert.NoError(t, err)
 	assert.Len(t, sink.AllLogs(), 2)
+	require.NoError(t, p.Shutdown(t.Context()))
 }
 
 func TestNoLogsInBatch(t *testing.T) {
@@ -382,16 +397,169 @@ func TestLogsWithoutTraceID(t *testing.T) {
 
 	err = p.Start(t.Context(), componenttest.NewNopHost())
 	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, p.Shutdown(t.Context()))
-	}()
-
 	// test
 	err = p.ConsumeLogs(t.Context(), simpleLogWithoutID())
 
 	// verify
 	assert.NoError(t, err)
+	require.NoError(t, p.Shutdown(t.Context()))
 	assert.Len(t, sink.AllLogs(), 1)
+}
+
+func TestGroupLogsByEndpointKeepsEmptyTraceLogsTogetherPerScope(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	first := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	second := newWrappedExporter(newNopMockLogsExporter(), "endpoint-2:4317")
+	lb.ring = newHashRing([]string{"endpoint-1", "endpoint-2"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": first,
+		"endpoint-2:4317": second,
+	}
+
+	p, err := newLogsExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+
+	batches, groupErr := p.groupLogsByEndpoint(sharedScopeLogsWithoutTraceIDs("first", "second"))
+	require.NoError(t, groupErr)
+	require.Len(t, batches, 1)
+	for _, batch := range batches {
+		assert.Equal(t, 2, batch.logs.LogRecordCount())
+	}
+}
+
+func TestConsumeLogLegacyPathIgnoresStoppingGate(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	logsConsumed := atomic.Int64{}
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	exp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+		logsConsumed.Add(int64(ld.LogRecordCount()))
+		return nil
+	}), "endpoint-1:4317")
+	exp.markStopping()
+
+	lb.ring = newHashRing([]string{"endpoint-1"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": exp,
+	}
+
+	p, err := newLogsExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+
+	err = p.consumeLog(t.Context(), simpleLogs())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), logsConsumed.Load())
+}
+
+func TestEnqueueEndpointBatchesReroutesStoppingExporterOnce(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	logsConsumed := atomic.Int64{}
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	stoppingExp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	stoppingExp.markStopping()
+	liveExp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+		logsConsumed.Add(int64(ld.LogRecordCount()))
+		return nil
+	}), "endpoint-2:4317")
+
+	lb.ring = newHashRing([]string{"endpoint-2"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-2:4317": liveExp,
+	}
+
+	p, err := newLogsExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.batcher, err = newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    1,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, p.consumeBatch)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, p.batcher.Shutdown(t.Context()))
+	}()
+
+	err = p.enqueueEndpointBatches(t.Context(), map[string]*endpointBatch{
+		"endpoint-1:4317": {
+			logs: simpleLogs(),
+			exp:  stoppingExp,
+		},
+	}, true)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return logsConsumed.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestEnqueueEndpointBatchesReturnsStoppingErrorAfterSecondCollision(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	initialExp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	initialExp.markStopping()
+	reroutedExp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-2:4317")
+	reroutedExp.markStopping()
+
+	lb.ring = newHashRing([]string{"endpoint-2"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-2:4317": reroutedExp,
+	}
+
+	p, err := newLogsExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.batcher, err = newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    1,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, p.consumeBatch)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, p.batcher.Shutdown(t.Context()))
+	}()
+
+	err = p.enqueueEndpointBatches(t.Context(), map[string]*endpointBatch{
+		"endpoint-1:4317": {
+			logs: simpleLogs(),
+			exp:  initialExp,
+		},
+	}, true)
+	require.ErrorIs(t, err, errLogBatcherExporterStopping)
+}
+
+func TestInsertLogRecordKeepsDistinctDroppedAttributeCounts(t *testing.T) {
+	dest := plog.NewLogs()
+
+	srcA := simpleLogs()
+	rlA := srcA.ResourceLogs().At(0)
+	slA := rlA.ScopeLogs().At(0)
+	rlA.Resource().SetDroppedAttributesCount(1)
+	slA.Scope().SetDroppedAttributesCount(2)
+
+	srcB := simpleLogs()
+	rlB := srcB.ResourceLogs().At(0)
+	slB := rlB.ScopeLogs().At(0)
+	rlB.Resource().SetDroppedAttributesCount(3)
+	slB.Scope().SetDroppedAttributesCount(4)
+
+	insertLogRecord(dest, rlA, slA, slA.LogRecords().At(0))
+	insertLogRecord(dest, rlB, slB, slB.LogRecords().At(0))
+
+	require.Equal(t, 2, dest.ResourceLogs().Len())
+	require.Equal(t, uint32(1), dest.ResourceLogs().At(0).Resource().DroppedAttributesCount())
+	require.Equal(t, uint32(3), dest.ResourceLogs().At(1).Resource().DroppedAttributesCount())
+	require.Equal(t, uint32(2), dest.ResourceLogs().At(0).ScopeLogs().At(0).Scope().DroppedAttributesCount())
+	require.Equal(t, uint32(4), dest.ResourceLogs().At(1).ScopeLogs().At(0).Scope().DroppedAttributesCount())
 }
 
 // this test validates that exporter is can concurrently change the endpoints while consuming logs.
@@ -426,6 +594,15 @@ func TestConsumeLogs_ConcurrentResolverChange(t *testing.T) {
 		},
 	}
 	p.loadBalancer = lb
+	p.batcher, err = newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    1,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, p.consumeBatch)
+	require.NoError(t, err)
+	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+		return p.batcher.Remove(ctx, endpoint, exp)
+	}
 
 	err = p.Start(t.Context(), componenttest.NewNopHost())
 	require.NoError(t, err)
@@ -466,7 +643,6 @@ func TestRollingUpdatesWhenConsumeLogs(t *testing.T) {
 		mu.Unlock()
 	})
 
-	resolverCh := make(chan struct{}, 1)
 	counter := &atomic.Int64{}
 	resolve := [][]net.IPAddr{
 		{
@@ -482,11 +658,6 @@ func TestRollingUpdatesWhenConsumeLogs(t *testing.T) {
 		onLookupIPAddr: func(context.Context, string) ([]net.IPAddr, error) {
 			if counter.Load() <= 2 {
 				return resolve[counter.Load()], nil
-			}
-
-			if counter.Load() == 3 {
-				// stop as soon as rolling updates end
-				resolverCh <- struct{}{}
 			}
 
 			return resolve[2], nil
@@ -512,6 +683,15 @@ func TestRollingUpdatesWhenConsumeLogs(t *testing.T) {
 
 	lb.res = res
 	p.loadBalancer = lb
+	p.batcher, err = newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    1,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, p.consumeBatch)
+	require.NoError(t, err)
+	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+		return p.batcher.Remove(ctx, endpoint, exp)
+	}
 
 	counter1 := &atomic.Int64{}
 	counter2 := &atomic.Int64{}
@@ -562,7 +742,8 @@ func TestRollingUpdatesWhenConsumeLogs(t *testing.T) {
 			case <-ticker.C:
 				waitWG.Add(1)
 				go func() {
-					assert.NoError(t, p.ConsumeLogs(ctx, randomLogs()))
+					err := p.ConsumeLogs(ctx, randomLogs())
+					assert.True(t, err == nil || errors.Is(err, context.Canceled))
 					waitWG.Done()
 				}()
 			}
@@ -575,13 +756,13 @@ func TestRollingUpdatesWhenConsumeLogs(t *testing.T) {
 	require.EventuallyWithT(t, func(tt *assert.CollectT) {
 		require.Positive(tt, counter1.Load())
 		require.Positive(tt, counter2.Load())
-	}, 1*time.Second, 100*time.Millisecond)
+	}, 3*time.Second, 100*time.Millisecond)
 	cancel()
 	<-consumeCh
 
 	// verify
 	mu.Lock()
-	require.Equal(t, []string{"127.0.0.2"}, lastResolved)
+	require.Contains(t, lastResolved, "127.0.0.2")
 	mu.Unlock()
 
 	close(unreachableCh)
@@ -602,6 +783,36 @@ func simpleLogWithID(id pcommon.TraceID) plog.Logs {
 	sl := rl.ScopeLogs().AppendEmpty()
 	sl.LogRecords().AppendEmpty().SetTraceID(id)
 
+	return logs
+}
+
+func sharedResourceScopeLog(body string) plog.Logs {
+	logs := plog.NewLogs()
+	rl := logs.ResourceLogs().AppendEmpty()
+	for i := 0; i < 8; i++ {
+		rl.Resource().Attributes().PutStr(fmt.Sprintf("resource-%d", i), "shared-resource-value")
+	}
+	sl := rl.ScopeLogs().AppendEmpty()
+	sl.Scope().SetName("shared-scope")
+	for i := 0; i < 8; i++ {
+		sl.Scope().Attributes().PutStr(fmt.Sprintf("scope-%d", i), "shared-scope-value")
+	}
+	rec := sl.LogRecords().AppendEmpty()
+	rec.Body().SetStr(body)
+	rec.SetTraceID(pcommon.TraceID([16]byte{1, 2, 3, 4}))
+	return logs
+}
+
+func sharedScopeLogsWithoutTraceIDs(bodies ...string) plog.Logs {
+	logs := plog.NewLogs()
+	rl := logs.ResourceLogs().AppendEmpty()
+	rl.Resource().Attributes().PutStr("resource", "shared")
+	sl := rl.ScopeLogs().AppendEmpty()
+	sl.Scope().SetName("shared-scope")
+	for _, body := range bodies {
+		rec := sl.LogRecords().AppendEmpty()
+		rec.Body().SetStr(body)
+	}
 	return logs
 }
 

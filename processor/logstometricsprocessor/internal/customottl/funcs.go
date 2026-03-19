@@ -16,4 +16,3 @@ func LogFuncs() map[string]ottl.Factory[ottllog.TransformContext] {
 func commonFuncs[K any]() map[string]ottl.Factory[K] {
 	return ottlfuncs.StandardFuncs[K]()
 }
-

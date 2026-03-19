@@ -120,6 +120,15 @@ func (e *metricExporterImp) ConsumeMetrics(ctx context.Context, md pmetric.Metri
 	// Now assign each batch to an exporter, and merge as we go
 	metricsByExporter := map[*wrappedExporter]pmetric.Metrics{}
 	exporterEndpoints := map[*wrappedExporter]string{}
+	needsCleanup := true
+	defer func() {
+		if !needsCleanup {
+			return
+		}
+		for exp := range metricsByExporter {
+			exp.doneConsume()
+		}
+	}()
 
 	for routingID, mds := range batches {
 		exp, endpoint, err := e.loadBalancer.exporterAndEndpoint([]byte(routingID))
@@ -129,7 +138,9 @@ func (e *metricExporterImp) ConsumeMetrics(ctx context.Context, md pmetric.Metri
 
 		expMetrics, ok := metricsByExporter[exp]
 		if !ok {
-			exp.consumeWG.Add(1)
+			if !exp.tryStartConsume() {
+				return errExporterIsStopping
+			}
 			expMetrics = pmetric.NewMetrics()
 			metricsByExporter[exp] = expMetrics
 			exporterEndpoints[exp] = endpoint
@@ -138,13 +149,14 @@ func (e *metricExporterImp) ConsumeMetrics(ctx context.Context, md pmetric.Metri
 		metrics.Merge(expMetrics, mds)
 	}
 
+	needsCleanup = false
 	var errs error
 	for exp, mds := range metricsByExporter {
 		start := time.Now()
 		err := exp.ConsumeMetrics(ctx, mds)
 		duration := time.Since(start)
 
-		exp.consumeWG.Done()
+		exp.doneConsume()
 		errs = multierr.Append(errs, err)
 		e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(exp.endpointAttr))
 		if err == nil {

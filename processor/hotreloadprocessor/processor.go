@@ -228,7 +228,7 @@ func (hp *HotReloadProcessor[T, P]) Start(ctx context.Context, host component.Ho
 		hp.config,
 		hp.logger,
 		client,
-		func(client S3Client, bucket string, key string) ListObjectsV2Paginator {
+		func(client S3Client, bucket, key string) ListObjectsV2Paginator {
 			delimiter := "/"
 			return s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
 				Bucket:    &bucket,
@@ -254,7 +254,7 @@ func (hp *HotReloadProcessor[T, P]) Start(ctx context.Context, host component.Ho
 		hp.fileWatcher, err = NewFileWatcher(
 			hp.logger,
 			*hp.config.WatchPath,
-			func(filePath string) error {
+			func(_ string) error {
 				hp.telemetry.record(
 					triggerScan,
 					float64(1),
@@ -362,7 +362,7 @@ func (hp *HotReloadProcessor[T, P]) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (hp *HotReloadProcessor[T, P]) Capabilities() consumer.Capabilities {
+func (*HotReloadProcessor[T, P]) Capabilities() consumer.Capabilities {
 	return processorCapabilities
 }
 
@@ -379,7 +379,7 @@ func (hp *HotReloadProcessor[T, P]) consume(consumer func() error) error {
 	return consumer()
 }
 
-func (hp *HotReloadProcessor[T, P]) hashConfig(config otelcol.Config) (string, error) {
+func (*HotReloadProcessor[T, P]) hashConfig(config otelcol.Config) (string, error) {
 	yaml, err := yaml.Marshal(config)
 	if err != nil {
 		return "", err

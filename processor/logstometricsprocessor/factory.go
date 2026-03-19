@@ -62,4 +62,3 @@ func createLogsProcessor(
 		processorhelper.WithShutdown(p.Shutdown),
 	)
 }
-

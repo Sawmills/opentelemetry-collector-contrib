@@ -115,6 +115,7 @@ components:
         - isolationforest
         - k8sattributes
         - logdedup
+        - logstometricsprocessor
         - metricsgeneration
         - metricstarttime
         - metricstransform
@@ -123,7 +124,6 @@ components:
         - remotetap
         - resource
         - resourcedetection
-        - logstometricsprocessor
         - span
         - sumologic
         - tail_sampling

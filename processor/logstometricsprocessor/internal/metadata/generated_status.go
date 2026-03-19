@@ -14,4 +14,3 @@ var (
 const (
 	LogsStability = component.StabilityLevelAlpha
 )
-

@@ -24,6 +24,7 @@ require (
 	go.opentelemetry.io/collector/consumer/consumertest v0.140.0
 	go.opentelemetry.io/collector/exporter v1.46.0
 	go.opentelemetry.io/collector/exporter/exporterhelper v0.140.0
+	go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper v0.140.0
 	go.opentelemetry.io/collector/exporter/exportertest v0.140.0
 	go.opentelemetry.io/collector/exporter/otlpexporter v0.140.0
 	go.opentelemetry.io/collector/otelcol/otelcoltest v0.140.0
@@ -133,7 +134,6 @@ require (
 	go.opentelemetry.io/collector/connector/xconnector v0.140.0 // indirect
 	go.opentelemetry.io/collector/consumer/consumererror/xconsumererror v0.140.0 // indirect
 	go.opentelemetry.io/collector/consumer/xconsumer v0.140.0 // indirect
-	go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper v0.140.0 // indirect
 	go.opentelemetry.io/collector/exporter/xexporter v0.140.0 // indirect
 	go.opentelemetry.io/collector/extension v1.46.0 // indirect
 	go.opentelemetry.io/collector/extension/extensionauth v1.46.0 // indirect

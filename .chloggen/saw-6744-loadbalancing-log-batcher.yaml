@@ -1,0 +1,8 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Add an optional post-routing log batcher to the loadbalancing exporter with per-backend buffering and configurable flush limits.
+issues: [6744]
+subtext: |
+  The new `log_batcher` config is disabled by default for backward compatibility.
+  When enabled, logs are batched per resolved backend before downstream queue compression.
+change_logs: [user]
