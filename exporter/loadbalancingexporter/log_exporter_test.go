@@ -322,6 +322,7 @@ func TestConsumeLogsWithQueueCompressionAndLogBatcher(t *testing.T) {
 	require.NoError(t, wrappedExporter.ConsumeLogs(ctx, simpleLogs()))
 	shutdown()
 
+	require.NotEmpty(t, sink.AllLogs())
 	assert.Equal(t, 2, sink.AllLogs()[0].LogRecordCount())
 }
 
