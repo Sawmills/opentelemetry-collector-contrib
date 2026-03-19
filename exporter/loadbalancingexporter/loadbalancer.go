@@ -154,18 +154,40 @@ func (lb *loadBalancer) Start(ctx context.Context, host component.Host) error {
 func (lb *loadBalancer) onBackendChanges(resolved []string) {
 	newRing := newHashRing(resolved)
 
-	if !newRing.equal(lb.ring) {
-		lb.updateLock.Lock()
-		defer lb.updateLock.Unlock()
+	if newRing.equal(lb.ring) {
+		return
+	}
 
-		lb.ring = newRing
+	// TODO: set a timeout?
+	ctx := context.Background()
 
-		// TODO: set a timeout?
-		ctx := context.Background()
+	lb.updateLock.Lock()
+	lb.ring = newRing
 
-		// add the missing exporters first
-		lb.addMissingExporters(ctx, resolved)
-		lb.removeExtraExporters(ctx, resolved)
+	// add the missing exporters first
+	lb.addMissingExporters(ctx, resolved)
+	removed := lb.removeExtraExportersLocked(resolved)
+	lb.updateLock.Unlock()
+
+	lb.drainRemovedExporters(ctx, removed)
+}
+
+type removedExporter struct {
+	endpoint string
+	exporter *wrappedExporter
+}
+
+func (lb *loadBalancer) drainRemovedExporters(ctx context.Context, removed []removedExporter) {
+	for _, removedExporter := range removed {
+		if lb.onExporterRemove != nil {
+			if err := lb.onExporterRemove(ctx, removedExporter.endpoint, removedExporter.exporter); err != nil {
+				lb.logger.Error("failed to drain exporter before removal", zap.String("endpoint", removedExporter.endpoint), zap.Error(err))
+			}
+		}
+		// Shutdown the exporter asynchronously to avoid blocking the resolver.
+		go func(exp *wrappedExporter) {
+			_ = exp.Shutdown(ctx)
+		}(removedExporter.exporter)
 	}
 }
 
@@ -196,15 +218,10 @@ func endpointWithPort(endpoint string) string {
 	return endpoint
 }
 
-func (lb *loadBalancer) removeExtraExporters(ctx context.Context, endpoints []string) {
+func (lb *loadBalancer) removeExtraExportersLocked(endpoints []string) []removedExporter {
 	endpointsWithPort := make([]string, len(endpoints))
 	for i, e := range endpoints {
 		endpointsWithPort[i] = endpointWithPort(e)
-	}
-
-	type removedExporter struct {
-		endpoint string
-		exporter *wrappedExporter
 	}
 
 	var removed []removedExporter
@@ -217,17 +234,7 @@ func (lb *loadBalancer) removeExtraExporters(ctx context.Context, endpoints []st
 		}
 	}
 
-	for _, removedExporter := range removed {
-		if lb.onExporterRemove != nil {
-			if err := lb.onExporterRemove(ctx, removedExporter.endpoint, removedExporter.exporter); err != nil {
-				lb.logger.Error("failed to drain exporter before removal", zap.String("endpoint", removedExporter.endpoint), zap.Error(err))
-			}
-		}
-		// Shutdown the exporter asynchronously to avoid blocking the resolver
-		go func(exp *wrappedExporter) {
-			_ = exp.Shutdown(ctx)
-		}(removedExporter.exporter)
-	}
+	return removed
 }
 
 func (lb *loadBalancer) Shutdown(ctx context.Context) error {

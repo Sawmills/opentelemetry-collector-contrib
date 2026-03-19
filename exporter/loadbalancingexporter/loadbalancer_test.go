@@ -254,7 +254,8 @@ func TestRemoveExtraExporters(t *testing.T) {
 	resolved := []string{"endpoint-1"}
 
 	// test
-	p.removeExtraExporters(t.Context(), resolved)
+	removed := p.removeExtraExportersLocked(resolved)
+	p.drainRemovedExporters(t.Context(), removed)
 
 	// verify
 	assert.Len(t, p.exporters, 1)
