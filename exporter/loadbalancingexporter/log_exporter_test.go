@@ -283,7 +283,7 @@ func TestConsumeLogsWithQueueCompressionAndLogBatcher(t *testing.T) {
 	require.NoError(t, err)
 
 	sink := new(consumertest.LogsSink)
-	logsExporter.loadBalancer.componentFactory = func(_ context.Context, endpoint string) (component.Component, error) {
+	logsExporter.loadBalancer.componentFactory = func(_ context.Context, _ string) (component.Component, error) {
 		return newMockLogsExporter(sink.ConsumeLogs), nil
 	}
 
