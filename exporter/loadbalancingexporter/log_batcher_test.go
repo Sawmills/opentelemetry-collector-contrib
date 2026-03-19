@@ -363,3 +363,28 @@ func sizedLogWithID(id pcommon.TraceID, size int) plog.Logs {
 	logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Body().SetStr(string(make([]byte, size)))
 	return logs
 }
+
+// TestLogBatcherEnqueueAfterShutdownReturnsError verifies that a concurrent
+// ConsumeLogs call racing through acquireBackend after batcher.Shutdown has
+// cleared its backends map does not create a new orphaned backend. Before the
+// fix a new backendLogBatcher was created with no corresponding FlushAndStop
+// request, stranding any records it buffered.
+func TestLogBatcherEnqueueAfterShutdownReturnsError(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	batcher, err := newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    100,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, func(_ context.Context, _ *wrappedExporter, _ plog.Logs, _ string) error {
+		return nil
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, batcher.Shutdown(t.Context()))
+
+	// After shutdown, any attempt to enqueue must fail rather than create a new backend.
+	exp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	err = batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, simpleLogs())
+	require.ErrorIs(t, err, errLogBatcherExporterStopping,
+		"Enqueue after Shutdown should return errLogBatcherExporterStopping, got %v", err)
+}
