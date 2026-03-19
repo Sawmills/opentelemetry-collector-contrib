@@ -120,9 +120,9 @@ func (e *metricExporterImp) ConsumeMetrics(ctx context.Context, md pmetric.Metri
 	// Now assign each batch to an exporter, and merge as we go
 	metricsByExporter := map[*wrappedExporter]pmetric.Metrics{}
 	exporterEndpoints := map[*wrappedExporter]string{}
-	cleanupStarted := true
+	needsCleanup := true
 	defer func() {
-		if !cleanupStarted {
+		if !needsCleanup {
 			return
 		}
 		for exp := range metricsByExporter {
@@ -149,7 +149,7 @@ func (e *metricExporterImp) ConsumeMetrics(ctx context.Context, md pmetric.Metri
 		metrics.Merge(expMetrics, mds)
 	}
 
-	cleanupStarted = false
+	needsCleanup = false
 	var errs error
 	for exp, mds := range metricsByExporter {
 		start := time.Now()

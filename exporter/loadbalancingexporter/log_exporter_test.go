@@ -467,6 +467,68 @@ func TestEnqueueEndpointBatchesReroutesStoppingExporterOnce(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestEnqueueEndpointBatchesReturnsStoppingErrorAfterSecondCollision(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	initialExp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	initialExp.markStopping()
+	reroutedExp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-2:4317")
+	reroutedExp.markStopping()
+
+	lb.ring = newHashRing([]string{"endpoint-2"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-2:4317": reroutedExp,
+	}
+
+	p, err := newLogsExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.batcher, err = newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    1,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, p.consumeBatch)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, p.batcher.Shutdown(t.Context()))
+	}()
+
+	err = p.enqueueEndpointBatches(t.Context(), map[string]*endpointBatch{
+		"endpoint-1:4317": {
+			logs: simpleLogs(),
+			exp:  initialExp,
+		},
+	}, true)
+	require.ErrorIs(t, err, errLogBatcherExporterStopping)
+}
+
+func TestInsertLogRecordKeepsDistinctDroppedAttributeCounts(t *testing.T) {
+	dest := plog.NewLogs()
+
+	srcA := simpleLogs()
+	rlA := srcA.ResourceLogs().At(0)
+	slA := rlA.ScopeLogs().At(0)
+	rlA.Resource().SetDroppedAttributesCount(1)
+	slA.Scope().SetDroppedAttributesCount(2)
+
+	srcB := simpleLogs()
+	rlB := srcB.ResourceLogs().At(0)
+	slB := rlB.ScopeLogs().At(0)
+	rlB.Resource().SetDroppedAttributesCount(3)
+	slB.Scope().SetDroppedAttributesCount(4)
+
+	insertLogRecord(dest, rlA, slA, slA.LogRecords().At(0))
+	insertLogRecord(dest, rlB, slB, slB.LogRecords().At(0))
+
+	require.Equal(t, 2, dest.ResourceLogs().Len())
+	require.Equal(t, uint32(1), dest.ResourceLogs().At(0).Resource().DroppedAttributesCount())
+	require.Equal(t, uint32(3), dest.ResourceLogs().At(1).Resource().DroppedAttributesCount())
+	require.Equal(t, uint32(2), dest.ResourceLogs().At(0).ScopeLogs().At(0).Scope().DroppedAttributesCount())
+	require.Equal(t, uint32(4), dest.ResourceLogs().At(1).ScopeLogs().At(0).Scope().DroppedAttributesCount())
+}
+
 // this test validates that exporter is can concurrently change the endpoints while consuming logs.
 func TestConsumeLogs_ConcurrentResolverChange(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)

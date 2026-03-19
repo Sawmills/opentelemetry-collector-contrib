@@ -104,9 +104,9 @@ func (e *traceExporterImp) ConsumeTraces(ctx context.Context, td ptrace.Traces) 
 
 	exporterSegregatedTraces := make(exporterTraces)
 	endpoints := make(map[*wrappedExporter]string)
-	cleanupStarted := true
+	needsCleanup := true
 	defer func() {
-		if !cleanupStarted {
+		if !needsCleanup {
 			return
 		}
 		for exp := range exporterSegregatedTraces {
@@ -138,7 +138,7 @@ func (e *traceExporterImp) ConsumeTraces(ctx context.Context, td ptrace.Traces) 
 		}
 	}
 
-	cleanupStarted = false
+	needsCleanup = false
 	var errs error
 
 	for exp, td := range exporterSegregatedTraces {
