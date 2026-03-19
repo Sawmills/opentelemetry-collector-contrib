@@ -127,11 +127,10 @@ func newLogBatcher(
 }
 
 func (b *logBatcher) Enqueue(ctx context.Context, endpoint string, exp *wrappedExporter, logs plog.Logs) error {
-	backend, err := b.getOrCreateBackend(endpoint, exp)
+	backend, err := b.acquireBackend(endpoint, exp)
 	if err != nil {
 		return err
 	}
-	backend.inflight.Add(1)
 	defer backend.inflight.Done()
 	select {
 	case backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: logs}:
@@ -192,20 +191,23 @@ func (b *logBatcher) snapshotPending() []logBatcherPending {
 	return pending
 }
 
-func (b *logBatcher) getOrCreateBackend(endpoint string, exp *wrappedExporter) (*backendLogBatcher, error) {
+func (b *logBatcher) acquireBackend(endpoint string, exp *wrappedExporter) (*backendLogBatcher, error) {
 	b.mu.RLock()
 	backend, ok := b.backends[endpoint]
-	b.mu.RUnlock()
 	if ok {
 		backend.setExporter(exp)
+		backend.inflight.Add(1)
+		b.mu.RUnlock()
 		return backend, nil
 	}
+	b.mu.RUnlock()
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	backend, ok = b.backends[endpoint]
 	if ok {
 		backend.setExporter(exp)
+		backend.inflight.Add(1)
 		return backend, nil
 	}
 	if exp != nil && exp.isStopping() {
@@ -213,6 +215,7 @@ func (b *logBatcher) getOrCreateBackend(endpoint string, exp *wrappedExporter) (
 	}
 
 	backend = newBackendLogBatcher(endpoint, exp, b.logger, b.settings, b.telemetry, b.send)
+	backend.inflight.Add(1)
 	b.backends[endpoint] = backend
 	return backend, nil
 }
