@@ -12,10 +12,10 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/metadata"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/model"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatautil"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/metadata"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/model"
 )
 
 // Aggregator provides a single interface to update all metrics
@@ -363,4 +363,3 @@ func getDoubleFromOTTL[K any](
 		)
 	}
 }
-

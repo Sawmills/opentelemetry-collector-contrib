@@ -72,4 +72,3 @@ func (info CollectorInstanceInfo) Copy(to pcommon.Map) {
 func keyWithPrefix(key string) string {
 	return prefix + "." + key
 }
-
