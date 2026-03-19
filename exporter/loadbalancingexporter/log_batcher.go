@@ -86,6 +86,7 @@ type backendLogBatcher struct {
 }
 
 type logBatcherTelemetry struct {
+	logger         *zap.Logger
 	meter          metric.Meter
 	batchSize      metric.Int64Histogram
 	batchBytes     metric.Int64Histogram
@@ -156,6 +157,7 @@ func (b *logBatcher) Remove(ctx context.Context, endpoint string, exp *wrappedEx
 		backend.setExporter(exp)
 	}
 	if err := waitForInflight(ctx, &backend.inflight); err != nil {
+		b.scheduleBackendCleanup(backend, logFlushReasonResolverChange)
 		return err
 	}
 	return backend.stopAndFlush(ctx, logFlushReasonResolverChange)
@@ -173,6 +175,7 @@ func (b *logBatcher) Shutdown(ctx context.Context) error {
 	var errs error
 	for _, backend := range backends {
 		if err := waitForInflight(ctx, &backend.inflight); err != nil {
+			b.scheduleBackendCleanup(backend, logFlushReasonShutdown)
 			errs = errors.Join(errs, err)
 			continue
 		}
@@ -180,6 +183,18 @@ func (b *logBatcher) Shutdown(ctx context.Context) error {
 	}
 	b.telemetry.shutdown()
 	return errs
+}
+
+func (b *logBatcher) scheduleBackendCleanup(backend *backendLogBatcher, reason string) {
+	go func() {
+		if err := waitForInflight(context.Background(), &backend.inflight); err != nil {
+			b.logger.Warn("failed waiting for inflight log batcher requests during background cleanup", zap.String("endpoint", backend.endpoint), zap.Error(err))
+			return
+		}
+		if err := backend.stopAndFlush(context.Background(), reason); err != nil {
+			b.logger.Warn("failed to stop log batcher backend during background cleanup", zap.String("endpoint", backend.endpoint), zap.String("reason", reason), zap.Error(err))
+		}
+	}()
 }
 
 func (b *logBatcher) snapshotPending() []logBatcherPending {
@@ -401,7 +416,7 @@ func newLogBatcherTelemetry(settings component.TelemetrySettings) (*logBatcherTe
 	meter := metadata.Meter(settings)
 	var err, errs error
 
-	t := &logBatcherTelemetry{meter: meter}
+	t := &logBatcherTelemetry{logger: settings.Logger, meter: meter}
 	t.batchSize, err = meter.Int64Histogram(
 		"otelcol_loadbalancer_log_batch_size",
 		metric.WithDescription("Number of log records per flushed backend batch."),
@@ -477,7 +492,7 @@ func (t *logBatcherTelemetry) shutdown() {
 	defer t.mu.Unlock()
 	for _, reg := range t.registrations {
 		if err := reg.Unregister(); err != nil {
-			continue
+			t.logger.Warn("failed to unregister log batcher metric callback", zap.Error(err))
 		}
 	}
 	t.registrations = nil
