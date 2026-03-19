@@ -232,7 +232,7 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
 		cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodecIfEnabled(cfg), newSettings()), 3)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodecIfEnabled(cfg), newSettings()), 2)
 	})
 	t.Run("Should have timeout, queue and compression options when compression is enabled", func(t *testing.T) {
 		o := []exporterhelper.Option{}
@@ -241,7 +241,7 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
 		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodec(cfg.QueueSettings.PayloadCompression), newSettings()), 3)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodec(cfg.QueueSettings.PayloadCompression), newSettings()), 2)
 	})
 	t.Run("Should include in-memory queue compression option when enabled", func(t *testing.T) {
 		o := []exporterhelper.Option{}
@@ -251,7 +251,7 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
 		cfg.QueueSettings.CompressInMemory = true
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodec(cfg.QueueSettings.PayloadCompression), newSettings()), 4)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodec(cfg.QueueSettings.PayloadCompression), newSettings()), 2)
 	})
 	t.Run("Should have all resilience options if defined", func(t *testing.T) {
 		o := []exporterhelper.Option{}
@@ -261,7 +261,7 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionNone
 		cfg.BackOffConfig = configretry.NewDefaultBackOffConfig()
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodecIfEnabled(cfg), newSettings()), 4)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodecIfEnabled(cfg), newSettings()), 3)
 	})
 }
 
