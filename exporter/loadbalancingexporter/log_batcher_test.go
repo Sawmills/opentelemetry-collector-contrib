@@ -237,6 +237,29 @@ func TestLogBatcherShutdownRespectsContextWhileWaitingForInflight(t *testing.T) 
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestLogBatcherEnqueueAfterShutdownReturnsStoppingError(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	batcher, err := newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    100,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, func(context.Context, *wrappedExporter, plog.Logs, string) error {
+		return nil
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, batcher.Shutdown(t.Context()))
+
+	err = batcher.Enqueue(
+		t.Context(),
+		"endpoint-1:4317",
+		newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317"),
+		simpleLogs(),
+	)
+	require.ErrorIs(t, err, errLogBatcherExporterStopping)
+	assert.Empty(t, batcher.snapshotPending())
+}
+
 func TestLogBatcherRemoveRespectsContextWhileWaitingForInflight(t *testing.T) {
 	ts, _ := getTelemetryAssets(t)
 	batcher, err := newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
