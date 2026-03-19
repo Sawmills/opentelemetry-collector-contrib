@@ -123,4 +123,3 @@ func TestCompressionEffectiveness(t *testing.T) {
 	// Random data shouldn't compress much, size should be larger due to encryption overhead
 	assert.Greater(t, len(encryptedRandom), len(randomData))
 }
-
