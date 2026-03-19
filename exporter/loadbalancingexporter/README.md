@@ -246,7 +246,7 @@ service:
         - loadbalancing
 ```
 
-To compress payloads in an in-memory sending queue, set:
+To compress queued payloads before they are written to persistent queue storage, set:
 
 ```yaml
 exporters:
@@ -254,8 +254,9 @@ exporters:
     sending_queue:
       enabled: true
       payload_compression: zstd
-      compress_in_memory: true
 ```
+
+`sending_queue.compress_in_memory` is currently not supported by this exporter helper version. If set, config validation fails instead of silently ignoring it.
 
 Kubernetes resolver example (For a more specific example: [example/k8s-resolver](./example/k8s-resolver/README.md))
 > [!IMPORTANT]
