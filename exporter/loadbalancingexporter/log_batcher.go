@@ -20,6 +20,7 @@ import (
 )
 
 const (
+	logFlushReasonDirect         = "direct"
 	logFlushReasonSize           = "size"
 	logFlushReasonTimeout        = "timeout"
 	logFlushReasonShutdown       = "shutdown"
