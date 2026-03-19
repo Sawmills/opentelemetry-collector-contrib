@@ -212,9 +212,7 @@ func TestWrappedExporterHasEndpointAttribute(t *testing.T) {
 }
 
 func TestBuildExporterResilienceOptions(t *testing.T) {
-	newSettings := func() xexporterhelper.QueueBatchSettings {
-		return xexporterhelper.NewLogsQueueBatchSettings()
-	}
+	newSettings := xexporterhelper.NewLogsQueueBatchSettings
 
 	t.Run("Shouldn't have resilience options by default", func(t *testing.T) {
 		o := []exporterhelper.Option{}
