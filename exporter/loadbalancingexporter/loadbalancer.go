@@ -37,6 +37,7 @@ type loadBalancer struct {
 
 	componentFactory componentFactory
 	exporters        map[string]*wrappedExporter
+	onExporterRemove func(context.Context, string, *wrappedExporter) error
 
 	stopped    bool
 	updateLock sync.RWMutex
@@ -203,6 +204,11 @@ func (lb *loadBalancer) removeExtraExporters(ctx context.Context, endpoints []st
 	for existing := range lb.exporters {
 		if !slices.Contains(endpointsWithPort, existing) {
 			exp := lb.exporters[existing]
+			if lb.onExporterRemove != nil {
+				if err := lb.onExporterRemove(ctx, existing, exp); err != nil {
+					lb.logger.Error("failed to drain exporter before removal", zap.String("endpoint", existing), zap.Error(err))
+				}
+			}
 			// Shutdown the exporter asynchronously to avoid blocking the resolver
 			go func() {
 				_ = exp.Shutdown(ctx)

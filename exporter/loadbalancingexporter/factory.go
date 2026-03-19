@@ -53,6 +53,12 @@ func createDefaultConfig() component.Config {
 			QueueBatchConfig:   queueCfg,
 			PayloadCompression: QueuePayloadCompressionNone,
 		},
+		LogBatcher: LogBatcherConfig{
+			Enabled:       false,
+			MaxRecords:    defaultLogBatchMaxRecords,
+			MaxBytes:      defaultLogBatchMaxBytes,
+			FlushInterval: defaultLogBatchFlushTimeout,
+		},
 	}
 }
 

@@ -74,6 +74,15 @@ func TestOTLPConfigIsValid(t *testing.T) {
 	assert.NoError(t, otlpCfg.Validate())
 }
 
+func TestDefaultLogBatcherConfig(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+
+	assert.False(t, cfg.LogBatcher.Enabled)
+	assert.Equal(t, defaultLogBatchMaxRecords, cfg.LogBatcher.MaxRecords)
+	assert.Equal(t, defaultLogBatchMaxBytes, cfg.LogBatcher.MaxBytes)
+	assert.Equal(t, defaultLogBatchFlushTimeout, cfg.LogBatcher.FlushInterval)
+}
+
 func TestBuildExporterConfig(t *testing.T) {
 	// prepare
 	factories, err := otelcoltest.NopFactories()
