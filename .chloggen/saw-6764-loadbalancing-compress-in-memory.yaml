@@ -1,0 +1,8 @@
+change_type: bug_fix
+component: exporter/loadbalancing
+note: Restore `sending_queue.compress_in_memory` support for the loadbalancing exporter when queueing is enabled with snappy or zstd payload compression.
+issues: [6764]
+subtext: |
+  This fixes a regression in `v0.136.0-sawmills.4` that rejected `compress_in_memory` unconditionally.
+  Coverage now includes queue compression together with the optional `log_batcher` path.
+change_logs: [user]
