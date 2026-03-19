@@ -124,6 +124,11 @@ Refer to [config.yaml](./testdata/config.yaml) for detailed examples on using th
   * `streamID`: Routes metrics based on their datapoint streamID. That's the unique hash of all it's attributes, plus the attributes and identifying information of its resource, scope, and metric data
 * loadbalancing exporter supports set of standard [queuing, retry and timeout settings](https://github.com/open-telemetry/opentelemetry-collector/blob/main/exporter/exporterhelper/README.md), but they are disable by default to maintain compatibility
 * The `routing_attributes` property is used to list the attributes that should be used if the `routing_key` is `attributes`.
+* The `log_batcher` property enables post-routing log batching per backend. It is `disabled` by default for backward compatibility.
+  * `enabled` turns post-routing log batching on or off.
+  * `max_records` flushes a backend batch when it reaches this many log records. Default: `512`.
+  * `max_bytes` flushes a backend batch when its serialized OTLP payload size before compression reaches this many bytes. Default: `1048576` (`1 MiB`).
+  * `flush_interval` flushes a backend batch after this interval even if size limits are not reached. Default: `100ms`.
 
 Simple example
 
@@ -138,6 +143,11 @@ processors:
 
 exporters:
   loadbalancing:
+    log_batcher:
+      enabled: true
+      max_records: 512
+      max_bytes: 1048576
+      flush_interval: 100ms
     routing_key: "service"
     protocol:
       otlp:

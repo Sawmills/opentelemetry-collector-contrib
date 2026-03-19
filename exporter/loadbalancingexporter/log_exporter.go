@@ -5,8 +5,8 @@ package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry
 
 import (
 	"context"
+	"errors"
 	"math/rand/v2"
-	"sync"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
@@ -27,11 +27,11 @@ var _ exporter.Logs = (*logExporterImp)(nil)
 
 type logExporterImp struct {
 	loadBalancer *loadBalancer
+	batcher      *logBatcher
 
-	logger     *zap.Logger
-	started    bool
-	shutdownWg sync.WaitGroup
-	telemetry  *metadata.TelemetryBuilder
+	logger    *zap.Logger
+	started   bool
+	telemetry *metadata.TelemetryBuilder
 }
 
 // Create new logs exporter
@@ -53,11 +53,31 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 		return nil, err
 	}
 
-	return &logExporterImp{
+	logExporter := &logExporterImp{
 		loadBalancer: lb,
 		telemetry:    telemetry,
 		logger:       params.Logger,
-	}, nil
+	}
+	if cfg.(*Config).LogBatcher.Enabled {
+		logExporter.batcher, err = newLogBatcher(
+			params.Logger,
+			params.TelemetrySettings,
+			logBatcherSettings{
+				maxRecords:    cfg.(*Config).LogBatcher.MaxRecords,
+				maxBytes:      cfg.(*Config).LogBatcher.MaxBytes,
+				flushInterval: cfg.(*Config).LogBatcher.FlushInterval,
+			},
+			logExporter.consumeBatch,
+		)
+		if err != nil {
+			return nil, err
+		}
+		lb.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+			return logExporter.batcher.Remove(ctx, endpoint, exp)
+		}
+	}
+
+	return logExporter, nil
 }
 
 func (*logExporterImp) Capabilities() consumer.Capabilities {
@@ -73,29 +93,59 @@ func (e *logExporterImp) Shutdown(ctx context.Context) error {
 	if !e.started {
 		return nil
 	}
-	err := e.loadBalancer.Shutdown(ctx)
+	var err error
+	if e.batcher != nil {
+		err = e.batcher.Shutdown(ctx)
+	}
+	err = errors.Join(err, e.loadBalancer.Shutdown(ctx))
 	e.started = false
-	e.shutdownWg.Wait()
 	return err
 }
 
 func (e *logExporterImp) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
+	if e.batcher == nil {
+		var errs error
+		batches := batchpersignal.SplitLogs(ld)
+		for _, batch := range batches {
+			errs = multierr.Append(errs, e.consumeLog(ctx, batch))
+		}
+		return errs
+	}
+
 	var errs error
-	batches := batchpersignal.SplitLogs(ld)
-	for _, batch := range batches {
-		errs = multierr.Append(errs, e.consumeLog(ctx, batch))
+	for i := 0; i < ld.ResourceLogs().Len(); i++ {
+		resourceLogs := ld.ResourceLogs().At(i)
+		for j := 0; j < resourceLogs.ScopeLogs().Len(); j++ {
+			scopeLogs := resourceLogs.ScopeLogs().At(j)
+			for k := 0; k < scopeLogs.LogRecords().Len(); k++ {
+				record := scopeLogs.LogRecords().At(k)
+				errs = multierr.Append(errs, e.consumeLogRecord(resourceLogs, scopeLogs, record))
+			}
+		}
 	}
 
 	return errs
+}
+
+func (e *logExporterImp) consumeLogRecord(resourceLogs plog.ResourceLogs, scopeLogs plog.ScopeLogs, record plog.LogRecord) error {
+	traceID := record.TraceID()
+	balancingKey := traceID
+	if traceID == pcommon.NewTraceIDEmpty() {
+		balancingKey = random()
+	}
+
+	le, endpoint, err := e.loadBalancer.exporterAndEndpoint(balancingKey[:])
+	if err != nil {
+		return err
+	}
+
+	return e.batcher.Enqueue(endpointWithPort(endpoint), le, singleLogRecord(resourceLogs, scopeLogs, record))
 }
 
 func (e *logExporterImp) consumeLog(ctx context.Context, ld plog.Logs) error {
 	traceID := traceIDFromLogs(ld)
 	balancingKey := traceID
 	if traceID == pcommon.NewTraceIDEmpty() {
-		// every log may not contain a traceID
-		// generate a random traceID as balancingKey
-		// so the log can be routed to a random backend
 		balancingKey = random()
 	}
 
@@ -104,11 +154,15 @@ func (e *logExporterImp) consumeLog(ctx context.Context, ld plog.Logs) error {
 		return err
 	}
 
+	return e.consumeBatch(ctx, le, ld, logFlushReasonSize)
+}
+
+func (e *logExporterImp) consumeBatch(ctx context.Context, le *wrappedExporter, ld plog.Logs, _ string) error {
 	le.consumeWG.Add(1)
 	defer le.consumeWG.Done()
 
 	start := time.Now()
-	err = le.ConsumeLogs(ctx, ld)
+	err := le.ConsumeLogs(ctx, ld)
 	duration := time.Since(start)
 	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(le.endpointAttr))
 	if err == nil {
@@ -119,6 +173,21 @@ func (e *logExporterImp) consumeLog(ctx context.Context, ld plog.Logs) error {
 	}
 
 	return err
+}
+
+func singleLogRecord(resourceLogs plog.ResourceLogs, scopeLogs plog.ScopeLogs, record plog.LogRecord) plog.Logs {
+	logs := plog.NewLogs()
+
+	targetResourceLogs := logs.ResourceLogs().AppendEmpty()
+	resourceLogs.Resource().CopyTo(targetResourceLogs.Resource())
+	targetResourceLogs.SetSchemaUrl(resourceLogs.SchemaUrl())
+
+	targetScopeLogs := targetResourceLogs.ScopeLogs().AppendEmpty()
+	scopeLogs.Scope().CopyTo(targetScopeLogs.Scope())
+	targetScopeLogs.SetSchemaUrl(scopeLogs.SchemaUrl())
+
+	record.CopyTo(targetScopeLogs.LogRecords().AppendEmpty())
+	return logs
 }
 
 func traceIDFromLogs(ld plog.Logs) pcommon.TraceID {
