@@ -309,9 +309,11 @@ func TestConsumeLogsWithQueueCompressionAndLogBatcher(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, wrappedExporter.Start(ctx, componenttest.NewNopHost()))
+	t.Cleanup(func() {
+		require.NoError(t, wrappedExporter.Shutdown(shutdownCtx))
+	})
 	require.NoError(t, wrappedExporter.ConsumeLogs(ctx, simpleLogs()))
 	require.NoError(t, wrappedExporter.ConsumeLogs(ctx, simpleLogs()))
-	require.NoError(t, wrappedExporter.Shutdown(shutdownCtx))
 
 	require.Len(t, sink.AllLogs(), 1)
 	assert.Equal(t, 2, sink.AllLogs()[0].LogRecordCount())
