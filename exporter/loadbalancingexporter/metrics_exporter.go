@@ -129,7 +129,9 @@ func (e *metricExporterImp) ConsumeMetrics(ctx context.Context, md pmetric.Metri
 
 		expMetrics, ok := metricsByExporter[exp]
 		if !ok {
-			exp.consumeWG.Add(1)
+			if !exp.tryStartConsume() {
+				return errExporterIsStopping
+			}
 			expMetrics = pmetric.NewMetrics()
 			metricsByExporter[exp] = expMetrics
 			exporterEndpoints[exp] = endpoint
@@ -144,7 +146,7 @@ func (e *metricExporterImp) ConsumeMetrics(ctx context.Context, md pmetric.Metri
 		err := exp.ConsumeMetrics(ctx, mds)
 		duration := time.Since(start)
 
-		exp.consumeWG.Done()
+		exp.doneConsume()
 		errs = multierr.Append(errs, err)
 		e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(exp.endpointAttr))
 		if err == nil {

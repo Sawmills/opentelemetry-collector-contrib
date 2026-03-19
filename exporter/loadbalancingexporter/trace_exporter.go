@@ -118,7 +118,9 @@ func (e *traceExporterImp) ConsumeTraces(ctx context.Context, td ptrace.Traces) 
 
 			_, ok := exporterSegregatedTraces[exp]
 			if !ok {
-				exp.consumeWG.Add(1)
+				if !exp.tryStartConsume() {
+					return errExporterIsStopping
+				}
 				exporterSegregatedTraces[exp] = ptrace.NewTraces()
 			}
 			exporterSegregatedTraces[exp] = mergeTraces(exporterSegregatedTraces[exp], batch)
@@ -132,7 +134,7 @@ func (e *traceExporterImp) ConsumeTraces(ctx context.Context, td ptrace.Traces) 
 	for exp, td := range exporterSegregatedTraces {
 		start := time.Now()
 		err := exp.ConsumeTraces(ctx, td)
-		exp.consumeWG.Done()
+		exp.doneConsume()
 		errs = multierr.Append(errs, err)
 		duration := time.Since(start)
 		e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(exp.endpointAttr))

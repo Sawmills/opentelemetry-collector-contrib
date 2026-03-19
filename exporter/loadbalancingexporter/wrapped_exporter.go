@@ -5,6 +5,7 @@ package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -17,11 +18,14 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
+var errExporterIsStopping = errors.New("exporter is stopping")
+
 // wrappedExporter is an exporter that waits for the data processing to complete before shutting down.
 // consumeWG has to be incremented explicitly by the consumer of the wrapped exporter.
 type wrappedExporter struct {
 	component.Component
 	consumeWG sync.WaitGroup
+	consumeMu sync.Mutex
 	stopping  atomic.Bool
 
 	// we store the attributes here for both cases, to avoid new allocations on the hot path
@@ -41,17 +45,43 @@ func newWrappedExporter(exp component.Component, identifier string) *wrappedExpo
 }
 
 func (we *wrappedExporter) Shutdown(ctx context.Context) error {
+	we.consumeMu.Lock()
 	we.stopping.Store(true)
+	we.consumeMu.Unlock()
 	we.consumeWG.Wait()
 	return we.Component.Shutdown(ctx)
 }
 
 func (we *wrappedExporter) markStopping() {
+	we.consumeMu.Lock()
 	we.stopping.Store(true)
+	we.consumeMu.Unlock()
 }
 
 func (we *wrappedExporter) isStopping() bool {
 	return we.stopping.Load()
+}
+
+func (we *wrappedExporter) tryStartConsume() bool {
+	return we.startConsume(false)
+}
+
+func (we *wrappedExporter) forceStartConsume() {
+	we.startConsume(true)
+}
+
+func (we *wrappedExporter) startConsume(allowStopping bool) bool {
+	we.consumeMu.Lock()
+	defer we.consumeMu.Unlock()
+	if !allowStopping && we.stopping.Load() {
+		return false
+	}
+	we.consumeWG.Add(1)
+	return true
+}
+
+func (we *wrappedExporter) doneConsume() {
+	we.consumeWG.Done()
 }
 
 func (we *wrappedExporter) ConsumeTraces(ctx context.Context, td ptrace.Traces) error {
