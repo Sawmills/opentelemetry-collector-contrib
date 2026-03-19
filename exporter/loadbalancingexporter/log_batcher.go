@@ -28,6 +28,7 @@ const (
 	defaultLogBatchMaxRecords   = 512
 	defaultLogBatchMaxBytes     = 1 << 20
 	defaultLogBatchFlushTimeout = 100 * time.Millisecond
+	backgroundCleanupTimeout    = 30 * time.Second
 )
 
 var errLogBatcherExporterStopping = errors.New("log batcher exporter is stopping")
@@ -187,11 +188,13 @@ func (b *logBatcher) Shutdown(ctx context.Context) error {
 
 func (b *logBatcher) scheduleBackendCleanup(backend *backendLogBatcher, reason string) {
 	go func() {
-		if err := waitForInflight(context.Background(), &backend.inflight); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), backgroundCleanupTimeout)
+		defer cancel()
+		if err := waitForInflight(cleanupCtx, &backend.inflight); err != nil {
 			b.logger.Warn("failed waiting for inflight log batcher requests during background cleanup", zap.String("endpoint", backend.endpoint), zap.Error(err))
 			return
 		}
-		if err := backend.stopAndFlush(context.Background(), reason); err != nil {
+		if err := backend.stopAndFlush(cleanupCtx, reason); err != nil {
 			b.logger.Warn("failed to stop log batcher backend during background cleanup", zap.String("endpoint", backend.endpoint), zap.String("reason", reason), zap.Error(err))
 		}
 	}()
@@ -216,6 +219,10 @@ func (b *logBatcher) acquireBackend(endpoint string, exp *wrappedExporter) (*bac
 	b.mu.RLock()
 	backend, ok := b.backends[endpoint]
 	if ok {
+		if exp != nil && exp.isStopping() {
+			b.mu.RUnlock()
+			return nil, errLogBatcherExporterStopping
+		}
 		backend.setExporter(exp)
 		backend.inflight.Add(1)
 		b.mu.RUnlock()
@@ -227,6 +234,9 @@ func (b *logBatcher) acquireBackend(endpoint string, exp *wrappedExporter) (*bac
 	defer b.mu.Unlock()
 	backend, ok = b.backends[endpoint]
 	if ok {
+		if exp != nil && exp.isStopping() {
+			return nil, errLogBatcherExporterStopping
+		}
 		backend.setExporter(exp)
 		backend.inflight.Add(1)
 		return backend, nil
