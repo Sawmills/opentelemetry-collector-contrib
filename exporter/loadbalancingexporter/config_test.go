@@ -44,13 +44,13 @@ func TestConfigValidatePayloadCompression(t *testing.T) {
 }
 
 func TestConfigValidateCompressInMemory(t *testing.T) {
+	// compress_in_memory is unsupported; any use must fail immediately regardless of other settings.
 	cfg := createDefaultConfig().(*Config)
 	cfg.QueueSettings.CompressInMemory = true
-	require.ErrorContains(t, cfg.Validate(), "sending_queue.compress_in_memory requires sending_queue.enabled=true")
+	require.ErrorContains(t, cfg.Validate(), "sending_queue.compress_in_memory is not supported")
 
+	// Same error even when enabled=true and payload_compression is set.
 	cfg.QueueSettings.Enabled = true
-	require.ErrorContains(t, cfg.Validate(), "sending_queue.compress_in_memory requires sending_queue.payload_compression")
-
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
 	require.ErrorContains(t, cfg.Validate(), "sending_queue.compress_in_memory is not supported")
 }
