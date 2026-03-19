@@ -104,6 +104,15 @@ func (e *traceExporterImp) ConsumeTraces(ctx context.Context, td ptrace.Traces) 
 
 	exporterSegregatedTraces := make(exporterTraces)
 	endpoints := make(map[*wrappedExporter]string)
+	cleanupStarted := true
+	defer func() {
+		if !cleanupStarted {
+			return
+		}
+		for exp := range exporterSegregatedTraces {
+			exp.doneConsume()
+		}
+	}()
 	for _, batch := range batches {
 		routingID, err := routingIdentifiersFromTraces(batch, e.routingKey, e.routingAttrs)
 		if err != nil {
@@ -129,6 +138,7 @@ func (e *traceExporterImp) ConsumeTraces(ctx context.Context, td ptrace.Traces) 
 		}
 	}
 
+	cleanupStarted = false
 	var errs error
 
 	for exp, td := range exporterSegregatedTraces {

@@ -120,6 +120,15 @@ func (e *metricExporterImp) ConsumeMetrics(ctx context.Context, md pmetric.Metri
 	// Now assign each batch to an exporter, and merge as we go
 	metricsByExporter := map[*wrappedExporter]pmetric.Metrics{}
 	exporterEndpoints := map[*wrappedExporter]string{}
+	cleanupStarted := true
+	defer func() {
+		if !cleanupStarted {
+			return
+		}
+		for exp := range metricsByExporter {
+			exp.doneConsume()
+		}
+	}()
 
 	for routingID, mds := range batches {
 		exp, endpoint, err := e.loadBalancer.exporterAndEndpoint([]byte(routingID))
@@ -140,6 +149,7 @@ func (e *metricExporterImp) ConsumeMetrics(ctx context.Context, md pmetric.Metri
 		metrics.Merge(expMetrics, mds)
 	}
 
+	cleanupStarted = false
 	var errs error
 	for exp, mds := range metricsByExporter {
 		start := time.Now()

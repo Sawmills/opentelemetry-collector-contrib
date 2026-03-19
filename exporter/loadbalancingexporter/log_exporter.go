@@ -187,11 +187,11 @@ func (e *logExporterImp) consumeLog(ctx context.Context, ld plog.Logs) error {
 		return err
 	}
 
-	return e.consumeBatch(ctx, le, ld, logFlushReasonSize)
+	return e.consumeBatch(ctx, le, ld, logFlushReasonDirect)
 }
 
 func (e *logExporterImp) consumeBatch(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string) error {
-	if reason == logFlushReasonResolverChange || reason == logFlushReasonShutdown {
+	if reason == logFlushReasonDirect || reason == logFlushReasonResolverChange || reason == logFlushReasonShutdown {
 		le.forceStartConsume()
 	} else if !le.tryStartConsume() {
 		return errLogBatcherExporterStopping

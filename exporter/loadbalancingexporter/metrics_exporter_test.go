@@ -1075,6 +1075,17 @@ func simpleMetricsWithServiceName() pmetric.Metrics {
 	return metrics
 }
 
+func metricsWithServiceNames(serviceNames ...string) pmetric.Metrics {
+	metrics := pmetric.NewMetrics()
+	metrics.ResourceMetrics().EnsureCapacity(len(serviceNames))
+	for _, serviceName := range serviceNames {
+		rm := metrics.ResourceMetrics().AppendEmpty()
+		rm.Resource().Attributes().PutStr(string(conventions.ServiceNameKey), serviceName)
+		appendSimpleMetricWithID(rm, signal1Name)
+	}
+	return metrics
+}
+
 func simpleMetricsWithResource() pmetric.Metrics {
 	metrics := pmetric.NewMetrics()
 	metrics.ResourceMetrics().EnsureCapacity(1)
@@ -1100,6 +1111,44 @@ func twoServicesWithSameMetricName() pmetric.Metrics {
 
 func appendSimpleMetricWithID(dest pmetric.ResourceMetrics, id string) {
 	dest.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty().SetName(id)
+}
+
+func TestConsumeMetricsReleasesStartedConsumesOnEarlyReturn(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	lb, err := newLoadBalancer(ts.Logger, endpoint2Config(), nil, tb)
+	require.NoError(t, err)
+
+	lb.ring = newHashRing([]string{"endpoint-1", "endpoint-2"})
+
+	serviceForEndpoint1 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1")
+	serviceForEndpoint2 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-2")
+
+	exp1 := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
+	exp2 := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-2:4317")
+	exp2.markStopping()
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": exp1,
+		"endpoint-2:4317": exp2,
+	}
+
+	p, err := newMetricsExporter(ts, endpoint2Config())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+
+	err = p.ConsumeMetrics(t.Context(), metricsWithServiceNames(serviceForEndpoint1, serviceForEndpoint2))
+	require.ErrorIs(t, err, errExporterIsStopping)
+
+	shutdownErr := make(chan error, 1)
+	go func() {
+		shutdownErr <- exp1.Shutdown(t.Context())
+	}()
+
+	select {
+	case err := <-shutdownErr:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("expected started consume slot to be released on early return")
+	}
 }
 
 type mockMetricsExporter struct {

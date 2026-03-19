@@ -398,6 +398,32 @@ func TestLogsWithoutTraceID(t *testing.T) {
 	assert.Len(t, sink.AllLogs(), 1)
 }
 
+func TestConsumeLogLegacyPathIgnoresStoppingGate(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	logsConsumed := atomic.Int64{}
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	exp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+		logsConsumed.Add(int64(ld.LogRecordCount()))
+		return nil
+	}), "endpoint-1:4317")
+	exp.markStopping()
+
+	lb.ring = newHashRing([]string{"endpoint-1"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": exp,
+	}
+
+	p, err := newLogsExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+
+	err = p.consumeLog(t.Context(), simpleLogs())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), logsConsumed.Load())
+}
+
 // this test validates that exporter is can concurrently change the endpoints while consuming logs.
 func TestConsumeLogs_ConcurrentResolverChange(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)

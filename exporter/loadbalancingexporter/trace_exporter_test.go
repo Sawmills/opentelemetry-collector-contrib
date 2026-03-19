@@ -844,6 +844,17 @@ func simpleTracesWithServiceName() ptrace.Traces {
 	return traces
 }
 
+func tracesWithServiceNames(serviceNames ...string) ptrace.Traces {
+	traces := ptrace.NewTraces()
+	traces.ResourceSpans().EnsureCapacity(len(serviceNames))
+	for i, serviceName := range serviceNames {
+		rs := traces.ResourceSpans().AppendEmpty()
+		rs.Resource().Attributes().PutStr(string(conventions.ServiceNameKey), serviceName)
+		appendSimpleTraceWithID(rs, pcommon.TraceID{byte(i + 1)})
+	}
+	return traces
+}
+
 func twoServicesWithSameTraceID() ptrace.Traces {
 	traces := ptrace.NewTraces()
 	traces.ResourceSpans().EnsureCapacity(2)
@@ -858,6 +869,44 @@ func twoServicesWithSameTraceID() ptrace.Traces {
 
 func appendSimpleTraceWithID(dest ptrace.ResourceSpans, id pcommon.TraceID) {
 	dest.ScopeSpans().AppendEmpty().Spans().AppendEmpty().SetTraceID(id)
+}
+
+func TestConsumeTracesReleasesStartedConsumesOnEarlyReturn(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	lb, err := newLoadBalancer(ts.Logger, serviceBasedRoutingConfig(), nil, tb)
+	require.NoError(t, err)
+
+	lb.ring = newHashRing([]string{"endpoint-1", "endpoint-2"})
+
+	serviceForEndpoint1 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1")
+	serviceForEndpoint2 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-2")
+
+	exp1 := newWrappedExporter(newNopMockTracesExporter(), "endpoint-1:4317")
+	exp2 := newWrappedExporter(newNopMockTracesExporter(), "endpoint-2:4317")
+	exp2.markStopping()
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": exp1,
+		"endpoint-2:4317": exp2,
+	}
+
+	p, err := newTracesExporter(ts, serviceBasedRoutingConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+
+	err = p.ConsumeTraces(t.Context(), tracesWithServiceNames(serviceForEndpoint1, serviceForEndpoint2))
+	require.ErrorIs(t, err, errExporterIsStopping)
+
+	shutdownErr := make(chan error, 1)
+	go func() {
+		shutdownErr <- exp1.Shutdown(t.Context())
+	}()
+
+	select {
+	case err := <-shutdownErr:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("expected started consume slot to be released on early return")
+	}
 }
 
 func simpleConfig() *Config {
