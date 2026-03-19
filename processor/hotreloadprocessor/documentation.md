@@ -95,7 +95,6 @@ The timestamp of the rollback file successfully loaded by the hotreloadprocessor
 | ---- | ----------- | ------ |
 | destination | The destination of the hotreloadprocessor | Any Str |
 | key | The key of the file being scanned | Any Str |
-| reason | The reason for the error | Any Str |
 
 ### otelcol_processor_hot_reload_running_processors_count
 
