@@ -23,11 +23,11 @@ import (
 	"go.opentelemetry.io/collector/processor"
 	"go.opentelemetry.io/collector/processor/processortest"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/plogtest"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/pmetrictest"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/config"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/metadata"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/pmetrictest"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/plogtest"
 )
 
 const testDataDir = "testdata"
@@ -41,11 +41,11 @@ func TestProcessorWithLogs(t *testing.T) {
 		"gauge",
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	for _, tc := range testCases {
 		t.Run(tc, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
 			logTestDataDir := filepath.Join(testDataDir, "logs")
 			inputLogs, err := golden.ReadLogs(filepath.Join(logTestDataDir, "logs.yaml"))
 			require.NoError(t, err)
@@ -53,14 +53,14 @@ func TestProcessorWithLogs(t *testing.T) {
 			metricsSink := &consumertest.MetricsSink{}
 			logsSink := &consumertest.LogsSink{}
 			tcTestDataDir := filepath.Join(logTestDataDir, tc)
-			factory, settings, cfg := setupProcessor(t, tcTestDataDir, metricsSink)
+			factory, settings, cfg := setupProcessor(t, tcTestDataDir)
 			processor, err := factory.CreateLogs(ctx, settings, cfg, logsSink)
 			require.NoError(t, err)
 
 			expectedMetrics, err := golden.ReadMetrics(filepath.Join(tcTestDataDir, "output.yaml"))
 			require.NoError(t, err)
 
-			require.NoError(t, processor.Start(ctx, createTestHost(t, cfg.MetricsConnector, metricsSink)))
+			require.NoError(t, processor.Start(ctx, createTestHost(cfg.MetricsConnector, metricsSink)))
 			defer func() {
 				require.NoError(t, processor.Shutdown(ctx))
 			}()
@@ -68,18 +68,18 @@ func TestProcessorWithLogs(t *testing.T) {
 			require.NoError(t, processor.ConsumeLogs(ctx, inputLogs))
 
 			// Verify metrics were extracted
-			require.Greater(t, len(metricsSink.AllMetrics()), 0, "expected at least one metrics batch")
+			require.NotEmpty(t, metricsSink.AllMetrics(), "expected at least one metrics batch")
 			assertAggregatedMetrics(t, expectedMetrics, metricsSink.AllMetrics()[0])
 
 			// Verify logs were forwarded (default behavior)
-			require.Greater(t, len(logsSink.AllLogs()), 0, "expected logs to be forwarded")
+			require.NotEmpty(t, logsSink.AllLogs(), "expected logs to be forwarded")
 			assertLogsEqual(t, inputLogs, logsSink.AllLogs()[0])
 		})
 	}
 }
 
 func TestProcessorDropLogs(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	inputLogs, err := golden.ReadLogs(filepath.Join(testDataDir, "logs", "logs.yaml"))
@@ -90,7 +90,7 @@ func TestProcessorDropLogs(t *testing.T) {
 
 	cfg := &config.Config{
 		MetricsConnector: component.MustNewID("test_connector"),
-		DropLogs:       true,
+		DropLogs:         true,
 		Logs: []config.MetricInfo{
 			{
 				Name:        "log.count",
@@ -105,10 +105,10 @@ func TestProcessorDropLogs(t *testing.T) {
 
 	factory := NewFactory()
 	settings := processortest.NewNopSettings(metadata.Type)
-			processor, err := factory.CreateLogs(ctx, settings, cfg, logsSink)
+	processor, err := factory.CreateLogs(ctx, settings, cfg, logsSink)
 	require.NoError(t, err)
 
-		require.NoError(t, processor.Start(ctx, createTestHost(t, cfg.MetricsConnector, metricsSink)))
+	require.NoError(t, processor.Start(ctx, createTestHost(cfg.MetricsConnector, metricsSink)))
 	defer func() {
 		require.NoError(t, processor.Shutdown(ctx))
 	}()
@@ -116,14 +116,14 @@ func TestProcessorDropLogs(t *testing.T) {
 	require.NoError(t, processor.ConsumeLogs(ctx, inputLogs))
 
 	// Verify metrics were extracted
-	require.Greater(t, len(metricsSink.AllMetrics()), 0, "expected metrics to be extracted")
+	require.NotEmpty(t, metricsSink.AllMetrics(), "expected metrics to be extracted")
 
 	// Verify logs were dropped - check that no log records were forwarded
 	require.Equal(t, 0, logsSink.LogRecordCount(), "expected logs to be dropped when drop_logs is true")
 }
 
 func TestProcessorForwardLogs(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	inputLogs, err := golden.ReadLogs(filepath.Join(testDataDir, "logs", "logs.yaml"))
@@ -134,7 +134,7 @@ func TestProcessorForwardLogs(t *testing.T) {
 
 	cfg := &config.Config{
 		MetricsConnector: component.MustNewID("test_connector"),
-		DropLogs:       false, // Explicitly set to false
+		DropLogs:         false, // Explicitly set to false
 		Logs: []config.MetricInfo{
 			{
 				Name:        "log.count",
@@ -149,10 +149,10 @@ func TestProcessorForwardLogs(t *testing.T) {
 
 	factory := NewFactory()
 	settings := processortest.NewNopSettings(metadata.Type)
-			processor, err := factory.CreateLogs(ctx, settings, cfg, logsSink)
+	processor, err := factory.CreateLogs(ctx, settings, cfg, logsSink)
 	require.NoError(t, err)
 
-		require.NoError(t, processor.Start(ctx, createTestHost(t, cfg.MetricsConnector, metricsSink)))
+	require.NoError(t, processor.Start(ctx, createTestHost(cfg.MetricsConnector, metricsSink)))
 	defer func() {
 		require.NoError(t, processor.Shutdown(ctx))
 	}()
@@ -160,20 +160,20 @@ func TestProcessorForwardLogs(t *testing.T) {
 	require.NoError(t, processor.ConsumeLogs(ctx, inputLogs))
 
 	// Verify metrics were extracted
-	require.Greater(t, len(metricsSink.AllMetrics()), 0, "expected metrics to be extracted")
+	require.NotEmpty(t, metricsSink.AllMetrics(), "expected metrics to be extracted")
 
 	// Verify logs were forwarded
-	require.Greater(t, len(logsSink.AllLogs()), 0, "expected logs to be forwarded when drop_logs is false")
+	require.NotEmpty(t, logsSink.AllLogs(), "expected logs to be forwarded when drop_logs is false")
 	assertLogsEqual(t, inputLogs, logsSink.AllLogs()[0])
 }
 
 func TestProcessorMetricsConnectorNotFound(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	cfg := &config.Config{
 		MetricsConnector: component.MustNewID("nonexistent"),
-		DropLogs:       false,
+		DropLogs:         false,
 		Logs: []config.MetricInfo{
 			{
 				Name:        "log.count",
@@ -189,7 +189,7 @@ func TestProcessorMetricsConnectorNotFound(t *testing.T) {
 	factory := NewFactory()
 	settings := processortest.NewNopSettings(metadata.Type)
 	logsSink := &consumertest.LogsSink{}
-			processor, err := factory.CreateLogs(ctx, settings, cfg, logsSink)
+	processor, err := factory.CreateLogs(ctx, settings, cfg, logsSink)
 	require.NoError(t, err)
 
 	// Start should fail because connector is not found
@@ -210,7 +210,7 @@ func TestProcessorMetricsConnectorNotFound(t *testing.T) {
 }
 
 func TestProcessorMetricsConnectorError(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	inputLogs, err := golden.ReadLogs(filepath.Join(testDataDir, "logs", "logs.yaml"))
@@ -222,7 +222,7 @@ func TestProcessorMetricsConnectorError(t *testing.T) {
 
 	cfg := &config.Config{
 		MetricsConnector: component.MustNewID("test_connector"),
-		DropLogs:       false,
+		DropLogs:         false,
 		Logs: []config.MetricInfo{
 			{
 				Name:        "log.count",
@@ -237,10 +237,10 @@ func TestProcessorMetricsConnectorError(t *testing.T) {
 
 	factory := NewFactory()
 	settings := processortest.NewNopSettings(metadata.Type)
-			processor, err := factory.CreateLogs(ctx, settings, cfg, logsSink)
+	processor, err := factory.CreateLogs(ctx, settings, cfg, logsSink)
 	require.NoError(t, err)
 
-	host := createTestHostWithErrorConsumer(t, cfg.MetricsConnector, errMetricsConsumer)
+	host := createTestHostWithErrorConsumer(cfg.MetricsConnector, errMetricsConsumer)
 	require.NoError(t, processor.Start(ctx, host))
 	defer func() {
 		require.NoError(t, processor.Shutdown(ctx))
@@ -250,14 +250,14 @@ func TestProcessorMetricsConnectorError(t *testing.T) {
 	require.NoError(t, processor.ConsumeLogs(ctx, inputLogs))
 
 	// Logs should still be forwarded despite metrics export error
-	require.Greater(t, len(logsSink.AllLogs()), 0, "expected logs to be forwarded even if metrics export fails")
+	require.NotEmpty(t, logsSink.AllLogs(), "expected logs to be forwarded even if metrics export fails")
 }
 
 func TestProcessorNoMetricDefinitions(t *testing.T) {
 	cfg := &config.Config{
 		MetricsConnector: component.MustNewID("test_connector"),
-		DropLogs:       false,
-		Logs:           []config.MetricInfo{}, // No metric definitions
+		DropLogs:         false,
+		Logs:             []config.MetricInfo{}, // No metric definitions
 	}
 
 	// Validation should reject empty logs configuration
@@ -292,8 +292,8 @@ func TestProcessorInvalidConfig(t *testing.T) {
 			name: "no logs configuration",
 			cfg: &config.Config{
 				MetricsConnector: component.MustNewID("test_connector"),
-				DropLogs:       false,
-				Logs:           []config.MetricInfo{},
+				DropLogs:         false,
+				Logs:             []config.MetricInfo{},
 			},
 			expectedErr: "no logs configuration provided",
 		},
@@ -301,11 +301,11 @@ func TestProcessorInvalidConfig(t *testing.T) {
 			name: "invalid metric name",
 			cfg: &config.Config{
 				MetricsConnector: component.MustNewID("test_connector"),
-				DropLogs:       false,
+				DropLogs:         false,
 				Logs: []config.MetricInfo{
 					{
 						Name:        "", // Missing name
-						Description:  "Count of log records",
+						Description: "Count of log records",
 						Sum: configoptional.Some(config.Sum{
 							Value: "1",
 						}),
@@ -326,7 +326,7 @@ func TestProcessorInvalidConfig(t *testing.T) {
 }
 
 func BenchmarkProcessorWithLogs(b *testing.B) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(b.Context())
 	defer cancel()
 
 	metricsSink := &consumertest.MetricsSink{}
@@ -334,7 +334,7 @@ func BenchmarkProcessorWithLogs(b *testing.B) {
 
 	cfg := &config.Config{
 		MetricsConnector: component.MustNewID("test_connector"),
-		DropLogs:       false,
+		DropLogs:         false,
 		Logs: []config.MetricInfo{
 			{
 				Name:        "log.count",
@@ -349,10 +349,10 @@ func BenchmarkProcessorWithLogs(b *testing.B) {
 
 	factory := NewFactory()
 	settings := processortest.NewNopSettings(metadata.Type)
-			processor, err := factory.CreateLogs(ctx, settings, cfg, logsSink)
+	processor, err := factory.CreateLogs(ctx, settings, cfg, logsSink)
 	require.NoError(b, err)
 
-	require.NoError(b, processor.Start(ctx, createTestHost(b, cfg.MetricsConnector, metricsSink)))
+	require.NoError(b, processor.Start(ctx, createTestHost(cfg.MetricsConnector, metricsSink)))
 	defer func() {
 		require.NoError(b, processor.Shutdown(ctx))
 	}()
@@ -371,8 +371,8 @@ func BenchmarkProcessorWithLogs(b *testing.B) {
 
 // Helper functions
 
-func setupProcessor(t testing.TB, testDataDir string, metricsSink *consumertest.MetricsSink) (processor.Factory, processor.Settings, *config.Config) {
-	t.Helper()
+func setupProcessor(tb testing.TB, testDataDir string) (processor.Factory, processor.Settings, *config.Config) {
+	tb.Helper()
 	factory := NewFactory()
 	settings := processortest.NewNopSettings(metadata.Type)
 
@@ -380,31 +380,31 @@ func setupProcessor(t testing.TB, testDataDir string, metricsSink *consumertest.
 	cfg.MetricsConnector = component.MustNewID("test_connector")
 
 	conf, err := confmaptest.LoadConf(filepath.Join(testDataDir, "config.yaml"))
-	require.NoError(t, err)
-	
+	require.NoError(tb, err)
+
 	// Extract the processor config from under the processor name key
 	sub, err := conf.Sub(metadata.Type.String())
-	require.NoError(t, err)
-	require.NoError(t, sub.Unmarshal(cfg))
+	require.NoError(tb, err)
+	require.NoError(tb, sub.Unmarshal(cfg))
 
 	// Override metrics connector for testing
 	cfg.MetricsConnector = component.MustNewID("test_connector")
-	require.NoError(t, cfg.Validate())
+	require.NoError(tb, cfg.Validate())
 
 	return factory, settings, cfg
 }
 
-func createTestHost(t testing.TB, connectorID component.ID, metricsSink *consumertest.MetricsSink) component.Host {
+func createTestHost(connectorID component.ID, metricsSink *consumertest.MetricsSink) component.Host {
 	// Create a metrics router with the sink
 	router := connector.NewMetricsRouter(map[pipeline.ID]consumer.Metrics{
 		pipeline.NewID(pipeline.SignalMetrics): metricsSink,
 	})
-	
+
 	// Create a test connector that embeds the router
 	testConnector := &testMetricsConnector{
 		MetricsRouterAndConsumer: router,
 	}
-	
+
 	return &testHost{
 		connectors: map[component.ID]component.Component{
 			connectorID: testConnector,
@@ -412,17 +412,17 @@ func createTestHost(t testing.TB, connectorID component.ID, metricsSink *consume
 	}
 }
 
-func createTestHostWithErrorConsumer(t testing.TB, connectorID component.ID, errConsumer consumer.Metrics) component.Host {
+func createTestHostWithErrorConsumer(connectorID component.ID, errConsumer consumer.Metrics) component.Host {
 	// Create a metrics router with the error consumer
 	router := connector.NewMetricsRouter(map[pipeline.ID]consumer.Metrics{
 		pipeline.NewID(pipeline.SignalMetrics): errConsumer,
 	})
-	
+
 	// Create a test connector that embeds the router
 	testConnector := &testMetricsConnector{
 		MetricsRouterAndConsumer: router,
 	}
-	
+
 	return &testHost{
 		connectors: map[component.ID]component.Component{
 			connectorID: testConnector,
@@ -436,15 +436,15 @@ type testMetricsConnector struct {
 	connector.MetricsRouterAndConsumer
 }
 
-func (t *testMetricsConnector) Start(ctx context.Context, host component.Host) error {
+func (*testMetricsConnector) Start(_ context.Context, _ component.Host) error {
 	return nil
 }
 
-func (t *testMetricsConnector) Shutdown(ctx context.Context) error {
+func (*testMetricsConnector) Shutdown(_ context.Context) error {
 	return nil
 }
 
-func (t *testMetricsConnector) Capabilities() consumer.Capabilities {
+func (*testMetricsConnector) Capabilities() consumer.Capabilities {
 	return consumer.Capabilities{MutatesData: false}
 }
 
@@ -467,11 +467,11 @@ func (h *testHost) GetConnectors() map[component.ID]component.Component {
 	return h.connectors
 }
 
-func (h *testHost) GetExtensions() map[component.ID]component.Component {
+func (*testHost) GetExtensions() map[component.ID]component.Component {
 	return nil
 }
 
-func (h *testHost) GetFactory(kind component.Kind, componentType component.Type) component.Factory {
+func (*testHost) GetFactory(_ component.Kind, _ component.Type) component.Factory {
 	return nil
 }
 
@@ -491,5 +491,3 @@ func assertAggregatedMetrics(t *testing.T, expected, actual pmetric.Metrics) {
 func assertLogsEqual(t *testing.T, expected, actual plog.Logs) {
 	assert.NoError(t, plogtest.CompareLogs(expected, actual, plogtest.IgnoreObservedTimestamp()))
 }
-
-

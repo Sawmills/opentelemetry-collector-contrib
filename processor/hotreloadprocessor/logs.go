@@ -49,7 +49,8 @@ func (hp *HotReloadLogsProcessor) ConsumeLogs(ctx context.Context, ld plog.Logs)
 
 type loaderLogs struct{}
 
-func (l loaderLogs) load(
+//nolint:unused // False positive from generic loader wiring.
+func (loaderLogs) load(
 	ctx context.Context,
 	config otelcol.Config,
 	set otelprocessor.Settings,
@@ -74,24 +75,30 @@ func (l loaderLogs) load(
 }
 
 // passthroughLogsProcessor is a fallback processor that just forwards logs to nextConsumer.
+//
+//nolint:unused // False positive from interface implementation only used through generics.
 type passthroughLogsProcessor struct {
 	next consumer.Logs
 }
 
-func (p *passthroughLogsProcessor) Start(ctx context.Context, host component.Host) error {
+//nolint:unused // False positive from interface implementation only used through generics.
+func (*passthroughLogsProcessor) Start(_ context.Context, _ component.Host) error {
 	// No-op
 	return nil
 }
 
-func (p *passthroughLogsProcessor) Shutdown(ctx context.Context) error {
+//nolint:unused // False positive from interface implementation only used through generics.
+func (*passthroughLogsProcessor) Shutdown(_ context.Context) error {
 	// No-op
 	return nil
 }
 
+//nolint:unused // False positive on interface method implementation.
 func (p *passthroughLogsProcessor) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
 	return p.next.ConsumeLogs(ctx, ld)
 }
 
-func (p *passthroughLogsProcessor) Capabilities() consumer.Capabilities {
+//nolint:unused // False positive from interface implementation only used through generics.
+func (*passthroughLogsProcessor) Capabilities() consumer.Capabilities {
 	return processorCapabilities
 }

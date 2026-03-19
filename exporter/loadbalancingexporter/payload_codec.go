@@ -4,12 +4,15 @@
 package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter"
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/golang/snappy"
 	"github.com/klauspost/compress/zstd"
+	"go.opentelemetry.io/collector/exporter/exporterhelper"
+	"go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper"
 )
 
 var (
@@ -148,4 +151,26 @@ func codecIDForCompression(compression QueuePayloadCompression) (byte, error) {
 	default:
 		return 0, fmt.Errorf("unsupported queue payload compression %q", compression)
 	}
+}
+
+type payloadCodecEncoding struct {
+	encoding exporterhelper.QueueBatchEncoding[xexporterhelper.Request]
+	codec    *queuePayloadCodec
+}
+
+func (e payloadCodecEncoding) Marshal(ctx context.Context, req xexporterhelper.Request) ([]byte, error) {
+	payload, err := e.encoding.Marshal(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return e.codec.Encode(payload)
+}
+
+func (e payloadCodecEncoding) Unmarshal(payload []byte) (context.Context, xexporterhelper.Request, error) {
+	decoded, err := e.codec.Decode(payload)
+	if err != nil {
+		var req xexporterhelper.Request
+		return context.Background(), req, err
+	}
+	return e.encoding.Unmarshal(decoded)
 }

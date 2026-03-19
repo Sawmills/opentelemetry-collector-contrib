@@ -53,4 +53,3 @@ func (dp *sumDP) Copy(
 	// TODO determine appropriate start time
 	dest.SetTimestamp(pcommon.NewTimestampFromTime(timestamp))
 }
-

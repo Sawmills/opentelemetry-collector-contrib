@@ -40,7 +40,8 @@ const (
 type Config struct {
 	TimeoutSettings           exporterhelper.TimeoutConfig `mapstructure:",squash"`
 	configretry.BackOffConfig `mapstructure:"retry_on_failure"`
-	QueueSettings             QueueSettings `mapstructure:"sending_queue"`
+	QueueSettings             QueueSettings    `mapstructure:"sending_queue"`
+	LogBatcher                LogBatcherConfig `mapstructure:"log_batcher"`
 
 	Protocol Protocol         `mapstructure:"protocol"`
 	Resolver ResolverSettings `mapstructure:"resolver"`
@@ -59,6 +60,13 @@ type QueueSettings struct {
 	exporterhelper.QueueBatchConfig `mapstructure:",squash"`
 	PayloadCompression              QueuePayloadCompression `mapstructure:"payload_compression"`
 	CompressInMemory                bool                    `mapstructure:"compress_in_memory"`
+}
+
+type LogBatcherConfig struct {
+	Enabled       bool          `mapstructure:"enabled"`
+	MaxRecords    int           `mapstructure:"max_records"`
+	MaxBytes      int           `mapstructure:"max_bytes"`
+	FlushInterval time.Duration `mapstructure:"flush_interval"`
 }
 
 func (q *QueueSettings) Unmarshal(conf *confmap.Conf) error {
@@ -117,18 +125,34 @@ func (q QueueSettings) Validate() error {
 		return fmt.Errorf("sending_queue.payload_compression must be one of [none, snappy, zstd], found %q", q.PayloadCompression)
 	}
 
-	if q.CompressInMemory && !q.Enabled {
-		return errors.New("sending_queue.compress_in_memory requires sending_queue.enabled=true")
-	}
-	if q.CompressInMemory && (q.PayloadCompression == "" || q.PayloadCompression == QueuePayloadCompressionNone) {
-		return errors.New("sending_queue.compress_in_memory requires sending_queue.payload_compression to be set to snappy or zstd")
+	if q.CompressInMemory {
+		return errors.New("sending_queue.compress_in_memory is not supported by this exporter helper version; use sending_queue.payload_compression instead")
 	}
 
 	return nil
 }
 
 func (cfg *Config) Validate() error {
-	return cfg.QueueSettings.Validate()
+	if err := cfg.QueueSettings.Validate(); err != nil {
+		return err
+	}
+	return cfg.LogBatcher.Validate()
+}
+
+func (c LogBatcherConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if c.MaxRecords <= 0 {
+		return errors.New("log_batcher.max_records must be greater than 0 when log_batcher.enabled=true")
+	}
+	if c.MaxBytes <= 0 {
+		return errors.New("log_batcher.max_bytes must be greater than 0 when log_batcher.enabled=true")
+	}
+	if c.FlushInterval <= 0 {
+		return errors.New("log_batcher.flush_interval must be greater than 0 when log_batcher.enabled=true")
+	}
+	return nil
 }
 
 // Protocol holds the individual protocol-specific settings. Only OTLP is supported at the moment.

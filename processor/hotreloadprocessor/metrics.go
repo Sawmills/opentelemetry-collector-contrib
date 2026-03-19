@@ -49,7 +49,8 @@ func (hp *HotReloadMetricsProcessor) ConsumeMetrics(ctx context.Context, ld pmet
 
 type loaderMetrics struct{}
 
-func (l loaderMetrics) load(
+//nolint:unused // False positive from generic loader wiring.
+func (loaderMetrics) load(
 	ctx context.Context,
 	config otelcol.Config,
 	set otelprocessor.Settings,
@@ -74,20 +75,25 @@ func (l loaderMetrics) load(
 }
 
 // passthroughMetricsProcessor is a fallback processor that just forwards metrics to nextConsumer.
+//
+//nolint:unused // False positive from interface implementation only used through generics.
 type passthroughMetricsProcessor struct {
 	next consumer.Metrics
 }
 
-func (p *passthroughMetricsProcessor) Start(ctx context.Context, host component.Host) error {
+//nolint:unused // False positive from interface implementation only used through generics.
+func (*passthroughMetricsProcessor) Start(_ context.Context, _ component.Host) error {
 	// No-op
 	return nil
 }
 
-func (p *passthroughMetricsProcessor) Shutdown(ctx context.Context) error {
+//nolint:unused // False positive from interface implementation only used through generics.
+func (*passthroughMetricsProcessor) Shutdown(_ context.Context) error {
 	// No-op
 	return nil
 }
 
+//nolint:unused // False positive on interface method implementation.
 func (p *passthroughMetricsProcessor) ConsumeMetrics(
 	ctx context.Context,
 	ld pmetric.Metrics,
@@ -95,6 +101,7 @@ func (p *passthroughMetricsProcessor) ConsumeMetrics(
 	return p.next.ConsumeMetrics(ctx, ld)
 }
 
-func (p *passthroughMetricsProcessor) Capabilities() consumer.Capabilities {
+//nolint:unused // False positive from interface implementation only used through generics.
+func (*passthroughMetricsProcessor) Capabilities() consumer.Capabilities {
 	return processorCapabilities
 }
