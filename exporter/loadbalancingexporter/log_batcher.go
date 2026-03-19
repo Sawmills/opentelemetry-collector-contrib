@@ -50,6 +50,7 @@ type logBatcher struct {
 
 	mu       sync.RWMutex
 	backends map[string]*backendLogBatcher
+	stopped  bool
 }
 
 type logBatcherRequest struct {
@@ -166,6 +167,7 @@ func (b *logBatcher) Remove(ctx context.Context, endpoint string, exp *wrappedEx
 
 func (b *logBatcher) Shutdown(ctx context.Context) error {
 	b.mu.Lock()
+	b.stopped = true
 	backends := make([]*backendLogBatcher, 0, len(b.backends))
 	for endpoint, backend := range b.backends {
 		backends = append(backends, backend)
@@ -240,6 +242,9 @@ func (b *logBatcher) acquireBackend(endpoint string, exp *wrappedExporter) (*bac
 		return backend, nil
 	}
 	if exp != nil && exp.isStopping() {
+		return nil, errLogBatcherExporterStopping
+	}
+	if b.stopped {
 		return nil, errLogBatcherExporterStopping
 	}
 
