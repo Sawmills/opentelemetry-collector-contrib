@@ -247,7 +247,8 @@ func (lb *loadBalancer) Shutdown(ctx context.Context) error {
 	return err
 }
 
-func (lb *loadBalancer) withExporterAndEndpoint(identifier []byte, fn func(*wrappedExporter, string) error) error {
+// exporterAndEndpoint returns the exporter and the endpoint for the given identifier.
+func (lb *loadBalancer) exporterAndEndpoint(identifier []byte) (*wrappedExporter, string, error) {
 	lb.updateLock.RLock()
 	defer lb.updateLock.RUnlock()
 
@@ -255,24 +256,8 @@ func (lb *loadBalancer) withExporterAndEndpoint(identifier []byte, fn func(*wrap
 	exp, found := lb.exporters[endpointWithPort(endpoint)]
 	if !found {
 		// something is really wrong... how come we couldn't find the exporter??
-		return fmt.Errorf("couldn't find the exporter for the endpoint %q", endpoint)
+		return nil, "", fmt.Errorf("couldn't find the exporter for the endpoint %q", endpoint)
 	}
 
-	return fn(exp, endpoint)
-}
-
-// exporterAndEndpoint returns the exporter and the endpoint for the given identifier.
-func (lb *loadBalancer) exporterAndEndpoint(identifier []byte) (*wrappedExporter, string, error) {
-	var matchedExporter *wrappedExporter
-	var matchedEndpoint string
-	err := lb.withExporterAndEndpoint(identifier, func(exp *wrappedExporter, endpoint string) error {
-		matchedExporter = exp
-		matchedEndpoint = endpoint
-		return nil
-	})
-	if err != nil {
-		return nil, "", err
-	}
-
-	return matchedExporter, matchedEndpoint, nil
+	return exp, endpoint, nil
 }
