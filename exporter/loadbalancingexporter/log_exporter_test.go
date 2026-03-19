@@ -22,6 +22,7 @@ import (
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
+	"go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper"
 	"go.opentelemetry.io/collector/exporter/exportertest"
 	"go.opentelemetry.io/collector/exporter/otlpexporter"
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -261,6 +262,59 @@ func TestConsumeLogsEmitsOnlyParentExporterMetrics(t *testing.T) {
 	require.Len(t, childSettings, 1)
 	assert.IsType(t, metricnoop.NewMeterProvider(), childSettings[0].MeterProvider)
 	assert.IsType(t, tracenoop.NewTracerProvider(), childSettings[0].TracerProvider)
+}
+
+func TestConsumeLogsWithQueueCompressionAndLogBatcher(t *testing.T) {
+	ctx := t.Context()
+	shutdownCtx := context.Background() //nolint:usetesting // Context must outlive test for cleanup
+
+	cfg := simpleConfig()
+	cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
+	cfg.QueueSettings.Enabled = true
+	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
+	cfg.QueueSettings.CompressInMemory = true
+	cfg.LogBatcher.Enabled = true
+	cfg.LogBatcher.MaxRecords = 32
+	cfg.LogBatcher.MaxBytes = 1 << 20
+	cfg.LogBatcher.FlushInterval = time.Hour
+
+	ts := exportertest.NewNopSettings(metadata.Type)
+	logsExporter, err := newLogsExporter(ts, cfg)
+	require.NoError(t, err)
+
+	sink := new(consumertest.LogsSink)
+	logsExporter.loadBalancer.componentFactory = func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockLogsExporter(sink.ConsumeLogs), nil
+	}
+
+	payloadCodec := newQueuePayloadCodecIfEnabled(cfg)
+	require.NotNil(t, payloadCodec)
+
+	wrappedExporter, err := exporterhelper.NewLogs(
+		ctx,
+		ts,
+		cfg,
+		logsExporter.ConsumeLogs,
+		buildExporterResilienceOptions(
+			[]exporterhelper.Option{
+				exporterhelper.WithStart(logsExporter.Start),
+				exporterhelper.WithShutdown(shutdownWithCodec(component.ShutdownFunc(logsExporter.Shutdown), payloadCodec)),
+				exporterhelper.WithCapabilities(logsExporter.Capabilities()),
+			},
+			cfg,
+			payloadCodec,
+			xexporterhelper.NewLogsQueueBatchSettings(),
+		)...,
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, wrappedExporter.Start(ctx, componenttest.NewNopHost()))
+	require.NoError(t, wrappedExporter.ConsumeLogs(ctx, simpleLogs()))
+	require.NoError(t, wrappedExporter.ConsumeLogs(ctx, simpleLogs()))
+	require.NoError(t, wrappedExporter.Shutdown(shutdownCtx))
+
+	require.Len(t, sink.AllLogs(), 1)
+	assert.Equal(t, 2, sink.AllLogs()[0].LogRecordCount())
 }
 
 func generateSingleLogRecord() plog.Logs {
