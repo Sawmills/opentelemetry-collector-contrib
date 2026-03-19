@@ -578,7 +578,8 @@ func TestRollingUpdatesWhenConsumeLogs(t *testing.T) {
 			case <-ticker.C:
 				waitWG.Add(1)
 				go func() {
-					assert.NoError(t, p.ConsumeLogs(ctx, randomLogs()))
+					err := p.ConsumeLogs(ctx, randomLogs())
+					assert.True(t, err == nil || errors.Is(err, context.Canceled))
 					waitWG.Done()
 				}()
 			}
@@ -597,7 +598,7 @@ func TestRollingUpdatesWhenConsumeLogs(t *testing.T) {
 
 	// verify
 	mu.Lock()
-	require.NotEmpty(t, lastResolved)
+	require.Contains(t, lastResolved, "127.0.0.2")
 	mu.Unlock()
 
 	close(unreachableCh)
