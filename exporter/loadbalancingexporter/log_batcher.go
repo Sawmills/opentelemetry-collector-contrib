@@ -341,11 +341,10 @@ func (b *backendLogBatcher) run() {
 			switch req.kind {
 			case logBatcherRequestEnqueue:
 				recordCount := req.logs.LogRecordCount()
-				// Measure incoming chunk size before merge; proto repeated fields
-				// are additive so incremental accounting is accurate and avoids
-				// O(n²) re-serialization of the full pending batch on every enqueue.
-				pendingBytes += sizer.LogsSize(req.logs)
 				pending = mergeLogs(pending, req.logs)
+				// Track max_bytes using the actual serialized merged OTLP payload.
+				// Resource/scope dedup during merge means chunk sizes are not additive.
+				pendingBytes = sizer.LogsSize(pending)
 				pendingRecords += recordCount
 				b.pendingRecords.Store(int64(pendingRecords))
 				b.pendingBytes.Store(int64(pendingBytes))

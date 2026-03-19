@@ -99,6 +99,38 @@ func TestLogBatcherFlushesOnMaxBytes(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestLogBatcherMaxBytesUsesMergedPayloadSize(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	sink := new(consumertest.LogsSink)
+	p, _ := newTestLogsExporter(t, ts, tb, simpleConfig(), func(_ context.Context, _ string) (component.Component, error) {
+		return newMockLogsExporter(sink.ConsumeLogs), nil
+	})
+
+	first := sharedResourceScopeLog("first")
+	second := sharedResourceScopeLog("second")
+	sizer := &plog.ProtoMarshaler{}
+	separateBytes := sizer.LogsSize(first) + sizer.LogsSize(second)
+	merged := mergeLogs(sharedResourceScopeLog("first"), sharedResourceScopeLog("second"))
+	mergedBytes := sizer.LogsSize(merged)
+	require.Greater(t, separateBytes, mergedBytes)
+
+	p.batcher, _ = newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    100,
+		maxBytes:      mergedBytes + 1,
+		flushInterval: time.Hour,
+	}, p.consumeBatch)
+	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+		return p.batcher.Remove(ctx, endpoint, exp)
+	}
+
+	require.NoError(t, p.Start(t.Context(), componenttest.NewNopHost()))
+	require.NoError(t, p.ConsumeLogs(t.Context(), mergeLogs(sharedResourceScopeLog("first"), sharedResourceScopeLog("second"))))
+	assert.Empty(t, sink.AllLogs())
+	require.NoError(t, p.Shutdown(t.Context()))
+	require.Len(t, sink.AllLogs(), 1)
+	assert.Equal(t, 2, sink.AllLogs()[0].LogRecordCount())
+}
+
 func TestLogBatcherDoesNotBlockOtherBackends(t *testing.T) {
 	ts, _ := getTelemetryAssets(t)
 	blockFirst := make(chan struct{})
