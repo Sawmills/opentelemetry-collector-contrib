@@ -139,6 +139,43 @@ func TestLogBatcherDoesNotBlockOtherBackends(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestLogBatcherShutdownWaitsForInflightEnqueue(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	var calls atomic.Int64
+	batcher, err := newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    100,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, func(ctx context.Context, exp *wrappedExporter, ld plog.Logs, reason string) error {
+		_ = ctx
+		_ = exp
+		_ = reason
+		calls.Add(int64(ld.LogRecordCount()))
+		return nil
+	})
+	require.NoError(t, err)
+
+	backend, err := batcher.acquireBackend("endpoint-1:4317", newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317"))
+	require.NoError(t, err)
+
+	shutdownDone := make(chan error, 1)
+	go func() {
+		shutdownDone <- batcher.Shutdown(t.Context())
+	}()
+
+	select {
+	case err := <-shutdownDone:
+		t.Fatalf("shutdown returned before inflight enqueue finished: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: simpleLogs()}
+	backend.inflight.Done()
+
+	require.NoError(t, <-shutdownDone)
+	assert.Equal(t, int64(1), calls.Load())
+}
+
 func TestLogBatcherFlushesRemovedBackendToOldExporter(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	var endpoint1Calls atomic.Int64

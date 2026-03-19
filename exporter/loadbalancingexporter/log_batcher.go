@@ -170,6 +170,7 @@ func (b *logBatcher) Shutdown(ctx context.Context) error {
 
 	var errs error
 	for _, backend := range backends {
+		backend.inflight.Wait()
 		errs = errors.Join(errs, backend.stopAndFlush(ctx, logFlushReasonShutdown))
 	}
 	b.telemetry.shutdown()
