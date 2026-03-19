@@ -195,8 +195,44 @@ func TestLogBatcherShutdownRespectsContextWhileWaitingForInflight(t *testing.T) 
 
 	require.ErrorIs(t, batcher.Shutdown(ctx), context.Canceled)
 	backend.inflight.Done()
-	require.NoError(t, backend.stopAndFlush(t.Context(), logFlushReasonShutdown))
-	batcher.telemetry.shutdown()
+	require.Eventually(t, func() bool {
+		select {
+		case <-backend.done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestLogBatcherRemoveRespectsContextWhileWaitingForInflight(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	batcher, err := newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    100,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, func(context.Context, *wrappedExporter, plog.Logs, string) error {
+		return nil
+	})
+	require.NoError(t, err)
+	defer batcher.telemetry.shutdown()
+
+	backend, err := batcher.acquireBackend("endpoint-1:4317", newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317"))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	require.ErrorIs(t, batcher.Remove(ctx, "endpoint-1:4317", backend.exporter()), context.Canceled)
+	backend.inflight.Done()
+	require.Eventually(t, func() bool {
+		select {
+		case <-backend.done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestLogBatcherFlushesRemovedBackendToOldExporter(t *testing.T) {
