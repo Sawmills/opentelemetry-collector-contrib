@@ -215,9 +215,11 @@ processor/filterprocessor
 processor/geoipprocessor
 processor/groupbyattrsprocessor
 processor/groupbytraceprocessor
+processor/hotreloadprocessor
 processor/intervalprocessor
 processor/isolationforestprocessor
 processor/logdedupprocessor
+processor/logstometricsprocessor
 processor/logstransformprocessor
 processor/metricsgenerationprocessor
 processor/metricstarttimeprocessor
