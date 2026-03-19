@@ -66,12 +66,14 @@ const (
 
 type backendLogBatcher struct {
 	endpoint string
-	exp      *wrappedExporter
 	logger   *zap.Logger
 	settings logBatcherSettings
 	send     logBatcherSendFunc
 
 	telemetry *logBatcherTelemetry
+
+	exporterMu sync.RWMutex
+	exp        *wrappedExporter
 
 	requests chan logBatcherRequest
 	done     chan struct{}
@@ -142,7 +144,7 @@ func (b *logBatcher) Remove(ctx context.Context, endpoint string, exp *wrappedEx
 		return nil
 	}
 	if exp != nil {
-		backend.exp = exp
+		backend.setExporter(exp)
 	}
 	return backend.stopAndFlush(ctx, logFlushReasonResolverChange)
 }
@@ -184,7 +186,7 @@ func (b *logBatcher) getOrCreateBackend(endpoint string, exp *wrappedExporter) *
 	backend, ok := b.backends[endpoint]
 	b.mu.RUnlock()
 	if ok {
-		backend.exp = exp
+		backend.setExporter(exp)
 		return backend
 	}
 
@@ -192,7 +194,7 @@ func (b *logBatcher) getOrCreateBackend(endpoint string, exp *wrappedExporter) *
 	defer b.mu.Unlock()
 	backend, ok = b.backends[endpoint]
 	if ok {
-		backend.exp = exp
+		backend.setExporter(exp)
 		return backend
 	}
 
@@ -244,6 +246,18 @@ func (b *backendLogBatcher) stopAndFlush(ctx context.Context, reason string) err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (b *backendLogBatcher) setExporter(exp *wrappedExporter) {
+	b.exporterMu.Lock()
+	b.exp = exp
+	b.exporterMu.Unlock()
+}
+
+func (b *backendLogBatcher) exporter() *wrappedExporter {
+	b.exporterMu.RLock()
+	defer b.exporterMu.RUnlock()
+	return b.exp
 }
 
 func (b *backendLogBatcher) run() {
@@ -328,7 +342,7 @@ func (b *backendLogBatcher) flush(
 	b.telemetry.batchBytes.Record(ctx, int64(bytes), metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
 	b.telemetry.flushTotal.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint), attribute.String("reason", reason))))
 
-	err := b.send(ctx, b.exp, drained, reason)
+	err := b.send(ctx, b.exporter(), drained, reason)
 	if err != nil {
 		b.telemetry.flushErrors.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
 	}
