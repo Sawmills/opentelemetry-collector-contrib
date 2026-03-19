@@ -155,7 +155,9 @@ func (b *logBatcher) Remove(ctx context.Context, endpoint string, exp *wrappedEx
 	if exp != nil {
 		backend.setExporter(exp)
 	}
-	backend.inflight.Wait()
+	if err := waitForInflight(ctx, &backend.inflight); err != nil {
+		return err
+	}
 	return backend.stopAndFlush(ctx, logFlushReasonResolverChange)
 }
 
@@ -170,7 +172,10 @@ func (b *logBatcher) Shutdown(ctx context.Context) error {
 
 	var errs error
 	for _, backend := range backends {
-		backend.inflight.Wait()
+		if err := waitForInflight(ctx, &backend.inflight); err != nil {
+			errs = errors.Join(errs, err)
+			continue
+		}
 		errs = errors.Join(errs, backend.stopAndFlush(ctx, logFlushReasonShutdown))
 	}
 	b.telemetry.shutdown()
@@ -278,6 +283,21 @@ func (b *backendLogBatcher) exporter() *wrappedExporter {
 	return b.exp
 }
 
+func waitForInflight(ctx context.Context, wg *sync.WaitGroup) error {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (b *backendLogBatcher) run() {
 	defer close(b.done)
 
@@ -298,9 +318,12 @@ func (b *backendLogBatcher) run() {
 			switch req.kind {
 			case logBatcherRequestEnqueue:
 				recordCount := req.logs.LogRecordCount()
+				// Measure incoming chunk size before merge; proto repeated fields
+				// are additive so incremental accounting is accurate and avoids
+				// O(n²) re-serialization of the full pending batch on every enqueue.
+				pendingBytes += sizer.LogsSize(req.logs)
 				pending = mergeLogs(pending, req.logs)
 				pendingRecords += recordCount
-				pendingBytes = sizer.LogsSize(pending)
 				b.pendingRecords.Store(int64(pendingRecords))
 				b.pendingBytes.Store(int64(pendingBytes))
 				if pendingRecords > 0 && timerC == nil {
