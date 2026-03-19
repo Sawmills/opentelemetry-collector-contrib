@@ -449,7 +449,9 @@ func (t *logBatcherTelemetry) shutdown() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, reg := range t.registrations {
-		reg.Unregister()
+		if err := reg.Unregister(); err != nil {
+			continue
+		}
 	}
 	t.registrations = nil
 }
