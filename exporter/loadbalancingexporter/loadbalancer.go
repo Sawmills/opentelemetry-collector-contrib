@@ -204,6 +204,7 @@ func (lb *loadBalancer) removeExtraExporters(ctx context.Context, endpoints []st
 	for existing := range lb.exporters {
 		if !slices.Contains(endpointsWithPort, existing) {
 			exp := lb.exporters[existing]
+			exp.markStopping()
 			if lb.onExporterRemove != nil {
 				if err := lb.onExporterRemove(ctx, existing, exp); err != nil {
 					lb.logger.Error("failed to drain exporter before removal", zap.String("endpoint", existing), zap.Error(err))
@@ -228,19 +229,32 @@ func (lb *loadBalancer) Shutdown(ctx context.Context) error {
 	return err
 }
 
-// exporterAndEndpoint returns the exporter and the endpoint for the given identifier.
-func (lb *loadBalancer) exporterAndEndpoint(identifier []byte) (*wrappedExporter, string, error) {
-	// NOTE: make rolling updates of next tier of collectors work. currently, this may cause
-	// data loss because the latest batches sent to outdated backend will never find their way out.
-	// for details: https://github.com/open-telemetry/opentelemetry-collector-contrib/issues/1690
+func (lb *loadBalancer) withExporterAndEndpoint(identifier []byte, fn func(*wrappedExporter, string) error) error {
 	lb.updateLock.RLock()
 	defer lb.updateLock.RUnlock()
+
 	endpoint := lb.ring.endpointFor(identifier)
 	exp, found := lb.exporters[endpointWithPort(endpoint)]
 	if !found {
 		// something is really wrong... how come we couldn't find the exporter??
-		return nil, "", fmt.Errorf("couldn't find the exporter for the endpoint %q", endpoint)
+		return fmt.Errorf("couldn't find the exporter for the endpoint %q", endpoint)
 	}
 
-	return exp, endpoint, nil
+	return fn(exp, endpoint)
+}
+
+// exporterAndEndpoint returns the exporter and the endpoint for the given identifier.
+func (lb *loadBalancer) exporterAndEndpoint(identifier []byte) (*wrappedExporter, string, error) {
+	var matchedExporter *wrappedExporter
+	var matchedEndpoint string
+	err := lb.withExporterAndEndpoint(identifier, func(exp *wrappedExporter, endpoint string) error {
+		matchedExporter = exp
+		matchedEndpoint = endpoint
+		return nil
+	})
+	if err != nil {
+		return nil, "", err
+	}
+
+	return matchedExporter, matchedEndpoint, nil
 }
