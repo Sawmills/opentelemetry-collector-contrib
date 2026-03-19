@@ -250,7 +250,6 @@ func findOrCreateResourceLogs(dest plog.Logs, src plog.ResourceLogs) plog.Resour
 	}
 	rl := dest.ResourceLogs().AppendEmpty()
 	srcRes.CopyTo(rl.Resource())
-	rl.Resource().SetDroppedAttributesCount(srcRes.DroppedAttributesCount())
 	rl.SetSchemaUrl(src.SchemaUrl())
 	return rl
 }
@@ -265,7 +264,6 @@ func findOrCreateScopeLogs(rl plog.ResourceLogs, src plog.ScopeLogs) plog.ScopeL
 	}
 	sl := rl.ScopeLogs().AppendEmpty()
 	srcScope.CopyTo(sl.Scope())
-	sl.Scope().SetDroppedAttributesCount(srcScope.DroppedAttributesCount())
 	sl.SetSchemaUrl(src.SchemaUrl())
 	return sl
 }
