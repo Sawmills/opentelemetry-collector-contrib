@@ -176,6 +176,29 @@ func TestLogBatcherShutdownWaitsForInflightEnqueue(t *testing.T) {
 	assert.Equal(t, int64(1), calls.Load())
 }
 
+func TestLogBatcherShutdownRespectsContextWhileWaitingForInflight(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	batcher, err := newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    100,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, func(context.Context, *wrappedExporter, plog.Logs, string) error {
+		return nil
+	})
+	require.NoError(t, err)
+
+	backend, err := batcher.acquireBackend("endpoint-1:4317", newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317"))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	require.ErrorIs(t, batcher.Shutdown(ctx), context.Canceled)
+	backend.inflight.Done()
+	require.NoError(t, backend.stopAndFlush(t.Context(), logFlushReasonShutdown))
+	batcher.telemetry.shutdown()
+}
+
 func TestLogBatcherFlushesRemovedBackendToOldExporter(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	var endpoint1Calls atomic.Int64
