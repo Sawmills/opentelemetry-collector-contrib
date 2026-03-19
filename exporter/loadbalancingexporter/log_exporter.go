@@ -242,39 +242,31 @@ func insertLogRecord(dest plog.Logs, srcRL plog.ResourceLogs, srcSL plog.ScopeLo
 
 func findOrCreateResourceLogs(dest plog.Logs, src plog.ResourceLogs) plog.ResourceLogs {
 	srcRes := src.Resource()
-	srcSchema := src.SchemaUrl()
 	for i := 0; i < dest.ResourceLogs().Len(); i++ {
 		rl := dest.ResourceLogs().At(i)
-		if rl.SchemaUrl() == srcSchema &&
-			rl.Resource().DroppedAttributesCount() == srcRes.DroppedAttributesCount() &&
-			rl.Resource().Attributes().Equal(srcRes.Attributes()) {
+		if resourceLogsMatches(rl, src) {
 			return rl
 		}
 	}
 	rl := dest.ResourceLogs().AppendEmpty()
 	srcRes.CopyTo(rl.Resource())
 	rl.Resource().SetDroppedAttributesCount(srcRes.DroppedAttributesCount())
-	rl.SetSchemaUrl(srcSchema)
+	rl.SetSchemaUrl(src.SchemaUrl())
 	return rl
 }
 
 func findOrCreateScopeLogs(rl plog.ResourceLogs, src plog.ScopeLogs) plog.ScopeLogs {
 	srcScope := src.Scope()
-	srcSchema := src.SchemaUrl()
 	for i := 0; i < rl.ScopeLogs().Len(); i++ {
 		sl := rl.ScopeLogs().At(i)
-		if sl.SchemaUrl() == srcSchema &&
-			sl.Scope().Name() == srcScope.Name() &&
-			sl.Scope().Version() == srcScope.Version() &&
-			sl.Scope().DroppedAttributesCount() == srcScope.DroppedAttributesCount() &&
-			sl.Scope().Attributes().Equal(srcScope.Attributes()) {
+		if scopeLogsMatches(sl, src) {
 			return sl
 		}
 	}
 	sl := rl.ScopeLogs().AppendEmpty()
 	srcScope.CopyTo(sl.Scope())
 	sl.Scope().SetDroppedAttributesCount(srcScope.DroppedAttributesCount())
-	sl.SetSchemaUrl(srcSchema)
+	sl.SetSchemaUrl(src.SchemaUrl())
 	return sl
 }
 
