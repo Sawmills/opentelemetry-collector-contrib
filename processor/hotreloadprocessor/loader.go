@@ -5,6 +5,7 @@ package hotreloadprocessor // import "github.com/open-telemetry/opentelemetry-co
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"go.opentelemetry.io/collector/component"
@@ -21,6 +22,7 @@ type HostWithFactories interface {
 	GetFactory(kind component.Kind, componentType component.Type) component.Factory
 }
 
+//nolint:unused // Used via the typed loader helpers below.
 func loadSubprocessors[T any](
 	ctx context.Context,
 	config otelcol.Config,
@@ -32,11 +34,11 @@ func loadSubprocessors[T any](
 	nc := nextConsumer
 
 	if len(config.Service.Pipelines) == 0 {
-		return nil, fmt.Errorf("no pipelines found")
+		return nil, errors.New("no pipelines found")
 	}
 
 	if len(config.Service.Pipelines) > 1 {
-		return nil, fmt.Errorf("only one pipeline is supported")
+		return nil, errors.New("only one pipeline is supported")
 	}
 
 	var subprocessors []T
@@ -46,7 +48,7 @@ func loadSubprocessors[T any](
 			processor := pipeline.Processors[i]
 			hostWithFactories, ok := host.(HostWithFactories)
 			if !ok {
-				return nil, fmt.Errorf("host does not implement HostWithFactories interface")
+				return nil, errors.New("host does not implement HostWithFactories interface")
 			}
 			factory := hostWithFactories.GetFactory(component.KindProcessor, processor.Type())
 			if factory == nil {
@@ -57,7 +59,7 @@ func loadSubprocessors[T any](
 				return nil, fmt.Errorf("factory for type %s is not a processor factory", processor.Type())
 			}
 			conf := processorFactory.CreateDefaultConfig()
-			processorConfig := config.Processors[processor].(map[string]interface{})
+			processorConfig := config.Processors[processor].(map[string]any)
 			newConfMap := confmap.NewFromStringMap(processorConfig)
 			err := newConfMap.Unmarshal(&conf)
 			if err != nil {
@@ -79,6 +81,7 @@ func loadSubprocessors[T any](
 	return subprocessors, nil
 }
 
+//nolint:unused // Used by loaderLogs.
 func loadLogsSubprocessors(
 	ctx context.Context,
 	config otelcol.Config,
@@ -101,6 +104,7 @@ func loadLogsSubprocessors(
 	)
 }
 
+//nolint:unused // Used by loaderMetrics.
 func loadMetricsSubprocessors(
 	ctx context.Context,
 	config otelcol.Config,
@@ -123,6 +127,7 @@ func loadMetricsSubprocessors(
 	)
 }
 
+//nolint:unused // Used by loaderTraces.
 func loadTracesSubprocessors(
 	ctx context.Context,
 	config otelcol.Config,
@@ -144,4 +149,3 @@ func loadTracesSubprocessors(
 		},
 	)
 }
-

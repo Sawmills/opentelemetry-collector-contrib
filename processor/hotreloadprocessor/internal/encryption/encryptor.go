@@ -8,6 +8,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 
@@ -90,7 +91,7 @@ func (f *FileEncryptor) Encrypt(content []byte) ([]byte, error) {
 // Decrypt decrypts and then decompresses the content using AES-GCM.
 func (f *FileEncryptor) Decrypt(encrypted []byte) ([]byte, error) {
 	if len(encrypted) < 12 {
-		return nil, fmt.Errorf("encrypted content too short")
+		return nil, errors.New("encrypted content too short")
 	}
 	nonce := encrypted[:12]
 	ciphertext := encrypted[12:]

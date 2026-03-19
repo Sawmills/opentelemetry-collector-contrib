@@ -11,8 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/hotreloadprocessor/internal/metadata"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
@@ -24,6 +22,9 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.uber.org/zap"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/hotreloadprocessor/internal/metadata"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor"
 )
 
 type componentTestTelemetry struct {
@@ -45,7 +46,7 @@ func (tt *componentTestTelemetry) assertMetrics(
 	totalMetrics *int,
 ) {
 	var md metricdata.ResourceMetrics
-	require.NoError(t, tt.reader.Collect(context.Background(), &md))
+	require.NoError(t, tt.reader.Collect(t.Context(), &md))
 	// ensure all required metrics are present
 	for _, want := range expected {
 		got := tt.getMetric(want.Name, md)
@@ -58,7 +59,7 @@ func (tt *componentTestTelemetry) assertMetrics(
 	}
 }
 
-func (tt *componentTestTelemetry) len(got metricdata.ResourceMetrics) int {
+func (*componentTestTelemetry) len(got metricdata.ResourceMetrics) int {
 	metricsCount := 0
 	for _, sm := range got.ScopeMetrics {
 		metricsCount += len(sm.Metrics)
@@ -67,7 +68,7 @@ func (tt *componentTestTelemetry) len(got metricdata.ResourceMetrics) int {
 	return metricsCount
 }
 
-func (tt *componentTestTelemetry) getMetric(
+func (*componentTestTelemetry) getMetric(
 	name string,
 	got metricdata.ResourceMetrics,
 ) metricdata.Metrics {
@@ -182,7 +183,7 @@ func TestConsumeLogs(t *testing.T) {
 
 			tel := setupMetricsCollection()
 			hotreloadProcessor, err := newHotReloadLogsProcessor(
-				context.Background(),
+				t.Context(),
 				otelprocessor.Settings{
 					TelemetrySettings: component.TelemetrySettings{
 						Logger:        zap.NewNop(),
@@ -211,7 +212,6 @@ func TestConsumeLogs(t *testing.T) {
 			require.NoError(t, err)
 
 			logsMarshaler := plog.JSONMarshaler{}
-			logsMarshaler.MarshalLogs(transformedLogs)
 			json, err := logsMarshaler.MarshalLogs(transformedLogs)
 			require.NoError(t, err)
 			require.JSONEq(t, test.wantLogs(), string(json))
@@ -259,7 +259,7 @@ func TestRefreshConfig(t *testing.T) {
 
 			tel := setupMetricsCollection()
 			hotreloadProcessor, err := newHotReloadLogsProcessor(
-				context.Background(),
+				t.Context(),
 				otelprocessor.Settings{
 					TelemetrySettings: component.TelemetrySettings{
 						Logger:        zap.NewExample(),
@@ -309,7 +309,7 @@ func readTestLogs(t *testing.T, file string) plog.Logs {
 	require.NotEmpty(t, content)
 
 	logsUnmarshaler := &plog.JSONUnmarshaler{}
-	inputLogs, err := logsUnmarshaler.UnmarshalLogs([]byte(content))
+	inputLogs, err := logsUnmarshaler.UnmarshalLogs(content)
 	require.NoError(t, err)
 
 	return inputLogs
@@ -353,6 +353,6 @@ func (m *mockHost) GetFactory(kind component.Kind, componentType component.Type)
 	return nil
 }
 
-func (m *mockHost) GetExtensions() map[component.ID]component.Component {
+func (*mockHost) GetExtensions() map[component.ID]component.Component {
 	return nil
 }
