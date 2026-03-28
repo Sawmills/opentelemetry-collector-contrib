@@ -13,10 +13,17 @@
 
 set -euo pipefail
 
-if [[ -z "${REPO:-}" || -z "${PR:-}" || -z "${PR_HEAD:-}" ]]; then
-    echo "One or more of REPO, PR, and PR_HEAD have not been set, please ensure each is set."
+if [[ -z "${REPO:-}" || -z "${PR:-}" || -z "${PR_HEAD:-}" || -z "${PR_TITLE:-}" ]]; then
+    echo "One or more of REPO, PR, PR_HEAD, and PR_TITLE have not been set, please ensure each is set."
     exit 0
 fi
+
+shopt -s nocasematch
+if [[ ! "${PR_TITLE}" =~ as\ per\ (changelog|chloggen) ]]; then
+    echo "PR title does not request changelog-based generation, exiting."
+    exit 0
+fi
+shopt -u nocasematch
 
 # Map change_type values to human-readable prefixes
 change_type_label() {
@@ -105,15 +112,13 @@ main() {
             fi
         fi
 
-        if [[ -n "${COMPONENT}" ]]; then
-            COMPONENTS+=("${COMPONENT}")
+        if [[ -z "${NOTE}" ]]; then
+            continue
         fi
-        if [[ -n "${NOTE}" ]]; then
-            NOTES+=("${NOTE}")
-        fi
-        if [[ -n "${CHANGE_TYPE}" ]]; then
-            CHANGE_TYPES+=("${CHANGE_TYPE}")
-        fi
+
+        COMPONENTS+=("${COMPONENT}")
+        NOTES+=("${NOTE}")
+        CHANGE_TYPES+=("${CHANGE_TYPE}")
         if [[ -n "${ISSUES}" ]]; then
             # Split comma-separated issues
             IFS=',' read -ra ISSUE_ARRAY <<< "${ISSUES}"
@@ -124,9 +129,7 @@ main() {
                 fi
             done
         fi
-        if [[ -n "${SUBTEXT}" ]]; then
-            SUBTEXTS+=("${SUBTEXT}")
-        fi
+        SUBTEXTS+=("${SUBTEXT}")
     done
 
     if [[ ${#NOTES[@]} -eq 0 ]]; then

@@ -79,7 +79,7 @@ function genLookbackDates() {
 
 function filterOnDateRange({ created_at, periodStart, periodEnd }) {
   const createdAt = new Date(created_at);
-  return createdAt >= periodStart && createdAt <= periodEnd;
+  return createdAt >= periodStart && createdAt < periodEnd;
 }
 
 /**

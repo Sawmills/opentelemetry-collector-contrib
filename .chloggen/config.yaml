@@ -194,12 +194,14 @@ components:
     - processor/geoip
     - processor/groupbyattrs
     - processor/groupbytrace
+    - processor/hotreload
     - processor/hetznerdetector
     - processor/ibmcloudvpcdetector
     - processor/interval
     - processor/isolationforest
     - processor/k8s_attributes
     - processor/logdedup
+    - processor/logstometrics
     - processor/logstransform
     - processor/lookup
     - processor/metric_start_time
