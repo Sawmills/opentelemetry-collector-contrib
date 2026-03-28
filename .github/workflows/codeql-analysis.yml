@@ -24,7 +24,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - run: ./.github/workflows/scripts/free-disk-space.sh
+      - if: runner.os == 'Linux'
+        run: ./.github/workflows/scripts/free-disk-space.sh
       - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6
         id: go-setup
         with:
@@ -46,4 +47,5 @@ jobs:
         uses: github/codeql-action/analyze@0d579ffd059c29b07949a3cce3983f0780820c98 # v4
         timeout-minutes: 60
 
-      - run: ./.github/workflows/scripts/check-disk-space.sh
+      - if: runner.os == 'Linux'
+        run: ./.github/workflows/scripts/check-disk-space.sh

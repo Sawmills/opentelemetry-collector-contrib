@@ -183,10 +183,12 @@ processor/filterprocessor processor/filter
 processor/geoipprocessor processor/geoip
 processor/groupbyattrsprocessor processor/groupbyattrs
 processor/groupbytraceprocessor processor/groupbytrace
+processor/hotreloadprocessor processor/hotreload
 processor/intervalprocessor processor/interval
 processor/isolationforestprocessor processor/isolationforest
 processor/k8sattributesprocessor processor/k8sattributes
 processor/logdedupprocessor processor/logdedup
+processor/logstometricsprocessor processor/logstometrics
 processor/logstransformprocessor processor/logstransform
 processor/lookupprocessor processor/lookup
 processor/metricsgenerationprocessor processor/metricsgeneration

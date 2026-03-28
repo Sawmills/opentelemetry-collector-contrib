@@ -42,7 +42,7 @@ echo "Finding workflows pending approval for commit: ${HEAD_SHA}"
 WAITING_RUNS=$(gh run list \
     --commit "${HEAD_SHA}" \
     --json databaseId,status,conclusion \
-    --jq '.[] | select(.conclusion == "action_required") | .databaseId')
+    --jq '.[] | select(.status == "action_required") | .databaseId')
 
 if [[ -z "${WAITING_RUNS}" ]]; then
     echo "No workflows with action_required conclusion found"

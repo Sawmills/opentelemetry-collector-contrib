@@ -251,7 +251,6 @@ async function computePrStats(octokit, prs, labelToOwners, componentLabels, peri
     if (labelsOnPr.length === 0) continue;
 
     const ownerToLabels = getCodeOwnersByLabel(labelsOnPr, labelToOwners);
-    if (ownerToLabels.size === 0) continue;
 
     if (processed === 0 || processed % PROGRESS_INTERVAL === 0) progress(`PRs: fetching #${pr.number} (${processed + 1})...`);
     const { requested: requestedReviewers, respondents, draft } = await getReviewAndRequestedLogins(octokit, REPO_OWNER, REPO_NAME, pr.number);
@@ -259,17 +258,15 @@ async function computePrStats(octokit, prs, labelToOwners, componentLabels, peri
     if (draft) continue;
 
     for (const label of labelsOnPr) {
-      const requestedOwnersForLabel = [];
+      const ownersForLabel = [];
       for (const [login, labels] of ownerToLabels) {
         if (!labels.has(label)) continue;
         if (authorLogin && login === authorLogin) continue;
-        if (!requestedReviewers.has(login)) continue;
-        requestedOwnersForLabel.push(login);
+        ownersForLabel.push(login);
       }
-      if (requestedOwnersForLabel.length === 0) continue; // only count PRs where a code owner for this component was requested
       if (!componentPrStats[label]) componentPrStats[label] = { prsTotal: 0, prsWithResponse: 0 };
       componentPrStats[label].prsTotal++;
-      if (requestedOwnersForLabel.some((login) => respondents.has(login))) {
+      if (ownersForLabel.some((login) => respondents.has(login))) {
         componentPrStats[label].prsWithResponse++;
       }
     }

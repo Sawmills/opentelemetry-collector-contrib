@@ -172,11 +172,11 @@ endif
 	
 	# Update main go.mod
 	@echo "Updating main go.mod..."
-	@sed -i '' -E 's/^go [0-9]+\.[0-9]+.*/go $(VERSION)/' go.mod
+	@sed -i.bak -E 's/^go [0-9]+\.[0-9]+.*/go $(VERSION)/' go.mod && rm -f go.mod.bak
 	
 	# Update all module go.mod files
 	@echo "Updating all module go.mod files..."
-	@find . -name "go.mod" -type f -not -path "./go.mod" -exec sed -i '' -E 's/^go [0-9]+\.[0-9]+\.[0-9]+/go $(VERSION)/g' {} \;
+	@find . -name "go.mod" -type f -not -path "./go.mod" -exec sh -c 'sed -i.bak -E '\''s/^go [0-9]+\.[0-9]+\.[0-9]+/go $(VERSION)/g'\'' "$$1" && rm -f "$$1.bak"' _ {} \;
 	
 	@echo ""
 	@echo "✓ Successfully bumped golang version to $(VERSION)"

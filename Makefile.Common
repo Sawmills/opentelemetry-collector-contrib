@@ -350,4 +350,4 @@ FLAGS ?= '-o=$(CURDIR)/'
 .PHONY: schemagen
 schemagen:
 	@echo "Running schemagen with filepath='$(SRC)' and flags='$(FLAGS)'"
-	cd $(SRC_ROOT)/cmd/schemagen && go run . $(FLAGS) $(SRC)
+	cd $(SRC_ROOT)/cmd/schemagen && $(GOCMD) run . $(FLAGS) $(SRC)
