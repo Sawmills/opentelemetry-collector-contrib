@@ -197,10 +197,12 @@ body:
       - processor/geoip
       - processor/groupbyattrs
       - processor/groupbytrace
+      - processor/hotreload
       - processor/interval
       - processor/isolationforest
       - processor/k8sattributes
       - processor/logdedup
+      - processor/logstometrics
       - processor/logstransform
       - processor/lookup
       - processor/metricsgeneration
