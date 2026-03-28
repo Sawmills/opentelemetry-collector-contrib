@@ -5,10 +5,11 @@ The Logs to Metrics Processor (`logstometricsprocessor`) extracts metrics from l
 ## Overview
 
 This processor is designed to convert log data into metrics, enabling you to:
-- Extract metrics from log records using flexible OTTL expressions
-- Support multiple metric types: Sum, Gauge, Histogram, and Exponential Histogram
-- Optionally forward or drop logs after metric extraction
-- Send extracted metrics to a separate metrics pipeline via a configured metrics connector
+
+* Extract metrics from log records using flexible OTTL expressions
+* Support multiple metric types: Sum, Gauge, Histogram, and Exponential Histogram
+* Optionally forward or drop logs after metric extraction
+* Send extracted metrics to a separate metrics pipeline via routereceiver
 
 ## Configuration
 
@@ -17,8 +18,8 @@ The processor requires the following configuration:
 ```yaml
 processors:
   logstometricsprocessor:
-    # Required: Component ID of the metrics connector to send extracted metrics to
-    metrics_connector: my_connector
+    # Required: Route name to send extracted metrics to via routereceiver
+    route: my_route
     
     # Optional: Whether to drop logs after processing (default: false)
     drop_logs: false
@@ -35,7 +36,7 @@ processors:
 
 | Field | Type | Description | Required |
 |-------|------|-------------|----------|
-| `metrics_connector` | string | Component ID of the metrics connector to send extracted metrics to | Yes |
+| `route` | string | Route name to send extracted metrics to via routereceiver | Yes |
 | `drop_logs` | bool | Whether to drop logs after processing. If `false`, logs are forwarded to the next consumer. Default: `false` | No |
 | `logs` | array | List of metric definitions to extract from logs | Yes |
 
@@ -51,10 +52,10 @@ Each metric definition supports the following fields:
 | `attributes` | array | List of attributes to include in the metric | No |
 | `include_resource_attributes` | array | List of resource attributes to include in the metric | No |
 | `conditions` | array | OTTL conditions (ORed) that must evaluate to true for the metric to be processed | No |
-| `sum` | object | Sum metric configuration | One of sum/gauge/histogram/exponential_histogram |
-| `gauge` | object | Gauge metric configuration | One of sum/gauge/histogram/exponential_histogram |
-| `histogram` | object | Histogram metric configuration | One of sum/gauge/histogram/exponential_histogram |
-| `exponential_histogram` | object | Exponential histogram metric configuration | One of sum/gauge/histogram/exponential_histogram |
+| `sum` | object | Sum metric configuration | One of sum/gauge/histogram/exponential\_histogram |
+| `gauge` | object | Gauge metric configuration | One of sum/gauge/histogram/exponential\_histogram |
+| `histogram` | object | Histogram metric configuration | One of sum/gauge/histogram/exponential\_histogram |
+| `exponential_histogram` | object | Exponential histogram metric configuration | One of sum/gauge/histogram/exponential\_histogram |
 
 ### Metric Types
 
@@ -97,7 +98,7 @@ exponential_histogram:
 ```yaml
 processors:
   logstometricsprocessor:
-    metrics_connector: my_connector
+    route: my_connector
     drop_logs: false
     logs:
       - name: logrecord.count
@@ -111,7 +112,7 @@ processors:
 ```yaml
 processors:
   logstometricsprocessor:
-    metrics_connector: my_connector
+    route: my_connector
     drop_logs: false
     logs:
       - name: error.log.count
@@ -132,7 +133,7 @@ processors:
 ```yaml
 processors:
   logstometricsprocessor:
-    metrics_connector: my_connector
+    route: my_connector
     drop_logs: true  # Drop logs after extracting metrics
     logs:
       - name: logrecord.count
@@ -146,7 +147,7 @@ processors:
 ```yaml
 processors:
   logstometricsprocessor:
-    metrics_connector: my_connector
+    route: my_connector
     drop_logs: false
     logs:
       - name: log.count.by.service
@@ -162,7 +163,7 @@ processors:
 ```yaml
 processors:
   logstometricsprocessor:
-    metrics_connector: my_connector
+    route: my_connector
     drop_logs: false
     logs:
       - name: memory.usage.mb
@@ -173,12 +174,12 @@ processors:
 
 ## Pipeline Configuration
 
-The processor must be configured with a metrics connector that exists in the same collector configuration. The connector routes extracted metrics to a metrics pipeline:
+The processor must be configured with a routereceiver that exists in the same collector configuration. The routereceiver routes extracted metrics to a metrics pipeline:
 
 ```yaml
-connectors:
-  my_connector:
-    # Configure your connector here (e.g., routingconnector, sumconnector, etc.)
+receivers:
+  routereceiver/my_route:
+    # routereceiver configuration
 
 service:
   pipelines:
@@ -187,13 +188,13 @@ service:
       processors: [logstometricsprocessor]
       exporters: [nop]
     metrics:
-      receivers: [my_connector]
+      receivers: [routereceiver/my_route]
       processors: [batch]
       exporters: [otlp/metrics]
 
 processors:
   logstometricsprocessor:
-    metrics_connector: my_connector
+    route: my_connector
     drop_logs: false
     logs:
       - name: logrecord.count
@@ -206,27 +207,26 @@ processors:
 
 The processor reports the following internal metrics:
 
-- `processor_logstometrics_logs_processed`: Number of log records processed
-- `processor_logstometrics_metrics_extracted`: Number of metrics extracted from logs
-- `processor_logstometrics_errors`: Number of errors encountered during processing
-- `processor_logstometrics_logs_dropped`: Number of logs dropped when `drop_logs` is true
-- `processor_logstometrics_processing_duration`: Time spent processing logs and extracting metrics (in milliseconds)
+* `processor_logstometrics_logs_processed`: Number of log records processed
+* `processor_logstometrics_metrics_extracted`: Number of metrics extracted from logs
+* `processor_logstometrics_errors`: Number of errors encountered during processing
+* `processor_logstometrics_logs_dropped`: Number of logs dropped when `drop_logs` is true
+* `processor_logstometrics_processing_duration`: Time spent processing logs and extracting metrics (in milliseconds)
 
 ## Performance Considerations
 
-- The processor processes logs synchronously and extracts metrics in-memory
-- Metric aggregation is performed efficiently using hash-based lookups
-- Processing duration is tracked and reported via telemetry metrics
-- Errors during metric extraction are logged but do not block log forwarding (unless `drop_logs` is true and metrics export fails)
+* The processor processes logs synchronously and extracts metrics in-memory
+* Metric aggregation is performed efficiently using hash-based lookups
+* Processing duration is tracked and reported via telemetry metrics
+* Errors during metric extraction are logged but do not block log forwarding (unless `drop_logs` is true and metrics export fails)
 
 ## Limitations
 
-- Only supports log records (not traces, metrics, or profiles)
-- Metrics connector must be available at processor startup
-- Metrics are sent immediately after extraction (no batching)
+* Only supports log records (not traces, metrics, or profiles)
+* Metrics connector must be available at processor startup
+* Metrics are sent immediately after extraction (no batching)
 
 ## See Also
 
-- [OTTL Documentation](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/pkg/ottl)
-- [Signal to Metrics Connector](../connector/signaltometricsconnector/README.md) - Similar functionality as a connector
-
+* [OTTL Documentation](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/pkg/ottl)
+* [Signal to Metrics Connector](../connector/signaltometricsconnector/README.md) - Similar functionality as a connector

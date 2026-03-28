@@ -9,8 +9,8 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ottlfuncs"
 )
 
-func LogFuncs() map[string]ottl.Factory[ottllog.TransformContext] {
-	return commonFuncs[ottllog.TransformContext]()
+func LogFuncs() map[string]ottl.Factory[*ottllog.TransformContext] {
+	return commonFuncs[*ottllog.TransformContext]()
 }
 
 func commonFuncs[K any]() map[string]ottl.Factory[K] {

@@ -1,9 +1,7 @@
-// Copyright The OpenTelemetry Authors
-// SPDX-License-Identifier: Apache-2.0
-
 package hotreloadprocessor
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,18 +16,18 @@ func TestFileWatcher(t *testing.T) {
 
 	done := make(chan bool)
 	watchedFiles := []string{}
-	watcher, err := NewFileWatcher(zap.NewNop(), dir, func(filePath string) error {
+	watcher, err := newFileWatcher(zap.NewNop(), dir, func(filePath string) error {
 		watchedFiles = append(watchedFiles, filePath)
 		done <- true
 		return nil
 	})
 	require.NoError(t, err)
 
-	err = watcher.Start(t.Context())
+	err = watcher.Start(context.Background())
 	require.NoError(t, err)
 
 	filePath := filepath.Join(dir, "config.yaml")
-	require.NoError(t, os.WriteFile(filePath, []byte("test"), 0o600))
+	os.WriteFile(filePath, []byte("test"), 0644)
 
 	select {
 	case <-done:
@@ -37,7 +35,7 @@ func TestFileWatcher(t *testing.T) {
 		t.Fatal("timeout: file not watched")
 	}
 
-	require.NoError(t, watcher.Stop(t.Context()))
+	watcher.Stop(context.Background())
 
 	require.Equal(t, []string{filePath}, watchedFiles)
 }

@@ -11,7 +11,6 @@ import (
 
 	"github.com/lightstep/go-expohisto/structure"
 	"go.opentelemetry.io/collector/component"
-	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.uber.org/zap"
@@ -42,8 +41,8 @@ var _ confmap.Unmarshaler = (*Config)(nil)
 
 // Config for the processor. Only logs configuration is supported.
 type Config struct {
-	// MetricsConnector is the component ID of the connector to send extracted metrics to
-	MetricsConnector component.ID `mapstructure:"metrics_connector"`
+	// Route is the route name to send extracted metrics to via routereceiver
+	Route string `mapstructure:"route"`
 	// DropLogs controls whether logs are forwarded to the next consumer after processing.
 	// If true, logs are dropped after metrics are extracted. Default: false
 	DropLogs bool `mapstructure:"drop_logs"`
@@ -59,10 +58,12 @@ type Config struct {
 
 func (c *Config) Validate() error {
 	if len(c.Logs) == 0 {
-		return errors.New("no logs configuration provided, at least one log metric definition must be specified")
+		return errors.New(
+			"no logs configuration provided, at least one log metric definition must be specified",
+		)
 	}
-	if c.MetricsConnector == (component.ID{}) {
-		return errors.New("metrics_connector must be specified")
+	if c.Route == "" {
+		return errors.New("route must be specified")
 	}
 
 	var multiError error
@@ -76,7 +77,10 @@ func (c *Config) Validate() error {
 	for i := range c.Logs {
 		log := &c.Logs[i]
 		if err := validateMetricInfo(log, parser); err != nil {
-			multiError = errors.Join(multiError, fmt.Errorf("failed to validate logs configuration: %w", err))
+			multiError = errors.Join(
+				multiError,
+				fmt.Errorf("failed to validate logs configuration: %w", err),
+			)
 		}
 	}
 	return multiError
@@ -140,25 +144,25 @@ type MetricInfo struct {
 	Attributes                []Attribute `mapstructure:"attributes"`
 	// Conditions are a set of OTTL conditions which are ORed. Data is
 	// processed into metrics only if the sequence evaluates to true.
-	Conditions           []string                                      `mapstructure:"conditions"`
-	Histogram            configoptional.Optional[Histogram]            `mapstructure:"histogram"`
-	ExponentialHistogram configoptional.Optional[ExponentialHistogram] `mapstructure:"exponential_histogram"`
-	Sum                  configoptional.Optional[Sum]                  `mapstructure:"sum"`
-	Gauge                configoptional.Optional[Gauge]                `mapstructure:"gauge"`
+	Conditions           []string              `mapstructure:"conditions"`
+	Histogram            *Histogram            `mapstructure:"histogram"`
+	ExponentialHistogram *ExponentialHistogram `mapstructure:"exponential_histogram"`
+	Sum                  *Sum                  `mapstructure:"sum"`
+	Gauge                *Gauge                `mapstructure:"gauge"`
 	// prevent unkeyed literal initialization
 	_ struct{}
 }
 
 func (mi *MetricInfo) ensureDefaults() {
-	if mi.Histogram.HasValue() {
+	if mi.Histogram != nil {
 		// Add default buckets if explicit histogram is defined
-		if len(mi.Histogram.Get().Buckets) == 0 {
-			mi.Histogram.Get().Buckets = defaultHistogramBuckets
+		if len(mi.Histogram.Buckets) == 0 {
+			mi.Histogram.Buckets = defaultHistogramBuckets
 		}
 	}
-	if mi.ExponentialHistogram.HasValue() {
-		if mi.ExponentialHistogram.Get().MaxSize == 0 {
-			mi.ExponentialHistogram.Get().MaxSize = defaultExponentialHistogramMaxSize
+	if mi.ExponentialHistogram != nil {
+		if mi.ExponentialHistogram.MaxSize == 0 {
+			mi.ExponentialHistogram.MaxSize = defaultExponentialHistogramMaxSize
 		}
 	}
 }
@@ -185,23 +189,21 @@ func (mi *MetricInfo) validateAttributes() error {
 }
 
 func (mi *MetricInfo) validateHistogram() error {
-	if mi.Histogram.HasValue() {
-		h := mi.Histogram.Get()
-		if len(h.Buckets) == 0 {
+	if mi.Histogram != nil {
+		if len(mi.Histogram.Buckets) == 0 {
 			return errors.New("histogram buckets missing")
 		}
-		if h.Value == "" {
+		if mi.Histogram.Value == "" {
 			return errors.New("value OTTL statement is required")
 		}
 	}
-	if mi.ExponentialHistogram.HasValue() {
-		eh := mi.ExponentialHistogram.Get()
+	if mi.ExponentialHistogram != nil {
 		if _, err := structure.NewConfig(
-			structure.WithMaxSize(eh.MaxSize),
+			structure.WithMaxSize(mi.ExponentialHistogram.MaxSize),
 		).Validate(); err != nil {
 			return err
 		}
-		if eh.Value == "" {
+		if mi.ExponentialHistogram.Value == "" {
 			return errors.New("value OTTL statement is required")
 		}
 	}
@@ -209,8 +211,8 @@ func (mi *MetricInfo) validateHistogram() error {
 }
 
 func (mi *MetricInfo) validateSum() error {
-	if mi.Sum.HasValue() {
-		if mi.Sum.Get().Value == "" {
+	if mi.Sum != nil {
+		if mi.Sum.Value == "" {
 			return errors.New("value must be defined for sum metrics")
 		}
 	}
@@ -218,8 +220,8 @@ func (mi *MetricInfo) validateSum() error {
 }
 
 func (mi *MetricInfo) validateGauge() error {
-	if mi.Gauge.HasValue() {
-		if mi.Gauge.Get().Value == "" {
+	if mi.Gauge != nil {
+		if mi.Gauge.Value == "" {
 			return errors.New("value must be defined for gauge metrics")
 		}
 	}
@@ -249,52 +251,66 @@ func validateMetricInfo[K any](mi *MetricInfo, parser ottl.Parser[K]) error {
 	// note that, here we only evaluate if statements are valid. Check for
 	// required statements are left to the other validations.
 	var metricsDefinedCount int
-	if mi.Histogram.HasValue() {
+	if mi.Histogram != nil {
 		metricsDefinedCount++
-		h := mi.Histogram.Get()
-		if h.Count != "" {
-			if _, err := parser.ParseValueExpression(h.Count); err != nil {
-				return fmt.Errorf("failed to parse count OTTL expression for explicit histogram: %w", err)
+		if mi.Histogram.Count != "" {
+			if _, err := parser.ParseValueExpression(mi.Histogram.Count); err != nil {
+				return fmt.Errorf(
+					"failed to parse count OTTL expression for explicit histogram: %w",
+					err,
+				)
 			}
 		}
-		if _, err := parser.ParseValueExpression(h.Value); err != nil {
-			return fmt.Errorf("failed to parse value OTTL expression for explicit histogram: %w", err)
+		if _, err := parser.ParseValueExpression(mi.Histogram.Value); err != nil {
+			return fmt.Errorf(
+				"failed to parse value OTTL expression for explicit histogram: %w",
+				err,
+			)
 		}
 	}
-	if mi.ExponentialHistogram.HasValue() {
+	if mi.ExponentialHistogram != nil {
 		metricsDefinedCount++
-		eh := mi.ExponentialHistogram.Get()
-		if eh.Count != "" {
-			if _, err := parser.ParseValueExpression(eh.Count); err != nil {
-				return fmt.Errorf("failed to parse count OTTL expression for exponential histogram: %w", err)
+		if mi.ExponentialHistogram.Count != "" {
+			if _, err := parser.ParseValueExpression(mi.ExponentialHistogram.Count); err != nil {
+				return fmt.Errorf(
+					"failed to parse count OTTL expression for exponential histogram: %w",
+					err,
+				)
 			}
 		}
-		if _, err := parser.ParseValueExpression(eh.Value); err != nil {
-			return fmt.Errorf("failed to parse value OTTL expression for exponential histogram: %w", err)
+		if _, err := parser.ParseValueExpression(mi.ExponentialHistogram.Value); err != nil {
+			return fmt.Errorf(
+				"failed to parse value OTTL expression for exponential histogram: %w",
+				err,
+			)
 		}
 	}
-	if mi.Sum.HasValue() {
+	if mi.Sum != nil {
 		metricsDefinedCount++
-		if _, err := parser.ParseValueExpression(mi.Sum.Get().Value); err != nil {
+		if _, err := parser.ParseValueExpression(mi.Sum.Value); err != nil {
 			return fmt.Errorf("failed to parse value OTTL expression for summary: %w", err)
 		}
 	}
-	if mi.Gauge.HasValue() {
+	if mi.Gauge != nil {
 		metricsDefinedCount++
-		g := mi.Gauge.Get()
-		if _, err := parser.ParseValueExpression(g.Value); err != nil {
+		if _, err := parser.ParseValueExpression(mi.Gauge.Value); err != nil {
 			return fmt.Errorf("failed to parse value OTTL expression for gauge: %w", err)
 		}
 		// if ExtractGrokPatterns is used, validate the key selector
-		if strings.Contains(g.Value, "ExtractGrokPatterns") {
+		if strings.Contains(mi.Gauge.Value, "ExtractGrokPatterns") {
 			// Ensure a [key] selector is present after ExtractGrokPatterns
-			if !grokPatternKey.MatchString(g.Value) {
-				return errors.New("ExtractGrokPatterns: a single key selector[key] is required for signal to gauge")
+			if !grokPatternKey.MatchString(mi.Gauge.Value) {
+				return errors.New(
+					"ExtractGrokPatterns: a single key selector[key] is required for signal to gauge",
+				)
 			}
 		}
 	}
 	if metricsDefinedCount != 1 {
-		return fmt.Errorf("exactly one of the metrics must be defined, %d found", metricsDefinedCount)
+		return fmt.Errorf(
+			"exactly one of the metrics must be defined, %d found",
+			metricsDefinedCount,
+		)
 	}
 
 	// validate OTTL conditions

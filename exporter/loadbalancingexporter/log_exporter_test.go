@@ -269,8 +269,7 @@ func TestConsumeLogsWithQueueCompressionAndLogBatcher(t *testing.T) {
 	shutdownCtx := context.Background() //nolint:usetesting // Context must outlive test for cleanup
 
 	cfg := simpleConfig()
-	cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
-	cfg.QueueSettings.Enabled = true
+	cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
 	cfg.QueueSettings.CompressInMemory = true
 	cfg.LogBatcher.Enabled = true

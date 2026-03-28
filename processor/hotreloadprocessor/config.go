@@ -1,10 +1,7 @@
-// Copyright The OpenTelemetry Authors
-// SPDX-License-Identifier: Apache-2.0
-
-package hotreloadprocessor // import "github.com/open-telemetry/opentelemetry-collector-contrib/processor/hotreloadprocessor"
+package hotreloadprocessor
 
 import (
-	"errors"
+	"fmt"
 	"time"
 )
 
@@ -26,15 +23,15 @@ type Config struct {
 
 func (cfg *Config) Validate() error {
 	if cfg.ConfigurationPrefix == "" {
-		return errors.New("configuration_prefix must be specified")
+		return fmt.Errorf("configuration_prefix must be specified")
 	}
 
 	if cfg.EncryptionKey == "" {
-		return errors.New("encryption_key must be specified")
+		return fmt.Errorf("encryption_key must be specified")
 	}
 
 	if cfg.Region == "" {
-		return errors.New("region must be specified")
+		return fmt.Errorf("region must be specified")
 	}
 
 	if cfg.RefreshInterval <= 0 {
@@ -46,7 +43,7 @@ func (cfg *Config) Validate() error {
 	}
 
 	if cfg.RefreshInterval <= cfg.ShutdownDelay {
-		return errors.New("refresh_interval must be greater than shutdown_delay")
+		return fmt.Errorf("refresh_interval must be greater than shutdown_delay")
 	}
 
 	return nil

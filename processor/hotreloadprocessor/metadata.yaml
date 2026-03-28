@@ -5,21 +5,39 @@ status:
   stability:
     development: [logs, metrics, traces]
 
-tests:
-  config:
-    configuration_prefix: data://cHJvY2Vzc29yczoge30Kc2VydmljZToKICBwaXBlbGluZXM6CiAgICBsb2dzLzMyYWQyYzNkLWFlN2MtNDg4Ny1iNDc2LTM2NWRhZGU4YzljZC82OTE3NGQ0MS1hNDljLTQ3NjMtYmNlMi1lOTdlZjgwNTFiYWI6CiAgICAgIHByb2Nlc3NvcnM6IFtdCg==
-    encryption_key: test-key
-    region: us-east-1
-    refresh_interval: 2m
-    shutdown_delay: 1m
-
 telemetry:
   metrics:
+    processor_hot_reload_running_processors_count:
+      enabled: true
+      description: Number of running processors in the hotreloadprocessor
+      unit: "1"
+      gauge:
+        value_type: int
+      attributes: [destination]
+    processor_hot_reload_newest_file_success_timestamp:
+      enabled: true
+      description: The timestamp of the newest file successfully loaded by the hotreloadprocessor in seconds
+      unit: "1"
+      gauge:
+        value_type: int
+      attributes: [destination, key]
+    processor_hot_reload_newest_file_failed_timestamp:
+      enabled: true
+      description: The timestamp of the newest file failed to load by the hotreloadprocessor in seconds
+      unit: "1"
+      gauge:
+        value_type: int
+      attributes: [destination, key, reason]
+    processor_hot_reload_rollback_file_success_timestamp:
+      enabled: true
+      description: The timestamp of the rollback file successfully loaded by the hotreloadprocessor in seconds
+      unit: "1"
+      gauge:
+        value_type: int
+      attributes: [destination, key, reason]
     processor_hot_reload_config_refresh_interval:
       enabled: true
       description: Refresh interval of the hotreloadprocessor
-      stability:
-        level: development
       unit: ms
       gauge:
         value_type: int
@@ -27,88 +45,44 @@ telemetry:
     processor_hot_reload_config_shutdown_delay:
       enabled: true
       description: Shutdown delay of the hotreloadprocessor
-      stability:
-        level: development
       unit: ms
       gauge:
         value_type: int
       attributes: [destination]
-    processor_hot_reload_newest_file_failed_timestamp:
-      enabled: true
-      description: The timestamp of the newest file failed to load by the hotreloadprocessor in seconds
-      stability:
-        level: development
-      unit: "1"
-      gauge:
-        value_type: int
-      attributes: [destination, key, reason]
-    processor_hot_reload_newest_file_success_timestamp:
-      enabled: true
-      description: The timestamp of the newest file successfully loaded by the hotreloadprocessor in seconds
-      stability:
-        level: development
-      unit: "1"
-      gauge:
-        value_type: int
-      attributes: [destination, key]
-    processor_hot_reload_process_duration:
-      enabled: true
-      description: Duration of the processLogs function by the hotreloadprocessor
-      stability:
-        level: development
-      unit: ms
-      histogram:
-        value_type: int
-        bucket_boundaries:
-          [1, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
     processor_hot_reload_reload_duration:
       enabled: true
       description: Duration of the reload by the hotreloadprocessor
-      stability:
-        level: development
       unit: ms
       histogram:
         value_type: int
         bucket_boundaries:
           [1, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
-    processor_hot_reload_rollback_file_success_timestamp:
-      enabled: true
-      description: The timestamp of the rollback file successfully loaded by the hotreloadprocessor in seconds
-      stability:
-        level: development
-      unit: "1"
-      gauge:
-        value_type: int
-      attributes: [destination, key]
-    processor_hot_reload_running_processors_count:
-      enabled: true
-      description: Number of running processors in the hotreloadprocessor
-      stability:
-        level: development
-      unit: "1"
-      gauge:
-        value_type: int
-      attributes: [destination]
     processor_hot_reload_scan:
       enabled: true
       description: Number of scanned prefixes by the hotreloadprocessor
-      stability:
-        level: development
       unit: "1"
       gauge:
         value_type: int
       attributes: [prefix]
+    processor_hot_reload_process_duration:
+      enabled: true
+      description: Duration of the processLogs function by the hotreloadprocessor
+      unit: ms
+      histogram:
+        value_type: int
+        bucket_boundaries:
+          [1, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]
 
 attributes:
   destination:
     description: The destination of the hotreloadprocessor
     type: string
-  key:
-    description: The key of the file being scanned
+  reason:
+    description: The reason for the error
     type: string
   prefix:
     description: The prefix of the file being scanned
     type: string
-  reason:
-    description: The reason for the error
+  key:
+    description: The key of the file being scanned
     type: string

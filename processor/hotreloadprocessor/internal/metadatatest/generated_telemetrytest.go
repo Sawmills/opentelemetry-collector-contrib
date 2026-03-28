@@ -24,7 +24,7 @@ func NewSettings(tt *componenttest.Telemetry) processor.Settings {
 func AssertEqualProcessorHotReloadConfigRefreshInterval(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_processor_hot_reload_config_refresh_interval",
-		Description: "Refresh interval of the hotreloadprocessor [Development]",
+		Description: "Refresh interval of the hotreloadprocessor",
 		Unit:        "ms",
 		Data: metricdata.Gauge[int64]{
 			DataPoints: dps,
@@ -38,7 +38,7 @@ func AssertEqualProcessorHotReloadConfigRefreshInterval(t *testing.T, tt *compon
 func AssertEqualProcessorHotReloadConfigShutdownDelay(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_processor_hot_reload_config_shutdown_delay",
-		Description: "Shutdown delay of the hotreloadprocessor [Development]",
+		Description: "Shutdown delay of the hotreloadprocessor",
 		Unit:        "ms",
 		Data: metricdata.Gauge[int64]{
 			DataPoints: dps,
@@ -52,7 +52,7 @@ func AssertEqualProcessorHotReloadConfigShutdownDelay(t *testing.T, tt *componen
 func AssertEqualProcessorHotReloadNewestFileFailedTimestamp(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_processor_hot_reload_newest_file_failed_timestamp",
-		Description: "The timestamp of the newest file failed to load by the hotreloadprocessor in seconds [Development]",
+		Description: "The timestamp of the newest file failed to load by the hotreloadprocessor in seconds",
 		Unit:        "1",
 		Data: metricdata.Gauge[int64]{
 			DataPoints: dps,
@@ -66,7 +66,7 @@ func AssertEqualProcessorHotReloadNewestFileFailedTimestamp(t *testing.T, tt *co
 func AssertEqualProcessorHotReloadNewestFileSuccessTimestamp(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_processor_hot_reload_newest_file_success_timestamp",
-		Description: "The timestamp of the newest file successfully loaded by the hotreloadprocessor in seconds [Development]",
+		Description: "The timestamp of the newest file successfully loaded by the hotreloadprocessor in seconds",
 		Unit:        "1",
 		Data: metricdata.Gauge[int64]{
 			DataPoints: dps,
@@ -80,7 +80,7 @@ func AssertEqualProcessorHotReloadNewestFileSuccessTimestamp(t *testing.T, tt *c
 func AssertEqualProcessorHotReloadProcessDuration(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.HistogramDataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_processor_hot_reload_process_duration",
-		Description: "Duration of the processLogs function by the hotreloadprocessor [Development]",
+		Description: "Duration of the processLogs function by the hotreloadprocessor",
 		Unit:        "ms",
 		Data: metricdata.Histogram[int64]{
 			Temporality: metricdata.CumulativeTemporality,
@@ -95,7 +95,7 @@ func AssertEqualProcessorHotReloadProcessDuration(t *testing.T, tt *componenttes
 func AssertEqualProcessorHotReloadReloadDuration(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.HistogramDataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_processor_hot_reload_reload_duration",
-		Description: "Duration of the reload by the hotreloadprocessor [Development]",
+		Description: "Duration of the reload by the hotreloadprocessor",
 		Unit:        "ms",
 		Data: metricdata.Histogram[int64]{
 			Temporality: metricdata.CumulativeTemporality,
@@ -110,7 +110,7 @@ func AssertEqualProcessorHotReloadReloadDuration(t *testing.T, tt *componenttest
 func AssertEqualProcessorHotReloadRollbackFileSuccessTimestamp(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_processor_hot_reload_rollback_file_success_timestamp",
-		Description: "The timestamp of the rollback file successfully loaded by the hotreloadprocessor in seconds [Development]",
+		Description: "The timestamp of the rollback file successfully loaded by the hotreloadprocessor in seconds",
 		Unit:        "1",
 		Data: metricdata.Gauge[int64]{
 			DataPoints: dps,
@@ -124,7 +124,7 @@ func AssertEqualProcessorHotReloadRollbackFileSuccessTimestamp(t *testing.T, tt 
 func AssertEqualProcessorHotReloadRunningProcessorsCount(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_processor_hot_reload_running_processors_count",
-		Description: "Number of running processors in the hotreloadprocessor [Development]",
+		Description: "Number of running processors in the hotreloadprocessor",
 		Unit:        "1",
 		Data: metricdata.Gauge[int64]{
 			DataPoints: dps,
@@ -138,7 +138,7 @@ func AssertEqualProcessorHotReloadRunningProcessorsCount(t *testing.T, tt *compo
 func AssertEqualProcessorHotReloadScan(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_processor_hot_reload_scan",
-		Description: "Number of scanned prefixes by the hotreloadprocessor [Development]",
+		Description: "Number of scanned prefixes by the hotreloadprocessor",
 		Unit:        "1",
 		Data: metricdata.Gauge[int64]{
 			DataPoints: dps,

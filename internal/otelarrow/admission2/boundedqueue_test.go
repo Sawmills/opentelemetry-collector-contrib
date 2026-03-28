@@ -385,7 +385,7 @@ func TestBoundedQueueCancelation(t *testing.T) {
 		repetition = 100
 		maxAdmit   = 10
 	)
-	bq := newBQTest(t, maxAdmit, maxAdmit*2)
+	bq := newBQTest(t, maxAdmit, maxAdmit)
 
 	for number := range repetition {
 		ctx, cancel := context.WithCancel(t.Context())

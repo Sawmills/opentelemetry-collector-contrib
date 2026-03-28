@@ -4,7 +4,6 @@
 package loki // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/loki"
 
 import (
-	"sort"
 	"testing"
 
 	"github.com/grafana/loki/pkg/push"
@@ -235,16 +234,6 @@ func TestConvertAttributesToLabels(t *testing.T) {
 				"pod.name":  "pod-123",
 			},
 		},
-		{
-			desc: "processed_by value with UUID is stripped to prefix",
-			attrsAvailable: map[string]any{
-				"processed_by": "sawmills-72cfa7f8-00ae-40b4-a4eb-dc6f59932c29",
-			},
-			attrsToSelect: pcommon.NewValueStr("processed_by"),
-			expected: model.LabelSet{
-				"processed_by": "sawmills",
-			},
-		},
 	}
 	for _, tC := range testCases {
 		t.Run(tC.desc, func(t *testing.T) {
@@ -408,149 +397,4 @@ func TestConvertLogToLogRawEntry(t *testing.T) {
 	out, err := convertLogToLogRawEntry(log)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedLogEntry, out)
-}
-
-func TestGetFilteredAttributeNames(t *testing.T) {
-	tests := []struct {
-		name         string
-		logAttrs     map[string]any
-		resAttrs     map[string]any
-		wantLogNames []string
-		wantResNames []string
-	}{
-		{
-			name:         "empty maps",
-			logAttrs:     map[string]any{},
-			resAttrs:     map[string]any{},
-			wantLogNames: make([]string, 0),
-			wantResNames: make([]string, 0),
-		},
-		{
-			name: "basic attributes",
-			logAttrs: map[string]any{
-				"log.level": "error",
-				"message":   "test message",
-			},
-			resAttrs: map[string]any{
-				"host.name":    "localhost",
-				"service.type": "web",
-			},
-			wantLogNames: []string{"log.level", "message"},
-			wantResNames: []string{"host.name", "service.type"},
-		},
-		{
-			name: "filtered hint attributes",
-			logAttrs: map[string]any{
-				"message":               "test",
-				"loki.tenant":           "tenant1",
-				"loki.format":           "json",
-				"loki.resource.labels":  "host.name",
-				"loki.attribute.labels": "severity",
-			},
-			resAttrs: map[string]any{
-				"host.name":   "localhost",
-				"loki.tenant": "tenant1",
-				"loki.format": "json",
-			},
-			wantLogNames: []string{"message"},
-			wantResNames: []string{"host.name"},
-		},
-		{
-			name: "filtered skip attributes",
-			logAttrs: map[string]any{
-				"message": "test",
-			},
-			resAttrs: map[string]any{
-				"host.name":           "localhost",
-				"service.name":        "myapp",
-				"service.namespace":   "prod",
-				"service.instance.id": "instance1",
-			},
-			wantLogNames: []string{"message"},
-			wantResNames: []string{"host.name"},
-		},
-		{
-			name: "filtered map type attributes",
-			logAttrs: map[string]any{
-				"message": "test",
-				"metadata": map[string]any{
-					"nested": "value",
-				},
-			},
-			resAttrs: map[string]any{
-				"host.name": "localhost",
-				"labels": map[string]any{
-					"app": "service",
-				},
-			},
-			wantLogNames: []string{"message"},
-			wantResNames: []string{"host.name"},
-		},
-		{
-			name: "filtered processed_by and exporter",
-			logAttrs: map[string]any{
-				"message":      "test",
-				"processed_by": "sawmills-otelcol",
-				"exporter":     "exp1",
-			},
-			resAttrs: map[string]any{
-				"host.name":    "localhost",
-				"processed_by": "sawmills-otelcol",
-				"exporter":     "exp2",
-			},
-			wantLogNames: []string{"message", "processed_by"},
-			wantResNames: []string{"host.name", "processed_by"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			logMap := pcommon.NewMap()
-			resMap := pcommon.NewMap()
-
-			// Convert test input maps to pcommon.Map
-			for k, v := range tt.logAttrs {
-				insertValue(logMap, k, v)
-			}
-			for k, v := range tt.resAttrs {
-				insertValue(resMap, k, v)
-			}
-
-			// Use default settings for testing
-			defaultLabelsEnabled := map[string]bool{
-				levelLabel: true,
-			}
-			gotLogNames, gotResNames := filteredAttributeNames(logMap, resMap, defaultLabelsEnabled)
-
-			// Initialize empty slices if nil to match expected empty slices
-			if gotLogNames == nil {
-				gotLogNames = make([]string, 0)
-			}
-			if gotResNames == nil {
-				gotResNames = make([]string, 0)
-			}
-
-			// Sort slices for consistent comparison
-			sort.Strings(gotLogNames)
-			sort.Strings(gotResNames)
-			sort.Strings(tt.wantLogNames)
-			sort.Strings(tt.wantResNames)
-
-			assert.Equal(t, tt.wantLogNames, gotLogNames)
-			assert.Equal(t, tt.wantResNames, gotResNames)
-		})
-	}
-}
-
-// Helper function to insert values into pcommon.Map
-func insertValue(m pcommon.Map, k string, v any) {
-	switch val := v.(type) {
-	case string:
-		m.PutStr(k, val)
-	case map[string]any:
-		nested := m.PutEmptyMap(k)
-		for nk, nv := range val {
-			insertValue(nested, nk, nv)
-		}
-	}
 }

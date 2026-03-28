@@ -1,7 +1,4 @@
-// Copyright The OpenTelemetry Authors
-// SPDX-License-Identifier: Apache-2.0
-
-package hotreloadprocessor // import "github.com/open-telemetry/opentelemetry-collector-contrib/processor/hotreloadprocessor"
+package hotreloadprocessor
 
 import (
 	"context"
@@ -25,7 +22,6 @@ type loader[T any, P component.Component] interface {
 	load(ctx context.Context,
 		config otelcol.Config,
 		settings otelprocessor.Settings,
-		host component.Host,
 		nextConsumer T) ([]P, error)
 }
 
@@ -143,7 +139,7 @@ func (hp *HotReloadProcessor[T, P]) applyConfig(
 	_ string,
 	reload bool,
 ) error {
-	subprocessors, err := hp.loader.load(ctx, config, hp.set, hp.host, hp.nextConsumer)
+	subprocessors, err := hp.loader.load(ctx, config, hp.set, hp.nextConsumer)
 	if err != nil {
 		return fmt.Errorf("failed to load subprocessors: %w", err)
 	}
@@ -185,6 +181,10 @@ func (hp *HotReloadProcessor[T, P]) applyConfig(
 			hp.shutdownTimer = time.AfterFunc(hp.shutdownDelay, func() {
 				hp.pendingShutdownMu.Lock()
 				defer hp.pendingShutdownMu.Unlock()
+
+				// if hp.terminating {
+				// 	return
+				// }
 
 				toShutdown := hp.pendingShutdown
 				hp.pendingShutdown = nil
@@ -228,7 +228,7 @@ func (hp *HotReloadProcessor[T, P]) Start(ctx context.Context, host component.Ho
 		hp.config,
 		hp.logger,
 		client,
-		func(client S3Client, bucket, key string) ListObjectsV2Paginator {
+		func(client S3Client, bucket string, key string) ListObjectsV2Paginator {
 			delimiter := "/"
 			return s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
 				Bucket:    &bucket,
@@ -251,10 +251,10 @@ func (hp *HotReloadProcessor[T, P]) Start(ctx context.Context, host component.Ho
 	hp.refreshConfig = time.NewTicker(hp.refreshInterval)
 
 	if hp.config.WatchPath != nil {
-		hp.fileWatcher, err = NewFileWatcher(
+		hp.fileWatcher, err = newFileWatcher(
 			hp.logger,
 			*hp.config.WatchPath,
-			func(_ string) error {
+			func(filePath string) error {
 				hp.telemetry.record(
 					triggerScan,
 					float64(1),
@@ -362,7 +362,7 @@ func (hp *HotReloadProcessor[T, P]) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (*HotReloadProcessor[T, P]) Capabilities() consumer.Capabilities {
+func (hp *HotReloadProcessor[T, P]) Capabilities() consumer.Capabilities {
 	return processorCapabilities
 }
 
@@ -379,7 +379,7 @@ func (hp *HotReloadProcessor[T, P]) consume(consumer func() error) error {
 	return consumer()
 }
 
-func (*HotReloadProcessor[T, P]) hashConfig(config otelcol.Config) (string, error) {
+func (hp *HotReloadProcessor[T, P]) hashConfig(config otelcol.Config) (string, error) {
 	yaml, err := yaml.Marshal(config)
 	if err != nil {
 		return "", err

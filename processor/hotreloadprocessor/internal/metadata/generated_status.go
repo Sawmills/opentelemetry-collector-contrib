@@ -8,7 +8,7 @@ import (
 
 var (
 	Type      = component.MustNewType("hotreloadprocessor")
-	ScopeName = "github.com/open-telemetry/opentelemetry-collector-contrib/processor/hotreloadprocessor"
+	ScopeName = "go.opentelemetry.io/collector/cmd/mdatagen"
 )
 
 const (

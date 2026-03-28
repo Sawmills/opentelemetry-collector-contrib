@@ -3,13 +3,14 @@
 package metadata
 
 import (
+	"context"
 	"errors"
-	"sync"
-
-	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/trace"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configtelemetry"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func Meter(settings component.TelemetrySettings) metric.Meter {
@@ -24,73 +25,96 @@ func Tracer(settings component.TelemetrySettings) trace.Tracer {
 // as defined in metadata and user config.
 type TelemetryBuilder struct {
 	meter                                    metric.Meter
-	mu                                       sync.Mutex
-	registrations                            []metric.Registration
-	ProcessorLogstometricsErrors             metric.Int64Counter
-	ProcessorLogstometricsLogsDropped        metric.Int64Counter
 	ProcessorLogstometricsLogsProcessed      metric.Int64Counter
 	ProcessorLogstometricsMetricsExtracted   metric.Int64Counter
+	ProcessorLogstometricsErrors             metric.Int64Counter
+	ProcessorLogstometricsLogsDropped        metric.Int64Counter
 	ProcessorLogstometricsProcessingDuration metric.Int64Histogram
+	level                                    configtelemetry.Level
 }
 
-// TelemetryBuilderOption applies changes to default builder.
-type TelemetryBuilderOption interface {
-	apply(*TelemetryBuilder)
-}
+// telemetryBuilderOption applies changes to default builder.
+type telemetryBuilderOption func(*TelemetryBuilder)
 
-type telemetryBuilderOptionFunc func(mb *TelemetryBuilder)
-
-func (tbof telemetryBuilderOptionFunc) apply(mb *TelemetryBuilder) {
-	tbof(mb)
-}
-
-// Shutdown unregister all registered callbacks for async instruments.
-func (builder *TelemetryBuilder) Shutdown() {
-	builder.mu.Lock()
-	defer builder.mu.Unlock()
-	for _, reg := range builder.registrations {
-		reg.Unregister()
+// WithLevel sets the current telemetry level for the component.
+func WithLevel(lvl configtelemetry.Level) telemetryBuilderOption {
+	return func(builder *TelemetryBuilder) {
+		builder.level = lvl
 	}
 }
 
 // NewTelemetryBuilder provides a struct with methods to update all internal telemetry
 // for a component
-func NewTelemetryBuilder(settings component.TelemetrySettings, options ...TelemetryBuilderOption) (*TelemetryBuilder, error) {
-	builder := TelemetryBuilder{}
+func NewTelemetryBuilder(settings component.TelemetrySettings, options ...telemetryBuilderOption) (*TelemetryBuilder, error) {
+	builder := TelemetryBuilder{level: configtelemetry.LevelBasic}
 	for _, op := range options {
-		op.apply(&builder)
+		op(&builder)
 	}
-	builder.meter = Meter(settings)
 	var err, errs error
-	builder.ProcessorLogstometricsErrors, err = builder.meter.Int64Counter(
-		"otelcol_processor_logstometrics_errors",
-		metric.WithDescription("Number of errors encountered during processing [Development]"),
-		metric.WithUnit("{errors}"),
-	)
-	errs = errors.Join(errs, err)
-	builder.ProcessorLogstometricsLogsDropped, err = builder.meter.Int64Counter(
-		"otelcol_processor_logstometrics_logs_dropped",
-		metric.WithDescription("Number of logs dropped when drop_logs is true [Development]"),
-		metric.WithUnit("{records}"),
-	)
-	errs = errors.Join(errs, err)
+	if builder.level >= configtelemetry.LevelBasic {
+		builder.meter = Meter(settings)
+	} else {
+		builder.meter = noop.Meter{}
+	}
 	builder.ProcessorLogstometricsLogsProcessed, err = builder.meter.Int64Counter(
-		"otelcol_processor_logstometrics_logs_processed",
-		metric.WithDescription("Number of log records processed by the processor [Development]"),
+		"processor_logstometrics_logs_processed",
+		metric.WithDescription("Number of log records processed by the processor"),
 		metric.WithUnit("{records}"),
 	)
 	errs = errors.Join(errs, err)
 	builder.ProcessorLogstometricsMetricsExtracted, err = builder.meter.Int64Counter(
-		"otelcol_processor_logstometrics_metrics_extracted",
-		metric.WithDescription("Number of metrics extracted from logs [Development]"),
+		"processor_logstometrics_metrics_extracted",
+		metric.WithDescription("Number of metrics extracted from logs"),
 		metric.WithUnit("{metrics}"),
 	)
 	errs = errors.Join(errs, err)
+	builder.ProcessorLogstometricsErrors, err = builder.meter.Int64Counter(
+		"processor_logstometrics_errors",
+		metric.WithDescription("Number of errors encountered during processing"),
+		metric.WithUnit("{errors}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.ProcessorLogstometricsLogsDropped, err = builder.meter.Int64Counter(
+		"processor_logstometrics_logs_dropped",
+		metric.WithDescription("Number of logs dropped when drop_logs is true"),
+		metric.WithUnit("{records}"),
+	)
+	errs = errors.Join(errs, err)
 	builder.ProcessorLogstometricsProcessingDuration, err = builder.meter.Int64Histogram(
-		"otelcol_processor_logstometrics_processing_duration",
-		metric.WithDescription("Time spent processing logs and extracting metrics [Development]"),
+		"processor_logstometrics_processing_duration",
+		metric.WithDescription("Time spent processing logs and extracting metrics"),
 		metric.WithUnit("ms"),
 	)
 	errs = errors.Join(errs, err)
 	return &builder, errs
+}
+
+// RecordProcessorLogstometricsLogsProcessed adds a value for processor_logstometrics_logs_processed.
+func (b *TelemetryBuilder) RecordProcessorLogstometricsLogsProcessed(ctx context.Context, val int64) {
+	b.ProcessorLogstometricsLogsProcessed.Add(ctx, val)
+}
+
+// RecordProcessorLogstometricsMetricsExtracted adds a value for processor_logstometrics_metrics_extracted.
+func (b *TelemetryBuilder) RecordProcessorLogstometricsMetricsExtracted(ctx context.Context, val int64) {
+	b.ProcessorLogstometricsMetricsExtracted.Add(ctx, val)
+}
+
+// RecordProcessorLogstometricsErrors adds a value for processor_logstometrics_errors.
+func (b *TelemetryBuilder) RecordProcessorLogstometricsErrors(ctx context.Context, val int64) {
+	b.ProcessorLogstometricsErrors.Add(ctx, val)
+}
+
+// RecordProcessorLogstometricsLogsDropped adds a value for processor_logstometrics_logs_dropped.
+func (b *TelemetryBuilder) RecordProcessorLogstometricsLogsDropped(ctx context.Context, val int64) {
+	b.ProcessorLogstometricsLogsDropped.Add(ctx, val)
+}
+
+// RecordProcessorLogstometricsProcessingDuration records a value for processor_logstometrics_processing_duration.
+func (b *TelemetryBuilder) RecordProcessorLogstometricsProcessingDuration(ctx context.Context, val int64) {
+	b.ProcessorLogstometricsProcessingDuration.Record(ctx, val)
+}
+
+// Shutdown stops the telemetry builder.
+func (b *TelemetryBuilder) Shutdown() {
+	// No-op for now
 }

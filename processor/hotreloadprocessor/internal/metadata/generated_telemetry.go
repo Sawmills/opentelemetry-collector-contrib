@@ -13,11 +13,11 @@ import (
 )
 
 func Meter(settings component.TelemetrySettings) metric.Meter {
-	return settings.MeterProvider.Meter("github.com/open-telemetry/opentelemetry-collector-contrib/processor/hotreloadprocessor")
+	return settings.MeterProvider.Meter("go.opentelemetry.io/collector/cmd/mdatagen")
 }
 
 func Tracer(settings component.TelemetrySettings) trace.Tracer {
-	return settings.TracerProvider.Tracer("github.com/open-telemetry/opentelemetry-collector-contrib/processor/hotreloadprocessor")
+	return settings.TracerProvider.Tracer("go.opentelemetry.io/collector/cmd/mdatagen")
 }
 
 // TelemetryBuilder provides an interface for components to report telemetry
@@ -68,57 +68,57 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 	var err, errs error
 	builder.ProcessorHotReloadConfigRefreshInterval, err = builder.meter.Int64Gauge(
 		"otelcol_processor_hot_reload_config_refresh_interval",
-		metric.WithDescription("Refresh interval of the hotreloadprocessor [Development]"),
+		metric.WithDescription("Refresh interval of the hotreloadprocessor"),
 		metric.WithUnit("ms"),
 	)
 	errs = errors.Join(errs, err)
 	builder.ProcessorHotReloadConfigShutdownDelay, err = builder.meter.Int64Gauge(
 		"otelcol_processor_hot_reload_config_shutdown_delay",
-		metric.WithDescription("Shutdown delay of the hotreloadprocessor [Development]"),
+		metric.WithDescription("Shutdown delay of the hotreloadprocessor"),
 		metric.WithUnit("ms"),
 	)
 	errs = errors.Join(errs, err)
 	builder.ProcessorHotReloadNewestFileFailedTimestamp, err = builder.meter.Int64Gauge(
 		"otelcol_processor_hot_reload_newest_file_failed_timestamp",
-		metric.WithDescription("The timestamp of the newest file failed to load by the hotreloadprocessor in seconds [Development]"),
+		metric.WithDescription("The timestamp of the newest file failed to load by the hotreloadprocessor in seconds"),
 		metric.WithUnit("1"),
 	)
 	errs = errors.Join(errs, err)
 	builder.ProcessorHotReloadNewestFileSuccessTimestamp, err = builder.meter.Int64Gauge(
 		"otelcol_processor_hot_reload_newest_file_success_timestamp",
-		metric.WithDescription("The timestamp of the newest file successfully loaded by the hotreloadprocessor in seconds [Development]"),
+		metric.WithDescription("The timestamp of the newest file successfully loaded by the hotreloadprocessor in seconds"),
 		metric.WithUnit("1"),
 	)
 	errs = errors.Join(errs, err)
 	builder.ProcessorHotReloadProcessDuration, err = builder.meter.Int64Histogram(
 		"otelcol_processor_hot_reload_process_duration",
-		metric.WithDescription("Duration of the processLogs function by the hotreloadprocessor [Development]"),
+		metric.WithDescription("Duration of the processLogs function by the hotreloadprocessor"),
 		metric.WithUnit("ms"),
 		metric.WithExplicitBucketBoundaries([]float64{1, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000}...),
 	)
 	errs = errors.Join(errs, err)
 	builder.ProcessorHotReloadReloadDuration, err = builder.meter.Int64Histogram(
 		"otelcol_processor_hot_reload_reload_duration",
-		metric.WithDescription("Duration of the reload by the hotreloadprocessor [Development]"),
+		metric.WithDescription("Duration of the reload by the hotreloadprocessor"),
 		metric.WithUnit("ms"),
 		metric.WithExplicitBucketBoundaries([]float64{1, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000}...),
 	)
 	errs = errors.Join(errs, err)
 	builder.ProcessorHotReloadRollbackFileSuccessTimestamp, err = builder.meter.Int64Gauge(
 		"otelcol_processor_hot_reload_rollback_file_success_timestamp",
-		metric.WithDescription("The timestamp of the rollback file successfully loaded by the hotreloadprocessor in seconds [Development]"),
+		metric.WithDescription("The timestamp of the rollback file successfully loaded by the hotreloadprocessor in seconds"),
 		metric.WithUnit("1"),
 	)
 	errs = errors.Join(errs, err)
 	builder.ProcessorHotReloadRunningProcessorsCount, err = builder.meter.Int64Gauge(
 		"otelcol_processor_hot_reload_running_processors_count",
-		metric.WithDescription("Number of running processors in the hotreloadprocessor [Development]"),
+		metric.WithDescription("Number of running processors in the hotreloadprocessor"),
 		metric.WithUnit("1"),
 	)
 	errs = errors.Join(errs, err)
 	builder.ProcessorHotReloadScan, err = builder.meter.Int64Gauge(
 		"otelcol_processor_hot_reload_scan",
-		metric.WithDescription("Number of scanned prefixes by the hotreloadprocessor [Development]"),
+		metric.WithDescription("Number of scanned prefixes by the hotreloadprocessor"),
 		metric.WithUnit("1"),
 	)
 	errs = errors.Join(errs, err)

@@ -1,7 +1,4 @@
-// Copyright The OpenTelemetry Authors
-// SPDX-License-Identifier: Apache-2.0
-
-package hotreloadprocessor // import "github.com/open-telemetry/opentelemetry-collector-contrib/processor/hotreloadprocessor"
+package hotreloadprocessor
 
 import (
 	"context"
@@ -9,7 +6,6 @@ import (
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
-	otelcol "go.opentelemetry.io/collector/otelcol"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	otelprocessor "go.opentelemetry.io/collector/processor"
 )
@@ -23,13 +19,14 @@ func newHotReloadMetricsProcessor(
 	set otelprocessor.Settings,
 	cfg *Config,
 	nextConsumer consumer.Metrics,
+	registry ProcessorFactoryRegistry,
 ) (*HotReloadMetricsProcessor, error) {
 	hp, err := newHotReloadProcessor[consumer.Metrics, otelprocessor.Metrics](
 		context,
 		set,
 		cfg,
 		nextConsumer,
-		loaderMetrics{},
+		loaderMetrics{subprocessorLoader: subprocessorLoader[consumer.Metrics]{factories: registry}},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("error creating hotreload processor: %w", err)
@@ -47,53 +44,21 @@ func (hp *HotReloadMetricsProcessor) ConsumeMetrics(ctx context.Context, ld pmet
 	})
 }
 
-type loaderMetrics struct{}
-
-//nolint:unused // False positive from generic loader wiring.
-func (loaderMetrics) load(
-	ctx context.Context,
-	config otelcol.Config,
-	set otelprocessor.Settings,
-	host component.Host,
-	nextConsumer consumer.Metrics,
-) ([]otelprocessor.Metrics, error) {
-	proc, err := loadMetricsSubprocessors(ctx, config, set, host, nextConsumer)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(proc) == 0 {
-		// Return a passthrough processor if none are loaded
-		return []otelprocessor.Metrics{&passthroughMetricsProcessor{next: nextConsumer}}, nil
-	}
-
-	proc2 := make([]otelprocessor.Metrics, len(proc))
-	for i, p := range proc {
-		proc2[i] = p.(otelprocessor.Metrics)
-	}
-	return proc2, nil
-}
-
 // passthroughMetricsProcessor is a fallback processor that just forwards metrics to nextConsumer.
-//
-//nolint:unused // False positive from interface implementation only used through generics.
 type passthroughMetricsProcessor struct {
 	next consumer.Metrics
 }
 
-//nolint:unused // False positive from interface implementation only used through generics.
-func (*passthroughMetricsProcessor) Start(_ context.Context, _ component.Host) error {
+func (p *passthroughMetricsProcessor) Start(ctx context.Context, host component.Host) error {
 	// No-op
 	return nil
 }
 
-//nolint:unused // False positive from interface implementation only used through generics.
-func (*passthroughMetricsProcessor) Shutdown(_ context.Context) error {
+func (p *passthroughMetricsProcessor) Shutdown(ctx context.Context) error {
 	// No-op
 	return nil
 }
 
-//nolint:unused // False positive on interface method implementation.
 func (p *passthroughMetricsProcessor) ConsumeMetrics(
 	ctx context.Context,
 	ld pmetric.Metrics,
@@ -101,7 +66,6 @@ func (p *passthroughMetricsProcessor) ConsumeMetrics(
 	return p.next.ConsumeMetrics(ctx, ld)
 }
 
-//nolint:unused // False positive from interface implementation only used through generics.
-func (*passthroughMetricsProcessor) Capabilities() consumer.Capabilities {
+func (p *passthroughMetricsProcessor) Capabilities() consumer.Capabilities {
 	return processorCapabilities
 }

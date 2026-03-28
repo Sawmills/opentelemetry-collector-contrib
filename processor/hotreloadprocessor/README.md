@@ -7,7 +7,13 @@ The `hotreloadprocessor` is an OpenTelemetry Collector processor that enables dy
 * **Hot-reloads** processors configuration from S3 at runtime (default: every 60 seconds).
 * Supports encrypted configuration files using a user-supplied encryption key.
 * Works with logs, metrics, and traces processors.
-* Supports any processor registered with the OpenTelemetry Collector via dynamic factory discovery.
+* Supports a default set of contrib processors, including:
+  * `transformprocessor`
+  * `batchprocessor`
+  * `logstometricsprocessor`
+  * `metricstransformprocessor`
+  * `groupbyattrsprocessor`
+* Can be extended by downstream distros via `hotreloadprocessor.WithProcessorFactories(...)`.
 * Emits internal telemetry for monitoring processor performance.
 
 ## Configuration
@@ -39,14 +45,18 @@ processors:
           - IsString(body)
       - context: log
         statements:
-          - set(attributes["pipeline"]["id"], String("12345"))
-  filter/f1:
+          - set(attributes["sawmills"]["pipeline_id"], String("12345"))
+  filtersamplingprocessor/f1:
     error_mode: ignore
     logs:
       log_record:
-        - 'attributes["pipeline"]["id"] == "12345"'
+        - 'attributes["sawmills"]["pipeline_id"] == "12345"'
     sampling:
       percentage: 100
+  redactprocessor/r1:
+    redactions:
+      - name: "sensitive"
+        pattern: "(?i)12345"
   batch/b1:
     send_batch_size: 1
     timeout: 0s
@@ -55,7 +65,8 @@ service:
     logs/my-pipeline:
       processors:
         - transform/t1
-        - filter/f1
+        - filtersamplingprocessor/f1
+        - redactprocessor/r1
         - batch/b1
 ```
 
@@ -83,16 +94,8 @@ The processor emits the following metric:
   go test ./...
   ```
 
-## Dependencies
-
-See [go.mod](go.mod) for a full list. Key dependencies include:
-
-* AWS SDK v2
-* OpenTelemetry Collector
-* Standard OpenTelemetry processors (discovered dynamically at runtime)
-
 ## Limitations
 
 * Only one pipeline per configuration file is supported.
 * Configuration files must be encrypted and stored in S3.
-* Only the listed processors are supported.
+* Only the registered processors are supported.
