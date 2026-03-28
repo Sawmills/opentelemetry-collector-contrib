@@ -802,12 +802,10 @@ func TestRollingUpdatesWhenConsumeLogs(t *testing.T) {
 				consumeCh <- struct{}{}
 				return
 			case <-ticker.C:
-				waitWG.Add(1)
-				go func() {
+				waitWG.Go(func() {
 					err := p.ConsumeLogs(ctx, randomLogs())
 					assert.True(t, err == nil || errors.Is(err, context.Canceled))
-					waitWG.Done()
-				}()
+				})
 			}
 		}
 	}(ctx)
@@ -851,12 +849,12 @@ func simpleLogWithID(id pcommon.TraceID) plog.Logs {
 func sharedResourceScopeLog(body string) plog.Logs {
 	logs := plog.NewLogs()
 	rl := logs.ResourceLogs().AppendEmpty()
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		rl.Resource().Attributes().PutStr(fmt.Sprintf("resource-%d", i), "shared-resource-value")
 	}
 	sl := rl.ScopeLogs().AppendEmpty()
 	sl.Scope().SetName("shared-scope")
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		sl.Scope().Attributes().PutStr(fmt.Sprintf("scope-%d", i), "shared-scope-value")
 	}
 	rec := sl.LogRecords().AppendEmpty()
