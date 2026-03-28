@@ -130,7 +130,7 @@ In `ss4o` mapping mode, the OpenSearch exporter stores documents using the SS4O 
 > [!WARNING]
 > The ECS mapping mode is currently undergoing changes, and its behaviour is unstable.
 
-In `ecs` mapping mode, the OpenSearch exporter maps fields from [OpenTelemetry Semantic Conventions](https://opentelemetry.io/docs/reference/specification/trace/semantic_conventions/) to [Elastic Common Schema (ECS)](https://www.elastic.co/guide/en/ecs/current/index.html) where possible. This mode may be used for compatibility with dashboards and tools that expect ECS.
+In `ecs` mapping mode, the OpenSearch exporter maps fields from [OpenTelemetry Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/general/trace/) to [Elastic Common Schema (ECS)](https://www.elastic.co/guide/en/ecs/current/index.html) where possible. This mode may be used for compatibility with dashboards and tools that expect ECS.
 
 | Signal    | `ecs`              |
 | --------- | ------------------ |

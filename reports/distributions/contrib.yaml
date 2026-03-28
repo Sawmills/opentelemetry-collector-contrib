@@ -112,6 +112,7 @@ components:
         - isolationforest
         - k8s_attributes
         - logdedup
+        - logstometricsprocessor
         - metric_start_time
         - metricsgeneration
         - metricstransform
