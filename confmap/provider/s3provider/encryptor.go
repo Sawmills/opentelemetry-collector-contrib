@@ -1,4 +1,7 @@
-package s3provider
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package s3provider // import "github.com/open-telemetry/opentelemetry-collector-contrib/confmap/provider/s3provider"
 
 import (
 	"crypto/aes"
@@ -6,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -95,7 +99,7 @@ func (f *FileEncryptor) EncryptFile(srcPath, dstPath string) error {
 		return fmt.Errorf("failed to encrypt content: %w", err)
 	}
 
-	if err := os.WriteFile(dstPath, encrypted, 0600); err != nil {
+	if err := os.WriteFile(dstPath, encrypted, 0o600); err != nil {
 		return fmt.Errorf("failed to write encrypted file: %w", err)
 	}
 
@@ -134,7 +138,7 @@ func (f *FileEncryptor) DecryptFile(srcPath, dstPath string) error {
 		return fmt.Errorf("failed to decrypt content: %w", err)
 	}
 
-	if err := os.WriteFile(dstPath, decrypted, 0600); err != nil {
+	if err := os.WriteFile(dstPath, decrypted, 0o600); err != nil {
 		return fmt.Errorf("failed to write decrypted file: %w", err)
 	}
 
@@ -143,7 +147,7 @@ func (f *FileEncryptor) DecryptFile(srcPath, dstPath string) error {
 
 func (f *FileEncryptor) Decrypt(encrypted []byte) ([]byte, error) {
 	if len(encrypted) < 12 {
-		return nil, fmt.Errorf("encrypted content too short")
+		return nil, errors.New("encrypted content too short")
 	}
 	nonce := encrypted[:12]
 	ciphertext := encrypted[12:]

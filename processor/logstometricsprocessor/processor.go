@@ -71,7 +71,7 @@ func newProcessor(
 	}, nil
 }
 
-func (p *logsToMetricsProcessor) Start(ctx context.Context, host component.Host) error {
+func (*logsToMetricsProcessor) Start(context.Context, component.Host) error {
 	return nil
 }
 
@@ -82,7 +82,7 @@ func (p *logsToMetricsProcessor) Shutdown(context.Context) error {
 	return nil
 }
 
-func (p *logsToMetricsProcessor) Capabilities() consumer.Capabilities {
+func (*logsToMetricsProcessor) Capabilities() consumer.Capabilities {
 	return consumer.Capabilities{MutatesData: false}
 }
 

@@ -4,7 +4,6 @@
 package logstometricsprocessor
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -14,13 +13,11 @@ import (
 	"go.opentelemetry.io/collector/confmap/confmaptest"
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/pdata/plog"
-	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/processor"
 	"go.opentelemetry.io/collector/processor/processortest"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/plogtest"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/pmetrictest"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/config"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/metadata"
 )
@@ -36,11 +33,9 @@ func TestProcessorWithLogs(t *testing.T) {
 		"gauge",
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	for _, tc := range testCases {
 		t.Run(tc, func(t *testing.T) {
+			ctx := t.Context()
 			logTestDataDir := filepath.Join(testDataDir, "logs")
 			inputLogs, err := golden.ReadLogs(filepath.Join(logTestDataDir, "logs.yaml"))
 			require.NoError(t, err)
@@ -64,15 +59,14 @@ func TestProcessorWithLogs(t *testing.T) {
 			// In integration tests, metrics would be verified through the metrics pipeline.
 
 			// Verify logs were forwarded (default behavior)
-			require.Greater(t, len(logsSink.AllLogs()), 0, "expected logs to be forwarded")
+			require.NotEmpty(t, logsSink.AllLogs(), "expected logs to be forwarded")
 			assertLogsEqual(t, inputLogs, logsSink.AllLogs()[0])
 		})
 	}
 }
 
 func TestProcessorDropLogs(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	inputLogs, err := golden.ReadLogs(filepath.Join(testDataDir, "logs", "logs.yaml"))
 	require.NoError(t, err)
@@ -119,8 +113,7 @@ func TestProcessorDropLogs(t *testing.T) {
 }
 
 func TestProcessorForwardLogs(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	inputLogs, err := golden.ReadLogs(filepath.Join(testDataDir, "logs", "logs.yaml"))
 	require.NoError(t, err)
@@ -158,12 +151,7 @@ func TestProcessorForwardLogs(t *testing.T) {
 	// as routereceiver.RouteMetrics routes to a receiver in the metrics pipeline.
 
 	// Verify logs were forwarded
-	require.Greater(
-		t,
-		len(logsSink.AllLogs()),
-		0,
-		"expected logs to be forwarded when drop_logs is false",
-	)
+	require.NotEmpty(t, logsSink.AllLogs(), "expected logs to be forwarded when drop_logs is false")
 	assertLogsEqual(t, inputLogs, logsSink.AllLogs()[0])
 }
 
@@ -243,8 +231,7 @@ func TestProcessorInvalidConfig(t *testing.T) {
 }
 
 func BenchmarkProcessorWithLogs(b *testing.B) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := b.Context()
 
 	logsSink := &consumertest.LogsSink{}
 
@@ -288,10 +275,10 @@ func BenchmarkProcessorWithLogs(b *testing.B) {
 // Helper functions
 
 func setupProcessor(
-	t testing.TB,
+	tb testing.TB,
 	testDataDir string,
 ) (processor.Factory, processor.Settings, *config.Config) {
-	t.Helper()
+	tb.Helper()
 	factory := NewFactory()
 	settings := processortest.NewNopSettings(metadata.Type)
 
@@ -299,33 +286,18 @@ func setupProcessor(
 	cfg.Route = "test_route"
 
 	conf, err := confmaptest.LoadConf(filepath.Join(testDataDir, "config.yaml"))
-	require.NoError(t, err)
+	require.NoError(tb, err)
 
 	// Extract the processor config from under the processor name key
 	sub, err := conf.Sub(metadata.Type.String())
-	require.NoError(t, err)
-	require.NoError(t, sub.Unmarshal(cfg))
+	require.NoError(tb, err)
+	require.NoError(tb, sub.Unmarshal(cfg))
 
 	// Override route for testing
 	cfg.Route = "test_route"
-	require.NoError(t, cfg.Validate())
+	require.NoError(tb, cfg.Validate())
 
 	return factory, settings, cfg
-}
-
-// Note: Connector-related helper functions removed since we now use routereceiver
-
-func assertAggregatedMetrics(t *testing.T, expected, actual pmetric.Metrics) {
-	opts := []pmetrictest.CompareMetricsOption{
-		pmetrictest.IgnoreTimestamp(),
-		pmetrictest.IgnoreStartTimestamp(),
-		pmetrictest.IgnoreMetricDataPointsOrder(), // Ignore datapoint order as aggregation order may vary
-		// Ignore collector instance info attributes that are added automatically
-		pmetrictest.IgnoreResourceAttributeValue("logstometricsprocessor.service.instance.id"),
-		pmetrictest.IgnoreResourceAttributeValue("logstometricsprocessor.service.name"),
-		pmetrictest.IgnoreResourceAttributeValue("logstometricsprocessor.service.namespace"),
-	}
-	assert.NoError(t, pmetrictest.CompareMetrics(expected, actual, opts...))
 }
 
 func assertLogsEqual(t *testing.T, expected, actual plog.Logs) {

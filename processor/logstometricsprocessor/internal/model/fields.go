@@ -1,20 +1,12 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package model
+package model // import "github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/model"
 
 import (
 	"strings"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
-)
-
-type keyType int
-
-const (
-	keyTypeInvalid keyType = iota
-	keyTypeFlat
-	keyTypeHier
 )
 
 // splitFieldName splits dot-separated keys while preserving escaped dots.
@@ -49,14 +41,14 @@ func getKeyValue(valueMap pcommon.Map, keyParts []string) (pcommon.Value, bool) 
 	return pcommon.NewValueEmpty(), false
 }
 
-func getFieldValue2Keys(valueMap pcommon.Map, keyParts []string, flatKey string) (pcommon.Value, keyType, bool) {
+func getFieldValue2Keys(valueMap pcommon.Map, keyParts []string, flatKey string) (pcommon.Value, bool) {
 	if value, ok := valueMap.Get(flatKey); ok {
-		return value, keyTypeFlat, true
+		return value, true
 	}
 
 	if value, ok := getKeyValue(valueMap, keyParts); ok {
-		return value, keyTypeHier, true
+		return value, true
 	}
 
-	return pcommon.NewValueEmpty(), keyTypeInvalid, false
+	return pcommon.NewValueEmpty(), false
 }

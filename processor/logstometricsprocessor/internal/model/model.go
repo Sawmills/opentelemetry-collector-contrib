@@ -247,7 +247,7 @@ func (md *MetricDef[K]) FilterAttributes(attrs pcommon.Map) (pcommon.Map, bool) 
 			continue
 		}
 		keyParts := splitFieldName(filter.Key)
-		_, _, found := getFieldValue2Keys(attrs, keyParts, filter.Key)
+		_, found := getFieldValue2Keys(attrs, keyParts, filter.Key)
 		if !found {
 			return pcommon.Map{}, false
 		}
@@ -260,7 +260,7 @@ func filterAttributes(attrs pcommon.Map, filters []AttributeKeyValue, expectedLe
 	filteredAttrs.EnsureCapacity(expectedLen)
 	for _, filter := range filters {
 		keyParts := splitFieldName(filter.Key)
-		attr, _, found := getFieldValue2Keys(attrs, keyParts, filter.Key)
+		attr, found := getFieldValue2Keys(attrs, keyParts, filter.Key)
 		if found {
 			// Copy the found value to output using the original key name
 			attr.CopyTo(filteredAttrs.PutEmpty(filter.Key))

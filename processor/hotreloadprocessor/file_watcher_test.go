@@ -1,3 +1,6 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package hotreloadprocessor
 
 import (
@@ -27,7 +30,8 @@ func TestFileWatcher(t *testing.T) {
 	require.NoError(t, err)
 
 	filePath := filepath.Join(dir, "config.yaml")
-	os.WriteFile(filePath, []byte("test"), 0644)
+	err = os.WriteFile(filePath, []byte("test"), 0o600)
+	require.NoError(t, err)
 
 	select {
 	case <-done:
