@@ -7,10 +7,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/groupbyattrsprocessor"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/metricstransformprocessor"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/consumer"
@@ -18,6 +14,11 @@ import (
 	otelpipeline "go.opentelemetry.io/collector/pipeline"
 	otelprocessor "go.opentelemetry.io/collector/processor"
 	"go.opentelemetry.io/collector/processor/batchprocessor"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/groupbyattrsprocessor"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/metricstransformprocessor"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor"
 )
 
 type ProcessorFactoryRegistry map[component.Type]otelprocessor.Factory

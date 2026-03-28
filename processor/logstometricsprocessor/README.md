@@ -235,4 +235,4 @@ The processor reports the following internal metrics:
 ## See Also
 
 * [OTTL Documentation](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/pkg/ottl)
-* [Signal to Metrics Connector](../connector/signaltometricsconnector/README.md) - Similar functionality as a connector
+* [Signal to Metrics Connector](../../connector/signaltometricsconnector/README.md) - Similar functionality as a connector

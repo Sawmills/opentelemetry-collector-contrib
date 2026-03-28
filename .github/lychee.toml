@@ -8,7 +8,13 @@ exclude  = [
     "^https://dev.mysql.com",
     "^https://bugs.mysql.com",
     "^https://techdocs.akamai.com",
-    "^https://www.vultr.com"
+    "^https://www.vultr.com",
+    "^https://docs\\.splunk\\.com/Documentation/Splunk/9\\.0\\.0/Metrics/GetMetricsInOther#The_multiple-metric_JSON_format$",
+    "^https://docs\\.splunk\\.com/Documentation/Splunk/9\\.0\\.1/RESTREF/RESTinput#services\\.2Fcollector\\.2Fhealth$",
+    "^https://docs\\.splunk\\.com/Documentation/Splunk/latest/Data/UsetheHTTPEventCollector$",
+    "^https://docs\\.splunk\\.com/Splexicon:Source$",
+    "^https://docs\\.splunk\\.com/Splexicon:Sourcetype$",
+    "^https://support\\.huaweicloud\\.com/intl/en-us/devg-apisign/api-sign-provide-proid\\.html$"
 ]
 
 # better to be safe and avoid failures

@@ -8,10 +8,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/hotreloadprocessor/internal/metadata"
 	"go.opentelemetry.io/collector/processor"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/hotreloadprocessor/internal/metadata"
 )
 
 // hotreloadProcessorTelemetry holds telemetry data and methods for recording metrics.

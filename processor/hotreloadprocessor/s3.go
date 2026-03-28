@@ -13,8 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/confmap/provider/s3provider"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -22,6 +20,8 @@ import (
 	"go.opentelemetry.io/collector/otelcol"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/confmap/provider/s3provider"
 )
 
 type applyConfig func(ctx context.Context, config otelcol.Config, key string) error
