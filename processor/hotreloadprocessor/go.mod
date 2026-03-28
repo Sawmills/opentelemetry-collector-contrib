@@ -7,9 +7,9 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.11
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.4
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/confmap/provider/s3provider v1.700.0
+	github.com/open-telemetry/opentelemetry-collector-contrib/confmap/provider/s3provider v0.0.0-00010101000000-000000000000
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/groupbyattrsprocessor v0.148.0
-	github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor v0.0.1
+	github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor v0.0.0-00010101000000-000000000000
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/metricstransformprocessor v0.148.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.148.0
 	github.com/stretchr/testify v1.11.1

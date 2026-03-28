@@ -11,6 +11,12 @@ This processor is designed to convert log data into metrics, enabling you to:
 * Optionally forward or drop logs after metric extraction
 * Send extracted metrics to a separate metrics pipeline via routereceiver
 
+## Router Dependency
+
+This processor currently routes extracted metrics through `github.com/observiq/bindplane-agent/receiver/routereceiver`.
+The dependency is isolated behind a local `routeMetrics` wrapper so the processor logic stays independent from the concrete routing package.
+The coupling is intentional for the Sawmills distro: `route` names map onto an existing routereceiver-based metrics pipeline, and keeping that route contract preserves current configs during the contrib migration.
+
 ## Configuration
 
 The processor requires the following configuration:

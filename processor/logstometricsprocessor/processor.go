@@ -16,7 +16,6 @@ import (
 	"go.opentelemetry.io/collector/processor/processorhelper"
 	"go.uber.org/zap"
 
-	"github.com/observiq/bindplane-agent/receiver/routereceiver"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottllog"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/config"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor/internal/aggregator"
@@ -73,7 +72,6 @@ func newProcessor(
 }
 
 func (p *logsToMetricsProcessor) Start(ctx context.Context, host component.Host) error {
-	// No initialization needed when using routereceiver
 	return nil
 }
 
@@ -188,9 +186,8 @@ func (p *logsToMetricsProcessor) ConsumeLogs(ctx context.Context, logs plog.Logs
 	}
 	agg.Finalize(p.logMetricDefs)
 
-	// Send metrics to routereceiver (which routes to metrics pipeline)
 	if processedMetrics.ResourceMetrics().Len() > 0 {
-		if err := routereceiver.RouteMetrics(ctx, p.config.Route, processedMetrics); err != nil {
+		if err := routeMetrics(ctx, p.config.Route, processedMetrics); err != nil {
 			p.logger.Error("Failed to send metrics to routereceiver", zap.Error(err))
 			totalErrorCount++
 			// Continue processing logs even if metrics send fails
