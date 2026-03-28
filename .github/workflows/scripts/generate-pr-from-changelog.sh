@@ -116,7 +116,11 @@ main() {
             continue
         fi
 
-        COMPONENTS+=("${COMPONENT}")
+        COMPONENT_FOR_BODY="${COMPONENT}"
+        if [[ -z "${COMPONENT_FOR_BODY}" ]]; then
+            COMPONENT_FOR_BODY="unknown"
+        fi
+        COMPONENTS+=("${COMPONENT_FOR_BODY}")
         NOTES+=("${NOTE}")
         CHANGE_TYPES+=("${CHANGE_TYPE}")
         if [[ -n "${ISSUES}" ]]; then
@@ -129,7 +133,9 @@ main() {
                 fi
             done
         fi
-        SUBTEXTS+=("${SUBTEXT}")
+        if [[ -n "${SUBTEXT}" ]]; then
+            SUBTEXTS+=("${SUBTEXT}")
+        fi
     done
 
     if [[ ${#NOTES[@]} -eq 0 ]]; then
@@ -142,7 +148,7 @@ main() {
     # Format: [component1, component2] first note (+N more) (for multiple entries)
 
     # Deduplicate components
-    mapfile -t UNIQUE_COMPONENTS < <(echo "${COMPONENTS[@]}" | tr ' ' '\n' | sort -u)
+    mapfile -t UNIQUE_COMPONENTS < <(printf '%s\n' "${COMPONENTS[@]}" | awk '$0 != "unknown" && NF' | sort -u)
     COMPONENT_PREFIX=""
     if [[ ${#UNIQUE_COMPONENTS[@]} -gt 0 ]]; then
         COMPONENT_PREFIX="[$(IFS=', '; echo "${UNIQUE_COMPONENTS[*]}")] "
