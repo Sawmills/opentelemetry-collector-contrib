@@ -34,4 +34,5 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.number }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_TITLE: ${{ github.event.pull_request.title }}
