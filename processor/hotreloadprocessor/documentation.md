@@ -10,70 +10,117 @@ The following telemetry is emitted by this component.
 
 Refresh interval of the hotreloadprocessor
 
-| Unit | Metric Type | Value Type |
-| ---- | ----------- | ---------- |
-| ms | Gauge | Int |
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| ms | Gauge | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values |
+| ---- | ----------- | ------ |
+| destination | The destination of the hotreloadprocessor | Any Str |
 
 ### otelcol_processor_hot_reload_config_shutdown_delay
 
 Shutdown delay of the hotreloadprocessor
 
-| Unit | Metric Type | Value Type |
-| ---- | ----------- | ---------- |
-| ms | Gauge | Int |
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| ms | Gauge | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values |
+| ---- | ----------- | ------ |
+| destination | The destination of the hotreloadprocessor | Any Str |
 
 ### otelcol_processor_hot_reload_newest_file_failed_timestamp
 
 The timestamp of the newest file failed to load by the hotreloadprocessor in seconds
 
-| Unit | Metric Type | Value Type |
-| ---- | ----------- | ---------- |
-| 1 | Gauge | Int |
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| 1 | Gauge | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values |
+| ---- | ----------- | ------ |
+| destination | The destination of the hotreloadprocessor | Any Str |
+| key | The key of the file being scanned | Any Str |
+| reason | The reason for the error | Any Str |
 
 ### otelcol_processor_hot_reload_newest_file_success_timestamp
 
 The timestamp of the newest file successfully loaded by the hotreloadprocessor in seconds
 
-| Unit | Metric Type | Value Type |
-| ---- | ----------- | ---------- |
-| 1 | Gauge | Int |
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| 1 | Gauge | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values |
+| ---- | ----------- | ------ |
+| destination | The destination of the hotreloadprocessor | Any Str |
+| key | The key of the file being scanned | Any Str |
 
 ### otelcol_processor_hot_reload_process_duration
 
 Duration of the processLogs function by the hotreloadprocessor
 
-| Unit | Metric Type | Value Type |
-| ---- | ----------- | ---------- |
-| ms | Histogram | Int |
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| ms | Histogram | Int | Development |
 
 ### otelcol_processor_hot_reload_reload_duration
 
 Duration of the reload by the hotreloadprocessor
 
-| Unit | Metric Type | Value Type |
-| ---- | ----------- | ---------- |
-| ms | Histogram | Int |
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| ms | Histogram | Int | Development |
 
 ### otelcol_processor_hot_reload_rollback_file_success_timestamp
 
 The timestamp of the rollback file successfully loaded by the hotreloadprocessor in seconds
 
-| Unit | Metric Type | Value Type |
-| ---- | ----------- | ---------- |
-| 1 | Gauge | Int |
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| 1 | Gauge | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values |
+| ---- | ----------- | ------ |
+| destination | The destination of the hotreloadprocessor | Any Str |
+| key | The key of the file being scanned | Any Str |
+| reason | The reason for the error | Any Str |
 
 ### otelcol_processor_hot_reload_running_processors_count
 
 Number of running processors in the hotreloadprocessor
 
-| Unit | Metric Type | Value Type |
-| ---- | ----------- | ---------- |
-| 1 | Gauge | Int |
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| 1 | Gauge | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values |
+| ---- | ----------- | ------ |
+| destination | The destination of the hotreloadprocessor | Any Str |
 
 ### otelcol_processor_hot_reload_scan
 
 Number of scanned prefixes by the hotreloadprocessor
 
-| Unit | Metric Type | Value Type |
-| ---- | ----------- | ---------- |
-| 1 | Gauge | Int |
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| 1 | Gauge | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values |
+| ---- | ----------- | ------ |
+| prefix | The prefix of the file being scanned | Any Str |

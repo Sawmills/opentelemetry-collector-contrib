@@ -20,28 +20,9 @@ tests:
 
 telemetry:
   metrics:
-    processor_logstometrics_logs_processed:
-      description: Number of log records processed by the processor
-      stability:
-        level: development
-      unit: "{records}"
-      enabled: true
-      sum:
-        value_type: int
-        monotonic: true
-    processor_logstometrics_metrics_extracted:
-      description: Number of metrics extracted from logs
-      stability:
-        level: development
-      unit: "{metrics}"
-      enabled: true
-      sum:
-        value_type: int
-        monotonic: true
     processor_logstometrics_errors:
       description: Number of errors encountered during processing
-      stability:
-        level: development
+      stability: development
       unit: "{errors}"
       enabled: true
       sum:
@@ -49,17 +30,31 @@ telemetry:
         monotonic: true
     processor_logstometrics_logs_dropped:
       description: Number of logs dropped when drop_logs is true
-      stability:
-        level: development
+      stability: development
       unit: "{records}"
+      enabled: true
+      sum:
+        value_type: int
+        monotonic: true
+    processor_logstometrics_logs_processed:
+      description: Number of log records processed by the processor
+      stability: development
+      unit: "{records}"
+      enabled: true
+      sum:
+        value_type: int
+        monotonic: true
+    processor_logstometrics_metrics_extracted:
+      description: Number of metrics extracted from logs
+      stability: development
+      unit: "{metrics}"
       enabled: true
       sum:
         value_type: int
         monotonic: true
     processor_logstometrics_processing_duration:
       description: Time spent processing logs and extracting metrics
-      stability:
-        level: development
+      stability: development
       unit: ms
       enabled: true
       histogram:
