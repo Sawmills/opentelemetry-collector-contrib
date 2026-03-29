@@ -26,4 +26,5 @@ exclude  = [
 ]
 
 # better to be safe and avoid failures
+max_redirects = 5
 max_retries = 6
