@@ -22,12 +22,13 @@ require (
 	github.com/observiq/bindplane-agent/receiver/routereceiver v1.57.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatautil v0.148.0
 	go.opentelemetry.io/collector/component/componenttest v0.148.0
-	go.opentelemetry.io/collector/config/configtelemetry v0.148.0
 	go.opentelemetry.io/collector/consumer/consumertest v0.148.0
 	go.opentelemetry.io/collector/processor/processortest v0.148.0
 	go.opentelemetry.io/otel v1.42.0
 	go.opentelemetry.io/otel/metric v1.42.0
+	go.opentelemetry.io/otel/sdk/metric v1.42.0
 	go.opentelemetry.io/otel/trace v1.42.0
+	go.uber.org/goleak v1.3.0
 )
 
 require (
@@ -75,7 +76,6 @@ require (
 	go.opentelemetry.io/collector/processor/xprocessor v0.148.0 // indirect
 	go.opentelemetry.io/collector/receiver v1.54.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.42.0 // indirect
-	go.opentelemetry.io/otel/sdk/metric v1.42.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/exp v0.0.0-20250305212735-054e65f0b394 // indirect

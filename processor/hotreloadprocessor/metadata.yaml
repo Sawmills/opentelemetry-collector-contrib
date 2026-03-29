@@ -95,3 +95,9 @@ attributes:
   reason:
     description: The reason for the error
     type: string
+
+tests:
+  config:
+    configuration_prefix: data://cHJvY2Vzc29yczoKICBiYXRjaC90ZXN0OgogICAgc2VuZF9iYXRjaF9zaXplOiAxCiAgICB0aW1lb3V0OiAxcwpzZXJ2aWNlOgogIHBpcGVsaW5lczoKICAgIGxvZ3MvdGVzdDoKICAgICAgcHJvY2Vzc29yczogW2JhdGNoL3Rlc3RdCiAgICBtZXRyaWNzL3Rlc3Q6CiAgICAgIHByb2Nlc3NvcnM6IFtiYXRjaC90ZXN0XQogICAgdHJhY2VzL3Rlc3Q6CiAgICAgIHByb2Nlc3NvcnM6IFtiYXRjaC90ZXN0XQo=
+    encryption_key: test-key
+    region: us-east-1
