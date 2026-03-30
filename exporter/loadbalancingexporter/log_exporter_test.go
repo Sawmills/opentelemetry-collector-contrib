@@ -574,6 +574,29 @@ func TestConsumeBatchReroutesTransportFailureToHealthyEndpoint(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestConsumeBatchDoesNotHideTransportFailureWhenRerouteStaysOnSameEndpoint(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	failingExp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, _ plog.Logs) error {
+		return errors.New(`rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 10.12.105.114:10418: connect: no route to host"`)
+	}), "endpoint-1:4317")
+
+	lb.ring = newHashRing([]string{"endpoint-1"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": failingExp,
+	}
+
+	p, err := newLogsExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+
+	err = p.consumeBatch(t.Context(), failingExp, simpleLogWithID(findTraceIDForEndpoint(t, lb.ring, "endpoint-1")), logFlushReasonTimeout)
+	require.ErrorContains(t, err, "no route to host")
+	require.ErrorContains(t, err, "reroute did not escape failed endpoint")
+}
+
 func TestInsertLogRecordKeepsDistinctDroppedAttributeCounts(t *testing.T) {
 	dest := plog.NewLogs()
 

@@ -3,7 +3,12 @@
 
 package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter"
 
-import "strings"
+import (
+	"strings"
+
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
+)
 
 func isBackendTransportFailure(err error) bool {
 	if err == nil {
@@ -14,5 +19,5 @@ func isBackendTransportFailure(err error) bool {
 	return strings.Contains(msg, "no route to host") ||
 		strings.Contains(msg, "connection refused") ||
 		strings.Contains(msg, "i/o timeout") ||
-		strings.Contains(msg, "context deadline exceeded")
+		(grpcstatus.Code(err) == codes.Unavailable && strings.Contains(msg, "transport:"))
 }

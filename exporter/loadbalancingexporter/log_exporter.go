@@ -227,10 +227,7 @@ func (e *logExporterImp) consumeBatch(ctx context.Context, le *wrappedExporter, 
 		if isBackendTransportFailure(err) {
 			e.loadBalancer.quarantineEndpoint(le.endpoint)
 			if e.shouldRerouteBatch(reason) {
-				reroutedBatches, rerouteErr := e.groupLogsByEndpoint(ld)
-				if rerouteErr == nil {
-					rerouteErr = e.enqueueEndpointBatches(ctx, reroutedBatches, false)
-				}
+				rerouteErr := e.rerouteTransportFailedBatch(ctx, le.endpoint, ld)
 				if rerouteErr == nil {
 					return nil
 				}
@@ -247,6 +244,33 @@ func (e *logExporterImp) shouldRerouteBatch(reason string) bool {
 	return reason != logFlushReasonDirect &&
 		reason != logFlushReasonResolverChange &&
 		reason != logFlushReasonShutdown
+}
+
+func (e *logExporterImp) rerouteTransportFailedBatch(ctx context.Context, failedEndpoint string, ld plog.Logs) error {
+	reroutedBatches, err := e.groupLogsByEndpoint(ld)
+	if err != nil {
+		return err
+	}
+
+	if !hasAlternativeEndpoint(reroutedBatches, failedEndpoint) {
+		return errors.New("reroute did not escape failed endpoint")
+	}
+
+	var errs error
+	for _, batch := range reroutedBatches {
+		errs = multierr.Append(errs, e.consumeBatch(ctx, batch.exp, batch.logs, logFlushReasonDirect))
+	}
+	return errs
+}
+
+func hasAlternativeEndpoint(batches map[string]*endpointBatch, failedEndpoint string) bool {
+	failedEndpoint = endpointWithPort(failedEndpoint)
+	for endpoint := range batches {
+		if endpoint != failedEndpoint {
+			return true
+		}
+	}
+	return false
 }
 
 // insertLogRecord adds a log record into the destination plog.Logs, reusing
