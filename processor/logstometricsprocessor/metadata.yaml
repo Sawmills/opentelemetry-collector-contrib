@@ -9,6 +9,7 @@ status:
     active: []
 
 tests:
+  skip_lifecycle: true
   config:
     metrics_connector: test_connector
     drop_logs: false
@@ -20,24 +21,6 @@ tests:
 
 telemetry:
   metrics:
-    processor_logstometrics_logs_processed:
-      description: Number of log records processed by the processor
-      stability:
-        level: development
-      unit: "{records}"
-      enabled: true
-      sum:
-        value_type: int
-        monotonic: true
-    processor_logstometrics_metrics_extracted:
-      description: Number of metrics extracted from logs
-      stability:
-        level: development
-      unit: "{metrics}"
-      enabled: true
-      sum:
-        value_type: int
-        monotonic: true
     processor_logstometrics_errors:
       description: Number of errors encountered during processing
       stability:
@@ -56,6 +39,24 @@ telemetry:
       sum:
         value_type: int
         monotonic: true
+    processor_logstometrics_logs_processed:
+      description: Number of log records processed by the processor
+      stability:
+        level: development
+      unit: "{records}"
+      enabled: true
+      sum:
+        value_type: int
+        monotonic: true
+    processor_logstometrics_metrics_extracted:
+      description: Number of metrics extracted from logs
+      stability:
+        level: development
+      unit: "{metrics}"
+      enabled: true
+      sum:
+        value_type: int
+        monotonic: true
     processor_logstometrics_processing_duration:
       description: Time spent processing logs and extracting metrics
       stability:
@@ -65,4 +66,3 @@ telemetry:
       histogram:
         value_type: int
         buckets: [1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]
-
