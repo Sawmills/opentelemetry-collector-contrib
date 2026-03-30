@@ -230,7 +230,7 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
-		cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
+		cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
 
 		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodecIfEnabled(cfg), newSettings()), 2)
 	})
@@ -238,7 +238,7 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
-		cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
+		cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
 		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
 
 		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodec(cfg.QueueSettings.PayloadCompression), newSettings()), 2)
@@ -247,7 +247,7 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
-		cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
+		cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
 		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionNone
 		cfg.BackOffConfig = configretry.NewDefaultBackOffConfig()
 
@@ -257,7 +257,7 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 
 func TestNewQueuePayloadCodecIfEnabled(t *testing.T) {
 	cfg := createDefaultConfig().(*Config)
-	cfg.QueueSettings.Enabled = true
+	cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
 
 	t.Run("legacy empty string disables codec", func(t *testing.T) {
 		cfg.QueueSettings.PayloadCompression = ""

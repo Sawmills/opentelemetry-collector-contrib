@@ -5,21 +5,12 @@ status:
   stability:
     development: [logs, metrics, traces]
 
-tests:
-  config:
-    configuration_prefix: data://cHJvY2Vzc29yczoge30Kc2VydmljZToKICBwaXBlbGluZXM6CiAgICBsb2dzLzMyYWQyYzNkLWFlN2MtNDg4Ny1iNDc2LTM2NWRhZGU4YzljZC82OTE3NGQ0MS1hNDljLTQ3NjMtYmNlMi1lOTdlZjgwNTFiYWI6CiAgICAgIHByb2Nlc3NvcnM6IFtdCg==
-    encryption_key: test-key
-    region: us-east-1
-    refresh_interval: 2m
-    shutdown_delay: 1m
-
 telemetry:
   metrics:
     processor_hot_reload_config_refresh_interval:
       enabled: true
       description: Refresh interval of the hotreloadprocessor
-      stability:
-        level: development
+      stability: development
       unit: ms
       gauge:
         value_type: int
@@ -27,8 +18,7 @@ telemetry:
     processor_hot_reload_config_shutdown_delay:
       enabled: true
       description: Shutdown delay of the hotreloadprocessor
-      stability:
-        level: development
+      stability: development
       unit: ms
       gauge:
         value_type: int
@@ -36,8 +26,7 @@ telemetry:
     processor_hot_reload_newest_file_failed_timestamp:
       enabled: true
       description: The timestamp of the newest file failed to load by the hotreloadprocessor in seconds
-      stability:
-        level: development
+      stability: development
       unit: "1"
       gauge:
         value_type: int
@@ -45,8 +34,7 @@ telemetry:
     processor_hot_reload_newest_file_success_timestamp:
       enabled: true
       description: The timestamp of the newest file successfully loaded by the hotreloadprocessor in seconds
-      stability:
-        level: development
+      stability: development
       unit: "1"
       gauge:
         value_type: int
@@ -54,8 +42,7 @@ telemetry:
     processor_hot_reload_process_duration:
       enabled: true
       description: Duration of the processLogs function by the hotreloadprocessor
-      stability:
-        level: development
+      stability: development
       unit: ms
       histogram:
         value_type: int
@@ -64,8 +51,7 @@ telemetry:
     processor_hot_reload_reload_duration:
       enabled: true
       description: Duration of the reload by the hotreloadprocessor
-      stability:
-        level: development
+      stability: development
       unit: ms
       histogram:
         value_type: int
@@ -74,17 +60,15 @@ telemetry:
     processor_hot_reload_rollback_file_success_timestamp:
       enabled: true
       description: The timestamp of the rollback file successfully loaded by the hotreloadprocessor in seconds
-      stability:
-        level: development
+      stability: development
       unit: "1"
       gauge:
         value_type: int
-      attributes: [destination, key]
+      attributes: [destination, key, reason]
     processor_hot_reload_running_processors_count:
       enabled: true
       description: Number of running processors in the hotreloadprocessor
-      stability:
-        level: development
+      stability: development
       unit: "1"
       gauge:
         value_type: int
@@ -92,8 +76,7 @@ telemetry:
     processor_hot_reload_scan:
       enabled: true
       description: Number of scanned prefixes by the hotreloadprocessor
-      stability:
-        level: development
+      stability: development
       unit: "1"
       gauge:
         value_type: int
@@ -112,3 +95,9 @@ attributes:
   reason:
     description: The reason for the error
     type: string
+
+tests:
+  config:
+    configuration_prefix: data://cHJvY2Vzc29yczoKICBiYXRjaC90ZXN0OgogICAgc2VuZF9iYXRjaF9zaXplOiAxCiAgICB0aW1lb3V0OiAxcwpzZXJ2aWNlOgogIHBpcGVsaW5lczoKICAgIGxvZ3MvdGVzdDoKICAgICAgcHJvY2Vzc29yczogW2JhdGNoL3Rlc3RdCiAgICBtZXRyaWNzL3Rlc3Q6CiAgICAgIHByb2Nlc3NvcnM6IFtiYXRjaC90ZXN0XQogICAgdHJhY2VzL3Rlc3Q6CiAgICAgIHByb2Nlc3NvcnM6IFtiYXRjaC90ZXN0XQo=
+    encryption_key: test-key
+    region: us-east-1

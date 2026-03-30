@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//go:generate mdatagen metadata.yaml
+//go:generate make mdatagen
 
 // Package logstometricsprocessor extracts metrics from logs using OTTL expressions.
 // The processor supports extracting Sum, Gauge, Histogram, and Exponential Histogram

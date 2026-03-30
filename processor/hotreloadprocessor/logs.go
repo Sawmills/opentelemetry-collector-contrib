@@ -9,7 +9,6 @@ import (
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
-	otelcol "go.opentelemetry.io/collector/otelcol"
 	"go.opentelemetry.io/collector/pdata/plog"
 	otelprocessor "go.opentelemetry.io/collector/processor"
 )
@@ -23,13 +22,14 @@ func newHotReloadLogsProcessor(
 	set otelprocessor.Settings,
 	cfg *Config,
 	nextConsumer consumer.Logs,
+	registry ProcessorFactoryRegistry,
 ) (*HotReloadLogsProcessor, error) {
 	hp, err := newHotReloadProcessor(
 		context,
 		set,
 		cfg,
 		nextConsumer,
-		loaderLogs{},
+		loaderLogs{subprocessorLoader: subprocessorLoader[consumer.Logs]{factories: registry}},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("error creating hotreload processor: %w", err)
@@ -47,58 +47,25 @@ func (hp *HotReloadLogsProcessor) ConsumeLogs(ctx context.Context, ld plog.Logs)
 	})
 }
 
-type loaderLogs struct{}
-
-//nolint:unused // False positive from generic loader wiring.
-func (loaderLogs) load(
-	ctx context.Context,
-	config otelcol.Config,
-	set otelprocessor.Settings,
-	host component.Host,
-	nextConsumer consumer.Logs,
-) ([]otelprocessor.Logs, error) {
-	proc, err := loadLogsSubprocessors(ctx, config, set, host, nextConsumer)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(proc) == 0 {
-		// Return a passthrough processor if none are loaded
-		return []otelprocessor.Logs{&passthroughLogsProcessor{next: nextConsumer}}, nil
-	}
-
-	proc2 := make([]otelprocessor.Logs, len(proc))
-	for i, p := range proc {
-		proc2[i] = p.(otelprocessor.Logs)
-	}
-	return proc2, nil
-}
-
 // passthroughLogsProcessor is a fallback processor that just forwards logs to nextConsumer.
-//
-//nolint:unused // False positive from interface implementation only used through generics.
 type passthroughLogsProcessor struct {
 	next consumer.Logs
 }
 
-//nolint:unused // False positive from interface implementation only used through generics.
-func (*passthroughLogsProcessor) Start(_ context.Context, _ component.Host) error {
+func (p *passthroughLogsProcessor) Start(ctx context.Context, host component.Host) error {
 	// No-op
 	return nil
 }
 
-//nolint:unused // False positive from interface implementation only used through generics.
-func (*passthroughLogsProcessor) Shutdown(_ context.Context) error {
+func (p *passthroughLogsProcessor) Shutdown(ctx context.Context) error {
 	// No-op
 	return nil
 }
 
-//nolint:unused // False positive on interface method implementation.
 func (p *passthroughLogsProcessor) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
 	return p.next.ConsumeLogs(ctx, ld)
 }
 
-//nolint:unused // False positive from interface implementation only used through generics.
-func (*passthroughLogsProcessor) Capabilities() consumer.Capabilities {
+func (p *passthroughLogsProcessor) Capabilities() consumer.Capabilities {
 	return processorCapabilities
 }

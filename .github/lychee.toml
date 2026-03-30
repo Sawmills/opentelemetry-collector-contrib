@@ -1,4 +1,4 @@
-include-fragments = true
+include_fragments = false
 
 accept = ["200..=299", "429"]
 
@@ -8,8 +8,62 @@ exclude  = [
     "^https://dev.mysql.com",
     "^https://bugs.mysql.com",
     "^https://techdocs.akamai.com",
-    "^https://www.vultr.com"
+    "^https://www.vultr.com",
+    "^https://www\\.github\\.com",
+    "^https://opentelemetry\\.io/docs/specs/semconv/attributes-registry/db/$",
+    "^https://opentelemetry\\.io/ecosystem/registry/adding/$",
+    "^https://opentelemetry\\.io/docs/reference/specification/common/#attribute$",
+    "^https://opentelemetry\\.io/docs/reference/specification/logs/data-model/#field-severitynumber$",
+    "^https://opentelemetry\\.io/docs/collector/custom-collector/$",
+    "^https://opentelemetry\\.io/docs/collector/$",
+    "^https://opentelemetry\\.io/docs/specs/otel/resource/sdk/$",
+    "^https://opentelemetry\\.io/docs/specs/otel/trace/exceptions/$",
+    "^https://opentelemetry\\.io/docs/specs/otel/trace/tracestate-probability-sampling-experimental/#adjusted-count$",
+    "^https://opentelemetry\\.io/docs/specs/semconv/general/naming/#general-naming-considerations$",
+    "^https://opentelemetry\\.io/docs/specs/semconv/general/attributes/#server-client-and-shared-network-attributes$",
+    "^https://opentelemetry\\.io/docs/specs/otel/metrics/data-model/#sums$",
+    "^https://opentelemetry\\.io/docs/specs/otel/common/#attribute$",
+    "^https://opentelemetry\\.io/docs/k8s-operator/$",
+    "^https://opentelemetry\\.io/docs/reference/specification/logs/data-model/$",
+    "^https://opentelemetry\\.io/docs/reference/specification/metrics/sdk/$",
+    "^https://opentelemetry\\.io/docs/reference/specification/resource/semantic_conventions/host/$",
+    "^https://opentelemetry\\.io/docs/reference/specification/trace/api/#add-events$",
+    "^https://opentelemetry\\.io/docs/reference/specification/trace/api/#specifying-links$",
+    "^https://opentelemetry\\.io/docs/reference/specification/trace/sdk/$",
+    "^https://www\\.jaegertracing\\.io/docs/1\\.28/sampling/#collector-sampling-configuration$",
+    "^https://docs\\.splunk\\.com/Documentation/Splunk/9\\.0\\.0/Metrics/GetMetricsInOther#The_multiple-metric_JSON_format$",
+    "^https://docs\\.splunk\\.com/Documentation/Splunk/9\\.0\\.1/RESTREF/RESTinput#services\\.2Fcollector\\.2Fhealth$",
+    "^https://docs\\.splunk\\.com/Documentation/Splunk/latest/Data/UsetheHTTPEventCollector$",
+    "^https://docs\\.splunk\\.com/Splexicon:Source$",
+    "^https://docs\\.splunk\\.com/Splexicon:Sourcetype$",
+    "^https://www\\.cisco\\.com/en/US/technologies/tk648/tk362/technologies_white_paper09186a00800a3db9\\.html$",
+    "^https://support\\.huaweicloud\\.com/intl/en-us/devg-apisign/api-sign-provide-proid\\.html$",
+    "^https://kubernetes\\.io/docs/reference/generated/kubernetes-api/v1\\.23/#resourcerequirements-v1-core$",
+    "^https://kubernetes\\.io/docs/reference/generated/kubernetes-api/v1\\.30/#containerstate-v1-core$",
+    "^https://opentelemetry\\.io/docs/specs/otel/compatibility/prometheus_and_openmetrics/#resource-attributes-1$",
+    "^https://opentelemetry\\.io/docs/specs/semconv/database/$",
+    "^https://opentelemetry\\.io/docs/specs/semconv/general/trace/$",
+    "^https://opentelemetry\\.io/docs/specs/semconv/messaging/messaging-spans/$",
+    "^https://opentelemetry\\.io/docs/specs/semconv/non-normative/k8s-attributes/$",
+    "^https://opentelemetry\\.io/docs/specs/semconv/non-normative/k8s-attributes/#how-serviceinstanceid-should-be-calculated$",
+    "^https://opentelemetry\\.io/docs/specs/semconv/non-normative/k8s-attributes/#how-servicename-should-be-calculated$",
+    "^https://opentelemetry\\.io/docs/specs/semconv/non-normative/k8s-attributes/#how-servicenamespace-should-be-calculated$",
+    "^https://opentelemetry\\.io/docs/specs/semconv/non-normative/k8s-attributes/#how-serviceversion-should-be-calculated$",
+    "^https://opentelemetry\\.io/docs/specs/semconv/registry/attributes/k8s/$",
+    "^https://opentelemetry\\.io/docs/specs/semconv/rpc/rpc-spans/$",
+    "^https://opentelemetry\\.io/docs/specs/semconv/cicd/cicd-metrics/#vcs-metrics$",
+    "^https://docs\\.logz\\.io/user-guide/accounts/account-region\\.html#available-regions$",
+    "^https://codecov\\.io/github/open-telemetry/opentelemetry-collector-contrib/graph/main/badge\\.svg\\?component=receiver_k8sobjects$",
+    "^https://nightlies\\.apache\\.org/flink/flink-docs-master/docs/deployment/security/security-ssl/#external--rest-connectivity$",
+    "^https://nightlies\\.apache\\.org/flink/flink-docs-master/docs/deployment/security/security-ssl/#rest-endpoints-external-connectivity$",
+    "^https://nightlies\\.apache\\.org/flink/flink-docs-release-1\\.14/docs/ops/metrics/#rest-api-integration$",
+    "^https://www\\.envoyproxy\\.io/docs/envoy/latest/api-v3/extensions/access_loggers/grpc/v3/als\\.proto#envoy-v3-api-msg-extensions-access-loggers-grpc-v3-httpgrpcaccesslogconfig$",
+    "^https://github\\.com/open-telemetry/opentelemetry-collector-contrib/issues/42103$",
+    "^https://github\\.com/open-telemetry/opentelemetry-collector-contrib/blob/release/0\\.119\\.x/pkg/ottl/contexts/ottldatapoint/README\\.md$",
+    "^https://github\\.com/open-telemetry/opentelemetry-collector-contrib/issues\\?q=is%3Aopen\\+is%3Aissue\\+label%3Aprocessor%2Funroll$",
+    "^https://github\\.com/open-telemetry/opentelemetry-collector-contrib/issues\\?q=is%3Aclosed\\+is%3Aissue\\+label%3Areceiver%2Fskywalking$"
 ]
 
 # better to be safe and avoid failures
-max-retries = 6
+max_redirects = 5
+max_retries = 6

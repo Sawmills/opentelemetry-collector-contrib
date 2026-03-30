@@ -1,5 +1,0 @@
-change_type: enhancement
-component: exporter/loadbalancing
-note: Add CI workflow to auto-tag Sawmills loadbalancingexporter module versions on merges to main.
-issues: [17]
-change_logs: [user]

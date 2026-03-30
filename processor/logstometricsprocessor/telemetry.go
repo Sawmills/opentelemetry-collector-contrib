@@ -21,7 +21,10 @@ type logsToMetricsTelemetry struct {
 }
 
 // newLogsToMetricsTelemetry initializes a new logsToMetricsTelemetry instance.
-func newLogsToMetricsTelemetry(set processor.Settings, cfg *config.Config) (*logsToMetricsTelemetry, error) {
+func newLogsToMetricsTelemetry(
+	set processor.Settings,
+	cfg *config.Config,
+) (*logsToMetricsTelemetry, error) {
 	telemetryBuilder, err := metadata.NewTelemetryBuilder(set.TelemetrySettings)
 	if err != nil {
 		return nil, err
@@ -59,7 +62,11 @@ func (lmt *logsToMetricsTelemetry) recordLogsProcessed(ctx context.Context, coun
 }
 
 // recordMetricsExtracted records the number of metrics extracted, optionally with metric name.
-func (lmt *logsToMetricsTelemetry) recordMetricsExtracted(ctx context.Context, count int64, metricName string) {
+func (lmt *logsToMetricsTelemetry) recordMetricsExtracted(
+	ctx context.Context,
+	count int64,
+	metricName string,
+) {
 	allLabels := make([]attribute.KeyValue, 0, len(lmt.processorAttr)+1)
 	allLabels = append(allLabels, lmt.processorAttr...)
 	if metricName != "" {
@@ -73,7 +80,11 @@ func (lmt *logsToMetricsTelemetry) recordMetricsExtracted(ctx context.Context, c
 }
 
 // recordError records an error, optionally with metric name.
-func (lmt *logsToMetricsTelemetry) recordError(ctx context.Context, count int64, metricName string) {
+func (lmt *logsToMetricsTelemetry) recordError(
+	ctx context.Context,
+	count int64,
+	metricName string,
+) {
 	allLabels := make([]attribute.KeyValue, 0, len(lmt.processorAttr)+1)
 	allLabels = append(allLabels, lmt.processorAttr...)
 	if metricName != "" {
@@ -98,7 +109,11 @@ func (lmt *logsToMetricsTelemetry) recordLogsDropped(ctx context.Context, count 
 }
 
 // recordProcessingDuration records the processing duration, optionally with metric name.
-func (lmt *logsToMetricsTelemetry) recordProcessingDuration(ctx context.Context, durationMs int64, metricName string) {
+func (lmt *logsToMetricsTelemetry) recordProcessingDuration(
+	ctx context.Context,
+	durationMs int64,
+	metricName string,
+) {
 	allLabels := make([]attribute.KeyValue, 0, len(lmt.processorAttr)+1)
 	allLabels = append(allLabels, lmt.processorAttr...)
 	if metricName != "" {

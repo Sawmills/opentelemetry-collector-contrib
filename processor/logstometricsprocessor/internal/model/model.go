@@ -47,7 +47,10 @@ func (h *ExplicitHistogram[K]) fromConfig(
 	if mi.Count != "" {
 		h.Count, err = parser.ParseValueExpression(mi.Count)
 		if err != nil {
-			return fmt.Errorf("failed to parse count OTTL expression for explicit histogram: %w", err)
+			return fmt.Errorf(
+				"failed to parse count OTTL expression for explicit histogram: %w",
+				err,
+			)
 		}
 	}
 	h.Value, err = parser.ParseValueExpression(mi.Value)
@@ -76,12 +79,18 @@ func (h *ExponentialHistogram[K]) fromConfig(
 	if mi.Count != "" {
 		h.Count, err = parser.ParseValueExpression(mi.Count)
 		if err != nil {
-			return fmt.Errorf("failed to parse count OTTL expression for exponential histogram: %w", err)
+			return fmt.Errorf(
+				"failed to parse count OTTL expression for exponential histogram: %w",
+				err,
+			)
 		}
 	}
 	h.Value, err = parser.ParseValueExpression(mi.Value)
 	if err != nil {
-		return fmt.Errorf("failed to parse value OTTL expression for exponential histogram: %w", err)
+		return fmt.Errorf(
+			"failed to parse value OTTL expression for exponential histogram: %w",
+			err,
+		)
 	}
 	return nil
 }
@@ -167,31 +176,31 @@ func (md *MetricDef[K]) FromMetricInfo(
 		)
 		md.Conditions = &condSeq
 	}
-	if mi.Histogram.HasValue() {
+	if mi.Histogram != nil {
 		md.Key.Type = pmetric.MetricTypeHistogram
 		md.ExplicitHistogram = new(ExplicitHistogram[K])
-		if err := md.ExplicitHistogram.fromConfig(mi.Histogram.Get(), parser); err != nil {
+		if err := md.ExplicitHistogram.fromConfig(mi.Histogram, parser); err != nil {
 			return fmt.Errorf("failed to parse histogram config: %w", err)
 		}
 	}
-	if mi.ExponentialHistogram.HasValue() {
+	if mi.ExponentialHistogram != nil {
 		md.Key.Type = pmetric.MetricTypeExponentialHistogram
 		md.ExponentialHistogram = new(ExponentialHistogram[K])
-		if err := md.ExponentialHistogram.fromConfig(mi.ExponentialHistogram.Get(), parser); err != nil {
+		if err := md.ExponentialHistogram.fromConfig(mi.ExponentialHistogram, parser); err != nil {
 			return fmt.Errorf("failed to parse histogram config: %w", err)
 		}
 	}
-	if mi.Sum.HasValue() {
+	if mi.Sum != nil {
 		md.Key.Type = pmetric.MetricTypeSum
 		md.Sum = new(Sum[K])
-		if err := md.Sum.fromConfig(mi.Sum.Get(), parser); err != nil {
+		if err := md.Sum.fromConfig(mi.Sum, parser); err != nil {
 			return fmt.Errorf("failed to parse sum config: %w", err)
 		}
 	}
-	if mi.Gauge.HasValue() {
+	if mi.Gauge != nil {
 		md.Key.Type = pmetric.MetricTypeGauge
 		md.Gauge = new(Gauge[K])
-		if err := md.Gauge.fromConfig(mi.Gauge.Get(), parser); err != nil {
+		if err := md.Gauge.fromConfig(mi.Gauge, parser); err != nil {
 			return fmt.Errorf("failed to parse gauge config: %w", err)
 		}
 	}
@@ -230,13 +239,16 @@ func (md *MetricDef[K]) FilterResourceAttributes(
 // The method returns a bool signaling if the filter was successful and metric
 // should be processed. If the bool value is false then the returned map
 // should not be used.
+// Supports nested attribute keys using dot notation (e.g., "k1.k2").
 func (md *MetricDef[K]) FilterAttributes(attrs pcommon.Map) (pcommon.Map, bool) {
 	// Figure out if all the attributes are available, saves allocation
 	for _, filter := range md.Attributes {
 		if filter.DefaultValue.Type() != pcommon.ValueTypeEmpty || filter.Optional {
 			continue
 		}
-		if _, ok := attrs.Get(filter.Key); !ok {
+		keyParts := splitFieldName(filter.Key)
+		_, found := getFieldValue2Keys(attrs, keyParts, filter.Key)
+		if !found {
 			return pcommon.Map{}, false
 		}
 	}
@@ -247,7 +259,10 @@ func filterAttributes(attrs pcommon.Map, filters []AttributeKeyValue, expectedLe
 	filteredAttrs := pcommon.NewMap()
 	filteredAttrs.EnsureCapacity(expectedLen)
 	for _, filter := range filters {
-		if attr, ok := attrs.Get(filter.Key); ok {
+		keyParts := splitFieldName(filter.Key)
+		attr, found := getFieldValue2Keys(attrs, keyParts, filter.Key)
+		if found {
+			// Copy the found value to output using the original key name
 			attr.CopyTo(filteredAttrs.PutEmpty(filter.Key))
 			continue
 		}

@@ -20,6 +20,7 @@ import (
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/akamai"
+	alibabaecs "github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/alibaba/ecs"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/aws/ec2"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/aws/ecs"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/aws/eks"
@@ -35,6 +36,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/gcp"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/heroku"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/hetzner"
+	ibmcloudvpc "github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/ibmcloud/vpc"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/k8snode"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/kubeadm"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/metadata"
@@ -43,6 +45,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/oraclecloud"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/scaleway"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/system"
+	tencentcvm "github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/tencent/cvm"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/upcloud"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor/internal/vultr"
 )
@@ -62,6 +65,7 @@ type factory struct {
 func NewFactory() processor.Factory {
 	resourceProviderFactory := internal.NewProviderFactory(map[internal.DetectorType]internal.DetectorFactory{
 		akamai.TypeStr:           akamai.NewDetector,
+		alibabaecs.TypeStr:       alibabaecs.NewDetector,
 		aks.TypeStr:              aks.NewDetector,
 		azure.TypeStr:            azure.NewDetector,
 		consul.TypeStr:           consul.NewDetector,
@@ -76,6 +80,7 @@ func NewFactory() processor.Factory {
 		gcp.TypeStr:              gcp.NewDetector,
 		heroku.TypeStr:           heroku.NewDetector,
 		hetzner.TypeStr:          hetzner.NewDetector,
+		ibmcloudvpc.TypeStr:      ibmcloudvpc.NewDetector,
 		scaleway.TypeStr:         scaleway.NewDetector,
 		system.TypeStr:           system.NewDetector,
 		openshift.TypeStr:        openshift.NewDetector,
@@ -84,6 +89,7 @@ func NewFactory() processor.Factory {
 		k8snode.TypeStr:          k8snode.NewDetector,
 		kubeadm.TypeStr:          kubeadm.NewDetector,
 		dynatrace.TypeStr:        dynatrace.NewDetector,
+		tencentcvm.TypeStr:       tencentcvm.NewDetector,
 		upcloud.TypeStr:          upcloud.NewDetector,
 		vultr.TypeStr:            vultr.NewDetector,
 	})
@@ -109,11 +115,11 @@ func (*factory) Type() component.Type {
 
 func createDefaultConfig() component.Config {
 	return &Config{
-		Detectors:      []string{env.TypeStr},
-		ClientConfig:   defaultClientConfig(),
-		Override:       true,
-		Attributes:     nil,
-		DetectorConfig: detectorCreateDefaultConfig(),
+		Detectors:       []string{env.TypeStr},
+		ClientConfig:    defaultClientConfig(),
+		Override:        true,
+		DetectorConfig:  detectorCreateDefaultConfig(),
+		RefreshInterval: 0,
 		// TODO: Once issue(https://github.com/open-telemetry/opentelemetry-collector/issues/4001) gets resolved,
 		//		 Set the default value of 'hostname_source' here instead of 'system' detector
 	}
@@ -143,7 +149,9 @@ func (f *factory) createTracesProcessor(
 		nextConsumer,
 		rdp.processTraces,
 		processorhelper.WithCapabilities(consumerCapabilities),
-		processorhelper.WithStart(rdp.Start))
+		processorhelper.WithStart(rdp.Start),
+		processorhelper.WithShutdown(rdp.Shutdown),
+	)
 }
 
 func (f *factory) createMetricsProcessor(
@@ -164,7 +172,9 @@ func (f *factory) createMetricsProcessor(
 		nextConsumer,
 		rdp.processMetrics,
 		processorhelper.WithCapabilities(consumerCapabilities),
-		processorhelper.WithStart(rdp.Start))
+		processorhelper.WithStart(rdp.Start),
+		processorhelper.WithShutdown(rdp.Shutdown),
+	)
 }
 
 func (f *factory) createLogsProcessor(
@@ -185,7 +195,9 @@ func (f *factory) createLogsProcessor(
 		nextConsumer,
 		rdp.processLogs,
 		processorhelper.WithCapabilities(consumerCapabilities),
-		processorhelper.WithStart(rdp.Start))
+		processorhelper.WithStart(rdp.Start),
+		processorhelper.WithShutdown(rdp.Shutdown),
+	)
 }
 
 func (f *factory) createProfilesProcessor(
@@ -206,7 +218,9 @@ func (f *factory) createProfilesProcessor(
 		nextConsumer,
 		rdp.processProfiles,
 		xprocessorhelper.WithCapabilities(consumerCapabilities),
-		xprocessorhelper.WithStart(rdp.Start))
+		xprocessorhelper.WithStart(rdp.Start),
+		xprocessorhelper.WithShutdown(rdp.Shutdown),
+	)
 }
 
 func (f *factory) getResourceDetectionProcessor(
@@ -214,10 +228,7 @@ func (f *factory) getResourceDetectionProcessor(
 	cfg component.Config,
 ) (*resourceDetectionProcessor, error) {
 	oCfg := cfg.(*Config)
-	if oCfg.Attributes != nil {
-		params.Logger.Warn("You are using deprecated `attributes` option that will be removed soon; use `resource_attributes` instead, details on configuration: https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/resourcedetectionprocessor#migration-from-attributes-to-resource_attributes")
-	}
-	provider, err := f.getResourceProvider(params, oCfg.Timeout, oCfg.Detectors, oCfg.DetectorConfig, oCfg.Attributes)
+	provider, err := f.getResourceProvider(params, oCfg.Timeout, oCfg.Detectors, oCfg.DetectorConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -226,6 +237,7 @@ func (f *factory) getResourceDetectionProcessor(
 		provider:           provider,
 		override:           oCfg.Override,
 		httpClientSettings: oCfg.ClientConfig,
+		refreshInterval:    oCfg.RefreshInterval,
 		telemetrySettings:  params.TelemetrySettings,
 	}, nil
 }
@@ -235,7 +247,6 @@ func (f *factory) getResourceProvider(
 	timeout time.Duration,
 	configuredDetectors []string,
 	detectorConfigs DetectorConfig,
-	attributes []string,
 ) (*internal.ResourceProvider, error) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
@@ -249,7 +260,7 @@ func (f *factory) getResourceProvider(
 		detectorTypes = append(detectorTypes, internal.DetectorType(strings.TrimSpace(key)))
 	}
 
-	provider, err := f.resourceProviderFactory.CreateResourceProvider(params, timeout, attributes, &detectorConfigs, detectorTypes...)
+	provider, err := f.resourceProviderFactory.CreateResourceProvider(params, timeout, &detectorConfigs, detectorTypes...)
 	if err != nil {
 		return nil, err
 	}

@@ -1,5 +1,0 @@
-change_type: bug_fix
-component: exporter/loadbalancing
-note: Preserve `sending_queue.payload_compression` and `sending_queue.compress_in_memory` during config decode and pin exporterhelper to the tagged Sawmills fork module version.
-issues: [6556]
-change_logs: [user]

@@ -14,17 +14,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
-	"go.opentelemetry.io/collector/otelcol"
 	"go.opentelemetry.io/collector/pdata/plog"
 	otelprocessor "go.opentelemetry.io/collector/processor"
-	"go.opentelemetry.io/collector/processor/batchprocessor"
 	"go.opentelemetry.io/collector/processor/processortest"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/hotreloadprocessor/internal/metadata"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor"
 )
 
 type componentTestTelemetry struct {
@@ -46,7 +43,7 @@ func (tt *componentTestTelemetry) assertMetrics(
 	totalMetrics *int,
 ) {
 	var md metricdata.ResourceMetrics
-	require.NoError(t, tt.reader.Collect(t.Context(), &md))
+	require.NoError(t, tt.reader.Collect(context.Background(), &md))
 	// ensure all required metrics are present
 	for _, want := range expected {
 		got := tt.getMetric(want.Name, md)
@@ -59,7 +56,7 @@ func (tt *componentTestTelemetry) assertMetrics(
 	}
 }
 
-func (*componentTestTelemetry) len(got metricdata.ResourceMetrics) int {
+func (tt *componentTestTelemetry) len(got metricdata.ResourceMetrics) int {
 	metricsCount := 0
 	for _, sm := range got.ScopeMetrics {
 		metricsCount += len(sm.Metrics)
@@ -68,7 +65,7 @@ func (*componentTestTelemetry) len(got metricdata.ResourceMetrics) int {
 	return metricsCount
 }
 
-func (*componentTestTelemetry) getMetric(
+func (tt *componentTestTelemetry) getMetric(
 	name string,
 	got metricdata.ResourceMetrics,
 ) metricdata.Metrics {
@@ -183,7 +180,7 @@ func TestConsumeLogs(t *testing.T) {
 
 			tel := setupMetricsCollection()
 			hotreloadProcessor, err := newHotReloadLogsProcessor(
-				t.Context(),
+				context.Background(),
 				otelprocessor.Settings{
 					TelemetrySettings: component.TelemetrySettings{
 						Logger:        zap.NewNop(),
@@ -198,11 +195,11 @@ func TestConsumeLogs(t *testing.T) {
 					ShutdownDelay:       10 * time.Second,
 				},
 				logsConsumer,
+				defaultProcessorFactories(),
 			)
 			require.NoError(t, err)
 
-			mockHost := newMockHost(t)
-			err = hotreloadProcessor.Start(t.Context(), mockHost)
+			err = hotreloadProcessor.Start(t.Context(), nil)
 			require.NoError(t, err)
 
 			err = hotreloadProcessor.ConsumeLogs(t.Context(), logs)
@@ -212,6 +209,7 @@ func TestConsumeLogs(t *testing.T) {
 			require.NoError(t, err)
 
 			logsMarshaler := plog.JSONMarshaler{}
+			logsMarshaler.MarshalLogs(transformedLogs)
 			json, err := logsMarshaler.MarshalLogs(transformedLogs)
 			require.NoError(t, err)
 			require.JSONEq(t, test.wantLogs(), string(json))
@@ -259,7 +257,7 @@ func TestRefreshConfig(t *testing.T) {
 
 			tel := setupMetricsCollection()
 			hotreloadProcessor, err := newHotReloadLogsProcessor(
-				t.Context(),
+				context.Background(),
 				otelprocessor.Settings{
 					TelemetrySettings: component.TelemetrySettings{
 						Logger:        zap.NewExample(),
@@ -274,11 +272,11 @@ func TestRefreshConfig(t *testing.T) {
 					ShutdownDelay:       10 * time.Second,
 				},
 				logsConsumer,
+				defaultProcessorFactories(),
 			)
 			require.NoError(t, err)
 
-			mockHost := newMockHost(t)
-			err = hotreloadProcessor.Start(t.Context(), mockHost)
+			err = hotreloadProcessor.Start(t.Context(), nil)
 			require.NoError(t, err)
 
 			oldSubprocessors := hotreloadProcessor.subprocessors.Load()
@@ -309,7 +307,7 @@ func readTestLogs(t *testing.T, file string) plog.Logs {
 	require.NotEmpty(t, content)
 
 	logsUnmarshaler := &plog.JSONUnmarshaler{}
-	inputLogs, err := logsUnmarshaler.UnmarshalLogs(content)
+	inputLogs, err := logsUnmarshaler.UnmarshalLogs([]byte(content))
 	require.NoError(t, err)
 
 	return inputLogs
@@ -325,34 +323,4 @@ func readWantedLogs(t *testing.T, file string) string {
 
 func ptrInt(i int) *int {
 	return &i
-}
-
-// mockHost provides a mock component.Host with processor factories for testing
-type mockHost struct {
-	component.Host
-	factories otelcol.Factories
-}
-
-func newMockHost(t *testing.T) component.Host {
-	factories, err := otelcol.MakeFactoryMap[otelprocessor.Factory](
-		transformprocessor.NewFactory(),
-		batchprocessor.NewFactory(),
-	)
-	require.NoError(t, err)
-	return &mockHost{
-		factories: otelcol.Factories{
-			Processors: factories,
-		},
-	}
-}
-
-func (m *mockHost) GetFactory(kind component.Kind, componentType component.Type) component.Factory {
-	if kind == component.KindProcessor {
-		return m.factories.Processors[componentType]
-	}
-	return nil
-}
-
-func (*mockHost) GetExtensions() map[component.ID]component.Component {
-	return nil
 }

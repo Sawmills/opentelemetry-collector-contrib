@@ -281,6 +281,7 @@ func (s *haproxyScraper) scrape(ctx context.Context) (pmetric.Metrics, error) {
 		rb := s.mb.NewResourceBuilder()
 		rb.SetHaproxyProxyName(record["pxname"])
 		rb.SetHaproxyServiceName(record["svname"])
+		rb.SetHaproxyServerState(record["status"])
 		rb.SetHaproxyAddr(s.cfg.Endpoint)
 		s.mb.EmitForResource(metadata.WithResource(rb.Emit()))
 	}
@@ -317,7 +318,7 @@ func (*haproxyScraper) readStats(buf []byte) ([]map[string]string, error) {
 
 func (s *haproxyScraper) start(ctx context.Context, host component.Host) error {
 	var err error
-	s.httpClient, err = s.cfg.ToClient(ctx, host, s.telemetrySettings)
+	s.httpClient, err = s.cfg.ToClient(ctx, host.GetExtensions(), s.telemetrySettings)
 	return err
 }
 

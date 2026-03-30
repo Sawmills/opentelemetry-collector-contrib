@@ -81,7 +81,7 @@ func (pt *hotreloadProcessorTelemetry) record(
 type metricRecordFunc func(*hotreloadProcessorTelemetry, float64, ...attribute.KeyValue)
 
 // getMetricFuncForTrigger returns the appropriate metric recording function based on the trigger type.
-func (*hotreloadProcessorTelemetry) getMetricFuncForTrigger(
+func (pt *hotreloadProcessorTelemetry) getMetricFuncForTrigger(
 	triggerName trigger,
 ) metricRecordFunc {
 	metricMap := map[trigger]metricRecordFunc{
@@ -132,6 +132,15 @@ func (*hotreloadProcessorTelemetry) getMetricFuncForTrigger(
 		),
 	}
 	return metricMap[triggerName]
+}
+
+// recordInt64Counter returns a function to record int64 counter metrics.
+func recordInt64Counter(
+	getMetric func(*hotreloadProcessorTelemetry) metric.Int64Counter,
+) metricRecordFunc {
+	return func(qpt *hotreloadProcessorTelemetry, value float64, labels ...attribute.KeyValue) {
+		getMetric(qpt).Add(qpt.exportCtx, int64(value), metric.WithAttributes(labels...))
+	}
 }
 
 // recordInt64Gauge returns a function to record int64 gauge metrics.

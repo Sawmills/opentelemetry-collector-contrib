@@ -1,5 +1,5 @@
 logstometricsprocessor:
-  metrics_connector: test_connector
+  route: test_route
   drop_logs: false
   logs:
     - name: metric.log.duration
@@ -18,4 +18,3 @@ logstometricsprocessor:
       description: Logrecords as sum with log.duration from attributes
       sum:
         value: attributes["log.duration"]
-

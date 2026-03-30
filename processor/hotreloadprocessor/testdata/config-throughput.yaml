@@ -1,0 +1,17 @@
+processors:
+  customprocessor/t1:
+    standard_attributes:
+      - service.name
+      - library.name
+      - request.id
+service:
+  pipelines:
+    logs/test:
+      processors:
+        - customprocessor/t1
+    metrics/test:
+      processors:
+        - customprocessor/t1
+    traces/test:
+      processors:
+        - customprocessor/t1
