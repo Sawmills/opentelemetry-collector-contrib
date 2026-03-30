@@ -42,6 +42,9 @@ type Config struct {
 	configretry.BackOffConfig `mapstructure:"retry_on_failure"`
 	QueueSettings             QueueSettings    `mapstructure:"sending_queue"`
 	LogBatcher                LogBatcherConfig `mapstructure:"log_batcher"`
+	// BackendFailureCooldown quarantines a backend after transport-level failures.
+	// Set to 0s to disable quarantine.
+	BackendFailureCooldown *time.Duration `mapstructure:"backend_failure_cooldown"`
 
 	Protocol Protocol         `mapstructure:"protocol"`
 	Resolver ResolverSettings `mapstructure:"resolver"`
@@ -133,10 +136,21 @@ func (q QueueSettings) Validate() error {
 }
 
 func (cfg *Config) Validate() error {
+	if cfg.BackendFailureCooldown != nil && *cfg.BackendFailureCooldown < 0 {
+		return errors.New("backend_failure_cooldown must be non-negative")
+	}
 	if err := cfg.QueueSettings.Validate(); err != nil {
 		return err
 	}
 	return cfg.LogBatcher.Validate()
+}
+
+func (cfg *Config) backendFailureCooldown() time.Duration {
+	if cfg.BackendFailureCooldown == nil {
+		return defaultBackendFailureCooldown
+	}
+
+	return *cfg.BackendFailureCooldown
 }
 
 func (c LogBatcherConfig) Validate() error {

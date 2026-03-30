@@ -20,14 +20,16 @@ require (
 
 require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatautil v0.140.1
+	go.opentelemetry.io/collector/component/componenttest v0.140.0
 	go.opentelemetry.io/collector/config/configoptional v1.46.0
-	go.opentelemetry.io/collector/config/configtelemetry v0.140.0
 	go.opentelemetry.io/collector/consumer/consumertest v0.140.0
 	go.opentelemetry.io/collector/processor/processorhelper v0.140.0
 	go.opentelemetry.io/collector/processor/processortest v0.140.0
 	go.opentelemetry.io/otel v1.38.0
 	go.opentelemetry.io/otel/metric v1.38.0
+	go.opentelemetry.io/otel/sdk/metric v1.38.0
 	go.opentelemetry.io/otel/trace v1.38.0
+	go.uber.org/goleak v1.3.0
 )
 
 require (
@@ -65,7 +67,6 @@ require (
 	github.com/zeebo/xxh3 v1.0.2 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/collector/component/componentstatus v0.140.0 // indirect
-	go.opentelemetry.io/collector/component/componenttest v0.140.0 // indirect
 	go.opentelemetry.io/collector/confmap/xconfmap v0.140.0 // indirect
 	go.opentelemetry.io/collector/consumer/xconsumer v0.140.0 // indirect
 	go.opentelemetry.io/collector/featuregate v1.46.0 // indirect
@@ -74,7 +75,6 @@ require (
 	go.opentelemetry.io/collector/pdata/testdata v0.140.0 // indirect
 	go.opentelemetry.io/collector/processor/xprocessor v0.140.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.38.0 // indirect
-	go.opentelemetry.io/otel/sdk/metric v1.38.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect

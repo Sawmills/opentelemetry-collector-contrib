@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -260,6 +261,58 @@ func TestRemoveExtraExporters(t *testing.T) {
 	// verify
 	assert.Len(t, p.exporters, 1)
 	assert.NotContains(t, p.exporters, endpointWithPort("endpoint-2"))
+}
+
+func TestExporterAndEndpointSkipsQuarantinedEndpoint(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	first := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	second := newWrappedExporter(newNopMockLogsExporter(), "endpoint-2:4317")
+	lb.ring = newHashRing([]string{"endpoint-1", "endpoint-2"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": first,
+		"endpoint-2:4317": second,
+	}
+
+	routingID := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1")
+	exp, endpoint, err := lb.exporterAndEndpoint([]byte(routingID))
+	require.NoError(t, err)
+	require.Equal(t, "endpoint-1", endpoint)
+	require.Same(t, exp, first)
+
+	lb.quarantineEndpoint("endpoint-1:4317")
+
+	exp, endpoint, err = lb.exporterAndEndpoint([]byte(routingID))
+	require.NoError(t, err)
+	require.Equal(t, "endpoint-2", endpoint)
+	require.Same(t, exp, second)
+}
+
+func TestNewLoadBalancerUsesDefaultBackendFailureCooldown(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+	require.Equal(t, defaultBackendFailureCooldown, lb.quarantineAfter)
+}
+
+func TestQuarantineEndpointCanBeDisabled(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	cfg.BackendFailureCooldown = durationPtr(0)
+
+	lb, err := newLoadBalancer(ts.Logger, cfg, nil, tb)
+	require.NoError(t, err)
+
+	lb.quarantineEndpoint("endpoint-1:4317")
+	require.Empty(t, lb.quarantineUntil)
+
+	cfg.BackendFailureCooldown = durationPtr(time.Second)
+	lb, err = newLoadBalancer(ts.Logger, cfg, nil, tb)
+	require.NoError(t, err)
+	lb.quarantineEndpoint("endpoint-1:4317")
+	require.Contains(t, lb.quarantineUntil, "endpoint-1:4317")
 }
 
 func TestAddMissingExporters(t *testing.T) {

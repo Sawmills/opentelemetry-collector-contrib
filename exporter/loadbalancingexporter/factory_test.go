@@ -82,6 +82,8 @@ func TestDefaultLogBatcherConfig(t *testing.T) {
 	assert.Equal(t, defaultLogBatchMaxRecords, cfg.LogBatcher.MaxRecords)
 	assert.Equal(t, defaultLogBatchMaxBytes, cfg.LogBatcher.MaxBytes)
 	assert.Equal(t, defaultLogBatchFlushTimeout, cfg.LogBatcher.FlushInterval)
+	require.NotNil(t, cfg.BackendFailureCooldown)
+	assert.Equal(t, defaultBackendFailureCooldown, *cfg.BackendFailureCooldown)
 }
 
 func TestBuildExporterConfig(t *testing.T) {

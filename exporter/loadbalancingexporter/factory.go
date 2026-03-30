@@ -8,6 +8,7 @@ package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/exporter"
@@ -60,6 +61,7 @@ func createDefaultConfig() component.Config {
 			MaxBytes:      defaultLogBatchMaxBytes,
 			FlushInterval: defaultLogBatchFlushTimeout,
 		},
+		BackendFailureCooldown: durationPtr(defaultBackendFailureCooldown),
 	}
 }
 
@@ -200,4 +202,8 @@ func shutdownWithCodec(shutdown component.ShutdownFunc, codec *queuePayloadCodec
 	return func(ctx context.Context) error {
 		return multierr.Append(shutdown.Shutdown(ctx), codec.Close())
 	}
+}
+
+func durationPtr(d time.Duration) *time.Duration {
+	return &d
 }

@@ -75,6 +75,19 @@ func TestConfigValidateLogBatcher(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 }
 
+func TestConfigValidateBackendFailureCooldown(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	require.NoError(t, cfg.Validate())
+	require.NotNil(t, cfg.BackendFailureCooldown)
+	require.Equal(t, defaultBackendFailureCooldown, *cfg.BackendFailureCooldown)
+
+	cfg.BackendFailureCooldown = durationPtr(0)
+	require.NoError(t, cfg.Validate())
+
+	cfg.BackendFailureCooldown = durationPtr(-time.Second)
+	require.ErrorContains(t, cfg.Validate(), "backend_failure_cooldown")
+}
+
 func TestLoadConfigWithQueueCompression(t *testing.T) {
 	cfg := createDefaultConfig().(*Config)
 	conf := confmap.NewFromStringMap(map[string]any{
@@ -134,4 +147,28 @@ func TestLoadConfigWithLogBatcher(t *testing.T) {
 	require.Equal(t, 1024, cfg.LogBatcher.MaxRecords)
 	require.Equal(t, 2097152, cfg.LogBatcher.MaxBytes)
 	require.Equal(t, 250*time.Millisecond, cfg.LogBatcher.FlushInterval)
+}
+
+func TestLoadConfigWithBackendFailureCooldown(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	conf := confmap.NewFromStringMap(map[string]any{
+		"protocol": map[string]any{
+			"otlp": map[string]any{
+				"endpoint": "localhost:4317",
+				"tls": map[string]any{
+					"insecure": true,
+				},
+			},
+		},
+		"resolver": map[string]any{
+			"static": map[string]any{
+				"hostnames": []string{"localhost:4317"},
+			},
+		},
+		"backend_failure_cooldown": "0s",
+	})
+
+	require.NoError(t, conf.Unmarshal(cfg))
+	require.NotNil(t, cfg.BackendFailureCooldown)
+	require.Zero(t, *cfg.BackendFailureCooldown)
 }
