@@ -57,7 +57,7 @@ func TestPositionsFor(t *testing.T) {
 	assert.Len(t, positions, 10)
 }
 
-func TestBinarySearch(t *testing.T) {
+func TestFindEndpointIndex(t *testing.T) {
 	// prepare
 	items := []ringItem{
 		{pos: 14},
@@ -72,8 +72,7 @@ func TestBinarySearch(t *testing.T) {
 		{pos: 270},
 		{pos: 350},
 	}
-	ringSize := len(items)
-	left, right := items[:ringSize/2], items[ringSize/2:]
+	ring := &hashRing{items: items}
 
 	for _, tt := range []struct {
 		requested position
@@ -87,10 +86,10 @@ func TestBinarySearch(t *testing.T) {
 	} {
 		t.Run(fmt.Sprintf("Angle %d Requested", uint32(tt.requested)), func(t *testing.T) {
 			// test
-			found := bsearch(tt.requested, left, right)
+			idx := ring.findEndpointIndex(tt.requested)
 
 			// verify
-			assert.Equal(t, tt.expected, found.pos)
+			assert.Equal(t, tt.expected, ring.items[idx].pos)
 		})
 	}
 }

@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	defaultPort              = "4317"
-	defaultQuarantineTimeout = 15 * time.Second
+	defaultPort                   = "4317"
+	defaultBackendFailureCooldown = 10 * time.Second
 )
 
 var (
@@ -147,7 +147,7 @@ func newLoadBalancer(logger *zap.Logger, cfg component.Config, factory component
 		componentFactory: factory,
 		exporters:        map[string]*wrappedExporter{},
 		quarantineUntil:  map[string]time.Time{},
-		quarantineAfter:  defaultQuarantineTimeout,
+		quarantineAfter:  oCfg.backendFailureCooldown(),
 	}, nil
 }
 
@@ -306,7 +306,7 @@ func (lb *loadBalancer) exporterAndEndpoint(identifier []byte) (*wrappedExporter
 }
 
 func (lb *loadBalancer) quarantineEndpoint(endpoint string) {
-	if endpoint == "" {
+	if endpoint == "" || lb.quarantineAfter <= 0 {
 		return
 	}
 

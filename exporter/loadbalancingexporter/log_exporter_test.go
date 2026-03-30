@@ -597,6 +597,34 @@ func TestConsumeBatchDoesNotHideTransportFailureWhenRerouteStaysOnSameEndpoint(t
 	require.ErrorContains(t, err, "reroute did not escape failed endpoint")
 }
 
+func TestRerouteTransportFailedBatchPreservesRecoverableLogsOnPartialGroupingError(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	logsConsumed := atomic.Int64{}
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	liveExp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+		logsConsumed.Add(int64(ld.LogRecordCount()))
+		return nil
+	}), "endpoint-2:4317")
+
+	lb.ring = newHashRing([]string{"endpoint-2", "endpoint-3"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-2:4317": liveExp,
+	}
+
+	p, err := newLogsExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+
+	healthyTraceID := findTraceIDForEndpoint(t, lb.ring, "endpoint-2")
+	missingTraceID := findTraceIDForCandidateEndpoints(t, lb.ring, len(lb.exporters), "endpoint-3")
+
+	err = p.rerouteTransportFailedBatch(t.Context(), "endpoint-1:4317", logsWithTraceIDs(healthyTraceID, missingTraceID))
+	require.ErrorContains(t, err, "couldn't find the exporter for any candidate endpoint")
+	require.Equal(t, int64(1), logsConsumed.Load())
+}
+
 func TestInsertLogRecordKeepsDistinctDroppedAttributeCounts(t *testing.T) {
 	dest := plog.NewLogs()
 

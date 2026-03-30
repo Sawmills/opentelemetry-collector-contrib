@@ -5,6 +5,7 @@ package loadbalancingexporter
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -38,5 +39,21 @@ func findTraceIDForEndpoint(t *testing.T, ring *hashRing, endpoint string) pcomm
 	}
 
 	require.FailNow(t, "failed to find trace id for endpoint", "endpoint=%s", endpoint)
+	return pcommon.NewTraceIDEmpty()
+}
+
+func findTraceIDForCandidateEndpoints(t *testing.T, ring *hashRing, limit int, endpoints ...string) pcommon.TraceID {
+	t.Helper()
+
+	for i := range 1 << 16 {
+		var traceID pcommon.TraceID
+		traceID[14] = byte(i >> 8)
+		traceID[15] = byte(i)
+		if slices.Equal(ring.candidateEndpointsFor(traceID[:], limit), endpoints) {
+			return traceID
+		}
+	}
+
+	require.FailNow(t, "failed to find trace id for candidate endpoints", "endpoints=%v", endpoints)
 	return pcommon.NewTraceIDEmpty()
 }

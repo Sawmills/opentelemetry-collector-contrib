@@ -248,15 +248,11 @@ func (e *logExporterImp) shouldRerouteBatch(reason string) bool {
 
 func (e *logExporterImp) rerouteTransportFailedBatch(ctx context.Context, failedEndpoint string, ld plog.Logs) error {
 	reroutedBatches, err := e.groupLogsByEndpoint(ld)
-	if err != nil {
-		return err
-	}
-
 	if !hasAlternativeEndpoint(reroutedBatches, failedEndpoint) {
-		return errors.New("reroute did not escape failed endpoint")
+		return errors.Join(err, errors.New("reroute did not escape failed endpoint"))
 	}
 
-	var errs error
+	errs := err
 	for _, batch := range reroutedBatches {
 		errs = multierr.Append(errs, e.consumeBatch(ctx, batch.exp, batch.logs, logFlushReasonDirect))
 	}
