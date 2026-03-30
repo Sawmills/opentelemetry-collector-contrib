@@ -1,12 +1,12 @@
 processors:
   transform/t1:
     log_statements:
-    - context: log
-      conditions:
-        - IsString(body)
-    - context: log
-      statements:
-        - set(attributes["pipeline"]["id"], String("12345"))
+      - context: log
+        conditions:
+          - IsString(body)
+      - context: log
+        statements:
+          - set(attributes["sawmills"]["pipeline_id"], String("12345"))
   batch/b1:
     send_batch_size: 1
     timeout: 0s

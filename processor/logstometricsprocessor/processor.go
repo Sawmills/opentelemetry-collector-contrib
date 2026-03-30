@@ -5,16 +5,13 @@ package logstometricsprocessor // import "github.com/open-telemetry/opentelemetr
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
-	"go.opentelemetry.io/collector/connector"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
-	"go.opentelemetry.io/collector/pipeline"
 	"go.opentelemetry.io/collector/processor"
 	"go.opentelemetry.io/collector/processor/processorhelper"
 	"go.uber.org/zap"
@@ -29,11 +26,10 @@ import (
 type logsToMetricsProcessor struct {
 	config           *config.Config
 	nextLogsConsumer consumer.Logs
-	metricsConsumer  consumer.Metrics
 	logger           *zap.Logger
 	telemetry        *logsToMetricsTelemetry
 	collectorInfo    model.CollectorInstanceInfo
-	logMetricDefs    []model.MetricDef[ottllog.TransformContext]
+	logMetricDefs    []model.MetricDef[*ottllog.TransformContext]
 	dropLogs         bool
 }
 
@@ -52,10 +48,10 @@ func newProcessor(
 		return nil, fmt.Errorf("failed to create OTTL statement parser for logs: %w", err)
 	}
 
-	metricDefs := make([]model.MetricDef[ottllog.TransformContext], 0, len(cfg.Logs))
+	metricDefs := make([]model.MetricDef[*ottllog.TransformContext], 0, len(cfg.Logs))
 	for i := range cfg.Logs {
 		info := cfg.Logs[i]
-		var md model.MetricDef[ottllog.TransformContext]
+		var md model.MetricDef[*ottllog.TransformContext]
 		if err := md.FromMetricInfo(info, parser, settings.TelemetrySettings); err != nil {
 			return nil, fmt.Errorf("failed to parse provided metric information: %w", err)
 		}
@@ -75,50 +71,7 @@ func newProcessor(
 	}, nil
 }
 
-// DataType represents the type of telemetry data
-type DataType int
-
-const (
-	// DataTypeMetrics represents metrics data type
-	DataTypeMetrics DataType = iota
-)
-
-// connectorHost is an interface for accessing connectors from component.Host
-type connectorHost interface {
-	GetConnectors() map[component.ID]component.Component
-}
-
-func (p *logsToMetricsProcessor) Start(_ context.Context, host component.Host) error {
-	ch, ok := host.(connectorHost)
-	if !ok {
-		return errors.New("host does not support GetConnectors() method")
-	}
-
-	connectors := ch.GetConnectors()
-	conn, ok := connectors[p.config.MetricsConnector]
-	if !ok {
-		return fmt.Errorf("metrics connector %s not found", p.config.MetricsConnector)
-	}
-
-	metricsConnector, ok := conn.(connector.Metrics)
-	if !ok {
-		return fmt.Errorf("connector %s is not a metrics connector", p.config.MetricsConnector)
-	}
-
-	// Get the router interface to access consumers for pipelines
-	router, ok := metricsConnector.(connector.MetricsRouterAndConsumer)
-	if !ok {
-		return fmt.Errorf("connector %s does not support MetricsRouterAndConsumer interface", p.config.MetricsConnector)
-	}
-
-	// Get the consumer for the metrics pipeline
-	pipelineID := pipeline.NewID(pipeline.SignalMetrics)
-	metricsConsumer, err := router.Consumer(pipelineID)
-	if err != nil {
-		return fmt.Errorf("failed to get consumer for metrics pipeline from connector %s: %w", p.config.MetricsConnector, err)
-	}
-
-	p.metricsConsumer = metricsConsumer
+func (*logsToMetricsProcessor) Start(context.Context, component.Host) error {
 	return nil
 }
 
@@ -134,7 +87,10 @@ func (*logsToMetricsProcessor) Capabilities() consumer.Capabilities {
 }
 
 // processLogs implements the ProcessLogsFunc type for processorhelper.NewLogs
-func (p *logsToMetricsProcessor) processLogs(ctx context.Context, logs plog.Logs) (plog.Logs, error) {
+func (p *logsToMetricsProcessor) processLogs(
+	ctx context.Context,
+	logs plog.Logs,
+) (plog.Logs, error) {
 	err := p.ConsumeLogs(ctx, logs)
 	if err != nil {
 		return logs, err
@@ -167,7 +123,7 @@ func (p *logsToMetricsProcessor) ConsumeLogs(ctx context.Context, logs plog.Logs
 
 	processedMetrics := pmetric.NewMetrics()
 	processedMetrics.ResourceMetrics().EnsureCapacity(logs.ResourceLogs().Len())
-	agg := aggregator.NewAggregator[ottllog.TransformContext](processedMetrics)
+	agg := aggregator.NewAggregator[*ottllog.TransformContext](processedMetrics)
 
 	for i := 0; i < logs.ResourceLogs().Len(); i++ {
 		resourceLog := logs.ResourceLogs().At(i)
@@ -186,27 +142,42 @@ func (p *logsToMetricsProcessor) ConsumeLogs(ctx context.Context, logs plog.Logs
 
 					// The transform context is created from original attributes so that the
 					// OTTL expressions are also applied on the original attributes.
-					tCtx := ottllog.NewTransformContext(log, scopeLog.Scope(), resourceLog.Resource(), scopeLog, resourceLog)
+					tCtx := ottllog.NewTransformContextPtr(resourceLog, scopeLog, log)
 					if md.Conditions != nil {
 						match, err := md.Conditions.Eval(ctx, tCtx)
 						if err != nil {
-							p.logger.Debug("condition evaluation error", zap.String("name", metricName), zap.Error(err))
+							tCtx.Close()
+							p.logger.Debug(
+								"condition evaluation error",
+								zap.String("name", metricName),
+								zap.Error(err),
+							)
 							metricErrors[metricName]++
 							totalErrorCount++
 							continue
 						}
 						if !match {
-							p.logger.Debug("condition not matched, skipping", zap.String("name", metricName))
+							tCtx.Close()
+							p.logger.Debug(
+								"condition not matched, skipping",
+								zap.String("name", metricName),
+							)
 							continue
 						}
 					}
 					filteredResAttrs := md.FilterResourceAttributes(resourceAttrs, p.collectorInfo)
 					if err := agg.Aggregate(ctx, tCtx, md, filteredResAttrs, filteredLogAttrs, 1); err != nil {
-						p.logger.Debug("aggregation error", zap.String("name", metricName), zap.Error(err))
+						tCtx.Close()
+						p.logger.Debug(
+							"aggregation error",
+							zap.String("name", metricName),
+							zap.Error(err),
+						)
 						metricErrors[metricName]++
 						totalErrorCount++
 						continue
 					}
+					tCtx.Close()
 					metricExtracted[metricName]++
 					totalMetricsExtracted++
 				}
@@ -215,10 +186,9 @@ func (p *logsToMetricsProcessor) ConsumeLogs(ctx context.Context, logs plog.Logs
 	}
 	agg.Finalize(p.logMetricDefs)
 
-	// Send metrics to connector (which routes to metrics pipeline)
 	if processedMetrics.ResourceMetrics().Len() > 0 {
-		if err := p.metricsConsumer.ConsumeMetrics(ctx, processedMetrics); err != nil {
-			p.logger.Error("Failed to send metrics to connector", zap.Error(err))
+		if err := routeMetrics(ctx, p.config.Route, processedMetrics); err != nil {
+			p.logger.Error("Failed to send metrics to routereceiver", zap.Error(err))
 			totalErrorCount++
 			// Continue processing logs even if metrics send fails
 		}

@@ -6,7 +6,6 @@ package hotreloadprocessor // import "github.com/open-telemetry/opentelemetry-co
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -22,7 +21,7 @@ import (
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/hotreloadprocessor/internal/encryption"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/confmap/provider/s3provider"
 )
 
 type applyConfig func(ctx context.Context, config otelcol.Config, key string) error
@@ -117,22 +116,22 @@ func (hp *S3Helper) fetchObject(
 	defer func(Body io.ReadCloser) {
 		err := Body.Close()
 		if err != nil {
-			hp.Logger.Warn("Error closing S3 object body", zap.Error(err))
+			// Handle the error if needed
+			fmt.Printf("Error closing body: %v\n", err)
 		}
 	}(result.Body)
 
 	return body, nil
 }
 
-func (*S3Helper) decryptObject(
+func (hp *S3Helper) decryptObject(
 	data []byte,
 	key string,
 ) (otelcol.Config, error) {
-	encryptor, err := encryption.NewFileEncryptor(key)
+	encryptor, err := s3provider.NewFileEncryptor(key)
 	if err != nil {
 		return otelcol.Config{}, fmt.Errorf("failed to create encryptor: %w", err)
 	}
-	defer encryptor.Close()
 
 	decrypted, err := encryptor.Decrypt(data)
 	if err != nil {
@@ -140,7 +139,7 @@ func (*S3Helper) decryptObject(
 	}
 
 	var config otelcol.Config
-	if err := yaml.Unmarshal(decrypted, &config); err != nil {
+	if err := yaml.Unmarshal([]byte(decrypted), &config); err != nil {
 		return otelcol.Config{}, fmt.Errorf("failed to unmarshal %T config: %w", config, err)
 	}
 
@@ -191,20 +190,20 @@ func (hp *S3Helper) iterateDayLevel(
 			return fmt.Errorf("failed to decrypt object: %w", err)
 		}
 
-		applyErr := applyConfig(ctx, config, *obj.Key)
-		if applyErr != nil {
+		err = applyConfig(ctx, config, *obj.Key)
+		if err != nil {
 			hp.Logger.Info(
 				"Failed to apply config, trying next one",
 				zap.String("key", *obj.Key),
-				zap.Error(applyErr),
+				zap.Error(err),
 			)
-			continue
+		} else {
+			hp.activeConfig = *obj.ETag
+			return nil
 		}
-		hp.activeConfig = *obj.ETag
-		return nil
 	}
 
-	return errors.New("no valid config found")
+	return fmt.Errorf("no valid config found")
 }
 
 func (hp *S3Helper) iterateAllDays(
@@ -243,12 +242,12 @@ func (hp *S3Helper) iterateAllDays(
 				zap.String("key", *obj.Key),
 				zap.Error(err),
 			)
-			continue
+		} else {
+			return nil
 		}
-		return nil
 	}
 
-	return errors.New("no valid configs found")
+	return fmt.Errorf("no valid configs found")
 }
 
 func (hp *S3Helper) iterateConfigs(ctx context.Context, applyConfig applyConfig) error {
@@ -265,7 +264,7 @@ func (hp *S3Helper) iterateConfigs(ctx context.Context, applyConfig applyConfig)
 		bucket := parts[2]
 		key := strings.Join(parts[3:], "/")
 		if !strings.HasSuffix(key, "/") {
-			key += "/"
+			key = key + "/"
 		}
 
 		return hp.iterateAllDays(ctx, hp.Client, bucket, key, applyConfig)
@@ -276,8 +275,8 @@ func (hp *S3Helper) iterateConfigs(ctx context.Context, applyConfig applyConfig)
 		if err != nil {
 			return fmt.Errorf("failed to decode base64: %w", err)
 		}
-		if unmarshalErr := yaml.Unmarshal(decoded, &config); unmarshalErr != nil {
-			return fmt.Errorf("failed to unmarshal %T config: %w", config, unmarshalErr)
+		if err := yaml.Unmarshal(decoded, &config); err != nil {
+			return fmt.Errorf("failed to unmarshal %T config: %w", config, err)
 		}
 		err = applyConfig(ctx, config, "local-key")
 		if err != nil {

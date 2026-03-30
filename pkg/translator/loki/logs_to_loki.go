@@ -8,10 +8,9 @@ import (
 
 	"github.com/grafana/loki/pkg/push"
 	"github.com/prometheus/common/model"
+	"github.com/prometheus/otlptranslator"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
-
-	prometheustranslator "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/prometheus"
 )
 
 type PushRequest struct {
@@ -73,10 +72,7 @@ func LogsToLokiRequests(ld plog.Logs, defaultLabelsEnabled map[string]bool) map[
 				entry, err := LogToLokiEntry(log, resource, scope, defaultLabelsEnabled)
 				if err != nil {
 					// Couldn't convert so dropping log.
-					group.report.Errors = append(
-						group.report.Errors,
-						fmt.Errorf("failed to convert, dropping log: %w", err),
-					)
+					group.report.Errors = append(group.report.Errors, fmt.Errorf("failed to convert, dropping log: %w", err))
 					group.report.NumDropped++
 					continue
 				}
@@ -124,12 +120,7 @@ type PushEntry struct {
 }
 
 // LogToLokiEntry converts LogRecord into Loki log entry enriched with normalized labels
-func LogToLokiEntry(
-	lr plog.LogRecord,
-	rl pcommon.Resource,
-	scope pcommon.InstrumentationScope,
-	defaultLabelsEnabled map[string]bool,
-) (*PushEntry, error) {
+func LogToLokiEntry(lr plog.LogRecord, rl pcommon.Resource, scope pcommon.InstrumentationScope, defaultLabelsEnabled map[string]bool) (*PushEntry, error) {
 	// we may remove attributes, so change only our version
 	log := plog.NewLogRecord()
 	lr.CopyTo(log)
@@ -145,20 +136,7 @@ func LogToLokiEntry(
 
 	format := getFormatFromFormatHint(log.Attributes(), resource.Attributes())
 
-	// SAWMILLS specific code changes done to support all attributes to be converted to labels
-	// We are getting all the attributes that are to be converted to labels
-	logAttrs, resAttrs := filteredAttributeNames(log.Attributes(), resource.Attributes(), defaultLabelsEnabled)
-
-	// Update the hints with the new attributes to be converted to labels, merging with existing hints
-	updateHintsWithFilteredAttributes(log.Attributes(), logAttrs, hintAttributes)
-	updateHintsWithFilteredAttributes(resource.Attributes(), resAttrs, hintResources)
-
-	mergedLabels := convertAttributesAndMerge(
-		log.Attributes(),
-		resource.Attributes(),
-		defaultLabelsEnabled,
-	)
-
+	mergedLabels := convertAttributesAndMerge(log.Attributes(), resource.Attributes(), defaultLabelsEnabled)
 	// remove the attributes that were promoted to labels
 	removeAttributes(log.Attributes(), mergedLabels)
 	removeAttributes(resource.Attributes(), mergedLabels)
@@ -169,10 +147,14 @@ func LogToLokiEntry(
 	}
 
 	labels := model.LabelSet{}
+	namer := otlptranslator.LabelNamer{}
 	for label := range mergedLabels {
 		// Loki doesn't support dots in label names
 		// labelName is normalized label name to follow Prometheus label names standard
-		labelName := prometheustranslator.NormalizeLabel(string(label))
+		labelName, err := namer.Build(string(label))
+		if err != nil {
+			return nil, err
+		}
 		labels[model.LabelName(labelName)] = mergedLabels[label]
 	}
 
@@ -239,8 +221,7 @@ func addHint(log plog.LogRecord) {
 		case pcommon.ValueTypeSlice:
 			value.Slice().AppendEmpty().SetStr(levelAttributeName)
 		case pcommon.ValueTypeStr:
-			log.Attributes().
-				PutStr(hintAttributes, fmt.Sprintf("%s,%s", value.AsString(), levelAttributeName))
+			log.Attributes().PutStr(hintAttributes, fmt.Sprintf("%s,%s", value.AsString(), levelAttributeName))
 		}
 	} else {
 		log.Attributes().PutStr(hintAttributes, levelAttributeName)

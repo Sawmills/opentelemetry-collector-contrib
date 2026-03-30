@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//go:generate mdatagen metadata.yaml
+//go:generate make mdatagen
 
 package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter"
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	"go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper"
@@ -42,7 +43,6 @@ func createDefaultConfig() component.Config {
 	otlpDefaultCfg := otlpFactory.CreateDefaultConfig().(*otlpexporter.Config)
 	otlpDefaultCfg.ClientConfig.Endpoint = "placeholder:4317"
 	queueCfg := exporterhelper.NewDefaultQueueConfig()
-	queueCfg.Enabled = false
 
 	return &Config{
 		// By default we disable resilience options on loadbalancing exporter level
@@ -51,7 +51,7 @@ func createDefaultConfig() component.Config {
 			OTLP: *otlpDefaultCfg,
 		},
 		QueueSettings: QueueSettings{
-			QueueBatchConfig:   queueCfg,
+			QueueConfig:        configoptional.Default(queueCfg),
 			PayloadCompression: QueuePayloadCompressionNone,
 		},
 		LogBatcher: LogBatcherConfig{
@@ -94,14 +94,14 @@ func buildExporterResilienceOptions(
 	if cfg.TimeoutSettings.Timeout > 0 {
 		options = append(options, exporterhelper.WithTimeout(cfg.TimeoutSettings))
 	}
-	if cfg.QueueSettings.Enabled {
+	if cfg.QueueSettings.QueueConfig.HasValue() {
 		if payloadCodec != nil && qbs.Encoding != nil {
 			qbs.Encoding = payloadCodecEncoding{
 				encoding: qbs.Encoding,
 				codec:    payloadCodec,
 			}
 		}
-		options = append(options, xexporterhelper.WithQueueBatch(cfg.QueueSettings.QueueBatchConfig, qbs))
+		options = append(options, xexporterhelper.WithQueueBatch(cfg.QueueSettings.QueueConfig, qbs))
 	}
 	if cfg.Enabled {
 		options = append(options, exporterhelper.WithRetry(cfg.BackOffConfig))
@@ -183,7 +183,7 @@ func createMetricsExporter(ctx context.Context, params exporter.Settings, cfg co
 }
 
 func newQueuePayloadCodecIfEnabled(cfg *Config) *queuePayloadCodec {
-	if !cfg.QueueSettings.Enabled {
+	if !cfg.QueueSettings.QueueConfig.HasValue() {
 		return nil
 	}
 	if cfg.QueueSettings.PayloadCompression == "" {

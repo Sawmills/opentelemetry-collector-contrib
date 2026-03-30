@@ -1,5 +1,5 @@
 logstometricsprocessor:
-  metrics_connector: test_connector
+  route: test_route
   drop_logs: false
   logs:
     - name: total.logrecords.sum
@@ -34,4 +34,3 @@ logstometricsprocessor:
         - key: log.bar
       sum:
         value: "2"
-

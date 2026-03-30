@@ -86,4 +86,3 @@ resourceMetrics:
                   timeUnixNano: "1000000"
         scope:
           name: github.com/open-telemetry/opentelemetry-collector-contrib/processor/logstometricsprocessor
-

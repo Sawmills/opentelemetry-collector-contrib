@@ -122,9 +122,7 @@ func TestSerializeComplexBody(t *testing.T) {
 		},
 		{
 			complexmap,
-			[]byte(
-				`{"keyarr":["a","b"],"keybool":true,"keyempty":null,"keyint":1,"keymap":{"key":"val"},"keynull":null,"keystr":"val"}`,
-			),
+			[]byte(`{"keyarr":["a","b"],"keybool":true,"keyempty":null,"keyint":1,"keymap":{"key":"val"},"keynull":null,"keystr":"val"}`),
 			[]byte(`keystr=val keyint=1 keybool=true keyarr_0=a keyarr_1=b keymap_key=val`),
 		},
 		{

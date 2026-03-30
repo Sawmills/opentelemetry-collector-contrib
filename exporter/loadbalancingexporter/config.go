@@ -57,9 +57,9 @@ type Config struct {
 }
 
 type QueueSettings struct {
-	exporterhelper.QueueBatchConfig `mapstructure:",squash"`
-	PayloadCompression              QueuePayloadCompression `mapstructure:"payload_compression"`
-	CompressInMemory                bool                    `mapstructure:"compress_in_memory"`
+	QueueConfig        configoptional.Optional[exporterhelper.QueueBatchConfig] `mapstructure:",squash"`
+	PayloadCompression QueuePayloadCompression                                  `mapstructure:"payload_compression"`
+	CompressInMemory   bool                                                     `mapstructure:"compress_in_memory"`
 }
 
 type LogBatcherConfig struct {
@@ -83,7 +83,7 @@ func (q *QueueSettings) Unmarshal(conf *confmap.Conf) error {
 	delete(queueCfg, "compress_in_memory")
 
 	queueConf := confmap.NewFromStringMap(queueCfg)
-	if err := queueConf.Unmarshal(&q.QueueBatchConfig); err != nil {
+	if err := queueConf.Unmarshal(&q.QueueConfig); err != nil {
 		return err
 	}
 
@@ -115,8 +115,10 @@ const (
 )
 
 func (q QueueSettings) Validate() error {
-	if err := q.QueueBatchConfig.Validate(); err != nil {
-		return err
+	if q.QueueConfig.HasValue() {
+		if err := q.QueueConfig.Get().Validate(); err != nil {
+			return err
+		}
 	}
 	switch q.PayloadCompression {
 	case "", QueuePayloadCompressionNone, QueuePayloadCompressionSnappy, QueuePayloadCompressionZstd:
@@ -125,7 +127,7 @@ func (q QueueSettings) Validate() error {
 		return fmt.Errorf("sending_queue.payload_compression must be one of [none, snappy, zstd], found %q", q.PayloadCompression)
 	}
 
-	if q.CompressInMemory && !q.Enabled {
+	if q.CompressInMemory && !q.QueueConfig.HasValue() {
 		return errors.New("sending_queue.compress_in_memory requires sending_queue.enabled=true")
 	}
 	if q.CompressInMemory && (q.PayloadCompression == "" || q.PayloadCompression == QueuePayloadCompressionNone) {

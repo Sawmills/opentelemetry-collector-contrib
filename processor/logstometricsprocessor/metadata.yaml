@@ -10,21 +10,19 @@ status:
 
 tests:
   config:
-    metrics_connector: test_connector
+    route: test_route
     drop_logs: false
     logs:
       - name: logrecord.count
         description: "Count of log record"
         sum:
           value: "1" # Count each log record as 1, has to be a string
-  skip_lifecycle: true
 
 telemetry:
   metrics:
     processor_logstometrics_errors:
       description: Number of errors encountered during processing
-      stability:
-        level: development
+      stability: development
       unit: "{errors}"
       enabled: true
       sum:
@@ -32,8 +30,7 @@ telemetry:
         monotonic: true
     processor_logstometrics_logs_dropped:
       description: Number of logs dropped when drop_logs is true
-      stability:
-        level: development
+      stability: development
       unit: "{records}"
       enabled: true
       sum:
@@ -41,8 +38,7 @@ telemetry:
         monotonic: true
     processor_logstometrics_logs_processed:
       description: Number of log records processed by the processor
-      stability:
-        level: development
+      stability: development
       unit: "{records}"
       enabled: true
       sum:
@@ -50,8 +46,7 @@ telemetry:
         monotonic: true
     processor_logstometrics_metrics_extracted:
       description: Number of metrics extracted from logs
-      stability:
-        level: development
+      stability: development
       unit: "{metrics}"
       enabled: true
       sum:
@@ -59,8 +54,7 @@ telemetry:
         monotonic: true
     processor_logstometrics_processing_duration:
       description: Time spent processing logs and extracting metrics
-      stability:
-        level: development
+      stability: development
       unit: ms
       enabled: true
       histogram:

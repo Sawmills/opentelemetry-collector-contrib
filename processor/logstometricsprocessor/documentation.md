@@ -8,7 +8,7 @@ The following telemetry is emitted by this component.
 
 ### otelcol_processor_logstometrics_errors
 
-Number of errors encountered during processing [Development]
+Number of errors encountered during processing
 
 | Unit | Metric Type | Value Type | Monotonic | Stability |
 | ---- | ----------- | ---------- | --------- | --------- |
@@ -16,7 +16,7 @@ Number of errors encountered during processing [Development]
 
 ### otelcol_processor_logstometrics_logs_dropped
 
-Number of logs dropped when drop_logs is true [Development]
+Number of logs dropped when drop_logs is true
 
 | Unit | Metric Type | Value Type | Monotonic | Stability |
 | ---- | ----------- | ---------- | --------- | --------- |
@@ -24,7 +24,7 @@ Number of logs dropped when drop_logs is true [Development]
 
 ### otelcol_processor_logstometrics_logs_processed
 
-Number of log records processed by the processor [Development]
+Number of log records processed by the processor
 
 | Unit | Metric Type | Value Type | Monotonic | Stability |
 | ---- | ----------- | ---------- | --------- | --------- |
@@ -32,7 +32,7 @@ Number of log records processed by the processor [Development]
 
 ### otelcol_processor_logstometrics_metrics_extracted
 
-Number of metrics extracted from logs [Development]
+Number of metrics extracted from logs
 
 | Unit | Metric Type | Value Type | Monotonic | Stability |
 | ---- | ----------- | ---------- | --------- | --------- |
@@ -40,7 +40,7 @@ Number of metrics extracted from logs [Development]
 
 ### otelcol_processor_logstometrics_processing_duration
 
-Time spent processing logs and extracting metrics [Development]
+Time spent processing logs and extracting metrics
 
 | Unit | Metric Type | Value Type | Stability |
 | ---- | ----------- | ---------- | --------- |

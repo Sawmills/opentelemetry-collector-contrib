@@ -5,7 +5,6 @@ package loki // import "github.com/open-telemetry/opentelemetry-collector-contri
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -33,44 +32,9 @@ const (
 	levelLabel    string = "level"
 )
 
-const (
-	skipServiceName      string = "service.name"
-	skipServiceNamespace string = "service.namespace"
-	skipServiceInstance  string = "service.instance.id"
-	skipTenant           string = "tenant.id"
-	skipProcessedBy      string = "processed.by"
-	skipHTTPStatus       string = "http.status"
-	skipExporter         string = "exporter"
-	skipRegionAZ         string = "region.az"
-)
-
-var excludedLogAttributes = []string{
-	hintAttributes,
-	hintResources,
-	hintTenant,
-	hintFormat,
-}
-
-// SAWMILLS: These attributes are excluded from being automatically converted to labels
-// but can still be converted if explicitly specified in hints
-var skipAttributes = []string{
-	skipServiceName,
-	skipServiceNamespace,
-	skipServiceInstance,
-	skipHTTPStatus,
-	skipTenant,
-	skipExporter,
-	skipRegionAZ,
-	skipProcessedBy,
-}
-
 const attrSeparator = "."
 
-func convertAttributesAndMerge(
-	logAttrs pcommon.Map,
-	resAttrs pcommon.Map,
-	defaultLabelsEnabled map[string]bool,
-) model.LabelSet {
+func convertAttributesAndMerge(logAttrs, resAttrs pcommon.Map, defaultLabelsEnabled map[string]bool) model.LabelSet {
 	out := getDefaultLabels(resAttrs, defaultLabelsEnabled)
 
 	if resourcesToLabel, found := resAttrs.Get(hintResources); found {
@@ -92,93 +56,6 @@ func convertAttributesAndMerge(
 	}
 
 	return out
-}
-
-// SAWMILLS custom function to get the names of the attributes that will be used as labels
-// and the names of the attributes that will be used as log attributes
-func filteredAttributeNames(
-	logAttrs, resAttrs pcommon.Map,
-	defaultLabelsEnabled map[string]bool,
-) (logAttrNames, resAttrNames []string) {
-	// Get resource attributes, excluding maps, excluded attributes, and skip attributes
-	resAttrs.Range(func(k string, v pcommon.Value) bool {
-		if v.Type() != pcommon.ValueTypeMap &&
-			!slices.Contains(excludedLogAttributes, k) &&
-			!slices.Contains(skipAttributes, k) {
-			// Respect defaultLabelsEnabled for level label
-			if k == levelLabel {
-				if enabled, ok := defaultLabelsEnabled[levelLabel]; !ok || enabled {
-					resAttrNames = append(resAttrNames, k)
-				}
-			} else {
-				resAttrNames = append(resAttrNames, k)
-			}
-		}
-		return true
-	})
-
-	// Get log attributes, excluding maps, excluded attributes, and skip attributes
-	logAttrs.Range(func(k string, v pcommon.Value) bool {
-		if v.Type() != pcommon.ValueTypeMap &&
-			!slices.Contains(excludedLogAttributes, k) &&
-			!slices.Contains(skipAttributes, k) {
-			// Respect defaultLabelsEnabled for level label
-			if k == levelLabel {
-				if enabled, ok := defaultLabelsEnabled[levelLabel]; !ok || enabled {
-					logAttrNames = append(logAttrNames, k)
-				}
-			} else {
-				logAttrNames = append(logAttrNames, k)
-			}
-		}
-		return true
-	})
-
-	return logAttrNames, resAttrNames
-}
-
-// updateHintsWithFilteredAttributes updates the hints with filtered attributes, respecting existing hints
-func updateHintsWithFilteredAttributes(attrs pcommon.Map, filteredAttrs []string, hintKey string) {
-	if len(filteredAttrs) == 0 {
-		return
-	}
-
-	// Check if there are existing hints
-	if existingHint, found := attrs.Get(hintKey); found {
-		// Merge with existing hints
-		var existingAttrs []string
-		switch existingHint.Type() {
-		case pcommon.ValueTypeStr:
-			existingAttrs = strings.Split(existingHint.AsString(), ",")
-		case pcommon.ValueTypeSlice:
-			as := existingHint.Slice().AsRaw()
-			for _, a := range as {
-				existingAttrs = append(existingAttrs, fmt.Sprintf("%v", a))
-			}
-		}
-
-		// Combine existing and new attributes, removing duplicates
-		allAttrs := make(map[string]bool)
-		for _, attr := range existingAttrs {
-			allAttrs[strings.TrimSpace(attr)] = true
-		}
-		for _, attr := range filteredAttrs {
-			allAttrs[strings.TrimSpace(attr)] = true
-		}
-
-		// Convert back to slice
-		var combinedAttrs []string
-		for attr := range allAttrs {
-			if attr != "" {
-				combinedAttrs = append(combinedAttrs, attr)
-			}
-		}
-
-		attrs.PutStr(hintKey, strings.Join(combinedAttrs, ","))
-	} else {
-		// No existing hints, just set the new ones
-		attrs.PutStr(hintKey, strings.Join(filteredAttrs, ","))
-	}
 }
 
 func getDefaultLabels(resAttrs pcommon.Map, defaultLabelsEnabled map[string]bool) model.LabelSet {
@@ -211,14 +88,7 @@ func convertAttributesToLabels(attributes pcommon.Map, attrsToSelect pcommon.Val
 		attr = strings.TrimSpace(attr)
 
 		if av, ok := getAttribute(attr, attributes); ok {
-			val := av.AsString()
-			if attr == "processed_by" {
-				// Only keep the prefix before the first '-'
-				if idx := strings.Index(val, "-"); idx > 0 {
-					val = val[:idx]
-				}
-			}
-			out[model.LabelName(attr)] = model.LabelValue(val)
+			out[model.LabelName(attr)] = model.LabelValue(av.AsString())
 		}
 	}
 
@@ -277,11 +147,7 @@ func removeAttributes(attrs pcommon.Map, labels model.LabelSet) {
 	})
 }
 
-func convertLogToJSONEntry(
-	lr plog.LogRecord,
-	res pcommon.Resource,
-	scope pcommon.InstrumentationScope,
-) (*push.Entry, error) {
+func convertLogToJSONEntry(lr plog.LogRecord, res pcommon.Resource, scope pcommon.InstrumentationScope) (*push.Entry, error) {
 	line, err := Encode(lr, res, scope)
 	if err != nil {
 		return nil, err
@@ -292,11 +158,7 @@ func convertLogToJSONEntry(
 	}, nil
 }
 
-func convertLogToLogfmtEntry(
-	lr plog.LogRecord,
-	res pcommon.Resource,
-	scope pcommon.InstrumentationScope,
-) (*push.Entry, error) {
+func convertLogToLogfmtEntry(lr plog.LogRecord, res pcommon.Resource, scope pcommon.InstrumentationScope) (*push.Entry, error) {
 	line, err := EncodeLogfmt(lr, res, scope)
 	if err != nil {
 		return nil, err
@@ -314,12 +176,7 @@ func convertLogToLogRawEntry(lr plog.LogRecord) (*push.Entry, error) {
 	}, nil
 }
 
-func convertLogToLokiEntry(
-	lr plog.LogRecord,
-	res pcommon.Resource,
-	format string,
-	scope pcommon.InstrumentationScope,
-) (*push.Entry, error) {
+func convertLogToLokiEntry(lr plog.LogRecord, res pcommon.Resource, format string, scope pcommon.InstrumentationScope) (*push.Entry, error) {
 	switch format {
 	case formatJSON:
 		return convertLogToJSONEntry(lr, res, scope)
@@ -328,13 +185,7 @@ func convertLogToLokiEntry(
 	case formatRaw:
 		return convertLogToLogRawEntry(lr)
 	default:
-		return nil, fmt.Errorf(
-			"invalid format %s. Expected one of: %s, %s, %s",
-			format,
-			formatJSON,
-			formatLogfmt,
-			formatRaw,
-		)
+		return nil, fmt.Errorf("invalid format %s. Expected one of: %s, %s, %s", format, formatJSON, formatLogfmt, formatRaw)
 	}
 }
 

@@ -8,7 +8,7 @@ The following telemetry is emitted by this component.
 
 ### otelcol_processor_hot_reload_config_refresh_interval
 
-Refresh interval of the hotreloadprocessor [Development]
+Refresh interval of the hotreloadprocessor
 
 | Unit | Metric Type | Value Type | Stability |
 | ---- | ----------- | ---------- | --------- |
@@ -22,7 +22,7 @@ Refresh interval of the hotreloadprocessor [Development]
 
 ### otelcol_processor_hot_reload_config_shutdown_delay
 
-Shutdown delay of the hotreloadprocessor [Development]
+Shutdown delay of the hotreloadprocessor
 
 | Unit | Metric Type | Value Type | Stability |
 | ---- | ----------- | ---------- | --------- |
@@ -36,7 +36,7 @@ Shutdown delay of the hotreloadprocessor [Development]
 
 ### otelcol_processor_hot_reload_newest_file_failed_timestamp
 
-The timestamp of the newest file failed to load by the hotreloadprocessor in seconds [Development]
+The timestamp of the newest file failed to load by the hotreloadprocessor in seconds
 
 | Unit | Metric Type | Value Type | Stability |
 | ---- | ----------- | ---------- | --------- |
@@ -52,7 +52,7 @@ The timestamp of the newest file failed to load by the hotreloadprocessor in sec
 
 ### otelcol_processor_hot_reload_newest_file_success_timestamp
 
-The timestamp of the newest file successfully loaded by the hotreloadprocessor in seconds [Development]
+The timestamp of the newest file successfully loaded by the hotreloadprocessor in seconds
 
 | Unit | Metric Type | Value Type | Stability |
 | ---- | ----------- | ---------- | --------- |
@@ -67,7 +67,7 @@ The timestamp of the newest file successfully loaded by the hotreloadprocessor i
 
 ### otelcol_processor_hot_reload_process_duration
 
-Duration of the processLogs function by the hotreloadprocessor [Development]
+Duration of the processLogs function by the hotreloadprocessor
 
 | Unit | Metric Type | Value Type | Stability |
 | ---- | ----------- | ---------- | --------- |
@@ -75,7 +75,7 @@ Duration of the processLogs function by the hotreloadprocessor [Development]
 
 ### otelcol_processor_hot_reload_reload_duration
 
-Duration of the reload by the hotreloadprocessor [Development]
+Duration of the reload by the hotreloadprocessor
 
 | Unit | Metric Type | Value Type | Stability |
 | ---- | ----------- | ---------- | --------- |
@@ -83,7 +83,7 @@ Duration of the reload by the hotreloadprocessor [Development]
 
 ### otelcol_processor_hot_reload_rollback_file_success_timestamp
 
-The timestamp of the rollback file successfully loaded by the hotreloadprocessor in seconds [Development]
+The timestamp of the rollback file successfully loaded by the hotreloadprocessor in seconds
 
 | Unit | Metric Type | Value Type | Stability |
 | ---- | ----------- | ---------- | --------- |
@@ -95,10 +95,11 @@ The timestamp of the rollback file successfully loaded by the hotreloadprocessor
 | ---- | ----------- | ------ |
 | destination | The destination of the hotreloadprocessor | Any Str |
 | key | The key of the file being scanned | Any Str |
+| reason | The reason for the error | Any Str |
 
 ### otelcol_processor_hot_reload_running_processors_count
 
-Number of running processors in the hotreloadprocessor [Development]
+Number of running processors in the hotreloadprocessor
 
 | Unit | Metric Type | Value Type | Stability |
 | ---- | ----------- | ---------- | --------- |
@@ -112,7 +113,7 @@ Number of running processors in the hotreloadprocessor [Development]
 
 ### otelcol_processor_hot_reload_scan
 
-Number of scanned prefixes by the hotreloadprocessor [Development]
+Number of scanned prefixes by the hotreloadprocessor
 
 | Unit | Metric Type | Value Type | Stability |
 | ---- | ----------- | ---------- | --------- |

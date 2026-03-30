@@ -7,7 +7,6 @@ ignored_paths:
   - extension/encoding
   - extension/opampcustommessages
   - extension/storage
-  - exporter/kedascalerexporter # pre-existing exported helper constructors; tracked for API cleanup
   - pkg/batchperresourceattr
   - pkg/batchpersignal
   - pkg/core/xidutils
@@ -32,8 +31,10 @@ ignored_paths:
   - pkg/translator/prometheusremotewrite
   - pkg/translator/signalfx
   - pkg/translator/skywalking
+  - pkg/translator/splunk
   - pkg/winperfcounters
   - pkg/xk8stest
+  - processor/lookupprocessor
   - processor/tailsamplingprocessor
   - receiver/hostmetricsreceiver # issue with the parser not identifying Config as a config struct
   - receiver/pulsarreceiver # 38930
@@ -43,11 +44,12 @@ ignored_paths:
   - extension/sumologicextension # 40655
   - extension/k8sleaderelector # 43992
   - processor/filterprocessor # 43994
-  - processor/hotreloadprocessor # pre-existing exported helper constructor; tracked for API cleanup
+  - processor/hotreloadprocessor # fork-specific extension seam via injected processor factories
   - processor/transformprocessor # 43994
   - receiver/aerospikereceiver # 43995
   - receiver/carbonreceiver
   - receiver/statsdreceiver
+  - confmap/provider/s3provider # fork-specific encrypted config helper surface
 allowed_functions:
   - name: NewFactory
     classes:

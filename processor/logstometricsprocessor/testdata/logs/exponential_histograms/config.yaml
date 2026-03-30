@@ -1,5 +1,5 @@
 logstometricsprocessor:
-  metrics_connector: test_connector
+  route: test_route
   drop_logs: false
   logs:
     - name: total.logrecords.exphistogram
@@ -39,4 +39,3 @@ logstometricsprocessor:
       exponential_histogram:
         count: "2"
         value: attributes["log.duration"]
-

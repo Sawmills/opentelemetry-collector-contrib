@@ -10,7 +10,6 @@ import (
 
 	"github.com/grafana/loki/pkg/push"
 	"github.com/prometheus/common/model"
-	"github.com/prometheus/prometheus/model/labels"
 	promql_parser "github.com/prometheus/prometheus/promql/parser"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
@@ -45,13 +44,13 @@ func PushRequestToLogs(pushRequest *push.PushRequest, keepTimestamp bool) (plog.
 
 		// Convert to model.LabelSet
 		filtered := model.LabelSet{}
-		ls.Range(func(label labels.Label) {
+		for labelName, labelValue := range ls.Map() {
 			// Labels started from __ are considered internal and should be ignored
-			if strings.HasPrefix(label.Name, "__") {
-				return
+			if strings.HasPrefix(labelName, "__") {
+				continue
 			}
-			filtered[model.LabelName(label.Name)] = model.LabelValue(label.Value)
-		})
+			filtered[model.LabelName(labelName)] = model.LabelValue(labelValue)
+		}
 
 		for i := range stream.Entries {
 			lr := logSlice.AppendEmpty()
@@ -67,12 +66,7 @@ func PushRequestToLogs(pushRequest *push.PushRequest, keepTimestamp bool) (plog.
 }
 
 // ConvertEntryToLogRecord converts loki log entry to otlp log record
-func ConvertEntryToLogRecord(
-	entry *push.Entry,
-	lr *plog.LogRecord,
-	labelSet model.LabelSet,
-	keepTimestamp bool,
-) {
+func ConvertEntryToLogRecord(entry *push.Entry, lr *plog.LogRecord, labelSet model.LabelSet, keepTimestamp bool) {
 	observedTimestamp := pcommon.NewTimestampFromTime(time.Now())
 	lr.SetObservedTimestamp(observedTimestamp)
 	if keepTimestamp && !entry.Timestamp.IsZero() {
@@ -83,5 +77,8 @@ func ConvertEntryToLogRecord(
 	lr.Body().SetStr(entry.Line)
 	for key, value := range labelSet {
 		lr.Attributes().PutStr(string(key), string(value))
+	}
+	for _, metadata := range entry.StructuredMetadata {
+		lr.Attributes().PutStr(metadata.Name, metadata.Value)
 	}
 }

@@ -10,8 +10,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
+	"go.opentelemetry.io/collector/exporter/exporterhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
 )
@@ -32,7 +34,7 @@ func TestConfigValidatePayloadCompression(t *testing.T) {
 	cfg := createDefaultConfig().(*Config)
 	require.NoError(t, cfg.Validate())
 
-	cfg.QueueSettings.Enabled = true
+	cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
 	require.NoError(t, cfg.Validate())
 
@@ -48,7 +50,7 @@ func TestConfigValidateCompressInMemory(t *testing.T) {
 	cfg.QueueSettings.CompressInMemory = true
 	require.ErrorContains(t, cfg.Validate(), "sending_queue.compress_in_memory requires sending_queue.enabled=true")
 
-	cfg.QueueSettings.Enabled = true
+	cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
 	require.ErrorContains(t, cfg.Validate(), "sending_queue.compress_in_memory requires sending_queue.payload_compression")
 
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionNone
@@ -107,6 +109,7 @@ func TestLoadConfigWithQueueCompression(t *testing.T) {
 	})
 
 	require.NoError(t, conf.Unmarshal(cfg))
+	require.True(t, cfg.QueueSettings.QueueConfig.HasValue())
 	require.Equal(t, QueuePayloadCompressionZstd, cfg.QueueSettings.PayloadCompression)
 	require.True(t, cfg.QueueSettings.CompressInMemory)
 }
