@@ -4,13 +4,16 @@
 package loadbalancingexporter
 
 import (
-	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configoptional"
+	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
+	"go.opentelemetry.io/collector/exporter/exporterhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
 )
@@ -27,62 +30,117 @@ func TestLoadConfig(t *testing.T) {
 	require.NotNil(t, cfg)
 }
 
-func TestConfigValidate(t *testing.T) {
-	tests := []struct {
-		name        string
-		cfg         Config
-		expectedErr string
-	}{
-		{
-			name: "attribute routing requires routing attributes",
-			cfg: Config{
-				RoutingKey: attrRoutingStr,
-			},
-			expectedErr: fmt.Sprintf("routing_attributes must be specified when routing_key is %q", attrRoutingStr),
-		},
-		{
-			name: "attribute routing with routing attributes is valid",
-			cfg: Config{
-				RoutingKey:        attrRoutingStr,
-				RoutingAttributes: []string{"service.name"},
-			},
-		},
-		{
-			name: "routing attributes with non attribute routing is invalid",
-			cfg: Config{
-				RoutingKey:        svcRoutingStr,
-				RoutingAttributes: []string{"service.name"},
-			},
-			expectedErr: fmt.Sprintf(
-				"routing_attributes can only be used when routing_key is %q; got %q. Remove routing_attributes or set routing_key to %q",
-				attrRoutingStr,
-				svcRoutingStr,
-				attrRoutingStr,
-			),
-		},
-		{
-			name: "routing attributes with empty routing key is invalid",
-			cfg: Config{
-				RoutingAttributes: []string{"service.name"},
-			},
-			expectedErr: fmt.Sprintf(
-				"routing_attributes can only be used when routing_key is %q; got %q. Remove routing_attributes or set routing_key to %q",
-				attrRoutingStr,
-				"",
-				attrRoutingStr,
-			),
-		},
-	}
+func TestConfigValidatePayloadCompression(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	require.NoError(t, cfg.Validate())
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.cfg.Validate()
-			if tt.expectedErr == "" {
-				require.NoError(t, err)
-				return
-			}
+	cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
+	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
+	require.NoError(t, cfg.Validate())
 
-			require.EqualError(t, err, tt.expectedErr)
-		})
-	}
+	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionZstd
+	require.NoError(t, cfg.Validate())
+
+	cfg.QueueSettings.PayloadCompression = QueuePayloadCompression("invalid")
+	require.Error(t, cfg.Validate())
+}
+
+func TestConfigValidateCompressInMemory(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	cfg.QueueSettings.CompressInMemory = true
+	require.ErrorContains(t, cfg.Validate(), "sending_queue.compress_in_memory requires sending_queue.enabled=true")
+
+	cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
+	require.ErrorContains(t, cfg.Validate(), "sending_queue.compress_in_memory requires sending_queue.payload_compression")
+
+	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionNone
+	require.ErrorContains(t, cfg.Validate(), "sending_queue.compress_in_memory requires sending_queue.payload_compression")
+
+	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
+	require.NoError(t, cfg.Validate())
+
+	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionZstd
+	require.NoError(t, cfg.Validate())
+}
+
+func TestConfigValidateLogBatcher(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	require.NoError(t, cfg.Validate())
+
+	cfg.LogBatcher.Enabled = true
+	cfg.LogBatcher.MaxRecords = 0
+	require.ErrorContains(t, cfg.Validate(), "log_batcher.max_records")
+
+	cfg.LogBatcher.MaxRecords = 10
+	cfg.LogBatcher.MaxBytes = 0
+	require.ErrorContains(t, cfg.Validate(), "log_batcher.max_bytes")
+
+	cfg.LogBatcher.MaxBytes = 1024
+	cfg.LogBatcher.FlushInterval = 0
+	require.ErrorContains(t, cfg.Validate(), "log_batcher.flush_interval")
+
+	cfg.LogBatcher.FlushInterval = time.Second
+	require.NoError(t, cfg.Validate())
+}
+
+func TestLoadConfigWithQueueCompression(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	conf := confmap.NewFromStringMap(map[string]any{
+		"protocol": map[string]any{
+			"otlp": map[string]any{
+				"endpoint": "localhost:4317",
+				"tls": map[string]any{
+					"insecure": true,
+				},
+			},
+		},
+		"resolver": map[string]any{
+			"static": map[string]any{
+				"hostnames": []string{"localhost:4317"},
+			},
+		},
+		"sending_queue": map[string]any{
+			"enabled":             true,
+			"queue_size":          1000,
+			"num_consumers":       2,
+			"payload_compression": "zstd",
+			"compress_in_memory":  true,
+		},
+	})
+
+	require.NoError(t, conf.Unmarshal(cfg))
+	require.True(t, cfg.QueueSettings.QueueConfig.HasValue())
+	require.Equal(t, QueuePayloadCompressionZstd, cfg.QueueSettings.PayloadCompression)
+	require.True(t, cfg.QueueSettings.CompressInMemory)
+}
+
+func TestLoadConfigWithLogBatcher(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	conf := confmap.NewFromStringMap(map[string]any{
+		"protocol": map[string]any{
+			"otlp": map[string]any{
+				"endpoint": "localhost:4317",
+				"tls": map[string]any{
+					"insecure": true,
+				},
+			},
+		},
+		"resolver": map[string]any{
+			"static": map[string]any{
+				"hostnames": []string{"localhost:4317"},
+			},
+		},
+		"log_batcher": map[string]any{
+			"enabled":        true,
+			"max_records":    1024,
+			"max_bytes":      2097152,
+			"flush_interval": "250ms",
+		},
+	})
+
+	require.NoError(t, conf.Unmarshal(cfg))
+	require.True(t, cfg.LogBatcher.Enabled)
+	require.Equal(t, 1024, cfg.LogBatcher.MaxRecords)
+	require.Equal(t, 2097152, cfg.LogBatcher.MaxBytes)
+	require.Equal(t, 250*time.Millisecond, cfg.LogBatcher.FlushInterval)
 }

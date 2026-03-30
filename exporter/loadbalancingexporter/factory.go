@@ -13,9 +13,11 @@ import (
 	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
+	"go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper"
 	"go.opentelemetry.io/collector/exporter/otlpexporter"
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
+	"go.uber.org/multierr"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
@@ -40,6 +42,7 @@ func createDefaultConfig() component.Config {
 	otlpFactory := otlpexporter.NewFactory()
 	otlpDefaultCfg := otlpFactory.CreateDefaultConfig().(*otlpexporter.Config)
 	otlpDefaultCfg.ClientConfig.Endpoint = "placeholder:4317"
+	queueCfg := exporterhelper.NewDefaultQueueConfig()
 
 	return &Config{
 		// By default we disable resilience options on loadbalancing exporter level
@@ -47,7 +50,16 @@ func createDefaultConfig() component.Config {
 		Protocol: Protocol{
 			OTLP: *otlpDefaultCfg,
 		},
-		QueueSettings: configoptional.Default(exporterhelper.NewDefaultQueueConfig()),
+		QueueSettings: QueueSettings{
+			QueueConfig:        configoptional.Default(queueCfg),
+			PayloadCompression: QueuePayloadCompressionNone,
+		},
+		LogBatcher: LogBatcherConfig{
+			Enabled:       false,
+			MaxRecords:    defaultLogBatchMaxRecords,
+			MaxBytes:      defaultLogBatchMaxBytes,
+			FlushInterval: defaultLogBatchFlushTimeout,
+		},
 	}
 }
 
@@ -73,12 +85,23 @@ func buildExporterSettings(typ component.Type, params exporter.Settings, endpoin
 	return params
 }
 
-func buildExporterResilienceOptions(options []exporterhelper.Option, cfg *Config) []exporterhelper.Option {
+func buildExporterResilienceOptions(
+	options []exporterhelper.Option,
+	cfg *Config,
+	payloadCodec *queuePayloadCodec,
+	qbs xexporterhelper.QueueBatchSettings,
+) []exporterhelper.Option {
 	if cfg.TimeoutSettings.Timeout > 0 {
 		options = append(options, exporterhelper.WithTimeout(cfg.TimeoutSettings))
 	}
-	if cfg.QueueSettings.HasValue() {
-		options = append(options, exporterhelper.WithQueue(cfg.QueueSettings))
+	if cfg.QueueSettings.QueueConfig.HasValue() {
+		if payloadCodec != nil && qbs.Encoding != nil {
+			qbs.Encoding = payloadCodecEncoding{
+				encoding: qbs.Encoding,
+				codec:    payloadCodec,
+			}
+		}
+		options = append(options, xexporterhelper.WithQueueBatch(cfg.QueueSettings.QueueConfig, qbs))
 	}
 	if cfg.Enabled {
 		options = append(options, exporterhelper.WithRetry(cfg.BackOffConfig))
@@ -93,19 +116,21 @@ func createTracesExporter(ctx context.Context, params exporter.Settings, cfg com
 	if err != nil {
 		return nil, fmt.Errorf("cannot configure loadbalancing traces exporter: %w", err)
 	}
+	payloadCodec := newQueuePayloadCodecIfEnabled(c)
 
 	options := []exporterhelper.Option{
 		exporterhelper.WithStart(exp.Start),
-		exporterhelper.WithShutdown(exp.Shutdown),
+		exporterhelper.WithShutdown(shutdownWithCodec(component.ShutdownFunc(exp.Shutdown), payloadCodec)),
 		exporterhelper.WithCapabilities(exp.Capabilities()),
 	}
+	qbs := xexporterhelper.NewTracesQueueBatchSettings()
 
 	return exporterhelper.NewTraces(
 		ctx,
 		params,
 		cfg,
 		exp.ConsumeTraces,
-		buildExporterResilienceOptions(options, c)...,
+		buildExporterResilienceOptions(options, c, payloadCodec, qbs)...,
 	)
 }
 
@@ -115,19 +140,21 @@ func createLogsExporter(ctx context.Context, params exporter.Settings, cfg compo
 	if err != nil {
 		return nil, fmt.Errorf("cannot configure loadbalancing logs exporter: %w", err)
 	}
+	payloadCodec := newQueuePayloadCodecIfEnabled(c)
 
 	options := []exporterhelper.Option{
 		exporterhelper.WithStart(exporter.Start),
-		exporterhelper.WithShutdown(exporter.Shutdown),
+		exporterhelper.WithShutdown(shutdownWithCodec(component.ShutdownFunc(exporter.Shutdown), payloadCodec)),
 		exporterhelper.WithCapabilities(exporter.Capabilities()),
 	}
+	qbs := xexporterhelper.NewLogsQueueBatchSettings()
 
 	return exporterhelper.NewLogs(
 		ctx,
 		params,
 		cfg,
 		exporter.ConsumeLogs,
-		buildExporterResilienceOptions(options, c)...,
+		buildExporterResilienceOptions(options, c, payloadCodec, qbs)...,
 	)
 }
 
@@ -137,18 +164,40 @@ func createMetricsExporter(ctx context.Context, params exporter.Settings, cfg co
 	if err != nil {
 		return nil, fmt.Errorf("cannot configure loadbalancing metrics exporter: %w", err)
 	}
+	payloadCodec := newQueuePayloadCodecIfEnabled(c)
 
 	options := []exporterhelper.Option{
 		exporterhelper.WithStart(exporter.Start),
-		exporterhelper.WithShutdown(exporter.Shutdown),
+		exporterhelper.WithShutdown(shutdownWithCodec(component.ShutdownFunc(exporter.Shutdown), payloadCodec)),
 		exporterhelper.WithCapabilities(exporter.Capabilities()),
 	}
+	qbs := xexporterhelper.NewMetricsQueueBatchSettings()
 
 	return exporterhelper.NewMetrics(
 		ctx,
 		params,
 		cfg,
 		exporter.ConsumeMetrics,
-		buildExporterResilienceOptions(options, c)...,
+		buildExporterResilienceOptions(options, c, payloadCodec, qbs)...,
 	)
+}
+
+func newQueuePayloadCodecIfEnabled(cfg *Config) *queuePayloadCodec {
+	if !cfg.QueueSettings.QueueConfig.HasValue() {
+		return nil
+	}
+	if cfg.QueueSettings.PayloadCompression == "" {
+		return nil
+	}
+
+	return newQueuePayloadCodec(cfg.QueueSettings.PayloadCompression)
+}
+
+func shutdownWithCodec(shutdown component.ShutdownFunc, codec *queuePayloadCodec) component.ShutdownFunc {
+	if codec == nil {
+		return shutdown
+	}
+	return func(ctx context.Context) error {
+		return multierr.Append(shutdown.Shutdown(ctx), codec.Close())
+	}
 }

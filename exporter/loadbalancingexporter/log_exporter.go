@@ -5,8 +5,9 @@ package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry
 
 import (
 	"context"
+	"errors"
 	"math/rand/v2"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
@@ -27,11 +28,11 @@ var _ exporter.Logs = (*logExporterImp)(nil)
 
 type logExporterImp struct {
 	loadBalancer *loadBalancer
+	batcher      *logBatcher
 
-	logger     *zap.Logger
-	started    bool
-	shutdownWg sync.WaitGroup
-	telemetry  *metadata.TelemetryBuilder
+	logger    *zap.Logger
+	started   atomic.Bool
+	telemetry *metadata.TelemetryBuilder
 }
 
 // Create new logs exporter
@@ -53,11 +54,31 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 		return nil, err
 	}
 
-	return &logExporterImp{
+	logExporter := &logExporterImp{
 		loadBalancer: lb,
 		telemetry:    telemetry,
 		logger:       params.Logger,
-	}, nil
+	}
+	if cfg.(*Config).LogBatcher.Enabled {
+		logExporter.batcher, err = newLogBatcher(
+			params.Logger,
+			params.TelemetrySettings,
+			logBatcherSettings{
+				maxRecords:    cfg.(*Config).LogBatcher.MaxRecords,
+				maxBytes:      cfg.(*Config).LogBatcher.MaxBytes,
+				flushInterval: cfg.(*Config).LogBatcher.FlushInterval,
+			},
+			logExporter.consumeBatch,
+		)
+		if err != nil {
+			return nil, err
+		}
+		lb.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+			return logExporter.batcher.Remove(ctx, endpoint, exp)
+		}
+	}
+
+	return logExporter, nil
 }
 
 func (*logExporterImp) Capabilities() consumer.Capabilities {
@@ -65,25 +86,114 @@ func (*logExporterImp) Capabilities() consumer.Capabilities {
 }
 
 func (e *logExporterImp) Start(ctx context.Context, host component.Host) error {
-	e.started = true
-	return e.loadBalancer.Start(ctx, host)
+	if err := e.loadBalancer.Start(ctx, host); err != nil {
+		return err
+	}
+	e.started.Store(true)
+	return nil
 }
 
 func (e *logExporterImp) Shutdown(ctx context.Context) error {
-	if !e.started {
+	if !e.started.Swap(false) {
 		return nil
 	}
-	err := e.loadBalancer.Shutdown(ctx)
-	e.started = false
-	e.shutdownWg.Wait()
+	var err error
+	if e.batcher != nil {
+		err = e.batcher.Shutdown(ctx)
+	}
+	err = errors.Join(err, e.loadBalancer.Shutdown(ctx))
 	return err
 }
 
 func (e *logExporterImp) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
+	if !e.started.Load() {
+		return errExporterIsStopping
+	}
+	if e.batcher == nil {
+		var errs error
+		batches := batchpersignal.SplitLogs(ld)
+		for _, batch := range batches {
+			errs = multierr.Append(errs, e.consumeLog(ctx, batch))
+		}
+		return errs
+	}
+
+	return e.consumeLogsBatched(ctx, ld)
+}
+
+// endpointBatch holds logs grouped for a single backend endpoint,
+// with resource/scope structures properly deduplicated.
+type endpointBatch struct {
+	logs plog.Logs
+	exp  *wrappedExporter
+}
+
+// consumeLogsBatched routes each log record to its target endpoint via the
+// load balancer, grouping records into per-endpoint plog.Logs that preserve
+// the original resource/scope hierarchy. This avoids the N×resource/scope
+// duplication that per-record wrapping would cause in the batcher.
+func (e *logExporterImp) consumeLogsBatched(ctx context.Context, ld plog.Logs) error {
+	batches, errs := e.groupLogsByEndpoint(ld)
+	return multierr.Append(errs, e.enqueueEndpointBatches(ctx, batches, true))
+}
+
+func (e *logExporterImp) groupLogsByEndpoint(ld plog.Logs) (map[string]*endpointBatch, error) {
+	batches := make(map[string]*endpointBatch)
+	emptyTraceFallbackKeys := make(map[[2]int]pcommon.TraceID)
 	var errs error
-	batches := batchpersignal.SplitLogs(ld)
-	for _, batch := range batches {
-		errs = multierr.Append(errs, e.consumeLog(ctx, batch))
+
+	for i := 0; i < ld.ResourceLogs().Len(); i++ {
+		rl := ld.ResourceLogs().At(i)
+		for j := 0; j < rl.ScopeLogs().Len(); j++ {
+			sl := rl.ScopeLogs().At(j)
+			for k := 0; k < sl.LogRecords().Len(); k++ {
+				rec := sl.LogRecords().At(k)
+
+				traceID := rec.TraceID()
+				balancingKey := traceID
+				if traceID == pcommon.NewTraceIDEmpty() {
+					scopeKey := [2]int{i, j}
+					balancingKey = emptyTraceFallbackKeys[scopeKey]
+					if balancingKey == pcommon.NewTraceIDEmpty() {
+						balancingKey = random()
+						emptyTraceFallbackKeys[scopeKey] = balancingKey
+					}
+				}
+
+				le, endpoint, err := e.loadBalancer.exporterAndEndpoint(balancingKey[:])
+				if err != nil {
+					errs = multierr.Append(errs, err)
+					continue
+				}
+				ep := endpointWithPort(endpoint)
+				batch, ok := batches[ep]
+				if !ok {
+					batch = &endpointBatch{logs: plog.NewLogs(), exp: le}
+					batches[ep] = batch
+				}
+				batch.exp = le
+				insertLogRecord(batch.logs, rl, sl, rec)
+			}
+		}
+	}
+
+	return batches, errs
+}
+
+func (e *logExporterImp) enqueueEndpointBatches(ctx context.Context, batches map[string]*endpointBatch, retryOnStopping bool) error {
+	var errs error
+
+	for ep, batch := range batches {
+		err := e.batcher.Enqueue(ctx, ep, batch.exp, batch.logs)
+		if errors.Is(err, errLogBatcherExporterStopping) && retryOnStopping {
+			reroutedBatches, rerouteErr := e.groupLogsByEndpoint(batch.logs)
+			errs = multierr.Append(errs, rerouteErr)
+			errs = multierr.Append(errs, e.enqueueEndpointBatches(ctx, reroutedBatches, false))
+			continue
+		}
+		if err != nil {
+			errs = multierr.Append(errs, err)
+		}
 	}
 
 	return errs
@@ -93,9 +203,6 @@ func (e *logExporterImp) consumeLog(ctx context.Context, ld plog.Logs) error {
 	traceID := traceIDFromLogs(ld)
 	balancingKey := traceID
 	if traceID == pcommon.NewTraceIDEmpty() {
-		// every log may not contain a traceID
-		// generate a random traceID as balancingKey
-		// so the log can be routed to a random backend
 		balancingKey = random()
 	}
 
@@ -104,11 +211,19 @@ func (e *logExporterImp) consumeLog(ctx context.Context, ld plog.Logs) error {
 		return err
 	}
 
-	le.consumeWG.Add(1)
-	defer le.consumeWG.Done()
+	return e.consumeBatch(ctx, le, ld, logFlushReasonDirect)
+}
+
+func (e *logExporterImp) consumeBatch(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string) error {
+	if reason == logFlushReasonDirect || reason == logFlushReasonResolverChange || reason == logFlushReasonShutdown {
+		le.forceStartConsume()
+	} else if !le.tryStartConsume() {
+		return errLogBatcherExporterStopping
+	}
+	defer le.doneConsume()
 
 	start := time.Now()
-	err = le.ConsumeLogs(ctx, ld)
+	err := le.ConsumeLogs(ctx, ld)
 	duration := time.Since(start)
 	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(le.endpointAttr))
 	if err == nil {
@@ -119,6 +234,44 @@ func (e *logExporterImp) consumeLog(ctx context.Context, ld plog.Logs) error {
 	}
 
 	return err
+}
+
+// insertLogRecord adds a log record into the destination plog.Logs, reusing
+// existing ResourceLogs/ScopeLogs entries when their attributes match. This
+// avoids creating duplicate resource/scope hierarchies for records that share
+// the same origin.
+func insertLogRecord(dest plog.Logs, srcRL plog.ResourceLogs, srcSL plog.ScopeLogs, rec plog.LogRecord) {
+	targetRL := findOrCreateResourceLogs(dest, srcRL)
+	targetSL := findOrCreateScopeLogs(targetRL, srcSL)
+	rec.CopyTo(targetSL.LogRecords().AppendEmpty())
+}
+
+func findOrCreateResourceLogs(dest plog.Logs, src plog.ResourceLogs) plog.ResourceLogs {
+	srcRes := src.Resource()
+	for i := 0; i < dest.ResourceLogs().Len(); i++ {
+		rl := dest.ResourceLogs().At(i)
+		if resourceLogsMatches(rl, src) {
+			return rl
+		}
+	}
+	rl := dest.ResourceLogs().AppendEmpty()
+	srcRes.CopyTo(rl.Resource())
+	rl.SetSchemaUrl(src.SchemaUrl())
+	return rl
+}
+
+func findOrCreateScopeLogs(rl plog.ResourceLogs, src plog.ScopeLogs) plog.ScopeLogs {
+	srcScope := src.Scope()
+	for i := 0; i < rl.ScopeLogs().Len(); i++ {
+		sl := rl.ScopeLogs().At(i)
+		if scopeLogsMatches(sl, src) {
+			return sl
+		}
+	}
+	sl := rl.ScopeLogs().AppendEmpty()
+	srcScope.CopyTo(sl.Scope())
+	sl.SetSchemaUrl(src.SchemaUrl())
+	return sl
 }
 
 func traceIDFromLogs(ld plog.Logs) pcommon.TraceID {

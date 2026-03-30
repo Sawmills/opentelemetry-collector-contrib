@@ -52,6 +52,7 @@ const (
 	signal1Attr4Value = 3.3
 	serviceName1      = "service-name-01"
 	serviceName2      = "service-name-02"
+	serviceNameKey    = "service.name"
 )
 
 func TestNewMetricsExporter(t *testing.T) {
@@ -284,30 +285,6 @@ func TestSplitMetrics(t *testing.T) {
 			name:      "duplicate_stream_id",
 			splitFunc: splitMetricsByStreamID,
 		},
-		{
-			name: "basic_attributes",
-			splitFunc: func(md pmetric.Metrics) map[string]pmetric.Metrics {
-				return splitMetricsByAttributes(md, []string{"resource_key", "scope_key", "aaa"})
-			},
-		},
-		{
-			name: "attributes_resource_only",
-			splitFunc: func(md pmetric.Metrics) map[string]pmetric.Metrics {
-				return splitMetricsByAttributes(md, []string{"resource_key"})
-			},
-		},
-		{
-			name: "attributes_scope_only",
-			splitFunc: func(md pmetric.Metrics) map[string]pmetric.Metrics {
-				return splitMetricsByAttributes(md, []string{"scope_key"})
-			},
-		},
-		{
-			name: "attributes_datapoint_only",
-			splitFunc: func(md pmetric.Metrics) map[string]pmetric.Metrics {
-				return splitMetricsByAttributes(md, []string{"aaa"})
-			},
-		},
 	}
 
 	for _, tc := range testCases {
@@ -333,9 +310,8 @@ func TestConsumeMetrics_SingleEndpoint(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
-		name              string
-		routingKey        string
-		routingAttributes []string
+		name       string
+		routingKey string
 	}{
 		{
 			name:       "resource_service_name",
@@ -353,11 +329,6 @@ func TestConsumeMetrics_SingleEndpoint(t *testing.T) {
 			name:       "stream_id",
 			routingKey: streamIDRoutingStr,
 		},
-		{
-			name:              "attributes",
-			routingKey:        attrRoutingStr,
-			routingAttributes: []string{"resource_key", "scope_key", "aaa"},
-		},
 	}
 
 	for _, tc := range testCases {
@@ -369,9 +340,9 @@ func TestConsumeMetrics_SingleEndpoint(t *testing.T) {
 				Resolver: ResolverSettings{
 					Static: configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1"}}),
 				},
-				RoutingKey:        tc.routingKey,
-				RoutingAttributes: tc.routingAttributes,
+				RoutingKey: tc.routingKey,
 			}
+
 			p, err := newMetricsExporter(createSettings, config)
 			require.NoError(t, err)
 			require.NotNil(t, p)
@@ -516,9 +487,8 @@ func TestConsumeMetrics_TripleEndpoint(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
-		name              string
-		routingKey        string
-		routingAttributes []string
+		name       string
+		routingKey string
 	}{
 		{
 			name:       "resource_service_name",
@@ -536,11 +506,6 @@ func TestConsumeMetrics_TripleEndpoint(t *testing.T) {
 			name:       "stream_id",
 			routingKey: streamIDRoutingStr,
 		},
-		{
-			name:              "attributes",
-			routingKey:        attrRoutingStr,
-			routingAttributes: []string{"resource_key", "scope_key", "aaa"},
-		},
 	}
 
 	for _, tc := range testCases {
@@ -552,8 +517,7 @@ func TestConsumeMetrics_TripleEndpoint(t *testing.T) {
 				Resolver: ResolverSettings{
 					Static: configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2", "endpoint-3"}}),
 				},
-				RoutingKey:        tc.routingKey,
-				RoutingAttributes: tc.routingAttributes,
+				RoutingKey: tc.routingKey,
 			}
 
 			p, err := newMetricsExporter(createSettings, config)
@@ -949,7 +913,7 @@ func randomMetrics(t require.TestingT, rmCount, smCount, mCount, dpCount int) pm
 	for range rmCount {
 		rm := md.ResourceMetrics().AppendEmpty()
 		err := rm.Resource().Attributes().FromRaw(map[string]any{
-			"service.name": fmt.Sprintf("service-%d", rand.IntN(512)),
+			serviceNameKey: fmt.Sprintf("service-%d", rand.IntN(512)),
 		})
 		require.NoError(t, err)
 
@@ -1106,8 +1070,19 @@ func simpleMetricsWithServiceName() pmetric.Metrics {
 	metrics := pmetric.NewMetrics()
 	metrics.ResourceMetrics().EnsureCapacity(1)
 	rmetrics := metrics.ResourceMetrics().AppendEmpty()
-	rmetrics.Resource().Attributes().PutStr("service.name", serviceName1)
+	rmetrics.Resource().Attributes().PutStr(serviceNameKey, serviceName1)
 	rmetrics.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty().SetName(signal1Name)
+	return metrics
+}
+
+func metricsWithServiceNames(serviceNames ...string) pmetric.Metrics {
+	metrics := pmetric.NewMetrics()
+	metrics.ResourceMetrics().EnsureCapacity(len(serviceNames))
+	for _, serviceName := range serviceNames {
+		rm := metrics.ResourceMetrics().AppendEmpty()
+		rm.Resource().Attributes().PutStr(serviceNameKey, serviceName)
+		appendSimpleMetricWithID(rm, signal1Name)
+	}
 	return metrics
 }
 
@@ -1115,7 +1090,7 @@ func simpleMetricsWithResource() pmetric.Metrics {
 	metrics := pmetric.NewMetrics()
 	metrics.ResourceMetrics().EnsureCapacity(1)
 	rmetrics := metrics.ResourceMetrics().AppendEmpty()
-	rmetrics.Resource().Attributes().PutStr("service.name", serviceName1)
+	rmetrics.Resource().Attributes().PutStr(serviceNameKey, serviceName1)
 	rmetrics.Resource().Attributes().PutStr(keyAttr1, valueAttr1)
 	rmetrics.Resource().Attributes().PutInt(keyAttr2, valueAttr2)
 	rmetrics.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty().SetName(signal1Name)
@@ -1126,16 +1101,54 @@ func twoServicesWithSameMetricName() pmetric.Metrics {
 	metrics := pmetric.NewMetrics()
 	metrics.ResourceMetrics().EnsureCapacity(2)
 	rs1 := metrics.ResourceMetrics().AppendEmpty()
-	rs1.Resource().Attributes().PutStr("service.name", serviceName1)
+	rs1.Resource().Attributes().PutStr(serviceNameKey, serviceName1)
 	appendSimpleMetricWithID(rs1, signal1Name)
 	rs2 := metrics.ResourceMetrics().AppendEmpty()
-	rs2.Resource().Attributes().PutStr("service.name", serviceName2)
+	rs2.Resource().Attributes().PutStr(serviceNameKey, serviceName2)
 	appendSimpleMetricWithID(rs2, signal1Name)
 	return metrics
 }
 
 func appendSimpleMetricWithID(dest pmetric.ResourceMetrics, id string) {
 	dest.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty().SetName(id)
+}
+
+func TestConsumeMetricsReleasesStartedConsumesOnEarlyReturn(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	lb, err := newLoadBalancer(ts.Logger, endpoint2Config(), nil, tb)
+	require.NoError(t, err)
+
+	lb.ring = newHashRing([]string{"endpoint-1", "endpoint-2"})
+
+	serviceForEndpoint1 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1")
+	serviceForEndpoint2 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-2")
+
+	exp1 := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
+	exp2 := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-2:4317")
+	exp2.markStopping()
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": exp1,
+		"endpoint-2:4317": exp2,
+	}
+
+	p, err := newMetricsExporter(ts, endpoint2Config())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+
+	err = p.ConsumeMetrics(t.Context(), metricsWithServiceNames(serviceForEndpoint1, serviceForEndpoint2))
+	require.ErrorIs(t, err, errExporterIsStopping)
+
+	shutdownErr := make(chan error, 1)
+	go func() {
+		shutdownErr <- exp1.Shutdown(t.Context())
+	}()
+
+	select {
+	case err := <-shutdownErr:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("expected started consume slot to be released on early return")
+	}
 }
 
 type mockMetricsExporter struct {

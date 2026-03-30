@@ -4,12 +4,14 @@
 package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter"
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/servicediscovery/types"
 	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
+	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	"go.opentelemetry.io/collector/exporter/otlpexporter"
 )
@@ -38,7 +40,8 @@ const (
 type Config struct {
 	TimeoutSettings           exporterhelper.TimeoutConfig `mapstructure:",squash"`
 	configretry.BackOffConfig `mapstructure:"retry_on_failure"`
-	QueueSettings             configoptional.Optional[exporterhelper.QueueBatchConfig] `mapstructure:"sending_queue"`
+	QueueSettings             QueueSettings    `mapstructure:"sending_queue"`
+	LogBatcher                LogBatcherConfig `mapstructure:"log_batcher"`
 
 	Protocol Protocol         `mapstructure:"protocol"`
 	Resolver ResolverSettings `mapstructure:"resolver"`
@@ -46,25 +49,114 @@ type Config struct {
 	// RoutingKey is a single routing key value
 	RoutingKey string `mapstructure:"routing_key"`
 
-	// RoutingAttributes creates a composite routing key from the listed attributes.
+	// RoutingAttributes creates a composite routing key, based on several resource attributes of the application.
 	//
-	// For traces, attributes can come from resource, scope, or span, plus the pseudo attributes "span.kind" and
+	// Supports all attributes available (both resource and span), as well as the pseudo attributes "span.kind" and
 	// "span.name".
-	// For metrics, attributes can come from resource, scope, or datapoint attributes.
 	RoutingAttributes []string `mapstructure:"routing_attributes"`
 }
 
-// Validate checks if the exporter configuration is valid.
-func (c *Config) Validate() error {
-	// routing_attributes only has meaning when routing_key=attributes.
-	if c.RoutingKey == attrRoutingStr && len(c.RoutingAttributes) == 0 {
-		return fmt.Errorf("routing_attributes must be specified when routing_key is %q", attrRoutingStr)
+type QueueSettings struct {
+	QueueConfig        configoptional.Optional[exporterhelper.QueueBatchConfig] `mapstructure:",squash"`
+	PayloadCompression QueuePayloadCompression                                  `mapstructure:"payload_compression"`
+	CompressInMemory   bool                                                     `mapstructure:"compress_in_memory"`
+}
+
+type LogBatcherConfig struct {
+	Enabled       bool          `mapstructure:"enabled"`
+	MaxRecords    int           `mapstructure:"max_records"`
+	MaxBytes      int           `mapstructure:"max_bytes"`
+	FlushInterval time.Duration `mapstructure:"flush_interval"`
+}
+
+func (q *QueueSettings) Unmarshal(conf *confmap.Conf) error {
+	if conf == nil {
+		return nil
 	}
 
-	if c.RoutingKey != attrRoutingStr && len(c.RoutingAttributes) > 0 {
-		return fmt.Errorf("routing_attributes can only be used when routing_key is %q; got %q. Remove routing_attributes or set routing_key to %q", attrRoutingStr, c.RoutingKey, attrRoutingStr)
+	// QueueBatchConfig has its own Unmarshal implementation that rejects unknown fields.
+	// Parse the queue payload compression fields separately so they can coexist with queue settings.
+	queueCfg := conf.ToStringMap()
+	payloadRaw, hasPayload := queueCfg["payload_compression"]
+	compressRaw, hasCompressInMemory := queueCfg["compress_in_memory"]
+	delete(queueCfg, "payload_compression")
+	delete(queueCfg, "compress_in_memory")
+
+	queueConf := confmap.NewFromStringMap(queueCfg)
+	if err := queueConf.Unmarshal(&q.QueueConfig); err != nil {
+		return err
 	}
 
+	if hasPayload {
+		payload, ok := payloadRaw.(string)
+		if !ok {
+			return errors.New("sending_queue.payload_compression must be a string")
+		}
+		q.PayloadCompression = QueuePayloadCompression(payload)
+	}
+
+	if hasCompressInMemory {
+		compressInMemory, ok := compressRaw.(bool)
+		if !ok {
+			return errors.New("sending_queue.compress_in_memory must be a bool")
+		}
+		q.CompressInMemory = compressInMemory
+	}
+
+	return nil
+}
+
+type QueuePayloadCompression string
+
+const (
+	QueuePayloadCompressionNone   QueuePayloadCompression = "none"
+	QueuePayloadCompressionSnappy QueuePayloadCompression = "snappy"
+	QueuePayloadCompressionZstd   QueuePayloadCompression = "zstd"
+)
+
+func (q QueueSettings) Validate() error {
+	if q.QueueConfig.HasValue() {
+		if err := q.QueueConfig.Get().Validate(); err != nil {
+			return err
+		}
+	}
+	switch q.PayloadCompression {
+	case "", QueuePayloadCompressionNone, QueuePayloadCompressionSnappy, QueuePayloadCompressionZstd:
+		// Valid payload compression value.
+	default:
+		return fmt.Errorf("sending_queue.payload_compression must be one of [none, snappy, zstd], found %q", q.PayloadCompression)
+	}
+
+	if q.CompressInMemory && !q.QueueConfig.HasValue() {
+		return errors.New("sending_queue.compress_in_memory requires sending_queue.enabled=true")
+	}
+	if q.CompressInMemory && (q.PayloadCompression == "" || q.PayloadCompression == QueuePayloadCompressionNone) {
+		return errors.New("sending_queue.compress_in_memory requires sending_queue.payload_compression to be set to snappy or zstd")
+	}
+
+	return nil
+}
+
+func (cfg *Config) Validate() error {
+	if err := cfg.QueueSettings.Validate(); err != nil {
+		return err
+	}
+	return cfg.LogBatcher.Validate()
+}
+
+func (c LogBatcherConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if c.MaxRecords <= 0 {
+		return errors.New("log_batcher.max_records must be greater than 0 when log_batcher.enabled=true")
+	}
+	if c.MaxBytes <= 0 {
+		return errors.New("log_batcher.max_bytes must be greater than 0 when log_batcher.enabled=true")
+	}
+	if c.FlushInterval <= 0 {
+		return errors.New("log_batcher.flush_interval must be greater than 0 when log_batcher.enabled=true")
+	}
 	return nil
 }
 
