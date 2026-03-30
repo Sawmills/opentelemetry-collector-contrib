@@ -106,7 +106,7 @@ func TestIterateConfigs(t *testing.T) {
 		getObjectFunc       func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 		listAllDaysFunc     func(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 		listDayObjectsFunc  func(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
-		createPaginatorFunc func(client S3Client, bucket string, key string) ListObjectsV2Paginator
+		createPaginatorFunc func(client S3Client, bucket, key string) ListObjectsV2Paginator
 		applyConfigFunc     func(ctx context.Context, config otelcol.Config, key string) error
 		expectedError       bool
 		wantedKeys          []string
@@ -127,7 +127,7 @@ func TestIterateConfigs(t *testing.T) {
 					Body: io.NopCloser(bytes.NewReader(encrypted)),
 				}, nil
 			},
-			createPaginatorFunc: func(client S3Client, bucket string, key string) ListObjectsV2Paginator {
+			createPaginatorFunc: func(client S3Client, bucket, key string) ListObjectsV2Paginator {
 				if key == "test-org-id/prefix-1/" {
 					return &mockListObjectsV2Paginator{
 						CommonPrefixes: []s3types.CommonPrefix{
@@ -172,7 +172,7 @@ func TestIterateConfigs(t *testing.T) {
 					Body: io.NopCloser(bytes.NewReader(encrypted)),
 				}, nil
 			},
-			createPaginatorFunc: func(client S3Client, bucket string, key string) ListObjectsV2Paginator {
+			createPaginatorFunc: func(client S3Client, bucket, key string) ListObjectsV2Paginator {
 				if key == "test-org-id/prefix-1/" {
 					return &mockListObjectsV2Paginator{
 						CommonPrefixes: []s3types.CommonPrefix{
@@ -219,7 +219,7 @@ func TestIterateConfigs(t *testing.T) {
 					Body: io.NopCloser(bytes.NewReader(encrypted)),
 				}, nil
 			},
-			createPaginatorFunc: func(client S3Client, bucket string, key string) ListObjectsV2Paginator {
+			createPaginatorFunc: func(client S3Client, bucket, key string) ListObjectsV2Paginator {
 				if key == "test-org-id/prefix-1/" {
 					return &mockListObjectsV2Paginator{
 						CommonPrefixes: []s3types.CommonPrefix{
@@ -278,7 +278,7 @@ func TestIterateConfigs(t *testing.T) {
 					Body: io.NopCloser(bytes.NewReader(encrypted)),
 				}, nil
 			},
-			createPaginatorFunc: func(client S3Client, bucket string, key string) ListObjectsV2Paginator {
+			createPaginatorFunc: func(client S3Client, bucket, key string) ListObjectsV2Paginator {
 				if key == "test-org-id/prefix-1/" {
 					return &mockListObjectsV2Paginator{
 						CommonPrefixes: []s3types.CommonPrefix{

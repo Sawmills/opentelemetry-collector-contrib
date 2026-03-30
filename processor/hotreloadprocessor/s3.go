@@ -58,7 +58,7 @@ type S3Helper struct {
 	Config          Config
 	Logger          *zap.Logger
 	Client          S3Client
-	CreatePaginator func(client S3Client, bucket string, key string) ListObjectsV2Paginator
+	CreatePaginator func(client S3Client, bucket, key string) ListObjectsV2Paginator
 	activeConfig    string
 	seenConfigs     map[string]bool
 	iterateMu       sync.Mutex
@@ -68,7 +68,7 @@ func newS3Helper(
 	config Config,
 	logger *zap.Logger,
 	client S3Client,
-	createPaginator func(client S3Client, bucket string, key string) ListObjectsV2Paginator,
+	createPaginator func(client S3Client, bucket, key string) ListObjectsV2Paginator,
 ) *S3Helper {
 	return &S3Helper{
 		Config:          config,

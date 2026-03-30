@@ -231,7 +231,7 @@ func (hp *HotReloadProcessor[T, P]) Start(ctx context.Context, host component.Ho
 		hp.config,
 		hp.logger,
 		client,
-		func(client S3Client, bucket string, key string) ListObjectsV2Paginator {
+		func(client S3Client, bucket, key string) ListObjectsV2Paginator {
 			delimiter := "/"
 			return s3.NewListObjectsV2Paginator(client, &s3.ListObjectsV2Input{
 				Bucket:    &bucket,
