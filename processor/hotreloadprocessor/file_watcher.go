@@ -25,13 +25,13 @@ func newFileWatcher(
 	logger *zap.Logger,
 	watchPath string,
 	onChange func(filePath string) error,
-) (*FileWatcher, error) {
+) *FileWatcher {
 	return &FileWatcher{
 		watchPath: watchPath,
 		logger:    logger,
 		done:      make(chan struct{}),
 		onChange:  onChange,
-	}, nil
+	}
 }
 
 func (p *FileWatcher) watchDir() error {
@@ -115,7 +115,7 @@ func (p *FileWatcher) Start(ctx context.Context) error {
 	return nil
 }
 
-func (p *FileWatcher) Stop(ctx context.Context) error {
+func (p *FileWatcher) Stop(_ context.Context) error {
 	p.dirWatcher.Close()
 	close(p.done)
 	return nil

@@ -4,7 +4,6 @@
 package hotreloadprocessor
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,14 +18,13 @@ func TestFileWatcher(t *testing.T) {
 
 	done := make(chan bool)
 	watchedFiles := []string{}
-	watcher, err := newFileWatcher(zap.NewNop(), dir, func(filePath string) error {
+	watcher := newFileWatcher(zap.NewNop(), dir, func(filePath string) error {
 		watchedFiles = append(watchedFiles, filePath)
 		done <- true
 		return nil
 	})
-	require.NoError(t, err)
 
-	err = watcher.Start(context.Background())
+	err := watcher.Start(t.Context())
 	require.NoError(t, err)
 
 	filePath := filepath.Join(dir, "config.yaml")
@@ -39,7 +37,8 @@ func TestFileWatcher(t *testing.T) {
 		t.Fatal("timeout: file not watched")
 	}
 
-	watcher.Stop(context.Background())
+	err = watcher.Stop(t.Context())
+	require.NoError(t, err)
 
 	require.Equal(t, []string{filePath}, watchedFiles)
 }

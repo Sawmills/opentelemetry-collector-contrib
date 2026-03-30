@@ -4,7 +4,6 @@
 package hotreloadprocessor
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -35,7 +34,7 @@ service:
 	settings := processortest.NewNopSettings(component.MustNewType("hotreloadprocessor"))
 
 	logsProcessors, err := loadLogsSubprocessors(
-		context.Background(),
+		t.Context(),
 		cfg,
 		settings,
 		consumertest.NewNop(),
@@ -45,7 +44,7 @@ service:
 	require.Len(t, logsProcessors, 1)
 
 	metricsProcessors, err := loadMetricsSubprocessors(
-		context.Background(),
+		t.Context(),
 		cfg,
 		settings,
 		consumertest.NewNop(),

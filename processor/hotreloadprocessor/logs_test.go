@@ -43,7 +43,7 @@ func (tt *componentTestTelemetry) assertMetrics(
 	totalMetrics *int,
 ) {
 	var md metricdata.ResourceMetrics
-	require.NoError(t, tt.reader.Collect(context.Background(), &md))
+	require.NoError(t, tt.reader.Collect(t.Context(), &md))
 	// ensure all required metrics are present
 	for _, want := range expected {
 		got := tt.getMetric(want.Name, md)
@@ -171,6 +171,7 @@ func TestConsumeLogs(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			ctx := t.Context()
 			logs := test.logs()
 			transformedLogs := plog.NewLogs()
 			logsConsumer, _ := consumer.NewLogs(func(_ context.Context, ld plog.Logs) error {
@@ -180,7 +181,7 @@ func TestConsumeLogs(t *testing.T) {
 
 			tel := setupMetricsCollection()
 			hotreloadProcessor, err := newHotReloadLogsProcessor(
-				context.Background(),
+				ctx,
 				otelprocessor.Settings{
 					TelemetrySettings: component.TelemetrySettings{
 						Logger:        zap.NewNop(),
@@ -199,17 +200,16 @@ func TestConsumeLogs(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			err = hotreloadProcessor.Start(t.Context(), nil)
+			err = hotreloadProcessor.Start(ctx, nil)
 			require.NoError(t, err)
 
-			err = hotreloadProcessor.ConsumeLogs(t.Context(), logs)
+			err = hotreloadProcessor.ConsumeLogs(ctx, logs)
 			require.NoError(t, err)
 
-			err = hotreloadProcessor.Shutdown(t.Context())
+			err = hotreloadProcessor.Shutdown(ctx)
 			require.NoError(t, err)
 
 			logsMarshaler := plog.JSONMarshaler{}
-			logsMarshaler.MarshalLogs(transformedLogs)
 			json, err := logsMarshaler.MarshalLogs(transformedLogs)
 			require.NoError(t, err)
 			require.JSONEq(t, test.wantLogs(), string(json))
@@ -248,7 +248,7 @@ func TestRefreshConfig(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			// logs := test.logs()
+			ctx := t.Context()
 			transformedLogs := plog.NewLogs()
 			logsConsumer, _ := consumer.NewLogs(func(_ context.Context, ld plog.Logs) error {
 				ld.CopyTo(transformedLogs)
@@ -257,7 +257,7 @@ func TestRefreshConfig(t *testing.T) {
 
 			tel := setupMetricsCollection()
 			hotreloadProcessor, err := newHotReloadLogsProcessor(
-				context.Background(),
+				ctx,
 				otelprocessor.Settings{
 					TelemetrySettings: component.TelemetrySettings{
 						Logger:        zap.NewExample(),
@@ -276,7 +276,7 @@ func TestRefreshConfig(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			err = hotreloadProcessor.Start(t.Context(), nil)
+			err = hotreloadProcessor.Start(ctx, nil)
 			require.NoError(t, err)
 
 			oldSubprocessors := hotreloadProcessor.subprocessors.Load()
@@ -286,7 +286,7 @@ func TestRefreshConfig(t *testing.T) {
 			// asser pointer address is different
 			require.NotEqual(t, oldSubprocessors, newSubprocessors)
 
-			err = hotreloadProcessor.Shutdown(t.Context())
+			err = hotreloadProcessor.Shutdown(ctx)
 			require.NoError(t, err)
 		})
 	}
