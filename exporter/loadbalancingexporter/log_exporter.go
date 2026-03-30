@@ -226,7 +226,7 @@ func (e *logExporterImp) consumeBatch(ctx context.Context, le *wrappedExporter, 
 		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.failureAttr))
 		if isBackendTransportFailure(err) {
 			e.loadBalancer.quarantineEndpoint(le.endpoint)
-			if e.shouldRerouteBatch(reason) {
+			if shouldRerouteBatch(reason) {
 				rerouteErr := e.rerouteTransportFailedBatch(ctx, le.endpoint, ld)
 				if rerouteErr == nil {
 					return nil
@@ -240,7 +240,7 @@ func (e *logExporterImp) consumeBatch(ctx context.Context, le *wrappedExporter, 
 	return err
 }
 
-func (e *logExporterImp) shouldRerouteBatch(reason string) bool {
+func shouldRerouteBatch(reason string) bool {
 	return reason != logFlushReasonDirect &&
 		reason != logFlushReasonResolverChange &&
 		reason != logFlushReasonShutdown

@@ -232,13 +232,15 @@ func (lb *loadBalancer) removeExtraExportersLocked(endpoints []string) []removed
 
 	var removed []removedExporter
 	for existing := range lb.exporters {
-		if !slices.Contains(endpointsWithPort, existing) {
-			exp := lb.exporters[existing]
-			exp.markStopping()
-			delete(lb.exporters, existing)
-			delete(lb.quarantineUntil, existing)
-			removed = append(removed, removedExporter{endpoint: existing, exporter: exp})
+		if slices.Contains(endpointsWithPort, existing) {
+			continue
 		}
+
+		exp := lb.exporters[existing]
+		exp.markStopping()
+		delete(lb.exporters, existing)
+		delete(lb.quarantineUntil, existing)
+		removed = append(removed, removedExporter{endpoint: existing, exporter: exp})
 	}
 
 	return removed
@@ -286,7 +288,7 @@ func (lb *loadBalancer) withExporterAndEndpoint(identifier []byte, fn func(*wrap
 		return fn(fallbackExp, fallbackEndpoint)
 	}
 
-	return fmt.Errorf("couldn't find the exporter for any candidate endpoint")
+	return errors.New("couldn't find the exporter for any candidate endpoint")
 }
 
 // exporterAndEndpoint returns the exporter and the endpoint for the given identifier.

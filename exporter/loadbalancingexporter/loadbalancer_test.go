@@ -280,14 +280,14 @@ func TestExporterAndEndpointSkipsQuarantinedEndpoint(t *testing.T) {
 	exp, endpoint, err := lb.exporterAndEndpoint([]byte(routingID))
 	require.NoError(t, err)
 	require.Equal(t, "endpoint-1", endpoint)
-	require.Same(t, first, exp)
+	require.Same(t, exp, first)
 
 	lb.quarantineEndpoint("endpoint-1:4317")
 
 	exp, endpoint, err = lb.exporterAndEndpoint([]byte(routingID))
 	require.NoError(t, err)
 	require.Equal(t, "endpoint-2", endpoint)
-	require.Same(t, second, exp)
+	require.Same(t, exp, second)
 }
 
 func TestNewLoadBalancerUsesDefaultBackendFailureCooldown(t *testing.T) {
