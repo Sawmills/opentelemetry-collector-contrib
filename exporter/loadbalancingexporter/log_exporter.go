@@ -224,10 +224,53 @@ func (e *logExporterImp) consumeBatch(ctx context.Context, le *wrappedExporter, 
 		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.successAttr))
 	} else {
 		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.failureAttr))
+		if isBackendTransportFailure(err) {
+			e.loadBalancer.quarantineEndpoint(le.endpoint)
+			if shouldRerouteBatch(reason) {
+				rerouteErr := e.rerouteTransportFailedBatch(ctx, le.endpoint, ld)
+				if rerouteErr == nil {
+					return nil
+				}
+				err = errors.Join(err, rerouteErr)
+			}
+		}
 		e.logger.Debug("failed to export log", zap.Error(err))
 	}
 
 	return err
+}
+
+func shouldRerouteBatch(reason string) bool {
+	return reason != logFlushReasonDirect &&
+		reason != logFlushReasonResolverChange &&
+		reason != logFlushReasonShutdown
+}
+
+func (e *logExporterImp) rerouteTransportFailedBatch(ctx context.Context, failedEndpoint string, ld plog.Logs) error {
+	reroutedBatches, err := e.groupLogsByEndpoint(ld)
+	return e.finishTransportFailedReroute(ctx, failedEndpoint, reroutedBatches, err)
+}
+
+func (e *logExporterImp) finishTransportFailedReroute(ctx context.Context, failedEndpoint string, reroutedBatches map[string]*endpointBatch, groupErr error) error {
+	if !hasAlternativeEndpoint(reroutedBatches, failedEndpoint) {
+		return errors.Join(groupErr, errors.New("reroute did not escape failed endpoint"))
+	}
+
+	errs := groupErr
+	for _, batch := range reroutedBatches {
+		errs = multierr.Append(errs, e.consumeBatch(ctx, batch.exp, batch.logs, logFlushReasonDirect))
+	}
+	return errs
+}
+
+func hasAlternativeEndpoint(batches map[string]*endpointBatch, failedEndpoint string) bool {
+	failedEndpoint = endpointWithPort(failedEndpoint)
+	for endpoint := range batches {
+		if endpoint != failedEndpoint {
+			return true
+		}
+	}
+	return false
 }
 
 // insertLogRecord adds a log record into the destination plog.Logs, reusing

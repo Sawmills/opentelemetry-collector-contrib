@@ -27,6 +27,7 @@ type wrappedExporter struct {
 	consumeWG sync.WaitGroup
 	consumeMu sync.Mutex
 	stopping  atomic.Bool
+	endpoint  string
 
 	// we store the attributes here for both cases, to avoid new allocations on the hot path
 	endpointAttr attribute.Set
@@ -38,6 +39,7 @@ func newWrappedExporter(exp component.Component, identifier string) *wrappedExpo
 	ea := attribute.String("endpoint", identifier)
 	return &wrappedExporter{
 		Component:    exp,
+		endpoint:     identifier,
 		endpointAttr: attribute.NewSet(ea),
 		successAttr:  attribute.NewSet(ea, attribute.Bool("success", true)),
 		failureAttr:  attribute.NewSet(ea, attribute.Bool("success", false)),

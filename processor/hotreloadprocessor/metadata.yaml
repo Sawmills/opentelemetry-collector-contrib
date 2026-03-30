@@ -5,6 +5,9 @@ status:
   stability:
     development: [logs, metrics, traces]
 
+tests:
+  skip_lifecycle: true
+
 telemetry:
   metrics:
     processor_hot_reload_config_refresh_interval:

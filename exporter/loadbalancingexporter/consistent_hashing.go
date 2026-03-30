@@ -53,52 +53,56 @@ func (h *hashRing) endpointFor(identifier []byte) string {
 	return h.findEndpoint(position(pos))
 }
 
+// candidateEndpointsFor returns distinct backend candidates in ring order for the given identifier.
+func (h *hashRing) candidateEndpointsFor(identifier []byte, limit int) []string {
+	if h == nil || len(h.items) == 0 || limit <= 0 {
+		return nil
+	}
+
+	hasher := crc32.NewIEEE()
+	hasher.Write(identifier)
+	hash := hasher.Sum32()
+	pos := position(hash % maxPositions)
+
+	idx := h.findEndpointIndex(pos)
+	if idx < 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, limit)
+	candidates := make([]string, 0, limit)
+	for offset := 0; offset < len(h.items) && len(candidates) < limit; offset++ {
+		item := h.items[(idx+offset)%len(h.items)]
+		if _, ok := seen[item.endpoint]; ok {
+			continue
+		}
+		seen[item.endpoint] = struct{}{}
+		candidates = append(candidates, item.endpoint)
+	}
+
+	return candidates
+}
+
 // findEndpoint returns the "next" endpoint starting from the given position, or an empty string in case no endpoints are available
 func (h *hashRing) findEndpoint(pos position) string {
 	ringSize := len(h.items)
 	if ringSize == 0 {
 		return ""
 	}
-	left, right := h.items[:ringSize/2], h.items[ringSize/2:]
-	found := bsearch(pos, left, right)
-	return found.endpoint
+	return h.items[h.findEndpointIndex(pos)].endpoint
 }
 
-// bsearch is a binary search-like algorithm, returning the closest "next" item instead of an exact match
-func bsearch(pos position, left, right []ringItem) ringItem {
-	// if it's the last item of the left side, return it
-	if left[len(left)-1].pos == pos {
-		return left[len(left)-1]
+func (h *hashRing) findEndpointIndex(pos position) int {
+	if len(h.items) == 0 {
+		return -1
 	}
-
-	// if it's the first item of the right side, return it
-	if right[0].pos == pos {
-		return right[0]
+	idx := sort.Search(len(h.items), func(i int) bool {
+		return h.items[i].pos >= pos
+	})
+	if idx == len(h.items) {
+		return 0
 	}
-
-	// if we want a higher angle than the highest from the ring, the first angle is the right one
-	if pos > right[len(right)-1].pos {
-		return left[0]
-	}
-
-	// if the requested position is greater than the highest in the left, the item is in the right side
-	if pos > left[len(left)-1].pos {
-		size := len(right)
-		if size == 1 {
-			return right[0]
-		}
-
-		l, r := right[:size/2], right[size/2:]
-		return bsearch(pos, l, r)
-	}
-
-	// not on the right side, has to be on the left side
-	size := len(left)
-	if size == 1 {
-		return left[0]
-	}
-	l, r := left[:size/2], left[size/2:]
-	return bsearch(pos, l, r)
+	return idx
 }
 
 // positionFor calculates all the positions in the ring based. The numPoints indicates how many positions to calculate.
