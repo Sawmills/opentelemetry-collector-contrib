@@ -33,6 +33,8 @@ exclude  = [
     "^https://opentelemetry\\.io/ecosystem/registry/\\?s=&component=all&language=collector&flag=all$",
     "^https://opentelemetry\\.io/docs/specs/otel/metrics/data-model/#sums$",
     "^https://opentelemetry\\.io/docs/specs/otel/common/#attribute$",
+    "^https://opentelemetry\\.io/docs/security/config-best-practices/#protect-against-denial-of-service-attacks$",
+    "^https://opentelemetry\\.io/docs/specs/semconv/resource/#service$",
     "^https://opentelemetry\\.io/docs/k8s-operator/$",
     "^https://opentelemetry\\.io/docs/reference/specification/logs/data-model/$",
     "^https://opentelemetry\\.io/docs/reference/specification/metrics/sdk/$",
