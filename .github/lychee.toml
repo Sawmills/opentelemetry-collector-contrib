@@ -32,7 +32,8 @@ exclude  = [
     "^https://support\\.huaweicloud\\.com/intl/en-us/devg-apisign/api-sign-provide-proid\\.html$",
     "^https://github\\.com/open-telemetry/opentelemetry-collector-contrib/issues/42103$",
     "^https://github\\.com/open-telemetry/opentelemetry-collector-contrib/blob/release/0\\.119\\.x/pkg/ottl/contexts/ottldatapoint/README\\.md$",
-    "^https://github\\.com/open-telemetry/opentelemetry-collector-contrib/issues\\?q=is%3Aopen\\+is%3Aissue\\+label%3Aprocessor%2Funroll$"
+    "^https://github\\.com/open-telemetry/opentelemetry-collector-contrib/issues\\?q=is%3Aopen\\+is%3Aissue\\+label%3Aprocessor%2Funroll$",
+    "^https://github\\.com/open-telemetry/opentelemetry-collector-contrib/issues\\?q=is%3Aclosed\\+is%3Aissue\\+label%3Areceiver%2Fskywalking$"
 ]
 
 # better to be safe and avoid failures
