@@ -224,10 +224,29 @@ func (e *logExporterImp) consumeBatch(ctx context.Context, le *wrappedExporter, 
 		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.successAttr))
 	} else {
 		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.failureAttr))
+		if isBackendTransportFailure(err) {
+			e.loadBalancer.quarantineEndpoint(le.endpoint)
+			if e.shouldRerouteBatch(reason) {
+				reroutedBatches, rerouteErr := e.groupLogsByEndpoint(ld)
+				if rerouteErr == nil {
+					rerouteErr = e.enqueueEndpointBatches(ctx, reroutedBatches, false)
+				}
+				if rerouteErr == nil {
+					return nil
+				}
+				err = errors.Join(err, rerouteErr)
+			}
+		}
 		e.logger.Debug("failed to export log", zap.Error(err))
 	}
 
 	return err
+}
+
+func (e *logExporterImp) shouldRerouteBatch(reason string) bool {
+	return reason != logFlushReasonDirect &&
+		reason != logFlushReasonResolverChange &&
+		reason != logFlushReasonShutdown
 }
 
 // insertLogRecord adds a log record into the destination plog.Logs, reusing

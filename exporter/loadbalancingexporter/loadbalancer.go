@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/collector/component"
 	"go.uber.org/zap"
@@ -18,7 +19,8 @@ import (
 )
 
 const (
-	defaultPort = "4317"
+	defaultPort              = "4317"
+	defaultQuarantineTimeout = 15 * time.Second
 )
 
 var (
@@ -38,6 +40,8 @@ type loadBalancer struct {
 	componentFactory componentFactory
 	exporters        map[string]*wrappedExporter
 	onExporterRemove func(context.Context, string, *wrappedExporter) error
+	quarantineUntil  map[string]time.Time
+	quarantineAfter  time.Duration
 
 	stopped    bool
 	updateLock sync.RWMutex
@@ -142,6 +146,8 @@ func newLoadBalancer(logger *zap.Logger, cfg component.Config, factory component
 		res:              res,
 		componentFactory: factory,
 		exporters:        map[string]*wrappedExporter{},
+		quarantineUntil:  map[string]time.Time{},
+		quarantineAfter:  defaultQuarantineTimeout,
 	}, nil
 }
 
@@ -230,6 +236,7 @@ func (lb *loadBalancer) removeExtraExportersLocked(endpoints []string) []removed
 			exp := lb.exporters[existing]
 			exp.markStopping()
 			delete(lb.exporters, existing)
+			delete(lb.quarantineUntil, existing)
 			removed = append(removed, removedExporter{endpoint: existing, exporter: exp})
 		}
 	}
@@ -251,14 +258,35 @@ func (lb *loadBalancer) withExporterAndEndpoint(identifier []byte, fn func(*wrap
 	lb.updateLock.RLock()
 	defer lb.updateLock.RUnlock()
 
-	endpoint := lb.ring.endpointFor(identifier)
-	exp, found := lb.exporters[endpointWithPort(endpoint)]
-	if !found {
-		// something is really wrong... how come we couldn't find the exporter??
-		return fmt.Errorf("couldn't find the exporter for the endpoint %q", endpoint)
+	candidates := lb.ring.candidateEndpointsFor(identifier, len(lb.exporters))
+	if len(candidates) == 0 {
+		return fmt.Errorf("couldn't find the exporter for the endpoint %q", "")
 	}
 
-	return fn(exp, endpoint)
+	var fallbackExp *wrappedExporter
+	var fallbackEndpoint string
+	now := time.Now()
+	for _, endpoint := range candidates {
+		exp, found := lb.exporters[endpointWithPort(endpoint)]
+		if !found {
+			continue
+		}
+		if fallbackExp == nil {
+			fallbackExp = exp
+			fallbackEndpoint = endpoint
+		}
+		until, quarantined := lb.quarantineUntil[endpointWithPort(endpoint)]
+		if quarantined && now.Before(until) {
+			continue
+		}
+		return fn(exp, endpoint)
+	}
+
+	if fallbackExp != nil {
+		return fn(fallbackExp, fallbackEndpoint)
+	}
+
+	return fmt.Errorf("couldn't find the exporter for any candidate endpoint")
 }
 
 // exporterAndEndpoint returns the exporter and the endpoint for the given identifier.
@@ -275,4 +303,14 @@ func (lb *loadBalancer) exporterAndEndpoint(identifier []byte) (*wrappedExporter
 	}
 
 	return matchedExporter, matchedEndpoint, nil
+}
+
+func (lb *loadBalancer) quarantineEndpoint(endpoint string) {
+	if endpoint == "" {
+		return
+	}
+
+	lb.updateLock.Lock()
+	defer lb.updateLock.Unlock()
+	lb.quarantineUntil[endpointWithPort(endpoint)] = time.Now().Add(lb.quarantineAfter)
 }

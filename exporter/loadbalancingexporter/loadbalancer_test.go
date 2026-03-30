@@ -262,6 +262,33 @@ func TestRemoveExtraExporters(t *testing.T) {
 	assert.NotContains(t, p.exporters, endpointWithPort("endpoint-2"))
 }
 
+func TestExporterAndEndpointSkipsQuarantinedEndpoint(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	first := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	second := newWrappedExporter(newNopMockLogsExporter(), "endpoint-2:4317")
+	lb.ring = newHashRing([]string{"endpoint-1", "endpoint-2"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": first,
+		"endpoint-2:4317": second,
+	}
+
+	routingID := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1")
+	exp, endpoint, err := lb.exporterAndEndpoint([]byte(routingID))
+	require.NoError(t, err)
+	require.Equal(t, "endpoint-1", endpoint)
+	require.Same(t, first, exp)
+
+	lb.quarantineEndpoint("endpoint-1:4317")
+
+	exp, endpoint, err = lb.exporterAndEndpoint([]byte(routingID))
+	require.NoError(t, err)
+	require.Equal(t, "endpoint-2", endpoint)
+	require.Same(t, second, exp)
+}
+
 func TestAddMissingExporters(t *testing.T) {
 	// prepare
 	ts, tb := getTelemetryAssets(t)

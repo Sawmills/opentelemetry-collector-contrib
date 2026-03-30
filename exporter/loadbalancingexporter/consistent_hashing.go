@@ -53,15 +53,58 @@ func (h *hashRing) endpointFor(identifier []byte) string {
 	return h.findEndpoint(position(pos))
 }
 
+// candidateEndpointsFor returns distinct backend candidates in ring order for the given identifier.
+func (h *hashRing) candidateEndpointsFor(identifier []byte, limit int) []string {
+	if h == nil || len(h.items) == 0 || limit <= 0 {
+		return nil
+	}
+
+	hasher := crc32.NewIEEE()
+	hasher.Write(identifier)
+	hash := hasher.Sum32()
+	pos := position(hash % maxPositions)
+
+	idx := h.findEndpointIndex(pos)
+	if idx < 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, limit)
+	candidates := make([]string, 0, limit)
+	for offset := 0; offset < len(h.items) && len(candidates) < limit; offset++ {
+		item := h.items[(idx+offset)%len(h.items)]
+		if _, ok := seen[item.endpoint]; ok {
+			continue
+		}
+		seen[item.endpoint] = struct{}{}
+		candidates = append(candidates, item.endpoint)
+	}
+
+	return candidates
+}
+
 // findEndpoint returns the "next" endpoint starting from the given position, or an empty string in case no endpoints are available
 func (h *hashRing) findEndpoint(pos position) string {
 	ringSize := len(h.items)
 	if ringSize == 0 {
 		return ""
 	}
+	return h.items[h.findEndpointIndex(pos)].endpoint
+}
+
+func (h *hashRing) findEndpointIndex(pos position) int {
+	ringSize := len(h.items)
+	if ringSize == 0 {
+		return -1
+	}
 	left, right := h.items[:ringSize/2], h.items[ringSize/2:]
 	found := bsearch(pos, left, right)
-	return found.endpoint
+	for i := range h.items {
+		if h.items[i] == found {
+			return i
+		}
+	}
+	return 0
 }
 
 // bsearch is a binary search-like algorithm, returning the closest "next" item instead of an exact match

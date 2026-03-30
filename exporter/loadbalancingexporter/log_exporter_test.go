@@ -529,6 +529,51 @@ func TestEnqueueEndpointBatchesReturnsStoppingErrorAfterSecondCollision(t *testi
 	require.ErrorIs(t, err, errLogBatcherExporterStopping)
 }
 
+func TestConsumeBatchReroutesTransportFailureToHealthyEndpoint(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	logsConsumed := atomic.Int64{}
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	failingExp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, _ plog.Logs) error {
+		return errors.New(`rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 10.12.105.114:10418: connect: no route to host"`)
+	}), "endpoint-1:4317")
+	liveExp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+		logsConsumed.Add(int64(ld.LogRecordCount()))
+		return nil
+	}), "endpoint-2:4317")
+
+	lb.ring = newHashRing([]string{"endpoint-1", "endpoint-2"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": failingExp,
+		"endpoint-2:4317": liveExp,
+	}
+
+	p, err := newLogsExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.batcher, err = newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    1,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, p.consumeBatch)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, p.batcher.Shutdown(t.Context()))
+	}()
+
+	err = p.enqueueEndpointBatches(t.Context(), map[string]*endpointBatch{
+		"endpoint-1:4317": {
+			logs: simpleLogWithID(findTraceIDForEndpoint(t, lb.ring, "endpoint-1")),
+			exp:  failingExp,
+		},
+	}, true)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return logsConsumed.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestInsertLogRecordKeepsDistinctDroppedAttributeCounts(t *testing.T) {
 	dest := plog.NewLogs()
 
