@@ -597,7 +597,7 @@ func TestConsumeBatchDoesNotHideTransportFailureWhenRerouteStaysOnSameEndpoint(t
 	require.ErrorContains(t, err, "reroute did not escape failed endpoint")
 }
 
-func TestRerouteTransportFailedBatchPreservesRecoverableLogsOnPartialGroupingError(t *testing.T) {
+func TestFinishTransportFailedReroutePreservesRecoverableLogsOnPartialGroupingError(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	logsConsumed := atomic.Int64{}
 	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
@@ -617,10 +617,12 @@ func TestRerouteTransportFailedBatchPreservesRecoverableLogsOnPartialGroupingErr
 	require.NoError(t, err)
 	p.loadBalancer = lb
 
-	healthyTraceID := findTraceIDForEndpoint(t, lb.ring, "endpoint-2")
-	missingTraceID := findTraceIDForCandidateEndpoints(t, lb.ring, len(lb.exporters), "endpoint-3")
-
-	err = p.rerouteTransportFailedBatch(t.Context(), "endpoint-1:4317", logsWithTraceIDs(healthyTraceID, missingTraceID))
+	err = p.finishTransportFailedReroute(t.Context(), "endpoint-1:4317", map[string]*endpointBatch{
+		"endpoint-2:4317": {
+			logs: simpleLogs(),
+			exp:  liveExp,
+		},
+	}, errors.New("couldn't find the exporter for any candidate endpoint"))
 	require.ErrorContains(t, err, "couldn't find the exporter for any candidate endpoint")
 	require.Equal(t, int64(1), logsConsumed.Load())
 }
