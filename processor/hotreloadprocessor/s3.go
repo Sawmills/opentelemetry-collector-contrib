@@ -133,6 +133,11 @@ func (_ *S3Helper) decryptObject(
 	if err != nil {
 		return otelcol.Config{}, fmt.Errorf("failed to create encryptor: %w", err)
 	}
+	if closer, ok := encryptor.(interface{ Close() error }); ok {
+		defer func() {
+			_ = closer.Close()
+		}()
+	}
 
 	decrypted, err := encryptor.Decrypt(data)
 	if err != nil {
