@@ -93,7 +93,6 @@ type logBatcherDrainResult struct {
 	logs    plog.Logs
 	records int
 	bytes   int
-	err     error
 }
 
 type backendLogBatcher struct {
@@ -394,7 +393,7 @@ func (b *backendLogBatcher) stopAndDrain(ctx context.Context) (logBatcherDrainRe
 	select {
 	case result := <-done:
 		<-b.done
-		return result, result.err
+		return result, nil
 	case <-ctx.Done():
 		return logBatcherDrainResult{}, ctx.Err()
 	}
