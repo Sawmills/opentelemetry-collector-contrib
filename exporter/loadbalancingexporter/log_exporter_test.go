@@ -692,7 +692,7 @@ func TestHandleRemovedBackendLogsNeverReenqueuesRemovedEndpoint(t *testing.T) {
 		require.NoError(t, p.batcher.Shutdown(t.Context()))
 	}()
 
-	err = p.handleRemovedBackendLogs(t.Context(), "endpoint-1:4317", simpleLogs(), 1, 1)
+	err = p.handleRemovedBackendLogs(t.Context(), "endpoint-1", simpleLogs(), 1, 1)
 	require.ErrorContains(t, err, "removed backend reroute did not escape removed endpoint")
 	require.Never(t, func() bool {
 		return logsConsumed.Load() > 0

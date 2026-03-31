@@ -196,10 +196,11 @@ func (e *logExporterImp) enqueueEndpointBatches(ctx context.Context, batches map
 }
 
 func (e *logExporterImp) handleRemovedBackendLogs(ctx context.Context, removedEndpoint string, drained plog.Logs, records, bytes int) error {
+	normalizedRemovedEndpoint := endpointWithPort(removedEndpoint)
 	reroutedBatches, groupErr := e.groupLogsByEndpoint(drained)
-	if hasEndpointBatch(reroutedBatches, removedEndpoint) {
+	if hasEndpointBatch(reroutedBatches, normalizedRemovedEndpoint) {
 		groupErr = errors.Join(groupErr, errors.New("removed backend reroute did not escape removed endpoint"))
-		delete(reroutedBatches, removedEndpoint)
+		delete(reroutedBatches, normalizedRemovedEndpoint)
 	}
 	if len(reroutedBatches) == 0 {
 		if groupErr != nil {

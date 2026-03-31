@@ -257,7 +257,7 @@ func (b *logBatcher) scheduleBackendDrain(backend *backendLogBatcher) {
 	go func() {
 		if err := waitForInflight(context.Background(), &backend.inflight); err != nil {
 			b.recordRemovedBackendOutcome(context.Background(), backend.endpoint, "failed")
-			b.logger.Warn("failed waiting for inflight log batcher requests during background removed-backend drain", zap.String("endpoint", backend.endpoint), zap.Error(err))
+			b.logger.Error("failed waiting for inflight log batcher requests during background removed-backend drain", zap.String("endpoint", backend.endpoint), zap.Error(err))
 			return
 		}
 		if err := b.drainRemovedBackend(context.Background(), backend.endpoint, backend); err != nil {
