@@ -6,7 +6,6 @@ package hotreloadprocessor // import "github.com/open-telemetry/opentelemetry-co
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -145,7 +144,7 @@ func (_ *S3Helper) decryptObject(
 	}
 
 	var config otelcol.Config
-	if err := yaml.Unmarshal(decrypted, &config); err != nil {
+	if err := yaml.Unmarshal([]byte(decrypted), &config); err != nil {
 		return otelcol.Config{}, fmt.Errorf("failed to unmarshal %T config: %w", config, err)
 	}
 
@@ -203,14 +202,16 @@ func (hp *S3Helper) iterateDayLevel(
 				zap.String("key", *obj.Key),
 				zap.Error(err),
 			)
-			continue
+		} else {
+			hp.activeConfig = *obj.ETag
+			return nil
 		}
 
 		hp.activeConfig = *obj.ETag
 		return nil
 	}
 
-	return errors.New("no valid config found")
+	return fmt.Errorf("no valid config found")
 }
 
 func (hp *S3Helper) iterateAllDays(
@@ -249,13 +250,14 @@ func (hp *S3Helper) iterateAllDays(
 				zap.String("key", *obj.Key),
 				zap.Error(err),
 			)
-			continue
+		} else {
+			return nil
 		}
 
 		return nil
 	}
 
-	return errors.New("no valid configs found")
+	return fmt.Errorf("no valid configs found")
 }
 
 func (hp *S3Helper) iterateConfigs(ctx context.Context, applyConfig applyConfig) error {

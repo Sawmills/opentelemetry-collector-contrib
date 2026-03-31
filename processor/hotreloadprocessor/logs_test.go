@@ -43,7 +43,7 @@ func (tt *componentTestTelemetry) assertMetrics(
 	totalMetrics *int,
 ) {
 	var md metricdata.ResourceMetrics
-	require.NoError(t, tt.reader.Collect(t.Context(), &md))
+	require.NoError(t, tt.reader.Collect(context.Background(), &md))
 	// ensure all required metrics are present
 	for _, want := range expected {
 		got := tt.getMetric(want.Name, md)
@@ -210,6 +210,7 @@ func TestConsumeLogs(t *testing.T) {
 			require.NoError(t, err)
 
 			logsMarshaler := plog.JSONMarshaler{}
+			logsMarshaler.MarshalLogs(transformedLogs)
 			json, err := logsMarshaler.MarshalLogs(transformedLogs)
 			require.NoError(t, err)
 			require.JSONEq(t, test.wantLogs(), string(json))
