@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	"go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper"
@@ -20,11 +21,14 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/inmemorystorage"
 )
 
 const (
 	zapEndpointKey = "endpoint"
 )
+
+var inMemoryQueueStorageID = component.NewID(inmemorystorage.Type)
 
 // NewFactory creates a factory for the exporter.
 func NewFactory() exporter.Factory {
@@ -41,8 +45,6 @@ func createDefaultConfig() component.Config {
 	otlpFactory := otlpexporter.NewFactory()
 	otlpDefaultCfg := otlpFactory.CreateDefaultConfig().(*otlpexporter.Config)
 	otlpDefaultCfg.ClientConfig.Endpoint = "placeholder:4317"
-	queueCfg := exporterhelper.NewDefaultQueueConfig()
-	queueCfg.Enabled = false
 
 	return &Config{
 		// By default we disable resilience options on loadbalancing exporter level
@@ -51,7 +53,7 @@ func createDefaultConfig() component.Config {
 			OTLP: *otlpDefaultCfg,
 		},
 		QueueSettings: QueueSettings{
-			QueueConfig:        queueCfg,
+			QueueConfig:        configoptional.None[exporterhelper.QueueBatchConfig](),
 			PayloadCompression: QueuePayloadCompressionNone,
 		},
 		LogBatcher: LogBatcherConfig{
@@ -94,17 +96,14 @@ func buildExporterResilienceOptions(
 	if cfg.TimeoutSettings.Timeout > 0 {
 		options = append(options, exporterhelper.WithTimeout(cfg.TimeoutSettings))
 	}
-	if cfg.QueueSettings.QueueConfig.Enabled {
-		if cfg.QueueSettings.CompressInMemory {
-			options = append(options, exporterhelper.WithQueueBatchInMemoryEncoding(true))
-		}
+	if queueCfg, ok := queueConfigForExport(cfg); ok {
 		if payloadCodec != nil && qbs.Encoding != nil {
 			qbs.Encoding = payloadCodecEncoding{
 				encoding: qbs.Encoding,
 				codec:    payloadCodec,
 			}
 		}
-		options = append(options, xexporterhelper.WithQueueBatch(cfg.QueueSettings.QueueConfig, qbs))
+		options = append(options, xexporterhelper.WithQueueBatch(queueCfg, qbs))
 	}
 	if cfg.Enabled {
 		options = append(options, exporterhelper.WithRetry(cfg.BackOffConfig))
@@ -186,7 +185,7 @@ func createMetricsExporter(ctx context.Context, params exporter.Settings, cfg co
 }
 
 func newQueuePayloadCodecIfEnabled(cfg *Config) *queuePayloadCodec {
-	if !cfg.QueueSettings.QueueConfig.Enabled {
+	if !cfg.QueueSettings.QueueConfig.HasValue() {
 		return nil
 	}
 	if cfg.QueueSettings.PayloadCompression == "" {
@@ -203,4 +202,17 @@ func shutdownWithCodec(shutdown component.ShutdownFunc, codec *queuePayloadCodec
 	return func(ctx context.Context) error {
 		return multierr.Append(shutdown.Shutdown(ctx), codec.Close())
 	}
+}
+
+func queueConfigForExport(cfg *Config) (configoptional.Optional[exporterhelper.QueueBatchConfig], bool) {
+	if !cfg.QueueSettings.QueueConfig.HasValue() {
+		return configoptional.None[exporterhelper.QueueBatchConfig](), false
+	}
+
+	queueCfg := *cfg.QueueSettings.QueueConfig.Get()
+	if cfg.QueueSettings.CompressInMemory && queueCfg.StorageID == nil {
+		queueCfg.StorageID = &inMemoryQueueStorageID
+	}
+
+	return configoptional.Some(queueCfg), true
 }
