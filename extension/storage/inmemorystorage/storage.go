@@ -22,7 +22,7 @@ func (*storage) Start(context.Context, component.Host) error {
 	return nil
 }
 
-func (s *storage) Shutdown(context.Context) error {
+func (*storage) Shutdown(context.Context) error {
 	return nil
 }
 

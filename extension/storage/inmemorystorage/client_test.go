@@ -4,7 +4,6 @@
 package inmemorystorage
 
 import (
-	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -20,8 +19,8 @@ func TestClientBatchAfterCloseReturnsError(t *testing.T) {
 		closed: &atomic.Bool{},
 	}
 
-	require.NoError(t, c.Close(context.Background()))
-	err := c.Batch(context.Background(), xstorage.SetOperation("key", []byte("value")))
+	require.NoError(t, c.Close(t.Context()))
+	err := c.Batch(t.Context(), xstorage.SetOperation("key", []byte("value")))
 	require.Error(t, err)
 	assert.EqualError(t, err, "client already closed")
 }
