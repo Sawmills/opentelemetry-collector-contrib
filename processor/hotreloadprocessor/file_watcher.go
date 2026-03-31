@@ -25,13 +25,13 @@ func newFileWatcher(
 	logger *zap.Logger,
 	watchPath string,
 	onChange func(filePath string) error,
-) (*FileWatcher, error) {
+) *FileWatcher {
 	return &FileWatcher{
 		watchPath: watchPath,
 		logger:    logger,
 		done:      make(chan struct{}),
 		onChange:  onChange,
-	}, nil
+	}
 }
 
 func (p *FileWatcher) watchDir() error {

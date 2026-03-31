@@ -6,16 +6,19 @@ package hotreloadprocessor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/otelcol"
 	"go.uber.org/zap"
@@ -95,6 +98,73 @@ func (m *mockS3Client) ListObjectsV2(
 
 var testKey = "test-1234567890-1234567890-1234567890" // gitleaks:allow
 
+type closableTestEncryptor struct {
+	closeCalls *atomic.Int32
+}
+
+func (e *closableTestEncryptor) Encrypt([]byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (e *closableTestEncryptor) Decrypt(_ []byte) ([]byte, error) {
+	return []byte("{}"), nil
+}
+
+func (e *closableTestEncryptor) EncryptFile(_, _ string) error {
+	return nil
+}
+
+func (e *closableTestEncryptor) DecryptFile(_, _ string) error {
+	return nil
+}
+
+func (e *closableTestEncryptor) Close() error {
+	e.closeCalls.Add(1)
+	return nil
+}
+
+type nonClosableTestEncryptor struct{}
+
+func (nonClosableTestEncryptor) Encrypt([]byte) ([]byte, error) { return nil, nil }
+
+func (nonClosableTestEncryptor) Decrypt(_ []byte) ([]byte, error) { return []byte("{}"), nil }
+
+func (nonClosableTestEncryptor) EncryptFile(_, _ string) error { return nil }
+
+func (nonClosableTestEncryptor) DecryptFile(_, _ string) error { return nil }
+
+func TestDecryptObjectClosesEncryptorWhenSupported(t *testing.T) {
+	original := newFileEncryptor
+	t.Cleanup(func() {
+		newFileEncryptor = original
+	})
+
+	var closeCalls atomic.Int32
+	newFileEncryptor = func(string) (s3provider.Encryptor, error) {
+		return &closableTestEncryptor{closeCalls: &closeCalls}, nil
+	}
+
+	config, err := (&S3Helper{}).decryptObject([]byte("{}"), testKey)
+	require.NoError(t, err)
+	assert.Equal(t, otelcol.Config{}, config)
+	assert.Equal(t, int32(1), closeCalls.Load())
+}
+
+func TestDecryptObjectWorksWithNonClosableEncryptor(t *testing.T) {
+	original := newFileEncryptor
+	t.Cleanup(func() {
+		newFileEncryptor = original
+	})
+
+	newFileEncryptor = func(string) (s3provider.Encryptor, error) {
+		return nonClosableTestEncryptor{}, nil
+	}
+
+	config, err := (&S3Helper{}).decryptObject([]byte("{}"), testKey)
+	require.NoError(t, err)
+	assert.Equal(t, otelcol.Config{}, config)
+}
+
 func TestIterateConfigs(t *testing.T) {
 	now := time.Now()
 	dayAgo := now.Add(time.Hour * -24)
@@ -103,11 +173,11 @@ func TestIterateConfigs(t *testing.T) {
 	tests := []struct {
 		name                string
 		config              Config
-		getObjectFunc       func(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
-		listAllDaysFunc     func(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
-		listDayObjectsFunc  func(ctx context.Context, params *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
-		createPaginatorFunc func(client S3Client, bucket, key string) ListObjectsV2Paginator
-		applyConfigFunc     func(ctx context.Context, config otelcol.Config, key string) error
+		getObjectFunc       func(_ context.Context, _ *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+		listAllDaysFunc     func(_ context.Context, _ *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+		listDayObjectsFunc  func(_ context.Context, _ *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+		createPaginatorFunc func(_ S3Client, _, key string) ListObjectsV2Paginator
+		applyConfigFunc     func(_ context.Context, _ otelcol.Config, key string) error
 		expectedError       bool
 		wantedKeys          []string
 		rerun               bool
@@ -127,8 +197,9 @@ func TestIterateConfigs(t *testing.T) {
 					Body: io.NopCloser(bytes.NewReader(encrypted)),
 				}, nil
 			},
-			createPaginatorFunc: func(client S3Client, bucket, key string) ListObjectsV2Paginator {
-				if key == "test-org-id/prefix-1/" {
+			createPaginatorFunc: func(_ S3Client, _, key string) ListObjectsV2Paginator {
+				switch key {
+				case "test-org-id/prefix-1/":
 					return &mockListObjectsV2Paginator{
 						CommonPrefixes: []s3types.CommonPrefix{
 							{Prefix: aws.String("test-org-id/prefix-1/1000000000000")},
@@ -136,7 +207,7 @@ func TestIterateConfigs(t *testing.T) {
 							{Prefix: aws.String("test-org-id/prefix-1/2000000000000")},
 						},
 					}
-				} else if key == "test-org-id/prefix-1/3000000000000" {
+				case "test-org-id/prefix-1/3000000000000":
 					return &mockListObjectsV2Paginator{
 						Objects: []s3types.Object{
 							{Key: aws.String(fmt.Sprintf("test-org-id/prefix-1/3000000000000/%d.yaml", now.Unix())), LastModified: &now, ETag: aws.String("etag1")},
@@ -172,8 +243,9 @@ func TestIterateConfigs(t *testing.T) {
 					Body: io.NopCloser(bytes.NewReader(encrypted)),
 				}, nil
 			},
-			createPaginatorFunc: func(client S3Client, bucket, key string) ListObjectsV2Paginator {
-				if key == "test-org-id/prefix-1/" {
+			createPaginatorFunc: func(_ S3Client, _, key string) ListObjectsV2Paginator {
+				switch key {
+				case "test-org-id/prefix-1/":
 					return &mockListObjectsV2Paginator{
 						CommonPrefixes: []s3types.CommonPrefix{
 							{Prefix: aws.String("test-org-id/prefix-1/1000000000000")},
@@ -181,7 +253,7 @@ func TestIterateConfigs(t *testing.T) {
 							{Prefix: aws.String("test-org-id/prefix-1/2000000000000")},
 						},
 					}
-				} else if key == "test-org-id/prefix-1/3000000000000" {
+				case "test-org-id/prefix-1/3000000000000":
 					return &mockListObjectsV2Paginator{
 						Objects: []s3types.Object{
 							{Key: aws.String(fmt.Sprintf("test-org-id/prefix-1/3000000000000/%d.yaml", dayAgo.Unix())), LastModified: &dayAgo, ETag: aws.String("etag2")},
@@ -219,8 +291,9 @@ func TestIterateConfigs(t *testing.T) {
 					Body: io.NopCloser(bytes.NewReader(encrypted)),
 				}, nil
 			},
-			createPaginatorFunc: func(client S3Client, bucket, key string) ListObjectsV2Paginator {
-				if key == "test-org-id/prefix-1/" {
+			createPaginatorFunc: func(_ S3Client, _, key string) ListObjectsV2Paginator {
+				switch key {
+				case "test-org-id/prefix-1/":
 					return &mockListObjectsV2Paginator{
 						CommonPrefixes: []s3types.CommonPrefix{
 							{Prefix: aws.String("test-org-id/prefix-1/1000000000000")},
@@ -229,7 +302,7 @@ func TestIterateConfigs(t *testing.T) {
 						},
 						MaxPageSize: 1,
 					}
-				} else if key == "test-org-id/prefix-1/3000000000000" {
+				case "test-org-id/prefix-1/3000000000000":
 					return &mockListObjectsV2Paginator{
 						Objects: []s3types.Object{
 							{Key: aws.String(fmt.Sprintf("test-org-id/prefix-1/3000000000000/%d.yaml", now.Unix())), LastModified: &now, ETag: aws.String("etag1")},
@@ -237,7 +310,7 @@ func TestIterateConfigs(t *testing.T) {
 						},
 						MaxPageSize: 1,
 					}
-				} else if key == "test-org-id/prefix-1/2000000000000" {
+				case "test-org-id/prefix-1/2000000000000":
 					return &mockListObjectsV2Paginator{
 						Objects: []s3types.Object{
 							{Key: aws.String(fmt.Sprintf("test-org-id/prefix-1/2000000000000/%d.yaml", twoDaysAgo.Unix())), LastModified: &twoDaysAgo, ETag: aws.String("etag3")},
@@ -278,8 +351,9 @@ func TestIterateConfigs(t *testing.T) {
 					Body: io.NopCloser(bytes.NewReader(encrypted)),
 				}, nil
 			},
-			createPaginatorFunc: func(client S3Client, bucket, key string) ListObjectsV2Paginator {
-				if key == "test-org-id/prefix-1/" {
+			createPaginatorFunc: func(_ S3Client, _, key string) ListObjectsV2Paginator {
+				switch key {
+				case "test-org-id/prefix-1/":
 					return &mockListObjectsV2Paginator{
 						CommonPrefixes: []s3types.CommonPrefix{
 							{Prefix: aws.String("test-org-id/prefix-1/1000000000000")},
@@ -288,7 +362,7 @@ func TestIterateConfigs(t *testing.T) {
 						},
 						MaxPageSize: 1,
 					}
-				} else if key == "test-org-id/prefix-1/3000000000000" {
+				case "test-org-id/prefix-1/3000000000000":
 					return &mockListObjectsV2Paginator{
 						Objects: []s3types.Object{
 							{Key: aws.String(fmt.Sprintf("test-org-id/prefix-1/3000000000000/%d.yaml", now.Unix())), LastModified: &now, ETag: aws.String("etag1")},
@@ -296,20 +370,20 @@ func TestIterateConfigs(t *testing.T) {
 						},
 						MaxPageSize: 1,
 					}
-				} else if key == "test-org-id/prefix-1/2000000000000" {
+				case "test-org-id/prefix-1/2000000000000":
 					return &mockListObjectsV2Paginator{
 						Objects: []s3types.Object{
 							{Key: aws.String(fmt.Sprintf("test-org-id/prefix-1/2000000000000/%d.yaml", twoDaysAgo.Unix())), LastModified: &twoDaysAgo, ETag: aws.String("etag3")},
 							{Key: aws.String(fmt.Sprintf("test-org-id/prefix-1/2000000000000/%d.yaml", threeDaysAgo.Unix())), LastModified: &threeDaysAgo, ETag: aws.String("etag4")},
 						},
 					}
-				} else if key == "test-org-id/prefix-1/1000000000000" {
+				case "test-org-id/prefix-1/1000000000000":
 					return &mockListObjectsV2Paginator{}
 				}
 				return nil
 			},
-			applyConfigFunc: func(ctx context.Context, config otelcol.Config, key string) error {
-				return fmt.Errorf("wrong config")
+			applyConfigFunc: func(_ context.Context, _ otelcol.Config, key string) error {
+				return errors.New("wrong config")
 			},
 			expectedError: true,
 			wantedKeys: []string{

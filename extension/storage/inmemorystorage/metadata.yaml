@@ -1,0 +1,12 @@
+display_name: In-Memory Storage Extension
+type: inmemorystorage
+
+description: The In-Memory Storage Extension provides ephemeral storage backed by process memory.
+
+status:
+  class: extension
+  stability:
+    alpha: [extension]
+  distributions: [contrib]
+  codeowners:
+    active: [dmitryax, atoulme, swiatekm, VihasMakwana]

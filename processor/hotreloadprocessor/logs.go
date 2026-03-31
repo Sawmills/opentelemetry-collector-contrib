@@ -52,12 +52,12 @@ type passthroughLogsProcessor struct {
 	next consumer.Logs
 }
 
-func (p *passthroughLogsProcessor) Start(ctx context.Context, host component.Host) error {
+func (_ *passthroughLogsProcessor) Start(ctx context.Context, host component.Host) error {
 	// No-op
 	return nil
 }
 
-func (p *passthroughLogsProcessor) Shutdown(ctx context.Context) error {
+func (_ *passthroughLogsProcessor) Shutdown(ctx context.Context) error {
 	// No-op
 	return nil
 }
@@ -66,6 +66,6 @@ func (p *passthroughLogsProcessor) ConsumeLogs(ctx context.Context, ld plog.Logs
 	return p.next.ConsumeLogs(ctx, ld)
 }
 
-func (p *passthroughLogsProcessor) Capabilities() consumer.Capabilities {
+func (_ *passthroughLogsProcessor) Capabilities() consumer.Capabilities {
 	return processorCapabilities
 }

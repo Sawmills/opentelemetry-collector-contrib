@@ -101,6 +101,7 @@ components:
     - extension/healthcheckv2
     - extension/host_observer
     - extension/http_forwarder
+    - extension/inmemorystorage
     - extension/jaeger_encoding
     - extension/jaegerremotesampling
     - extension/json_log_encoding

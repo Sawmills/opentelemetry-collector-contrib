@@ -257,7 +257,7 @@ exporters:
       payload_compression: zstd
 ```
 
-`sending_queue.compress_in_memory` is currently not supported by this exporter helper version. If set, config validation fails instead of silently ignoring it.
+`sending_queue.compress_in_memory` is retained for compatibility. It requires `sending_queue` to be configured and a non-`none` `sending_queue.payload_compression` value. When enabled, the exporter uses an internal in-memory storage backend so the queue payload codec still applies.
 
 Kubernetes resolver example (For a more specific example: [example/k8s-resolver](./example/k8s-resolver/README.md))
 > [!IMPORTANT]

@@ -52,12 +52,12 @@ type passthroughTracesProcessor struct {
 	next consumer.Traces
 }
 
-func (p *passthroughTracesProcessor) Start(ctx context.Context, host component.Host) error {
+func (_ *passthroughTracesProcessor) Start(ctx context.Context, host component.Host) error {
 	// No-op
 	return nil
 }
 
-func (p *passthroughTracesProcessor) Shutdown(ctx context.Context) error {
+func (_ *passthroughTracesProcessor) Shutdown(ctx context.Context) error {
 	// No-op
 	return nil
 }
@@ -66,6 +66,6 @@ func (p *passthroughTracesProcessor) ConsumeTraces(ctx context.Context, ld ptrac
 	return p.next.ConsumeTraces(ctx, ld)
 }
 
-func (p *passthroughTracesProcessor) Capabilities() consumer.Capabilities {
+func (_ *passthroughTracesProcessor) Capabilities() consumer.Capabilities {
 	return processorCapabilities
 }

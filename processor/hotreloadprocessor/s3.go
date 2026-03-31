@@ -26,6 +26,8 @@ import (
 
 type applyConfig func(ctx context.Context, config otelcol.Config, key string) error
 
+var newFileEncryptor = s3provider.NewFileEncryptor
+
 // S3Client is an interface that abstracts the s3.Client
 type S3Client interface {
 	GetObject(
@@ -93,7 +95,7 @@ func createS3Client(ctx context.Context, region string) (S3Client, error) {
 	return svc, nil
 }
 
-func (hp *S3Helper) fetchObject(
+func (_ *S3Helper) fetchObject(
 	ctx context.Context,
 	client S3Client,
 	bucket string,
@@ -124,13 +126,18 @@ func (hp *S3Helper) fetchObject(
 	return body, nil
 }
 
-func (hp *S3Helper) decryptObject(
+func (_ *S3Helper) decryptObject(
 	data []byte,
 	key string,
 ) (otelcol.Config, error) {
-	encryptor, err := s3provider.NewFileEncryptor(key)
+	encryptor, err := newFileEncryptor(key)
 	if err != nil {
 		return otelcol.Config{}, fmt.Errorf("failed to create encryptor: %w", err)
+	}
+	if closer, ok := encryptor.(interface{ Close() error }); ok {
+		defer func() {
+			_ = closer.Close()
+		}()
 	}
 
 	decrypted, err := encryptor.Decrypt(data)
@@ -197,10 +204,11 @@ func (hp *S3Helper) iterateDayLevel(
 				zap.String("key", *obj.Key),
 				zap.Error(err),
 			)
-		} else {
-			hp.activeConfig = *obj.ETag
-			return nil
+			continue
 		}
+
+		hp.activeConfig = *obj.ETag
+		return nil
 	}
 
 	return fmt.Errorf("no valid config found")
@@ -242,9 +250,10 @@ func (hp *S3Helper) iterateAllDays(
 				zap.String("key", *obj.Key),
 				zap.Error(err),
 			)
-		} else {
-			return nil
+			continue
 		}
+
+		return nil
 	}
 
 	return fmt.Errorf("no valid configs found")

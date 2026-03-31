@@ -9,6 +9,7 @@ require (
 	github.com/goccy/go-json v0.10.5
 	github.com/golang/snappy v1.0.0
 	github.com/klauspost/compress v1.18.4
+	github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/inmemorystorage v0.148.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/internal/exp/metrics v0.148.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/batchpersignal v0.148.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden v0.148.0
@@ -27,6 +28,7 @@ require (
 	go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper v0.148.0
 	go.opentelemetry.io/collector/exporter/exportertest v0.148.0
 	go.opentelemetry.io/collector/exporter/otlpexporter v0.148.0
+	go.opentelemetry.io/collector/extension v1.54.0
 	go.opentelemetry.io/collector/otelcol/otelcoltest v0.148.0
 	go.opentelemetry.io/collector/pdata v1.54.0
 	go.opentelemetry.io/otel v1.42.0
@@ -134,7 +136,6 @@ require (
 	go.opentelemetry.io/collector/consumer/consumererror/xconsumererror v0.148.0 // indirect
 	go.opentelemetry.io/collector/consumer/xconsumer v0.148.0 // indirect
 	go.opentelemetry.io/collector/exporter/xexporter v0.148.0 // indirect
-	go.opentelemetry.io/collector/extension v1.54.0 // indirect
 	go.opentelemetry.io/collector/extension/extensionauth v1.54.0 // indirect
 	go.opentelemetry.io/collector/extension/extensioncapabilities v0.148.0 // indirect
 	go.opentelemetry.io/collector/extension/extensionmiddleware v0.148.0 // indirect
@@ -215,3 +216,5 @@ replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden => ../../pkg/golden
 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/internal/exp/metrics => ../../internal/exp/metrics
+
+replace github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/inmemorystorage => ../../extension/storage/inmemorystorage

@@ -4,7 +4,6 @@
 package hotreloadprocessor
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -35,7 +34,7 @@ service:
 	settings := processortest.NewNopSettings(component.MustNewType("hotreloadprocessor"))
 
 	logsProcessors, err := loadLogsSubprocessors(
-		context.Background(),
+		t.Context(),
 		cfg,
 		settings,
 		consumertest.NewNop(),
@@ -45,7 +44,7 @@ service:
 	require.Len(t, logsProcessors, 1)
 
 	metricsProcessors, err := loadMetricsSubprocessors(
-		context.Background(),
+		t.Context(),
 		cfg,
 		settings,
 		consumertest.NewNop(),
@@ -53,4 +52,33 @@ service:
 	)
 	require.NoError(t, err)
 	require.Len(t, metricsProcessors, 1)
+}
+
+func TestLoadSubprocessorsRejectsMultiplePipelinesPerSignal(t *testing.T) {
+	var cfg otelcol.Config
+	require.NoError(t, yaml.Unmarshal([]byte(`
+processors:
+  batch/b:
+    send_batch_size: 1
+    timeout: 1s
+service:
+  pipelines:
+    logs/test-1:
+      processors:
+        - batch/b
+    logs/test-2:
+      processors:
+        - batch/b
+`), &cfg))
+
+	settings := processortest.NewNopSettings(component.MustNewType("hotreloadprocessor"))
+
+	_, err := loadLogsSubprocessors(
+		t.Context(),
+		cfg,
+		settings,
+		consumertest.NewNop(),
+		defaultProcessorFactories(),
+	)
+	require.ErrorContains(t, err, "only one pipeline per signal is supported")
 }
