@@ -6,6 +6,7 @@ package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry
 import (
 	"context"
 	"errors"
+	"maps"
 	"math/rand/v2"
 	"slices"
 	"time"
@@ -130,7 +131,7 @@ type endpointBatch struct {
 // duplication that per-record wrapping would cause in the batcher.
 func (e *logExporterImp) consumeLogsBatched(ctx context.Context, ld plog.Logs) error {
 	batches, errs := e.groupLogsByEndpoint(ld)
-	return multierr.Append(errs, e.enqueueEndpointBatches(ctx, batches, true))
+	return multierr.Append(errs, e.enqueueEndpointBatches(ctx, batches))
 }
 
 func (e *logExporterImp) groupLogsByEndpoint(ld plog.Logs) (map[string]*endpointBatch, error) {
@@ -176,46 +177,102 @@ func (e *logExporterImp) groupLogsByEndpoint(ld plog.Logs) (map[string]*endpoint
 	return batches, errs
 }
 
-func (e *logExporterImp) enqueueEndpointBatches(ctx context.Context, batches map[string]*endpointBatch, retryOnStopping bool) error {
+func (e *logExporterImp) enqueueEndpointBatches(ctx context.Context, batches map[string]*endpointBatch) error {
+	_, err := e.enqueueEndpointBatchesDetailed(ctx, batches, true)
+	return err
+}
+
+func (e *logExporterImp) enqueueEndpointBatchesDetailed(ctx context.Context, batches map[string]*endpointBatch, retryOnStopping bool) (map[string]*endpointBatch, error) {
 	var errs error
+	failed := make(map[string]*endpointBatch)
 
 	for ep, batch := range batches {
 		err := e.batcher.Enqueue(ctx, ep, batch.exp, batch.logs)
 		if errors.Is(err, errLogBatcherExporterStopping) && retryOnStopping {
 			reroutedBatches, rerouteErr := e.groupLogsByEndpoint(batch.logs)
 			errs = multierr.Append(errs, rerouteErr)
-			errs = multierr.Append(errs, e.enqueueEndpointBatches(ctx, reroutedBatches, false))
+			rerouteFailed, rerouteEnqueueErr := e.enqueueEndpointBatchesDetailed(ctx, reroutedBatches, false)
+			maps.Copy(failed, rerouteFailed)
+			errs = multierr.Append(errs, rerouteEnqueueErr)
 			continue
 		}
 		if err != nil {
+			failed[ep] = batch
 			errs = multierr.Append(errs, err)
 		}
 	}
 
-	return errs
+	if len(failed) == 0 {
+		return nil, errs
+	}
+
+	return failed, errs
+}
+
+func (e *logExporterImp) retryRemovedBackendBatches(removedEndpoint string, batches map[string]*endpointBatch, records, bytes int) {
+	retryBatches := maps.Clone(batches)
+	go func() {
+		err := e.enqueueEndpointBatches(context.Background(), retryBatches)
+		if err != nil {
+			e.logger.Error("failed background retry for removed backend batch",
+				zap.String("removed_endpoint", removedEndpoint),
+				zap.Int("records", records),
+				zap.Int("bytes", bytes),
+				zap.Strings("target_endpoints", endpointBatchKeys(retryBatches)),
+				zap.Error(err),
+			)
+			return
+		}
+
+		e.logger.Info("retried removed backend batch",
+			zap.String("removed_endpoint", removedEndpoint),
+			zap.Int("records", records),
+			zap.Int("bytes", bytes),
+			zap.Strings("target_endpoints", endpointBatchKeys(retryBatches)),
+		)
+	}()
 }
 
 func (e *logExporterImp) handleRemovedBackendLogs(ctx context.Context, removedEndpoint string, drained plog.Logs, records, bytes int) error {
-	normalizedRemovedEndpoint := endpointWithPort(removedEndpoint)
 	reroutedBatches, groupErr := e.groupLogsByEndpoint(drained)
+	return e.finishRemovedBackendReroute(ctx, removedEndpoint, reroutedBatches, records, bytes, groupErr)
+}
+
+func (e *logExporterImp) finishRemovedBackendReroute(ctx context.Context, removedEndpoint string, reroutedBatches map[string]*endpointBatch, records, bytes int, groupErr error) error {
+	normalizedRemovedEndpoint := endpointWithPort(removedEndpoint)
+	var removedEndpointErr error
 	if hasEndpointBatch(reroutedBatches, normalizedRemovedEndpoint) {
-		groupErr = errors.Join(groupErr, errors.New("removed backend reroute did not escape removed endpoint"))
+		removedEndpointErr = errors.New("removed backend reroute did not escape removed endpoint")
 		delete(reroutedBatches, normalizedRemovedEndpoint)
 	}
 	if len(reroutedBatches) == 0 {
-		if groupErr != nil {
+		err := errors.Join(groupErr, removedEndpointErr)
+		if err != nil {
 			e.logger.Error("failed to reroute removed backend batch",
 				zap.String("removed_endpoint", removedEndpoint),
 				zap.Int("records", records),
 				zap.Int("bytes", bytes),
-				zap.Error(groupErr),
+				zap.Error(err),
 			)
-			return groupErr
+			return err
 		}
 		return nil
 	}
 
-	err := errors.Join(groupErr, e.enqueueEndpointBatches(ctx, reroutedBatches, true))
+	failedBatches, enqueueErr := e.enqueueEndpointBatchesDetailed(ctx, reroutedBatches, true)
+	if len(failedBatches) > 0 {
+		e.retryRemovedBackendBatches(removedEndpoint, failedBatches, records, bytes)
+		e.logger.Warn("scheduled background retry for removed backend batch",
+			zap.String("removed_endpoint", removedEndpoint),
+			zap.Int("records", records),
+			zap.Int("bytes", bytes),
+			zap.Strings("target_endpoints", endpointBatchKeys(failedBatches)),
+			zap.Error(enqueueErr),
+		)
+		enqueueErr = nil
+	}
+
+	err := errors.Join(groupErr, enqueueErr)
 	if err != nil {
 		e.logger.Error("failed to reroute removed backend batch",
 			zap.String("removed_endpoint", removedEndpoint),
@@ -225,6 +282,17 @@ func (e *logExporterImp) handleRemovedBackendLogs(ctx context.Context, removedEn
 			zap.Error(err),
 		)
 		return err
+	}
+
+	if removedEndpointErr != nil {
+		e.logger.Warn("partially rerouted removed backend batch",
+			zap.String("removed_endpoint", removedEndpoint),
+			zap.Int("records", records),
+			zap.Int("bytes", bytes),
+			zap.Strings("target_endpoints", endpointBatchKeys(reroutedBatches)),
+			zap.Error(removedEndpointErr),
+		)
+		return nil
 	}
 
 	e.logger.Info("rerouted removed backend batch",
