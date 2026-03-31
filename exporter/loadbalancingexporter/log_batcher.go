@@ -249,6 +249,7 @@ func (b *logBatcher) scheduleBackendCleanup(backend *backendLogBatcher, reason s
 func (b *logBatcher) scheduleBackendDrain(backend *backendLogBatcher) {
 	go func() {
 		if err := waitForInflight(context.Background(), &backend.inflight); err != nil {
+			b.recordRemovedBackendOutcome(context.Background(), backend.endpoint, "failed")
 			b.logger.Warn("failed waiting for inflight log batcher requests during background removed-backend drain", zap.String("endpoint", backend.endpoint), zap.Error(err))
 			return
 		}
@@ -261,19 +262,19 @@ func (b *logBatcher) scheduleBackendDrain(backend *backendLogBatcher) {
 func (b *logBatcher) drainRemovedBackend(ctx context.Context, endpoint string, backend *backendLogBatcher) error {
 	drained, err := backend.stopAndDrain(ctx)
 	if err != nil {
-		b.recordRemovedBackendOutcome(ctx, endpoint, "failed", 0, 0)
+		b.recordRemovedBackendOutcome(ctx, endpoint, "failed")
 		return err
 	}
 	if drained.records == 0 {
-		b.recordRemovedBackendOutcome(ctx, endpoint, "empty", 0, 0)
+		b.recordRemovedBackendOutcome(ctx, endpoint, "empty")
 		return nil
 	}
 	b.recordRemovedBackendSize(ctx, endpoint, drained.records, drained.bytes)
 	if err := b.onBackendRemoved(ctx, endpoint, drained.logs, drained.records, drained.bytes); err != nil {
-		b.recordRemovedBackendOutcome(ctx, endpoint, "failed", drained.records, drained.bytes)
+		b.recordRemovedBackendOutcome(ctx, endpoint, "failed")
 		return err
 	}
-	b.recordRemovedBackendOutcome(ctx, endpoint, "rerouted", drained.records, drained.bytes)
+	b.recordRemovedBackendOutcome(ctx, endpoint, "rerouted")
 	return nil
 }
 
@@ -682,14 +683,14 @@ func newLogBatcherTelemetry(settings component.TelemetrySettings) (*logBatcherTe
 	return t, errs
 }
 
-func (b *logBatcher) recordRemovedBackendOutcome(ctx context.Context, endpoint string, outcome string, records int, bytes int) {
+func (b *logBatcher) recordRemovedBackendOutcome(ctx context.Context, endpoint, outcome string) {
 	b.telemetry.removedTotal.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(
 		attribute.String("endpoint", endpoint),
 		attribute.String("outcome", outcome),
 	)))
 }
 
-func (b *logBatcher) recordRemovedBackendSize(ctx context.Context, endpoint string, records int, bytes int) {
+func (b *logBatcher) recordRemovedBackendSize(ctx context.Context, endpoint string, records, bytes int) {
 	if records > 0 {
 		b.telemetry.removedRecords.Record(ctx, int64(records), metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", endpoint))))
 	}

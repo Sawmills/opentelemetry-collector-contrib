@@ -195,7 +195,7 @@ func (e *logExporterImp) enqueueEndpointBatches(ctx context.Context, batches map
 	return errs
 }
 
-func (e *logExporterImp) handleRemovedBackendLogs(ctx context.Context, removedEndpoint string, drained plog.Logs, records int, bytes int) error {
+func (e *logExporterImp) handleRemovedBackendLogs(ctx context.Context, removedEndpoint string, drained plog.Logs, records, bytes int) error {
 	reroutedBatches, groupErr := e.groupLogsByEndpoint(drained)
 	if hasEndpointBatch(reroutedBatches, removedEndpoint) {
 		groupErr = errors.Join(groupErr, errors.New("removed backend reroute did not escape removed endpoint"))

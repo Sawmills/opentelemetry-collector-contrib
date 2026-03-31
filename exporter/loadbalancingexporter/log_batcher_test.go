@@ -307,7 +307,7 @@ func TestLogBatcherReroutesRemovedBackendFlushToReplacementEndpoint(t *testing.T
 	}, func(ctx context.Context, exp *wrappedExporter, ld plog.Logs, reason string) error {
 		_ = reason
 		return exp.ConsumeLogs(ctx, ld)
-	}, withLogBatcherOnBackendRemoved(func(ctx context.Context, _ string, logs plog.Logs, _ int, _ int) error {
+	}, withLogBatcherOnBackendRemoved(func(ctx context.Context, _ string, logs plog.Logs, _, _ int) error {
 		return endpoint2Exp.ConsumeLogs(ctx, logs)
 	}))
 	require.NoError(t, err)
@@ -353,7 +353,7 @@ func TestLogBatcherRemoveEmitsReroutedMetric(t *testing.T) {
 	}, func(ctx context.Context, exp *wrappedExporter, ld plog.Logs, reason string) error {
 		_ = reason
 		return exp.ConsumeLogs(ctx, ld)
-	}, withLogBatcherOnBackendRemoved(func(ctx context.Context, _ string, logs plog.Logs, _ int, _ int) error {
+	}, withLogBatcherOnBackendRemoved(func(ctx context.Context, _ string, logs plog.Logs, _, _ int) error {
 		return endpoint2Exp.ConsumeLogs(ctx, logs)
 	}))
 	require.NoError(t, err)
@@ -407,7 +407,7 @@ func TestLogBatcherBackgroundRemovalCleanupReroutesPendingLogs(t *testing.T) {
 	}, func(ctx context.Context, exp *wrappedExporter, ld plog.Logs, reason string) error {
 		_ = reason
 		return exp.ConsumeLogs(ctx, ld)
-	}, withLogBatcherOnBackendRemoved(func(ctx context.Context, _ string, logs plog.Logs, _ int, _ int) error {
+	}, withLogBatcherOnBackendRemoved(func(ctx context.Context, _ string, logs plog.Logs, _, _ int) error {
 		return endpoint2Exp.ConsumeLogs(ctx, logs)
 	}))
 	require.NoError(t, err)
