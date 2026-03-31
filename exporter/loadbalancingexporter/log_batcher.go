@@ -253,7 +253,7 @@ func (b *logBatcher) scheduleBackendDrain(backend *backendLogBatcher) {
 			return
 		}
 		if err := b.drainRemovedBackend(context.Background(), backend.endpoint, backend); err != nil {
-			b.logger.Warn("failed to reroute removed backend log batch", zap.String("removed_endpoint", backend.endpoint), zap.Error(err))
+			b.logger.Error("failed to reroute removed backend log batch", zap.String("removed_endpoint", backend.endpoint), zap.Error(err))
 		}
 	}()
 }

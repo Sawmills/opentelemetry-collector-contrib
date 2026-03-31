@@ -202,7 +202,7 @@ func (e *logExporterImp) handleRemovedBackendLogs(ctx context.Context, removedEn
 	}
 	if len(reroutedBatches) == 0 {
 		if groupErr != nil {
-			e.logger.Warn("failed to reroute removed backend batch",
+			e.logger.Error("failed to reroute removed backend batch",
 				zap.String("removed_endpoint", removedEndpoint),
 				zap.Int("records", records),
 				zap.Int("bytes", bytes),
@@ -215,7 +215,7 @@ func (e *logExporterImp) handleRemovedBackendLogs(ctx context.Context, removedEn
 
 	err := errors.Join(groupErr, e.enqueueEndpointBatches(ctx, reroutedBatches, true))
 	if err != nil {
-		e.logger.Warn("failed to reroute removed backend batch",
+		e.logger.Error("failed to reroute removed backend batch",
 			zap.String("removed_endpoint", removedEndpoint),
 			zap.Int("records", records),
 			zap.Int("bytes", bytes),
