@@ -6,6 +6,7 @@ package hotreloadprocessor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -137,7 +138,7 @@ func TestIterateConfigs(t *testing.T) {
 							{Prefix: aws.String("test-org-id/prefix-1/2000000000000")},
 						},
 					}
-				} else if key == "test-org-id/prefix-1/3000000000000" {
+				case "test-org-id/prefix-1/3000000000000":
 					return &mockListObjectsV2Paginator{
 						Objects: []s3types.Object{
 							{Key: aws.String(fmt.Sprintf("test-org-id/prefix-1/3000000000000/%d.yaml", now.Unix())), LastModified: &now, ETag: aws.String("etag1")},
@@ -183,7 +184,7 @@ func TestIterateConfigs(t *testing.T) {
 							{Prefix: aws.String("test-org-id/prefix-1/2000000000000")},
 						},
 					}
-				} else if key == "test-org-id/prefix-1/3000000000000" {
+				case "test-org-id/prefix-1/3000000000000":
 					return &mockListObjectsV2Paginator{
 						Objects: []s3types.Object{
 							{Key: aws.String(fmt.Sprintf("test-org-id/prefix-1/3000000000000/%d.yaml", dayAgo.Unix())), LastModified: &dayAgo, ETag: aws.String("etag2")},
@@ -232,7 +233,7 @@ func TestIterateConfigs(t *testing.T) {
 						},
 						MaxPageSize: 1,
 					}
-				} else if key == "test-org-id/prefix-1/3000000000000" {
+				case "test-org-id/prefix-1/3000000000000":
 					return &mockListObjectsV2Paginator{
 						Objects: []s3types.Object{
 							{Key: aws.String(fmt.Sprintf("test-org-id/prefix-1/3000000000000/%d.yaml", now.Unix())), LastModified: &now, ETag: aws.String("etag1")},
@@ -240,7 +241,7 @@ func TestIterateConfigs(t *testing.T) {
 						},
 						MaxPageSize: 1,
 					}
-				} else if key == "test-org-id/prefix-1/2000000000000" {
+				case "test-org-id/prefix-1/2000000000000":
 					return &mockListObjectsV2Paginator{
 						Objects: []s3types.Object{
 							{Key: aws.String(fmt.Sprintf("test-org-id/prefix-1/2000000000000/%d.yaml", twoDaysAgo.Unix())), LastModified: &twoDaysAgo, ETag: aws.String("etag3")},
@@ -292,7 +293,7 @@ func TestIterateConfigs(t *testing.T) {
 						},
 						MaxPageSize: 1,
 					}
-				} else if key == "test-org-id/prefix-1/3000000000000" {
+				case "test-org-id/prefix-1/3000000000000":
 					return &mockListObjectsV2Paginator{
 						Objects: []s3types.Object{
 							{Key: aws.String(fmt.Sprintf("test-org-id/prefix-1/3000000000000/%d.yaml", now.Unix())), LastModified: &now, ETag: aws.String("etag1")},
@@ -300,14 +301,14 @@ func TestIterateConfigs(t *testing.T) {
 						},
 						MaxPageSize: 1,
 					}
-				} else if key == "test-org-id/prefix-1/2000000000000" {
+				case "test-org-id/prefix-1/2000000000000":
 					return &mockListObjectsV2Paginator{
 						Objects: []s3types.Object{
 							{Key: aws.String(fmt.Sprintf("test-org-id/prefix-1/2000000000000/%d.yaml", twoDaysAgo.Unix())), LastModified: &twoDaysAgo, ETag: aws.String("etag3")},
 							{Key: aws.String(fmt.Sprintf("test-org-id/prefix-1/2000000000000/%d.yaml", threeDaysAgo.Unix())), LastModified: &threeDaysAgo, ETag: aws.String("etag4")},
 						},
 					}
-				} else if key == "test-org-id/prefix-1/1000000000000" {
+				case "test-org-id/prefix-1/1000000000000":
 					return &mockListObjectsV2Paginator{}
 				}
 				return nil

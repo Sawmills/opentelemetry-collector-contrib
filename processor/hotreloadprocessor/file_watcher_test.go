@@ -4,7 +4,6 @@
 package hotreloadprocessor
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"

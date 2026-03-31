@@ -202,9 +202,7 @@ func (hp *S3Helper) iterateDayLevel(
 				zap.String("key", *obj.Key),
 				zap.Error(err),
 			)
-		} else {
-			hp.activeConfig = *obj.ETag
-			return nil
+			continue
 		}
 
 		hp.activeConfig = *obj.ETag
@@ -250,8 +248,7 @@ func (hp *S3Helper) iterateAllDays(
 				zap.String("key", *obj.Key),
 				zap.Error(err),
 			)
-		} else {
-			return nil
+			continue
 		}
 
 		return nil
