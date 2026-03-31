@@ -34,6 +34,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/inmemorystorage"
 )
 
 func TestNewLogsExporter(t *testing.T) {
@@ -264,32 +265,59 @@ func TestConsumeLogsEmitsOnlyParentExporterMetrics(t *testing.T) {
 	assert.IsType(t, tracenoop.NewTracerProvider(), childSettings[0].TracerProvider)
 }
 
-func TestConsumeLogsWithQueueCompressionAndLogBatcher(t *testing.T) {
+func TestConsumeLogsWithQueueCompressionAndInMemoryStorage(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	sink := new(consumertest.LogsSink)
+
 	cfg := simpleConfig()
 	cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
 	cfg.QueueSettings.CompressInMemory = true
-	cfg.LogBatcher.Enabled = true
-	cfg.LogBatcher.MaxRecords = 32
-	cfg.LogBatcher.MaxBytes = 1 << 20
-	cfg.LogBatcher.FlushInterval = time.Hour
 
-	payloadCodec := newQueuePayloadCodecIfEnabled(cfg)
-	require.NotNil(t, payloadCodec)
+	p, _ := newTestLogsExporter(t, ts, tb, cfg, func(_ context.Context, _ string) (component.Component, error) {
+		return newMockLogsExporter(sink.ConsumeLogs), nil
+	})
 
-	queueCfg, ok := queueConfigForExport(cfg)
-	require.True(t, ok)
-	require.True(t, queueCfg.HasValue())
-	require.NotNil(t, queueCfg.Get().StorageID)
-	assert.Equal(t, inMemoryQueueStorageID, *queueCfg.Get().StorageID)
-
-	options := buildExporterResilienceOptions(
-		[]exporterhelper.Option{},
-		cfg,
-		payloadCodec,
-		xexporterhelper.NewLogsQueueBatchSettings(),
+	settings := exportertest.NewNopSettings(metadata.Type)
+	settings.TelemetrySettings = ts.TelemetrySettings
+	options := []exporterhelper.Option{
+		exporterhelper.WithStart(p.Start),
+		exporterhelper.WithShutdown(p.Shutdown),
+		exporterhelper.WithCapabilities(p.Capabilities()),
+	}
+	options = append(
+		options,
+		buildExporterResilienceOptions(
+			[]exporterhelper.Option{},
+			cfg,
+			newQueuePayloadCodecIfEnabled(cfg),
+			xexporterhelper.NewLogsQueueBatchSettings(),
+		)...,
 	)
-	require.Len(t, options, 1)
+	wrapped, err := exporterhelper.NewLogs(
+		t.Context(),
+		settings,
+		cfg,
+		p.ConsumeLogs,
+		options...,
+	)
+	require.NoError(t, err)
+
+	host := testStorageHost{
+		extensions: map[component.ID]component.Component{
+			inMemoryQueueStorageID: &inmemorystorage.Storage{},
+		},
+	}
+	require.NoError(t, wrapped.Start(t.Context(), host))
+	t.Cleanup(func() {
+		require.NoError(t, wrapped.Shutdown(t.Context()))
+	})
+
+	require.NoError(t, wrapped.ConsumeLogs(t.Context(), simpleLogs()))
+	require.Eventually(t, func() bool {
+		return len(sink.AllLogs()) == 1
+	}, time.Second, 10*time.Millisecond)
+	assert.Equal(t, 1, sink.AllLogs()[0].LogRecordCount())
 }
 
 func generateSingleLogRecord() plog.Logs {
@@ -888,4 +916,16 @@ func newMockLogsExporter(consumelogsfn func(ctx context.Context, ld plog.Logs) e
 
 func newNopMockLogsExporter() exporter.Logs {
 	return &mockLogsExporter{Component: mockComponent{}}
+}
+
+type testStorageHost struct {
+	extensions map[component.ID]component.Component
+}
+
+func (h testStorageHost) GetExtensions() map[component.ID]component.Component {
+	return h.extensions
+}
+
+func (testStorageHost) GetFactory(component.Kind, component.Type) component.Factory {
+	return nil
 }

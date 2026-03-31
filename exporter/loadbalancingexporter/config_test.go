@@ -37,6 +37,7 @@ func TestConfigValidatePayloadCompression(t *testing.T) {
 	cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
 	require.NoError(t, cfg.Validate())
+	require.Nil(t, cfg.QueueSettings.QueueConfig.Get().StorageID)
 
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionZstd
 	require.NoError(t, cfg.Validate())

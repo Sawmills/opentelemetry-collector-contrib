@@ -26,6 +26,8 @@ import (
 
 type applyConfig func(ctx context.Context, config otelcol.Config, key string) error
 
+var newFileEncryptor = s3provider.NewFileEncryptor
+
 // S3Client is an interface that abstracts the s3.Client
 type S3Client interface {
 	GetObject(
@@ -128,7 +130,7 @@ func (_ *S3Helper) decryptObject(
 	data []byte,
 	key string,
 ) (otelcol.Config, error) {
-	encryptor, err := s3provider.NewFileEncryptor(key)
+	encryptor, err := newFileEncryptor(key)
 	if err != nil {
 		return otelcol.Config{}, fmt.Errorf("failed to create encryptor: %w", err)
 	}

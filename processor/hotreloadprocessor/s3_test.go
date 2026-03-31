@@ -11,12 +11,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/otelcol"
 	"go.uber.org/zap"
@@ -95,6 +97,73 @@ func (m *mockS3Client) ListObjectsV2(
 }
 
 var testKey = "test-1234567890-1234567890-1234567890" // gitleaks:allow
+
+type closableTestEncryptor struct {
+	closeCalls *atomic.Int32
+}
+
+func (e *closableTestEncryptor) Encrypt([]byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (e *closableTestEncryptor) Decrypt(_ []byte) ([]byte, error) {
+	return []byte("{}"), nil
+}
+
+func (e *closableTestEncryptor) EncryptFile(_, _ string) error {
+	return nil
+}
+
+func (e *closableTestEncryptor) DecryptFile(_, _ string) error {
+	return nil
+}
+
+func (e *closableTestEncryptor) Close() error {
+	e.closeCalls.Add(1)
+	return nil
+}
+
+type nonClosableTestEncryptor struct{}
+
+func (nonClosableTestEncryptor) Encrypt([]byte) ([]byte, error) { return nil, nil }
+
+func (nonClosableTestEncryptor) Decrypt(_ []byte) ([]byte, error) { return []byte("{}"), nil }
+
+func (nonClosableTestEncryptor) EncryptFile(_, _ string) error { return nil }
+
+func (nonClosableTestEncryptor) DecryptFile(_, _ string) error { return nil }
+
+func TestDecryptObjectClosesEncryptorWhenSupported(t *testing.T) {
+	original := newFileEncryptor
+	t.Cleanup(func() {
+		newFileEncryptor = original
+	})
+
+	var closeCalls atomic.Int32
+	newFileEncryptor = func(string) (s3provider.Encryptor, error) {
+		return &closableTestEncryptor{closeCalls: &closeCalls}, nil
+	}
+
+	config, err := (&S3Helper{}).decryptObject([]byte("{}"), testKey)
+	require.NoError(t, err)
+	assert.Equal(t, otelcol.Config{}, config)
+	assert.Equal(t, int32(1), closeCalls.Load())
+}
+
+func TestDecryptObjectWorksWithNonClosableEncryptor(t *testing.T) {
+	original := newFileEncryptor
+	t.Cleanup(func() {
+		newFileEncryptor = original
+	})
+
+	newFileEncryptor = func(string) (s3provider.Encryptor, error) {
+		return nonClosableTestEncryptor{}, nil
+	}
+
+	config, err := (&S3Helper{}).decryptObject([]byte("{}"), testKey)
+	require.NoError(t, err)
+	assert.Equal(t, otelcol.Config{}, config)
+}
 
 func TestIterateConfigs(t *testing.T) {
 	now := time.Now()

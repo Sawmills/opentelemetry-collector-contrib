@@ -6,7 +6,7 @@ description: The In-Memory Storage Extension provides ephemeral storage backed b
 status:
   class: extension
   stability:
-    development: [extension]
+    alpha: [extension]
   distributions: [contrib]
   codeowners:
     active: [dmitryax, atoulme, swiatekm, VihasMakwana]

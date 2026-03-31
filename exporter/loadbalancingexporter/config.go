@@ -132,7 +132,7 @@ const (
 
 func (q QueueSettings) Validate() error {
 	if q.QueueConfig.HasValue() {
-		queueCfg := q.QueueConfig.Get()
+		queueCfg := *q.QueueConfig.Get()
 		if q.CompressInMemory && queueCfg.StorageID == nil {
 			queueCfg.StorageID = &inMemoryQueueStorageID
 		}

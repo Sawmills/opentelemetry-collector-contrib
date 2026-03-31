@@ -38,7 +38,7 @@ func (c *client) Close(context.Context) error {
 
 func (c *client) Batch(_ context.Context, ops ...*storage.Operation) error {
 	if c.IsClosed() {
-		panic("client already closed")
+		return errors.New("client already closed")
 	}
 	for _, op := range ops {
 		switch op.Type {
