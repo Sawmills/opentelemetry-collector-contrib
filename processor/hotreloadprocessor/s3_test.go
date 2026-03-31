@@ -176,7 +176,7 @@ func TestIterateConfigs(t *testing.T) {
 		getObjectFunc       func(_ context.Context, _ *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 		listAllDaysFunc     func(_ context.Context, _ *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 		listDayObjectsFunc  func(_ context.Context, _ *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
-		createPaginatorFunc func(_ S3Client, _ string, key string) ListObjectsV2Paginator
+		createPaginatorFunc func(_ S3Client, _, key string) ListObjectsV2Paginator
 		applyConfigFunc     func(_ context.Context, _ otelcol.Config, key string) error
 		expectedError       bool
 		wantedKeys          []string
@@ -197,7 +197,7 @@ func TestIterateConfigs(t *testing.T) {
 					Body: io.NopCloser(bytes.NewReader(encrypted)),
 				}, nil
 			},
-			createPaginatorFunc: func(_ S3Client, _ string, key string) ListObjectsV2Paginator {
+			createPaginatorFunc: func(_ S3Client, _, key string) ListObjectsV2Paginator {
 				switch key {
 				case "test-org-id/prefix-1/":
 					return &mockListObjectsV2Paginator{
@@ -243,7 +243,7 @@ func TestIterateConfigs(t *testing.T) {
 					Body: io.NopCloser(bytes.NewReader(encrypted)),
 				}, nil
 			},
-			createPaginatorFunc: func(_ S3Client, _ string, key string) ListObjectsV2Paginator {
+			createPaginatorFunc: func(_ S3Client, _, key string) ListObjectsV2Paginator {
 				switch key {
 				case "test-org-id/prefix-1/":
 					return &mockListObjectsV2Paginator{
@@ -291,7 +291,7 @@ func TestIterateConfigs(t *testing.T) {
 					Body: io.NopCloser(bytes.NewReader(encrypted)),
 				}, nil
 			},
-			createPaginatorFunc: func(_ S3Client, _ string, key string) ListObjectsV2Paginator {
+			createPaginatorFunc: func(_ S3Client, _, key string) ListObjectsV2Paginator {
 				switch key {
 				case "test-org-id/prefix-1/":
 					return &mockListObjectsV2Paginator{
@@ -351,7 +351,7 @@ func TestIterateConfigs(t *testing.T) {
 					Body: io.NopCloser(bytes.NewReader(encrypted)),
 				}, nil
 			},
-			createPaginatorFunc: func(_ S3Client, _ string, key string) ListObjectsV2Paginator {
+			createPaginatorFunc: func(_ S3Client, _, key string) ListObjectsV2Paginator {
 				switch key {
 				case "test-org-id/prefix-1/":
 					return &mockListObjectsV2Paginator{
