@@ -384,6 +384,57 @@ func TestLogBatcherRemoveEmitsReroutedMetric(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestLogBatcherRemoveEmitsPartialMetric(t *testing.T) {
+	ctx := t.Context()
+	shutdownCtx := context.Background() //nolint:usetesting // Context must outlive test for cleanup
+	telemetry := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, telemetry.Shutdown(shutdownCtx))
+	})
+
+	params := exportertest.NewNopSettings(metadata.Type)
+	params.TelemetrySettings = telemetry.NewTelemetrySettings()
+
+	endpoint1Exp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+
+	batcher, err := newLogBatcher(params.Logger, params.TelemetrySettings, logBatcherSettings{
+		maxRecords:    100,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, func(ctx context.Context, exp *wrappedExporter, ld plog.Logs, reason string) error {
+		_ = reason
+		return exp.ConsumeLogs(ctx, ld)
+	}, withLogBatcherOnBackendRemoved(func(context.Context, string, plog.Logs, int, int) error {
+		return errLogBatcherRemovedBackendPartial
+	}))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, batcher.Shutdown(ctx)) }()
+
+	backend, err := batcher.acquireBackend("endpoint-1:4317", endpoint1Exp)
+	require.NoError(t, err)
+	backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: simpleLogs()}
+	backend.inflight.Done()
+
+	require.NoError(t, batcher.Remove(ctx, "endpoint-1:4317", endpoint1Exp))
+	require.Eventually(t, func() bool {
+		metric, metricErr := telemetry.GetMetric("otelcol_loadbalancer_log_batch_removed_backend_total")
+		if metricErr != nil {
+			return false
+		}
+		sum, ok := metric.Data.(metricdata.Sum[int64])
+		if !ok {
+			return false
+		}
+		for _, dp := range sum.DataPoints {
+			outcome, ok := dp.Attributes.Value(attribute.Key("outcome"))
+			if ok && outcome.AsString() == removedBackendOutcomePartial && dp.Value == 1 {
+				return true
+			}
+		}
+		return false
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestLogBatcherBackgroundRemovalCleanupReroutesPendingLogs(t *testing.T) {
 	ts, _ := getTelemetryAssets(t)
 	var endpoint1Calls atomic.Int64

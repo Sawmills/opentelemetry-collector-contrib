@@ -699,7 +699,7 @@ func TestHandleRemovedBackendLogsNeverReenqueuesRemovedEndpoint(t *testing.T) {
 	}, 200*time.Millisecond, 10*time.Millisecond, "removed backend guard must drop the self-rerouted batch")
 }
 
-func TestHandleRemovedBackendLogsDoesNotFailAfterDroppingRemovedEndpointBatch(t *testing.T) {
+func TestHandleRemovedBackendLogsReturnsPartialErrorAfterDroppingRemovedEndpointBatch(t *testing.T) {
 	ts, _ := getTelemetryAssets(t)
 	logsConsumed := atomic.Int64{}
 
@@ -734,7 +734,7 @@ func TestHandleRemovedBackendLogsDoesNotFailAfterDroppingRemovedEndpointBatch(t 
 			exp:  liveExp,
 		},
 	}, 2, 2, nil)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, errLogBatcherRemovedBackendPartial)
 	require.Eventually(t, func() bool {
 		return logsConsumed.Load() == 1
 	}, time.Second, 10*time.Millisecond)
@@ -778,6 +778,75 @@ func TestHandleRemovedBackendLogsRetriesCanceledEnqueueInBackground(t *testing.T
 	require.Eventually(t, func() bool {
 		return logsConsumed.Load() == 1
 	}, time.Second, 10*time.Millisecond)
+}
+
+func TestRetryRemovedBackendBatchesRecordsRetrySucceededMetric(t *testing.T) {
+	ctx := t.Context()
+	shutdownCtx := context.Background() //nolint:usetesting // Context must outlive test for cleanup
+	telemetry := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, telemetry.Shutdown(shutdownCtx))
+	})
+
+	params := exportertest.NewNopSettings(metadata.Type)
+	params.TelemetrySettings = telemetry.NewTelemetrySettings()
+	tb, err := metadata.NewTelemetryBuilder(params.TelemetrySettings)
+	require.NoError(t, err)
+
+	logsConsumed := atomic.Int64{}
+	lb, err := newLoadBalancer(params.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	liveExp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+		logsConsumed.Add(int64(ld.LogRecordCount()))
+		return nil
+	}), "endpoint-2:4317")
+
+	lb.ring = newHashRing([]string{"endpoint-2"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-2:4317": liveExp,
+	}
+
+	p, err := newLogsExporter(params, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.batcher, err = newLogBatcher(params.Logger, params.TelemetrySettings, logBatcherSettings{
+		maxRecords:    1,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, p.consumeBatch, withLogBatcherOnBackendRemoved(p.handleRemovedBackendLogs))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, p.batcher.Shutdown(ctx))
+	}()
+
+	p.retryRemovedBackendBatches("endpoint-1:4317", map[string]*endpointBatch{
+		"endpoint-2:4317": {
+			logs: simpleLogs(),
+			exp:  liveExp,
+		},
+	}, 1, 1)
+
+	require.Eventually(t, func() bool {
+		return logsConsumed.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		metric, metricErr := telemetry.GetMetric("otelcol_loadbalancer_log_batch_removed_backend_total")
+		if metricErr != nil {
+			return false
+		}
+		sum, ok := metric.Data.(metricdata.Sum[int64])
+		if !ok {
+			return false
+		}
+		for _, dp := range sum.DataPoints {
+			outcome, ok := dp.Attributes.Value(attribute.Key("outcome"))
+			if ok && outcome.AsString() == removedBackendOutcomeRetrySucceeded && dp.Value == 1 {
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second, 20*time.Millisecond)
 }
 
 func TestInsertLogRecordKeepsDistinctDroppedAttributeCounts(t *testing.T) {

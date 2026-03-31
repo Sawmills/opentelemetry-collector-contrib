@@ -33,6 +33,17 @@ const (
 
 var errLogBatcherExporterStopping = errors.New("log batcher exporter is stopping")
 
+var errLogBatcherRemovedBackendPartial = errors.New("removed backend reroute partially dropped records")
+
+const (
+	removedBackendOutcomeEmpty          = "empty"
+	removedBackendOutcomeFailed         = "failed"
+	removedBackendOutcomePartial        = "partial"
+	removedBackendOutcomeRerouted       = "rerouted"
+	removedBackendOutcomeRetryFailed    = "retry_failed"
+	removedBackendOutcomeRetrySucceeded = "retry_succeeded"
+)
+
 type logBatcherSettings struct {
 	maxRecords    int
 	maxBytes      int
@@ -256,7 +267,7 @@ func (b *logBatcher) scheduleBackendCleanup(backend *backendLogBatcher, reason s
 func (b *logBatcher) scheduleBackendDrain(backend *backendLogBatcher) {
 	go func() {
 		if err := waitForInflight(context.Background(), &backend.inflight); err != nil {
-			b.recordRemovedBackendOutcome(context.Background(), backend.endpoint, "failed")
+			b.recordRemovedBackendOutcome(context.Background(), backend.endpoint, removedBackendOutcomeFailed)
 			b.logger.Error("failed waiting for inflight log batcher requests during background removed-backend drain", zap.String("endpoint", backend.endpoint), zap.Error(err))
 			return
 		}
@@ -269,19 +280,23 @@ func (b *logBatcher) scheduleBackendDrain(backend *backendLogBatcher) {
 func (b *logBatcher) drainRemovedBackend(ctx context.Context, endpoint string, backend *backendLogBatcher) error {
 	drained, err := backend.stopAndDrain(ctx)
 	if err != nil {
-		b.recordRemovedBackendOutcome(ctx, endpoint, "failed")
+		b.recordRemovedBackendOutcome(ctx, endpoint, removedBackendOutcomeFailed)
 		return err
 	}
 	if drained.records == 0 {
-		b.recordRemovedBackendOutcome(ctx, endpoint, "empty")
+		b.recordRemovedBackendOutcome(ctx, endpoint, removedBackendOutcomeEmpty)
 		return nil
 	}
 	b.recordRemovedBackendSize(ctx, endpoint, drained.records, drained.bytes)
 	if err := b.onBackendRemoved(ctx, endpoint, drained.logs, drained.records, drained.bytes); err != nil {
-		b.recordRemovedBackendOutcome(ctx, endpoint, "failed")
+		if errors.Is(err, errLogBatcherRemovedBackendPartial) {
+			b.recordRemovedBackendOutcome(ctx, endpoint, removedBackendOutcomePartial)
+			return nil
+		}
+		b.recordRemovedBackendOutcome(ctx, endpoint, removedBackendOutcomeFailed)
 		return err
 	}
-	b.recordRemovedBackendOutcome(ctx, endpoint, "rerouted")
+	b.recordRemovedBackendOutcome(ctx, endpoint, removedBackendOutcomeRerouted)
 	return nil
 }
 

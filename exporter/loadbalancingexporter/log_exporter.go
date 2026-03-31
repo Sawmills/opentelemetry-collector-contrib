@@ -214,6 +214,9 @@ func (e *logExporterImp) retryRemovedBackendBatches(removedEndpoint string, batc
 	go func() {
 		err := e.enqueueEndpointBatches(context.Background(), retryBatches)
 		if err != nil {
+			if e.batcher != nil {
+				e.batcher.recordRemovedBackendOutcome(context.Background(), removedEndpoint, removedBackendOutcomeRetryFailed)
+			}
 			e.logger.Error("failed background retry for removed backend batch",
 				zap.String("removed_endpoint", removedEndpoint),
 				zap.Int("records", records),
@@ -224,6 +227,9 @@ func (e *logExporterImp) retryRemovedBackendBatches(removedEndpoint string, batc
 			return
 		}
 
+		if e.batcher != nil {
+			e.batcher.recordRemovedBackendOutcome(context.Background(), removedEndpoint, removedBackendOutcomeRetrySucceeded)
+		}
 		e.logger.Info("retried removed backend batch",
 			zap.String("removed_endpoint", removedEndpoint),
 			zap.Int("records", records),
@@ -285,14 +291,15 @@ func (e *logExporterImp) finishRemovedBackendReroute(ctx context.Context, remove
 	}
 
 	if removedEndpointErr != nil {
-		e.logger.Warn("partially rerouted removed backend batch",
+		err = errors.Join(errLogBatcherRemovedBackendPartial, removedEndpointErr)
+		e.logger.Error("partially rerouted removed backend batch",
 			zap.String("removed_endpoint", removedEndpoint),
 			zap.Int("records", records),
 			zap.Int("bytes", bytes),
 			zap.Strings("target_endpoints", endpointBatchKeys(reroutedBatches)),
-			zap.Error(removedEndpointErr),
+			zap.Error(err),
 		)
-		return nil
+		return err
 	}
 
 	e.logger.Info("rerouted removed backend batch",
