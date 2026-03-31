@@ -81,7 +81,6 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
 	github.com/hashicorp/go-version v1.8.0 // indirect
-	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
@@ -215,3 +214,9 @@ replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden => ../../pkg/golden
 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/internal/exp/metrics => ../../internal/exp/metrics
+
+replace go.opentelemetry.io/collector/exporter/exporterhelper v0.148.0 => github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.140.1-0.20260303212412-92b47b11df4d
+
+replace go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper v0.148.0 => github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper/xexporterhelper v0.140.1-0.20260303212412-92b47b11df4d
+
+replace go.opentelemetry.io/collector/exporter/otlpexporter v0.148.0 => github.com/Sawmills/opentelemetry-collector/exporter/otlpexporter v0.140.1-0.20260303212412-92b47b11df4d

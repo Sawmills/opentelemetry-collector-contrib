@@ -10,7 +10,6 @@ import (
 	"fmt"
 
 	"go.opentelemetry.io/collector/component"
-	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	"go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper"
@@ -42,7 +41,6 @@ func createDefaultConfig() component.Config {
 	otlpFactory := otlpexporter.NewFactory()
 	otlpDefaultCfg := otlpFactory.CreateDefaultConfig().(*otlpexporter.Config)
 	otlpDefaultCfg.ClientConfig.Endpoint = "placeholder:4317"
-	queueCfg := exporterhelper.NewDefaultQueueConfig()
 
 	return &Config{
 		// By default we disable resilience options on loadbalancing exporter level
@@ -51,7 +49,7 @@ func createDefaultConfig() component.Config {
 			OTLP: *otlpDefaultCfg,
 		},
 		QueueSettings: QueueSettings{
-			QueueConfig:        configoptional.Default(queueCfg),
+			QueueConfig:        exporterhelper.QueueBatchConfig{},
 			PayloadCompression: QueuePayloadCompressionNone,
 		},
 		LogBatcher: LogBatcherConfig{
@@ -94,7 +92,7 @@ func buildExporterResilienceOptions(
 	if cfg.TimeoutSettings.Timeout > 0 {
 		options = append(options, exporterhelper.WithTimeout(cfg.TimeoutSettings))
 	}
-	if cfg.QueueSettings.QueueConfig.HasValue() {
+	if cfg.QueueSettings.QueueConfig.Enabled {
 		if payloadCodec != nil && qbs.Encoding != nil {
 			qbs.Encoding = payloadCodecEncoding{
 				encoding: qbs.Encoding,
@@ -102,6 +100,9 @@ func buildExporterResilienceOptions(
 			}
 		}
 		options = append(options, xexporterhelper.WithQueueBatch(cfg.QueueSettings.QueueConfig, qbs))
+		if cfg.QueueSettings.CompressInMemory {
+			options = append(options, exporterhelper.WithQueueBatchInMemoryEncoding(true))
+		}
 	}
 	if cfg.Enabled {
 		options = append(options, exporterhelper.WithRetry(cfg.BackOffConfig))
@@ -183,7 +184,7 @@ func createMetricsExporter(ctx context.Context, params exporter.Settings, cfg co
 }
 
 func newQueuePayloadCodecIfEnabled(cfg *Config) *queuePayloadCodec {
-	if !cfg.QueueSettings.QueueConfig.HasValue() {
+	if !cfg.QueueSettings.QueueConfig.Enabled {
 		return nil
 	}
 	if cfg.QueueSettings.PayloadCompression == "" {
