@@ -428,6 +428,74 @@ func TestLogBatcherBackgroundRemovalCleanupReroutesPendingLogs(t *testing.T) {
 	require.Zero(t, endpoint1Calls.Load())
 }
 
+func TestLogBatcherRemoveSchedulesBackgroundDrainWhenStopAndDrainCannotEnqueue(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	rerouted := make(chan struct{}, 1)
+	allowDrain := make(chan struct{})
+
+	batcher, err := newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    100,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, func(context.Context, *wrappedExporter, plog.Logs, string) error {
+		return nil
+	}, withLogBatcherOnBackendRemoved(func(_ context.Context, _ string, logs plog.Logs, _, _ int) error {
+		if logs.LogRecordCount() > 0 {
+			rerouted <- struct{}{}
+		}
+		return nil
+	}))
+	require.NoError(t, err)
+	defer batcher.telemetry.shutdown()
+
+	backend := &backendLogBatcher{
+		endpoint:  "endpoint-1:4317",
+		logger:    ts.Logger,
+		settings:  batcher.settings,
+		telemetry: batcher.telemetry,
+		requests:  make(chan logBatcherRequest, 1),
+		done:      make(chan struct{}),
+	}
+	backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: simpleLogs()}
+
+	batcher.mu.Lock()
+	batcher.backends[backend.endpoint] = backend
+	batcher.mu.Unlock()
+
+	go func() {
+		<-allowDrain
+		<-backend.requests
+		req := <-backend.requests
+		if req.kind == logBatcherRequestDrainAndStop {
+			req.drain <- logBatcherDrainResult{logs: simpleLogs(), records: 1, bytes: 1}
+			close(backend.done)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+
+	err = batcher.Remove(ctx, backend.endpoint, newWrappedExporter(newNopMockLogsExporter(), backend.endpoint))
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	close(allowDrain)
+	require.Eventually(t, func() bool {
+		select {
+		case <-backend.done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		select {
+		case <-rerouted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
 func newTestLogsExporter(
 	t *testing.T,
 	ts exporter.Settings,

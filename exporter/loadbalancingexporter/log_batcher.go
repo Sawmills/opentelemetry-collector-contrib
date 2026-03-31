@@ -207,7 +207,15 @@ func (b *logBatcher) removeAndReroute(ctx context.Context, endpoint string, back
 		b.scheduleBackendDrain(backend)
 		return err
 	}
-	return b.drainRemovedBackend(ctx, endpoint, backend)
+	if err := b.drainRemovedBackend(ctx, endpoint, backend); err != nil {
+		select {
+		case <-backend.done:
+		default:
+			b.scheduleBackendDrain(backend)
+		}
+		return err
+	}
+	return nil
 }
 
 func (b *logBatcher) Shutdown(ctx context.Context) error {
