@@ -52,12 +52,12 @@ type passthroughMetricsProcessor struct {
 	next consumer.Metrics
 }
 
-func (p *passthroughMetricsProcessor) Start(ctx context.Context, host component.Host) error {
+func (_ *passthroughMetricsProcessor) Start(ctx context.Context, host component.Host) error {
 	// No-op
 	return nil
 }
 
-func (p *passthroughMetricsProcessor) Shutdown(ctx context.Context) error {
+func (_ *passthroughMetricsProcessor) Shutdown(ctx context.Context) error {
 	// No-op
 	return nil
 }
@@ -69,6 +69,6 @@ func (p *passthroughMetricsProcessor) ConsumeMetrics(
 	return p.next.ConsumeMetrics(ctx, ld)
 }
 
-func (p *passthroughMetricsProcessor) Capabilities() consumer.Capabilities {
+func (_ *passthroughMetricsProcessor) Capabilities() consumer.Capabilities {
 	return processorCapabilities
 }

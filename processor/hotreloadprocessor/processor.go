@@ -254,7 +254,7 @@ func (hp *HotReloadProcessor[T, P]) Start(ctx context.Context, host component.Ho
 	hp.refreshConfig = time.NewTicker(hp.refreshInterval)
 
 	if hp.config.WatchPath != nil {
-		hp.fileWatcher, err = newFileWatcher(
+		hp.fileWatcher = newFileWatcher(
 			hp.logger,
 			*hp.config.WatchPath,
 			func(filePath string) error {
@@ -275,10 +275,6 @@ func (hp *HotReloadProcessor[T, P]) Start(ctx context.Context, host component.Ho
 				return nil
 			},
 		)
-		if err != nil {
-			return fmt.Errorf("failed to create file watcher: %w", err)
-		}
-
 		err = hp.fileWatcher.Start(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to start file watcher: %w", err)

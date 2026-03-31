@@ -232,9 +232,9 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
 		cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodecIfEnabled(cfg), newSettings()), 2)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, nil, newSettings()), 2)
 	})
-	t.Run("Should have timeout, queue and compression options when compression is enabled", func(t *testing.T) {
+	t.Run("Should have timeout, queue and payload codec options when compression is enabled", func(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
@@ -268,4 +268,16 @@ func TestNewQueuePayloadCodecIfEnabled(t *testing.T) {
 		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionNone
 		assert.NotNil(t, newQueuePayloadCodecIfEnabled(cfg))
 	})
+}
+
+func TestQueueConfigForExportUsesInMemoryStorageWhenRequested(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
+	cfg.QueueSettings.CompressInMemory = true
+
+	queueCfg, ok := queueConfigForExport(cfg)
+	require.True(t, ok)
+	require.True(t, queueCfg.HasValue())
+	require.NotNil(t, queueCfg.Get().StorageID)
+	assert.Equal(t, inMemoryQueueStorageID, *queueCfg.Get().StorageID)
 }

@@ -173,6 +173,12 @@ jobs:
         run: |
           make generate
           if [[ -n $(git status -s) ]]; then
+            echo "::group::git status"
+            git status -s
+            echo "::endgroup::"
+            echo "::group::git diff --name-only"
+            git diff --name-only
+            echo "::endgroup::"
             echo 'Generated code is out of date, please run "make generate" and commit the changes in this PR.'
             exit 1
           fi

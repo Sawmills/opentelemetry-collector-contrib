@@ -25,6 +25,7 @@ import (
 	"go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper"
 	"go.opentelemetry.io/collector/exporter/exportertest"
 	"go.opentelemetry.io/collector/exporter/otlpexporter"
+	collectorextension "go.opentelemetry.io/collector/extension"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/otel/attribute"
@@ -34,6 +35,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/inmemorystorage"
 )
 
 func TestNewLogsExporter(t *testing.T) {
@@ -264,65 +266,66 @@ func TestConsumeLogsEmitsOnlyParentExporterMetrics(t *testing.T) {
 	assert.IsType(t, tracenoop.NewTracerProvider(), childSettings[0].TracerProvider)
 }
 
-func TestConsumeLogsWithQueueCompressionAndLogBatcher(t *testing.T) {
-	ctx := t.Context()
-	shutdownCtx := context.Background() //nolint:usetesting // Context must outlive test for cleanup
+func TestConsumeLogsWithQueueCompressionAndInMemoryStorage(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	sink := new(consumertest.LogsSink)
 
 	cfg := simpleConfig()
 	cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
 	cfg.QueueSettings.CompressInMemory = true
-	cfg.LogBatcher.Enabled = true
-	cfg.LogBatcher.MaxRecords = 32
-	cfg.LogBatcher.MaxBytes = 1 << 20
-	cfg.LogBatcher.FlushInterval = time.Hour
 
-	ts := exportertest.NewNopSettings(metadata.Type)
-	logsExporter, err := newLogsExporter(ts, cfg)
-	require.NoError(t, err)
-
-	sink := new(consumertest.LogsSink)
-	logsExporter.loadBalancer.componentFactory = func(_ context.Context, _ string) (component.Component, error) {
+	p, _ := newTestLogsExporter(t, ts, tb, cfg, func(_ context.Context, _ string) (component.Component, error) {
 		return newMockLogsExporter(sink.ConsumeLogs), nil
+	})
+
+	settings := exportertest.NewNopSettings(metadata.Type)
+	settings.TelemetrySettings = ts.TelemetrySettings
+	options := []exporterhelper.Option{
+		exporterhelper.WithStart(p.Start),
+		exporterhelper.WithShutdown(p.Shutdown),
+		exporterhelper.WithCapabilities(p.Capabilities()),
 	}
-
-	payloadCodec := newQueuePayloadCodecIfEnabled(cfg)
-	require.NotNil(t, payloadCodec)
-
-	wrappedExporter, err := exporterhelper.NewLogs(
-		ctx,
-		ts,
-		cfg,
-		logsExporter.ConsumeLogs,
+	options = append(
+		options,
 		buildExporterResilienceOptions(
-			[]exporterhelper.Option{
-				exporterhelper.WithStart(logsExporter.Start),
-				exporterhelper.WithShutdown(shutdownWithCodec(component.ShutdownFunc(logsExporter.Shutdown), payloadCodec)),
-				exporterhelper.WithCapabilities(logsExporter.Capabilities()),
-			},
+			[]exporterhelper.Option{},
 			cfg,
-			payloadCodec,
+			newQueuePayloadCodecIfEnabled(cfg),
 			xexporterhelper.NewLogsQueueBatchSettings(),
 		)...,
 	)
+	wrapped, err := exporterhelper.NewLogs(
+		t.Context(),
+		settings,
+		cfg,
+		p.ConsumeLogs,
+		options...,
+	)
 	require.NoError(t, err)
 
-	require.NoError(t, wrappedExporter.Start(ctx, componenttest.NewNopHost()))
-	var shutdownOnce sync.Once
-	shutdown := func() {
-		shutdownOnce.Do(func() {
-			require.NoError(t, wrappedExporter.Shutdown(shutdownCtx))
-		})
-	}
-	t.Cleanup(func() {
-		shutdown()
-	})
-	require.NoError(t, wrappedExporter.ConsumeLogs(ctx, simpleLogs()))
-	require.NoError(t, wrappedExporter.ConsumeLogs(ctx, simpleLogs()))
-	shutdown()
+	storageExt, err := inmemorystorage.NewFactory().Create(
+		t.Context(),
+		collectorextension.Settings{ID: component.NewID(inmemorystorage.Type)},
+		&inmemorystorage.Config{},
+	)
+	require.NoError(t, err)
 
-	require.NotEmpty(t, sink.AllLogs())
-	assert.Equal(t, 2, sink.AllLogs()[0].LogRecordCount())
+	host := testStorageHost{
+		extensions: map[component.ID]component.Component{
+			inMemoryQueueStorageID: storageExt,
+		},
+	}
+	require.NoError(t, wrapped.Start(t.Context(), host))
+	t.Cleanup(func() {
+		require.NoError(t, wrapped.Shutdown(t.Context()))
+	})
+
+	require.NoError(t, wrapped.ConsumeLogs(t.Context(), simpleLogs()))
+	require.Eventually(t, func() bool {
+		return len(sink.AllLogs()) == 1
+	}, time.Second, 10*time.Millisecond)
+	assert.Equal(t, 1, sink.AllLogs()[0].LogRecordCount())
 }
 
 func generateSingleLogRecord() plog.Logs {
@@ -921,4 +924,16 @@ func newMockLogsExporter(consumelogsfn func(ctx context.Context, ld plog.Logs) e
 
 func newNopMockLogsExporter() exporter.Logs {
 	return &mockLogsExporter{Component: mockComponent{}}
+}
+
+type testStorageHost struct {
+	extensions map[component.ID]component.Component
+}
+
+func (h testStorageHost) GetExtensions() map[component.ID]component.Component {
+	return h.extensions
+}
+
+func (testStorageHost) GetFactory(component.Kind, component.Type) component.Factory {
+	return nil
 }

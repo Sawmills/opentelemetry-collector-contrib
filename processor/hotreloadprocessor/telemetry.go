@@ -81,7 +81,7 @@ func (pt *hotreloadProcessorTelemetry) record(
 type metricRecordFunc func(*hotreloadProcessorTelemetry, float64, ...attribute.KeyValue)
 
 // getMetricFuncForTrigger returns the appropriate metric recording function based on the trigger type.
-func (pt *hotreloadProcessorTelemetry) getMetricFuncForTrigger(
+func (_ *hotreloadProcessorTelemetry) getMetricFuncForTrigger(
 	triggerName trigger,
 ) metricRecordFunc {
 	metricMap := map[trigger]metricRecordFunc{

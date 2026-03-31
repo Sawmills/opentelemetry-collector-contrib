@@ -37,6 +37,7 @@ func TestConfigValidatePayloadCompression(t *testing.T) {
 	cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
 	require.NoError(t, cfg.Validate())
+	require.Nil(t, cfg.QueueSettings.QueueConfig.Get().StorageID)
 
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionZstd
 	require.NoError(t, cfg.Validate())
@@ -61,6 +62,12 @@ func TestConfigValidateCompressInMemory(t *testing.T) {
 
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionZstd
 	require.NoError(t, cfg.Validate())
+
+	queueCfg := exporterhelper.NewDefaultQueueConfig()
+	queueCfg.WaitForResult = true
+	cfg.QueueSettings.QueueConfig = configoptional.Some(queueCfg)
+	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
+	require.ErrorContains(t, cfg.Validate(), "`wait_for_result` is not supported with a persistent queue configured with `storage`")
 }
 
 func TestConfigValidateLogBatcher(t *testing.T) {
@@ -110,6 +117,8 @@ func TestLoadConfigWithQueueCompression(t *testing.T) {
 
 	require.NoError(t, conf.Unmarshal(cfg))
 	require.True(t, cfg.QueueSettings.QueueConfig.HasValue())
+	require.Equal(t, int64(1000), cfg.QueueSettings.QueueConfig.Get().QueueSize)
+	require.Equal(t, 2, cfg.QueueSettings.QueueConfig.Get().NumConsumers)
 	require.Equal(t, QueuePayloadCompressionZstd, cfg.QueueSettings.PayloadCompression)
 	require.True(t, cfg.QueueSettings.CompressInMemory)
 }

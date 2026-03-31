@@ -66,8 +66,6 @@ func (l subprocessorLoader[T]) loadSubprocessors(
 	nextConsumer T,
 	createConsumer func(ctx context.Context, factory otelprocessor.Factory, settings otelprocessor.Settings, config component.Config, nextConsumer T, signal otelpipeline.Signal) (T, error),
 ) ([]T, error) {
-	nc := nextConsumer
-
 	if len(config.Service.Pipelines) == 0 {
 		return nil, fmt.Errorf("no pipelines found")
 	}
@@ -78,7 +76,11 @@ func (l subprocessorLoader[T]) loadSubprocessors(
 		if id.Signal() != signal {
 			continue
 		}
+		if found {
+			return nil, fmt.Errorf("only one pipeline per signal is supported: %s", signal)
+		}
 		found = true
+		nc := nextConsumer
 		subprocessors = make([]T, len(pipeline.Processors))
 		for i := len(pipeline.Processors) - 1; i >= 0; i-- {
 			processorID := pipeline.Processors[i]

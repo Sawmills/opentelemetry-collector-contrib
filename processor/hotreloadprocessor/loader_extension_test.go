@@ -35,7 +35,7 @@ func TestWithProcessorFactoriesAddsCustomProcessor(t *testing.T) {
 }
 
 func TestLoadLogsSubprocessorsWithInjectedFactory(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	config := loadHotReloadTestConfig(t, "config-throughput.yaml")
 	registry := cloneProcessorFactoryRegistry(defaultProcessorFactories())
 	registry[customProcessorType] = newFakeCustomFactory(t)
@@ -63,7 +63,7 @@ func TestLoadLogsSubprocessorsWithInjectedFactory(t *testing.T) {
 }
 
 func TestLoadMetricsSubprocessorsWithInjectedFactory(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	config := loadHotReloadTestConfig(t, "config-throughput.yaml")
 	registry := cloneProcessorFactoryRegistry(defaultProcessorFactories())
 	registry[customProcessorType] = newFakeCustomFactory(t)
@@ -91,7 +91,7 @@ func TestLoadMetricsSubprocessorsWithInjectedFactory(t *testing.T) {
 }
 
 func TestLoadTracesSubprocessorsWithInjectedFactory(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	config := loadHotReloadTestConfig(t, "config-throughput.yaml")
 	registry := cloneProcessorFactoryRegistry(defaultProcessorFactories())
 	registry[customProcessorType] = newFakeCustomFactory(t)

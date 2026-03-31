@@ -74,17 +74,21 @@ func (q *QueueSettings) Unmarshal(conf *confmap.Conf) error {
 		return nil
 	}
 
-	// QueueBatchConfig has its own Unmarshal implementation that rejects unknown fields.
-	// Parse the queue payload compression fields separately so they can coexist with queue settings.
 	queueCfg := conf.ToStringMap()
 	payloadRaw, hasPayload := queueCfg["payload_compression"]
 	compressRaw, hasCompressInMemory := queueCfg["compress_in_memory"]
+	enabledRaw, hasEnabled := queueCfg["enabled"]
 	delete(queueCfg, "payload_compression")
 	delete(queueCfg, "compress_in_memory")
+	delete(queueCfg, "enabled")
 
-	queueConf := confmap.NewFromStringMap(queueCfg)
-	if err := queueConf.Unmarshal(&q.QueueConfig); err != nil {
-		return err
+	enabled := hasPayload || hasCompressInMemory || len(queueCfg) > 0
+	if hasEnabled {
+		enabledVal, ok := enabledRaw.(bool)
+		if !ok {
+			return errors.New("sending_queue.enabled must be a bool")
+		}
+		enabled = enabledVal
 	}
 
 	if hasPayload {
@@ -103,6 +107,18 @@ func (q *QueueSettings) Unmarshal(conf *confmap.Conf) error {
 		q.CompressInMemory = compressInMemory
 	}
 
+	if !enabled {
+		q.QueueConfig = configoptional.None[exporterhelper.QueueBatchConfig]()
+		return nil
+	}
+
+	queueConf := confmap.NewFromStringMap(queueCfg)
+	queueConfig := exporterhelper.NewDefaultQueueConfig()
+	if err := queueConf.Unmarshal(&queueConfig); err != nil {
+		return err
+	}
+	q.QueueConfig = configoptional.Some(queueConfig)
+
 	return nil
 }
 
@@ -116,7 +132,11 @@ const (
 
 func (q QueueSettings) Validate() error {
 	if q.QueueConfig.HasValue() {
-		if err := q.QueueConfig.Get().Validate(); err != nil {
+		queueCfg := *q.QueueConfig.Get()
+		if q.CompressInMemory && queueCfg.StorageID == nil {
+			queueCfg.StorageID = &inMemoryQueueStorageID
+		}
+		if err := queueCfg.Validate(); err != nil {
 			return err
 		}
 	}
