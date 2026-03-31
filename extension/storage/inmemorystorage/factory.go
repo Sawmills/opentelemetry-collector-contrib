@@ -33,5 +33,5 @@ func createExtension(
 	_ extension.Settings,
 	_ component.Config,
 ) (extension.Extension, error) {
-	return &Storage{}, nil
+	return &storage{}, nil
 }

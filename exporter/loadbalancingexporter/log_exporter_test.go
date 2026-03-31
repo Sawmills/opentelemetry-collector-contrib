@@ -25,6 +25,7 @@ import (
 	"go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper"
 	"go.opentelemetry.io/collector/exporter/exportertest"
 	"go.opentelemetry.io/collector/exporter/otlpexporter"
+	collectorextension "go.opentelemetry.io/collector/extension"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/otel/attribute"
@@ -303,9 +304,16 @@ func TestConsumeLogsWithQueueCompressionAndInMemoryStorage(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	storageExt, err := inmemorystorage.NewFactory().Create(
+		t.Context(),
+		collectorextension.Settings{ID: component.NewID(inmemorystorage.Type)},
+		&inmemorystorage.Config{},
+	)
+	require.NoError(t, err)
+
 	host := testStorageHost{
 		extensions: map[component.ID]component.Component{
-			inMemoryQueueStorageID: &inmemorystorage.Storage{},
+			inMemoryQueueStorageID: storageExt,
 		},
 	}
 	require.NoError(t, wrapped.Start(t.Context(), host))

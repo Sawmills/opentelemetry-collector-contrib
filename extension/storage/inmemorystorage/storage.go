@@ -9,24 +9,23 @@ import (
 	"sync/atomic"
 
 	"go.opentelemetry.io/collector/component"
-	"go.opentelemetry.io/collector/extension/xextension/storage"
+	xstorage "go.opentelemetry.io/collector/extension/xextension/storage"
 )
 
-// Storage is a component-local in-memory storage extension.
-type Storage struct {
+type storage struct {
 	st sync.Map
 }
 
-var _ storage.Extension = (*Storage)(nil)
+var _ xstorage.Extension = (*storage)(nil)
 
-func (*Storage) Start(context.Context, component.Host) error {
+func (*storage) Start(context.Context, component.Host) error {
 	return nil
 }
 
-func (s *Storage) Shutdown(context.Context) error {
+func (s *storage) Shutdown(context.Context) error {
 	return nil
 }
 
-func (s *Storage) GetClient(context.Context, component.Kind, component.ID, string) (storage.Client, error) {
+func (s *storage) GetClient(context.Context, component.Kind, component.ID, string) (xstorage.Client, error) {
 	return &client{st: &s.st, closed: &atomic.Bool{}}, nil
 }
