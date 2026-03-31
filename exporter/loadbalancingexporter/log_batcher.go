@@ -41,12 +41,31 @@ type logBatcherSettings struct {
 
 type logBatcherSendFunc func(context.Context, *wrappedExporter, plog.Logs, string) error
 
+type logBatcherOnBackendRemovedFunc func(context.Context, string, plog.Logs, int, int) error
+
+type logBatcherOption interface {
+	apply(*logBatcher)
+}
+
+type logBatcherOptionFunc func(*logBatcher)
+
+func (f logBatcherOptionFunc) apply(b *logBatcher) {
+	f(b)
+}
+
+func withLogBatcherOnBackendRemoved(fn logBatcherOnBackendRemovedFunc) logBatcherOption {
+	return logBatcherOptionFunc(func(b *logBatcher) {
+		b.onBackendRemoved = fn
+	})
+}
+
 type logBatcher struct {
 	logger   *zap.Logger
 	settings logBatcherSettings
 	send     logBatcherSendFunc
 
-	telemetry *logBatcherTelemetry
+	telemetry        *logBatcherTelemetry
+	onBackendRemoved logBatcherOnBackendRemovedFunc
 
 	mu       sync.RWMutex
 	backends map[string]*backendLogBatcher
@@ -59,6 +78,7 @@ type logBatcherRequest struct {
 	ctx    context.Context
 	reason string
 	done   chan error
+	drain  chan logBatcherDrainResult
 }
 
 type logBatcherRequestKind int
@@ -66,7 +86,15 @@ type logBatcherRequestKind int
 const (
 	logBatcherRequestEnqueue logBatcherRequestKind = iota
 	logBatcherRequestFlushAndStop
+	logBatcherRequestDrainAndStop
 )
+
+type logBatcherDrainResult struct {
+	logs    plog.Logs
+	records int
+	bytes   int
+	err     error
+}
 
 type backendLogBatcher struct {
 	endpoint string
@@ -98,6 +126,9 @@ type logBatcherTelemetry struct {
 	overflowTotal  metric.Int64Counter
 	pendingRecords metric.Int64ObservableGauge
 	pendingBytes   metric.Int64ObservableGauge
+	removedTotal   metric.Int64Counter
+	removedRecords metric.Int64Histogram
+	removedBytes   metric.Int64Histogram
 
 	mu            sync.Mutex
 	registrations []metric.Registration
@@ -108,6 +139,7 @@ func newLogBatcher(
 	settings component.TelemetrySettings,
 	cfg logBatcherSettings,
 	send logBatcherSendFunc,
+	options ...logBatcherOption,
 ) (*logBatcher, error) {
 	telemetry, err := newLogBatcherTelemetry(settings)
 	if err != nil {
@@ -120,6 +152,9 @@ func newLogBatcher(
 		send:      send,
 		telemetry: telemetry,
 		backends:  make(map[string]*backendLogBatcher),
+	}
+	for _, option := range options {
+		option.apply(lb)
 	}
 
 	if err := telemetry.start(lb.snapshotPending); err != nil {
@@ -158,11 +193,22 @@ func (b *logBatcher) Remove(ctx context.Context, endpoint string, exp *wrappedEx
 	if exp != nil {
 		backend.setExporter(exp)
 	}
+	if b.onBackendRemoved != nil {
+		return b.removeAndReroute(ctx, endpoint, backend)
+	}
 	if err := waitForInflight(ctx, &backend.inflight); err != nil {
 		b.scheduleBackendCleanup(backend, logFlushReasonResolverChange)
 		return err
 	}
 	return backend.stopAndFlush(ctx, logFlushReasonResolverChange)
+}
+
+func (b *logBatcher) removeAndReroute(ctx context.Context, endpoint string, backend *backendLogBatcher) error {
+	if err := waitForInflight(ctx, &backend.inflight); err != nil {
+		b.scheduleBackendDrain(backend)
+		return err
+	}
+	return b.drainRemovedBackend(ctx, endpoint, backend)
 }
 
 func (b *logBatcher) Shutdown(ctx context.Context) error {
@@ -198,6 +244,37 @@ func (b *logBatcher) scheduleBackendCleanup(backend *backendLogBatcher, reason s
 			b.logger.Warn("failed to stop log batcher backend during background cleanup", zap.String("endpoint", backend.endpoint), zap.String("reason", reason), zap.Error(err))
 		}
 	}()
+}
+
+func (b *logBatcher) scheduleBackendDrain(backend *backendLogBatcher) {
+	go func() {
+		if err := waitForInflight(context.Background(), &backend.inflight); err != nil {
+			b.logger.Warn("failed waiting for inflight log batcher requests during background removed-backend drain", zap.String("endpoint", backend.endpoint), zap.Error(err))
+			return
+		}
+		if err := b.drainRemovedBackend(context.Background(), backend.endpoint, backend); err != nil {
+			b.logger.Warn("failed to reroute removed backend log batch", zap.String("removed_endpoint", backend.endpoint), zap.Error(err))
+		}
+	}()
+}
+
+func (b *logBatcher) drainRemovedBackend(ctx context.Context, endpoint string, backend *backendLogBatcher) error {
+	drained, err := backend.stopAndDrain(ctx)
+	if err != nil {
+		b.recordRemovedBackendOutcome(ctx, endpoint, "failed", 0, 0)
+		return err
+	}
+	if drained.records == 0 {
+		b.recordRemovedBackendOutcome(ctx, endpoint, "empty", 0, 0)
+		return nil
+	}
+	b.recordRemovedBackendSize(ctx, endpoint, drained.records, drained.bytes)
+	if err := b.onBackendRemoved(ctx, endpoint, drained.logs, drained.records, drained.bytes); err != nil {
+		b.recordRemovedBackendOutcome(ctx, endpoint, "failed", drained.records, drained.bytes)
+		return err
+	}
+	b.recordRemovedBackendOutcome(ctx, endpoint, "rerouted", drained.records, drained.bytes)
+	return nil
 }
 
 func (b *logBatcher) snapshotPending() []logBatcherPending {
@@ -299,6 +376,27 @@ func (b *backendLogBatcher) stopAndFlush(ctx context.Context, reason string) err
 	}
 }
 
+func (b *backendLogBatcher) stopAndDrain(ctx context.Context) (logBatcherDrainResult, error) {
+	done := make(chan logBatcherDrainResult, 1)
+	select {
+	case b.requests <- logBatcherRequest{
+		kind:  logBatcherRequestDrainAndStop,
+		ctx:   ctx,
+		drain: done,
+	}:
+	case <-b.done:
+		return logBatcherDrainResult{}, nil
+	}
+
+	select {
+	case result := <-done:
+		<-b.done
+		return result, result.err
+	case <-ctx.Done():
+		return logBatcherDrainResult{}, ctx.Err()
+	}
+}
+
 func (b *backendLogBatcher) setExporter(exp *wrappedExporter) {
 	b.exporterMu.Lock()
 	b.exp = exp
@@ -396,6 +494,9 @@ func (b *backendLogBatcher) handleRequest(
 		err := b.flush(req.ctx, pending, pendingRecords, pendingBytes, req.reason, timer, timerC)
 		req.done <- err
 		return true
+	case logBatcherRequestDrainAndStop:
+		req.drain <- b.drain(pending, pendingRecords, pendingBytes, timer, timerC)
+		return true
 	}
 	return false
 }
@@ -463,6 +564,41 @@ func (b *backendLogBatcher) flush(
 	return err
 }
 
+func (b *backendLogBatcher) drain(
+	pending *plog.Logs,
+	pendingRecords *int,
+	pendingBytes *int,
+	timer *time.Timer,
+	timerC *<-chan time.Time,
+) logBatcherDrainResult {
+	if !timer.Stop() && *timerC != nil {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	*timerC = nil
+
+	if pending.LogRecordCount() == 0 {
+		return logBatcherDrainResult{logs: plog.NewLogs()}
+	}
+
+	drained := *pending
+	records := *pendingRecords
+	bytes := *pendingBytes
+	*pending = plog.NewLogs()
+	*pendingRecords = 0
+	*pendingBytes = 0
+	b.pendingRecords.Store(0)
+	b.pendingBytes.Store(0)
+
+	return logBatcherDrainResult{
+		logs:    drained,
+		records: records,
+		bytes:   bytes,
+	}
+}
+
 type logBatcherPending struct {
 	endpoint string
 	records  int64
@@ -522,8 +658,42 @@ func newLogBatcherTelemetry(settings component.TelemetrySettings) (*logBatcherTe
 		metric.WithUnit("By"),
 	)
 	errs = errors.Join(errs, err)
+	t.removedTotal, err = meter.Int64Counter(
+		"otelcol_loadbalancer_log_batch_removed_backend_total",
+		metric.WithDescription("Number of removed backend drain attempts by outcome."),
+		metric.WithUnit("{removals}"),
+	)
+	errs = errors.Join(errs, err)
+	t.removedRecords, err = meter.Int64Histogram(
+		"otelcol_loadbalancer_log_batch_removed_backend_records",
+		metric.WithDescription("Number of log records drained from removed backends before reroute."),
+		metric.WithUnit("{records}"),
+	)
+	errs = errors.Join(errs, err)
+	t.removedBytes, err = meter.Int64Histogram(
+		"otelcol_loadbalancer_log_batch_removed_backend_bytes",
+		metric.WithDescription("Serialized OTLP bytes drained from removed backends before reroute."),
+		metric.WithUnit("By"),
+	)
+	errs = errors.Join(errs, err)
 
 	return t, errs
+}
+
+func (b *logBatcher) recordRemovedBackendOutcome(ctx context.Context, endpoint string, outcome string, records int, bytes int) {
+	b.telemetry.removedTotal.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(
+		attribute.String("endpoint", endpoint),
+		attribute.String("outcome", outcome),
+	)))
+}
+
+func (b *logBatcher) recordRemovedBackendSize(ctx context.Context, endpoint string, records int, bytes int) {
+	if records > 0 {
+		b.telemetry.removedRecords.Record(ctx, int64(records), metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", endpoint))))
+	}
+	if bytes > 0 {
+		b.telemetry.removedBytes.Record(ctx, int64(bytes), metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", endpoint))))
+	}
 }
 
 func (t *logBatcherTelemetry) start(snapshot func() []logBatcherPending) error {

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"math/rand/v2"
+	"slices"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
@@ -68,6 +69,7 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 				flushInterval: cfg.(*Config).LogBatcher.FlushInterval,
 			},
 			logExporter.consumeBatch,
+			withLogBatcherOnBackendRemoved(logExporter.handleRemovedBackendLogs),
 		)
 		if err != nil {
 			return nil, err
@@ -193,6 +195,45 @@ func (e *logExporterImp) enqueueEndpointBatches(ctx context.Context, batches map
 	return errs
 }
 
+func (e *logExporterImp) handleRemovedBackendLogs(ctx context.Context, removedEndpoint string, drained plog.Logs, records int, bytes int) error {
+	reroutedBatches, groupErr := e.groupLogsByEndpoint(drained)
+	if hasEndpointBatch(reroutedBatches, removedEndpoint) {
+		groupErr = errors.Join(groupErr, errors.New("removed backend reroute did not escape removed endpoint"))
+	}
+	if len(reroutedBatches) == 0 {
+		if groupErr != nil {
+			e.logger.Warn("failed to reroute removed backend batch",
+				zap.String("removed_endpoint", removedEndpoint),
+				zap.Int("records", records),
+				zap.Int("bytes", bytes),
+				zap.Error(groupErr),
+			)
+			return groupErr
+		}
+		return nil
+	}
+
+	err := errors.Join(groupErr, e.enqueueEndpointBatches(ctx, reroutedBatches, true))
+	if err != nil {
+		e.logger.Warn("failed to reroute removed backend batch",
+			zap.String("removed_endpoint", removedEndpoint),
+			zap.Int("records", records),
+			zap.Int("bytes", bytes),
+			zap.Strings("target_endpoints", endpointBatchKeys(reroutedBatches)),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	e.logger.Info("rerouted removed backend batch",
+		zap.String("removed_endpoint", removedEndpoint),
+		zap.Int("records", records),
+		zap.Int("bytes", bytes),
+		zap.Strings("target_endpoints", endpointBatchKeys(reroutedBatches)),
+	)
+	return nil
+}
+
 func (e *logExporterImp) consumeLog(ctx context.Context, ld plog.Logs) error {
 	traceID := traceIDFromLogs(ld)
 	balancingKey := traceID
@@ -271,6 +312,20 @@ func hasAlternativeEndpoint(batches map[string]*endpointBatch, failedEndpoint st
 		}
 	}
 	return false
+}
+
+func hasEndpointBatch(batches map[string]*endpointBatch, endpoint string) bool {
+	_, ok := batches[endpointWithPort(endpoint)]
+	return ok
+}
+
+func endpointBatchKeys(batches map[string]*endpointBatch) []string {
+	keys := make([]string, 0, len(batches))
+	for endpoint := range batches {
+		keys = append(keys, endpoint)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 // insertLogRecord adds a log record into the destination plog.Logs, reusing

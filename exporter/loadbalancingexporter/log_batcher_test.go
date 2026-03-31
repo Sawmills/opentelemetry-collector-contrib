@@ -5,6 +5,7 @@ package loadbalancingexporter
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,11 +14,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
-	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/exporter"
+	"go.opentelemetry.io/collector/exporter/exportertest"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
 )
@@ -267,61 +270,148 @@ func TestLogBatcherRemoveRespectsContextWhileWaitingForInflight(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
-func TestLogBatcherFlushesRemovedBackendToOldExporter(t *testing.T) {
-	ts, tb := getTelemetryAssets(t)
+func TestLogBatcherReroutesRemovedBackendFlushToReplacementEndpoint(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
 	var endpoint1Calls atomic.Int64
 	var endpoint2Calls atomic.Int64
-	endpoints := []string{"endpoint-1"}
 
-	p, lb := newTestLogsExporter(t, ts, tb, &Config{
-		Resolver: ResolverSettings{
-			Static: configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1"}}),
-		},
-	}, func(_ context.Context, endpoint string) (component.Component, error) {
-		switch endpoint {
-		case "endpoint-1:4317":
-			return newMockLogsExporter(func(_ context.Context, _ plog.Logs) error {
-				endpoint1Calls.Add(1)
-				return nil
-			}), nil
-		case "endpoint-2:4317":
-			return newMockLogsExporter(func(_ context.Context, _ plog.Logs) error {
-				endpoint2Calls.Add(1)
-				return nil
-			}), nil
-		default:
-			return newNopMockLogsExporter(), nil
-		}
-	})
+	endpoint1Exp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, _ plog.Logs) error {
+		endpoint1Calls.Add(1)
+		return errors.New(`rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 10.12.105.114:10418: connect: no route to host"`)
+	}), "endpoint-1:4317")
+	endpoint2Exp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, _ plog.Logs) error {
+		endpoint2Calls.Add(1)
+		return nil
+	}), "endpoint-2:4317")
 
-	lb.res = &mockResolver{
-		triggerCallbacks: true,
-		onResolve: func(_ context.Context) ([]string, error) {
-			return endpoints, nil
-		},
-	}
-	p.loadBalancer = lb
-	p.batcher, _ = newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+	var batcher *logBatcher
+	var err error
+	batcher, err = newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
 		maxRecords:    100,
 		maxBytes:      1 << 20,
 		flushInterval: time.Hour,
-	}, p.consumeBatch)
-	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
-		return p.batcher.Remove(ctx, endpoint, exp)
-	}
-
-	require.NoError(t, p.Start(t.Context(), componenttest.NewNopHost()))
-	defer func() { require.NoError(t, p.Shutdown(t.Context())) }()
-
-	require.NoError(t, p.ConsumeLogs(t.Context(), simpleLogs()))
-	endpoints = []string{"endpoint-2"}
-	_, err := lb.res.resolve(t.Context())
+	}, func(ctx context.Context, exp *wrappedExporter, ld plog.Logs, reason string) error {
+		_ = reason
+		return exp.ConsumeLogs(ctx, ld)
+	}, withLogBatcherOnBackendRemoved(func(ctx context.Context, _ string, logs plog.Logs, _ int, _ int) error {
+		return endpoint2Exp.ConsumeLogs(ctx, logs)
+	}))
 	require.NoError(t, err)
+	defer func() { require.NoError(t, batcher.Shutdown(t.Context())) }()
+
+	backend, err := batcher.acquireBackend("endpoint-1:4317", endpoint1Exp)
+	require.NoError(t, err)
+	backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: simpleLogs()}
+	backend.inflight.Done()
+
+	require.NoError(t, batcher.Remove(t.Context(), "endpoint-1:4317", endpoint1Exp))
+	require.Eventually(t, func() bool {
+		return endpoint2Calls.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, int64(0), endpoint1Calls.Load(), "removed backend drain should not flush against the stale exporter")
+	require.Equal(t, int64(1), endpoint2Calls.Load(), "removed backend drain should reroute pending logs to the replacement endpoint")
+}
+
+func TestLogBatcherRemoveEmitsReroutedMetric(t *testing.T) {
+	ctx := t.Context()
+	shutdownCtx := context.Background() //nolint:usetesting // Context must outlive test for cleanup
+	telemetry := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, telemetry.Shutdown(shutdownCtx))
+	})
+
+	params := exportertest.NewNopSettings(metadata.Type)
+	params.TelemetrySettings = telemetry.NewTelemetrySettings()
+
+	endpoint1Exp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, _ plog.Logs) error {
+		return errors.New(`rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 10.12.105.114:10418: connect: no route to host"`)
+	}), "endpoint-1:4317")
+	endpoint2Exp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, _ plog.Logs) error {
+		return nil
+	}), "endpoint-2:4317")
+
+	var batcher *logBatcher
+	var err error
+	batcher, err = newLogBatcher(params.Logger, params.TelemetrySettings, logBatcherSettings{
+		maxRecords:    100,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, func(ctx context.Context, exp *wrappedExporter, ld plog.Logs, reason string) error {
+		_ = reason
+		return exp.ConsumeLogs(ctx, ld)
+	}, withLogBatcherOnBackendRemoved(func(ctx context.Context, _ string, logs plog.Logs, _ int, _ int) error {
+		return endpoint2Exp.ConsumeLogs(ctx, logs)
+	}))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, batcher.Shutdown(ctx)) }()
+
+	backend, err := batcher.acquireBackend("endpoint-1:4317", endpoint1Exp)
+	require.NoError(t, err)
+	backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: simpleLogs()}
+	backend.inflight.Done()
+
+	require.NoError(t, batcher.Remove(ctx, "endpoint-1:4317", endpoint1Exp))
+	require.Eventually(t, func() bool {
+		metric, metricErr := telemetry.GetMetric("otelcol_loadbalancer_log_batch_removed_backend_total")
+		if metricErr != nil {
+			return false
+		}
+		sum, ok := metric.Data.(metricdata.Sum[int64])
+		if !ok {
+			return false
+		}
+		for _, dp := range sum.DataPoints {
+			outcome, ok := dp.Attributes.Value(attribute.Key("outcome"))
+			if ok && outcome.AsString() == "rerouted" && dp.Value == 1 {
+				return true
+			}
+		}
+		return false
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestLogBatcherBackgroundRemovalCleanupReroutesPendingLogs(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	var endpoint1Calls atomic.Int64
+	var endpoint2Calls atomic.Int64
+
+	endpoint1Exp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, _ plog.Logs) error {
+		endpoint1Calls.Add(1)
+		return nil
+	}), "endpoint-1:4317")
+	endpoint2Exp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, _ plog.Logs) error {
+		endpoint2Calls.Add(1)
+		return nil
+	}), "endpoint-2:4317")
+
+	var batcher *logBatcher
+	var err error
+	batcher, err = newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    100,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, func(ctx context.Context, exp *wrappedExporter, ld plog.Logs, reason string) error {
+		_ = reason
+		return exp.ConsumeLogs(ctx, ld)
+	}, withLogBatcherOnBackendRemoved(func(ctx context.Context, _ string, logs plog.Logs, _ int, _ int) error {
+		return endpoint2Exp.ConsumeLogs(ctx, logs)
+	}))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, batcher.Shutdown(t.Context())) }()
+
+	backend, err := batcher.acquireBackend("endpoint-1:4317", endpoint1Exp)
+	require.NoError(t, err)
+	backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: simpleLogs()}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, batcher.Remove(ctx, "endpoint-1:4317", endpoint1Exp), context.Canceled)
+	backend.inflight.Done()
 
 	require.Eventually(t, func() bool {
-		return endpoint1Calls.Load() == 1
+		return endpoint2Calls.Load() == 1
 	}, time.Second, 10*time.Millisecond)
-	assert.Zero(t, endpoint2Calls.Load())
+	require.Zero(t, endpoint1Calls.Load())
 }
 
 func newTestLogsExporter(
