@@ -83,6 +83,7 @@ components:
         - health_check
         - host_observer
         - http_forwarder
+        - inmemorystorage
         - jaeger_encoding
         - jaegerremotesampling
         - json_log_encoding
