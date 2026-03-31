@@ -270,6 +270,7 @@ func TestConsumeLogsWithQueueCompressionAndLogBatcher(t *testing.T) {
 
 	cfg := simpleConfig()
 	cfg.QueueSettings.QueueConfig = exporterhelper.NewDefaultQueueConfig()
+	cfg.QueueSettings.QueueConfig.Enabled = true
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
 	cfg.QueueSettings.CompressInMemory = true
 	cfg.LogBatcher.Enabled = true

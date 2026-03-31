@@ -230,34 +230,24 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
-		cfg.QueueSettings.QueueConfig = exporterhelper.NewDefaultQueueConfig()
+		cfg.QueueSettings.QueueConfig.Enabled = true
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodecIfEnabled(cfg), newSettings()), 2)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, nil, newSettings()), 2)
 	})
 	t.Run("Should have timeout, queue and payload codec options when compression is enabled", func(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
-		cfg.QueueSettings.QueueConfig = exporterhelper.NewDefaultQueueConfig()
+		cfg.QueueSettings.QueueConfig.Enabled = true
 		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
 
 		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodec(cfg.QueueSettings.PayloadCompression), newSettings()), 2)
-	})
-	t.Run("Should have in-memory encoding option when requested", func(t *testing.T) {
-		o := []exporterhelper.Option{}
-		cfg := createDefaultConfig().(*Config)
-		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
-		cfg.QueueSettings.QueueConfig = exporterhelper.NewDefaultQueueConfig()
-		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
-		cfg.QueueSettings.CompressInMemory = true
-
-		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodec(cfg.QueueSettings.PayloadCompression), newSettings()), 3)
 	})
 	t.Run("Should have all resilience options if defined", func(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
-		cfg.QueueSettings.QueueConfig = exporterhelper.NewDefaultQueueConfig()
+		cfg.QueueSettings.QueueConfig.Enabled = true
 		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionNone
 		cfg.BackOffConfig = configretry.NewDefaultBackOffConfig()
 
@@ -267,7 +257,7 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 
 func TestNewQueuePayloadCodecIfEnabled(t *testing.T) {
 	cfg := createDefaultConfig().(*Config)
-	cfg.QueueSettings.QueueConfig = exporterhelper.NewDefaultQueueConfig()
+	cfg.QueueSettings.QueueConfig.Enabled = true
 
 	t.Run("legacy empty string disables codec", func(t *testing.T) {
 		cfg.QueueSettings.PayloadCompression = ""

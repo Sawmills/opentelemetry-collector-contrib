@@ -257,7 +257,7 @@ exporters:
       payload_compression: zstd
 ```
 
-`sending_queue.compress_in_memory` enables queue encoding for in-memory queues. It requires `sending_queue.enabled: true` and a non-`none` `sending_queue.payload_compression` value.
+`sending_queue.compress_in_memory` is retained for compatibility. It requires `sending_queue.enabled: true` and a non-`none` `sending_queue.payload_compression` value.
 
 Kubernetes resolver example (For a more specific example: [example/k8s-resolver](./example/k8s-resolver/README.md))
 > [!IMPORTANT]
