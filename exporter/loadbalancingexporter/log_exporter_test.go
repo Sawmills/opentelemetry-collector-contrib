@@ -191,7 +191,7 @@ func TestConsumeLogsEmitsOnlyParentExporterMetrics(t *testing.T) {
 		maxRecords:    1,
 		maxBytes:      1 << 20,
 		flushInterval: time.Hour,
-	}, logsExporter.consumeBatch)
+	}, logsExporter.consumeBatch, withLogBatcherOnBackendRemoved(logsExporter.handleRemovedBackendLogs))
 	require.NoError(t, err)
 	logsExporter.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
 		return logsExporter.batcher.Remove(ctx, endpoint, exp)
@@ -474,7 +474,7 @@ func TestEnqueueEndpointBatchesReroutesStoppingExporterOnce(t *testing.T) {
 		maxRecords:    1,
 		maxBytes:      1 << 20,
 		flushInterval: time.Hour,
-	}, p.consumeBatch)
+	}, p.consumeBatch, withLogBatcherOnBackendRemoved(p.handleRemovedBackendLogs))
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, p.batcher.Shutdown(t.Context()))
@@ -485,7 +485,7 @@ func TestEnqueueEndpointBatchesReroutesStoppingExporterOnce(t *testing.T) {
 			logs: simpleLogs(),
 			exp:  stoppingExp,
 		},
-	}, true)
+	})
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		return logsConsumed.Load() == 1
@@ -514,7 +514,7 @@ func TestEnqueueEndpointBatchesReturnsStoppingErrorAfterSecondCollision(t *testi
 		maxRecords:    1,
 		maxBytes:      1 << 20,
 		flushInterval: time.Hour,
-	}, p.consumeBatch)
+	}, p.consumeBatch, withLogBatcherOnBackendRemoved(p.handleRemovedBackendLogs))
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, p.batcher.Shutdown(t.Context()))
@@ -525,7 +525,7 @@ func TestEnqueueEndpointBatchesReturnsStoppingErrorAfterSecondCollision(t *testi
 			logs: simpleLogs(),
 			exp:  initialExp,
 		},
-	}, true)
+	})
 	require.ErrorIs(t, err, errLogBatcherExporterStopping)
 }
 
@@ -556,7 +556,7 @@ func TestConsumeBatchReroutesTransportFailureToHealthyEndpoint(t *testing.T) {
 		maxRecords:    1,
 		maxBytes:      1 << 20,
 		flushInterval: time.Hour,
-	}, p.consumeBatch)
+	}, p.consumeBatch, withLogBatcherOnBackendRemoved(p.handleRemovedBackendLogs))
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, p.batcher.Shutdown(t.Context()))
@@ -567,7 +567,7 @@ func TestConsumeBatchReroutesTransportFailureToHealthyEndpoint(t *testing.T) {
 			logs: simpleLogWithID(findTraceIDForEndpoint(t, lb.ring, "endpoint-1")),
 			exp:  failingExp,
 		},
-	}, true)
+	})
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		return logsConsumed.Load() == 1
@@ -625,6 +625,228 @@ func TestFinishTransportFailedReroutePreservesRecoverableLogsOnPartialGroupingEr
 	}, errors.New("couldn't find the exporter for any candidate endpoint"))
 	require.ErrorContains(t, err, "couldn't find the exporter for any candidate endpoint")
 	require.Equal(t, int64(1), logsConsumed.Load())
+}
+
+func TestHandleRemovedBackendLogsReroutesToCurrentEndpoints(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	logsConsumed := atomic.Int64{}
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	liveExp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+		logsConsumed.Add(int64(ld.LogRecordCount()))
+		return nil
+	}), "endpoint-2:4317")
+
+	lb.ring = newHashRing([]string{"endpoint-2"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-2:4317": liveExp,
+	}
+
+	p, err := newLogsExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.batcher, err = newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    1,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, p.consumeBatch, withLogBatcherOnBackendRemoved(p.handleRemovedBackendLogs))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, p.batcher.Shutdown(t.Context()))
+	}()
+
+	err = p.handleRemovedBackendLogs(t.Context(), "endpoint-1:4317", simpleLogs(), 1, 1)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return logsConsumed.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestHandleRemovedBackendLogsNeverReenqueuesRemovedEndpoint(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	logsConsumed := atomic.Int64{}
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	removedExp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+		logsConsumed.Add(int64(ld.LogRecordCount()))
+		return nil
+	}), "endpoint-1:4317")
+
+	lb.ring = newHashRing([]string{"endpoint-1"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": removedExp,
+	}
+
+	p, err := newLogsExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.batcher, err = newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    1,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, p.consumeBatch, withLogBatcherOnBackendRemoved(p.handleRemovedBackendLogs))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, p.batcher.Shutdown(t.Context()))
+	}()
+
+	err = p.handleRemovedBackendLogs(t.Context(), "endpoint-1", simpleLogs(), 1, 1)
+	require.ErrorContains(t, err, "removed backend reroute did not escape removed endpoint")
+	require.Never(t, func() bool {
+		return logsConsumed.Load() > 0
+	}, 200*time.Millisecond, 10*time.Millisecond, "removed backend guard must drop the self-rerouted batch")
+}
+
+func TestHandleRemovedBackendLogsReturnsPartialErrorAfterDroppingRemovedEndpointBatch(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	logsConsumed := atomic.Int64{}
+
+	removedExp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+		logsConsumed.Add(int64(ld.LogRecordCount()) * 10)
+		return nil
+	}), "endpoint-1:4317")
+	liveExp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+		logsConsumed.Add(int64(ld.LogRecordCount()))
+		return nil
+	}), "endpoint-2:4317")
+
+	p, err := newLogsExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.batcher, err = newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    1,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, p.consumeBatch, withLogBatcherOnBackendRemoved(p.handleRemovedBackendLogs))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, p.batcher.Shutdown(t.Context()))
+	}()
+
+	err = p.finishRemovedBackendReroute(t.Context(), "endpoint-1:4317", map[string]*endpointBatch{
+		"endpoint-1:4317": {
+			logs: simpleLogs(),
+			exp:  removedExp,
+		},
+		"endpoint-2:4317": {
+			logs: simpleLogs(),
+			exp:  liveExp,
+		},
+	}, 2, 2, nil)
+	require.ErrorIs(t, err, errLogBatcherRemovedBackendPartial)
+	require.Eventually(t, func() bool {
+		return logsConsumed.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, int64(1), logsConsumed.Load(), "only the live-endpoint record should be rerouted")
+}
+
+func TestHandleRemovedBackendLogsRetriesCanceledEnqueueInBackground(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	logsConsumed := atomic.Int64{}
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	liveExp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+		logsConsumed.Add(int64(ld.LogRecordCount()))
+		return nil
+	}), "endpoint-2:4317")
+
+	lb.ring = newHashRing([]string{"endpoint-2"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-2:4317": liveExp,
+	}
+
+	p, err := newLogsExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.batcher, err = newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    1,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, p.consumeBatch, withLogBatcherOnBackendRemoved(p.handleRemovedBackendLogs))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, p.batcher.Shutdown(t.Context()))
+	}()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err = p.handleRemovedBackendLogs(ctx, "endpoint-1:4317", simpleLogs(), 1, 1)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return logsConsumed.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestRetryRemovedBackendBatchesRecordsRetrySucceededMetric(t *testing.T) {
+	ctx := t.Context()
+	shutdownCtx := context.Background() //nolint:usetesting // Context must outlive test for cleanup
+	telemetry := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, telemetry.Shutdown(shutdownCtx))
+	})
+
+	params := exportertest.NewNopSettings(metadata.Type)
+	params.TelemetrySettings = telemetry.NewTelemetrySettings()
+	tb, err := metadata.NewTelemetryBuilder(params.TelemetrySettings)
+	require.NoError(t, err)
+
+	logsConsumed := atomic.Int64{}
+	lb, err := newLoadBalancer(params.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	liveExp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+		logsConsumed.Add(int64(ld.LogRecordCount()))
+		return nil
+	}), "endpoint-2:4317")
+
+	lb.ring = newHashRing([]string{"endpoint-2"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-2:4317": liveExp,
+	}
+
+	p, err := newLogsExporter(params, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.batcher, err = newLogBatcher(params.Logger, params.TelemetrySettings, logBatcherSettings{
+		maxRecords:    1,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, p.consumeBatch, withLogBatcherOnBackendRemoved(p.handleRemovedBackendLogs))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, p.batcher.Shutdown(ctx))
+	}()
+
+	p.retryRemovedBackendBatches("endpoint-1:4317", map[string]*endpointBatch{
+		"endpoint-2:4317": {
+			logs: simpleLogs(),
+			exp:  liveExp,
+		},
+	}, 1, 1)
+
+	require.Eventually(t, func() bool {
+		return logsConsumed.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		metric, metricErr := telemetry.GetMetric("otelcol_loadbalancer_log_batch_removed_backend_total")
+		if metricErr != nil {
+			return false
+		}
+		sum, ok := metric.Data.(metricdata.Sum[int64])
+		if !ok {
+			return false
+		}
+		for _, dp := range sum.DataPoints {
+			outcome, ok := dp.Attributes.Value(attribute.Key("outcome"))
+			if ok && outcome.AsString() == removedBackendOutcomeRetrySucceeded && dp.Value == 1 {
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second, 20*time.Millisecond)
 }
 
 func TestInsertLogRecordKeepsDistinctDroppedAttributeCounts(t *testing.T) {
@@ -688,7 +910,7 @@ func TestConsumeLogs_ConcurrentResolverChange(t *testing.T) {
 		maxRecords:    1,
 		maxBytes:      1 << 20,
 		flushInterval: time.Hour,
-	}, p.consumeBatch)
+	}, p.consumeBatch, withLogBatcherOnBackendRemoved(p.handleRemovedBackendLogs))
 	require.NoError(t, err)
 	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
 		return p.batcher.Remove(ctx, endpoint, exp)
@@ -777,7 +999,7 @@ func TestRollingUpdatesWhenConsumeLogs(t *testing.T) {
 		maxRecords:    1,
 		maxBytes:      1 << 20,
 		flushInterval: time.Hour,
-	}, p.consumeBatch)
+	}, p.consumeBatch, withLogBatcherOnBackendRemoved(p.handleRemovedBackendLogs))
 	require.NoError(t, err)
 	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
 		return p.batcher.Remove(ctx, endpoint, exp)
