@@ -281,3 +281,4 @@ providers:
 # file before passing it to OCB, to ensure that local versions are used for all
 # Contrib modules.
 replaces:
+  - go.opentelemetry.io/collector/exporter/exporterhelper => github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.140.1-sawmills.1.0.20260304220840-f32306271c14
