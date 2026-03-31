@@ -425,6 +425,10 @@ component_management:
     name: extension_storage_filestorage
     paths:
     - extension/storage/filestorage/**
+  - component_id: extension_storage_inmemorystorage
+    name: extension_storage_inmemorystorage
+    paths:
+    - extension/storage/inmemorystorage/**
   - component_id: extension_storage_redisstorage
     name: extension_storage_redisstorage
     paths:
