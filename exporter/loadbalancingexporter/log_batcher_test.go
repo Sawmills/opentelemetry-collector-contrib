@@ -270,6 +270,20 @@ func TestLogBatcherRemoveRespectsContextWhileWaitingForInflight(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestBackendLogBatcherStopAndDrainRespectsContextWhileQueueIsFull(t *testing.T) {
+	backend := &backendLogBatcher{
+		requests: make(chan logBatcherRequest, 1),
+		done:     make(chan struct{}),
+	}
+	backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: simpleLogs()}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, err := backend.stopAndDrain(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestLogBatcherReroutesRemovedBackendFlushToReplacementEndpoint(t *testing.T) {
 	ts, _ := getTelemetryAssets(t)
 	var endpoint1Calls atomic.Int64

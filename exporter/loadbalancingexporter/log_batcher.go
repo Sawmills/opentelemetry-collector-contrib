@@ -384,6 +384,8 @@ func (b *backendLogBatcher) stopAndDrain(ctx context.Context) (logBatcherDrainRe
 		ctx:   ctx,
 		drain: done,
 	}:
+	case <-ctx.Done():
+		return logBatcherDrainResult{}, ctx.Err()
 	case <-b.done:
 		return logBatcherDrainResult{}, nil
 	}
