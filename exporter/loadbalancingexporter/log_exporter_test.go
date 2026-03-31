@@ -663,6 +663,42 @@ func TestHandleRemovedBackendLogsReroutesToCurrentEndpoints(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestHandleRemovedBackendLogsNeverReenqueuesRemovedEndpoint(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	logsConsumed := atomic.Int64{}
+	lb, err := newLoadBalancer(ts.Logger, simpleConfig(), nil, tb)
+	require.NoError(t, err)
+
+	removedExp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+		logsConsumed.Add(int64(ld.LogRecordCount()))
+		return nil
+	}), "endpoint-1:4317")
+
+	lb.ring = newHashRing([]string{"endpoint-1"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": removedExp,
+	}
+
+	p, err := newLogsExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.batcher, err = newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:    1,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, p.consumeBatch, withLogBatcherOnBackendRemoved(p.handleRemovedBackendLogs))
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, p.batcher.Shutdown(t.Context()))
+	}()
+
+	err = p.handleRemovedBackendLogs(t.Context(), "endpoint-1:4317", simpleLogs(), 1, 1)
+	require.ErrorContains(t, err, "removed backend reroute did not escape removed endpoint")
+	require.Never(t, func() bool {
+		return logsConsumed.Load() > 0
+	}, 200*time.Millisecond, 10*time.Millisecond, "removed backend guard must drop the self-rerouted batch")
+}
+
 func TestInsertLogRecordKeepsDistinctDroppedAttributeCounts(t *testing.T) {
 	dest := plog.NewLogs()
 
