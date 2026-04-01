@@ -136,6 +136,7 @@ body:
       - extension/storage
       - extension/storage/dbstorage
       - extension/storage/filestorage
+      - extension/storage/inmemorystorage
       - extension/storage/redisstorage
       - extension/sumologic
       - internal/aws
@@ -205,10 +206,12 @@ body:
       - processor/geoip
       - processor/groupbyattrs
       - processor/groupbytrace
+      - processor/hotreload
       - processor/interval
       - processor/isolationforest
       - processor/k8sattributes
       - processor/logdedup
+      - processor/logstometrics
       - processor/logstransform
       - processor/lookup
       - processor/metricsgeneration

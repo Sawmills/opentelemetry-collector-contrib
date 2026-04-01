@@ -102,6 +102,7 @@ components:
     - extension/healthcheckv2
     - extension/host_observer
     - extension/http_forwarder
+    - extension/inmemorystorage
     - extension/jaeger_encoding
     - extension/jaegerremotesampling
     - extension/json_log_encoding
@@ -197,12 +198,14 @@ components:
     - processor/groupbyattrs
     - processor/groupbytrace
     - processor/hetznerdetector
+    - processor/hotreloadprocessor
     - processor/ibmcloudclassicdetector
     - processor/ibmcloudvpcdetector
     - processor/interval
     - processor/isolationforest
     - processor/k8s_attributes
     - processor/logdedup
+    - processor/logstometricsprocessor
     - processor/logstransform
     - processor/lookup
     - processor/metric_start_time
