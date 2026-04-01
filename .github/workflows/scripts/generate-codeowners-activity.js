@@ -181,10 +181,10 @@ async function getReviewAndRequestedLogins(octokit, owner, repo, prNumber) {
   const requested = new Set();
   let draft = false;
   try {
-    const [{ data: prData }, { data: reviews }, { data: comments }] = await Promise.all([
-      octokit.pulls.get({ owner, repo, pull_number: prNumber }),
-      octokit.pulls.listReviews({ owner, repo, pull_number: prNumber }),
-      octokit.issues.listComments({ owner, repo, issue_number: prNumber }),
+    const [prData, reviews, comments] = await Promise.all([
+      octokit.pulls.get({ owner, repo, pull_number: prNumber }).then(({ data }) => data),
+      octokit.paginate(octokit.pulls.listReviews, { owner, repo, pull_number: prNumber }),
+      octokit.paginate(octokit.issues.listComments, { owner, repo, issue_number: prNumber }),
     ]);
     draft = prData.draft === true;
     for (const r of prData.requested_reviewers || []) {

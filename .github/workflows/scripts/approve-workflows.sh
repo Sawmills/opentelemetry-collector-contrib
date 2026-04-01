@@ -11,7 +11,7 @@ if [[ -z "${PR_NUMBER:-}" || -z "${COMMENT:-}" || -z "${SENDER:-}" || -z "${ORG_
     exit 0
 fi
 
-if [[ ${COMMENT:0:18} != "/workflow-approve" ]]; then
+if [[ ${COMMENT} != /workflow-approve* ]]; then
     echo "Not a workflow-approve command"
     exit 0
 fi

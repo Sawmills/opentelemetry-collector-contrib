@@ -139,7 +139,7 @@ main() {
     # Format: [component1, component2] first note (+N more) (for multiple entries)
 
     # Deduplicate components
-    mapfile -t UNIQUE_COMPONENTS < <(echo "${COMPONENTS[@]}" | tr ' ' '\n' | sort -u)
+    mapfile -t UNIQUE_COMPONENTS < <(printf '%s\n' "${COMPONENTS[@]}" | awk 'NF' | sort -u)
     COMPONENT_PREFIX=""
     if [[ ${#UNIQUE_COMPONENTS[@]} -gt 0 ]]; then
         COMPONENT_PREFIX="[$(IFS=', '; echo "${UNIQUE_COMPONENTS[*]}")] "
