@@ -28,6 +28,7 @@ exclude  = [
     "^https://opentelemetry\\.io/docs/specs/semconv/http/http-spans/$",
     "^https://opentelemetry\\.io/docs/specs/semconv/non-normative/db-migration/$",
     "^https://opentelemetry\\.io/docs/specs/semconv/non-normative/http-migration/$",
+    "^https://opentelemetry\\.io/blog/2024/otel-arrow-production/$",
     "^https://opentelemetry\\.io/docs/specs/semconv/general/naming/#general-naming-considerations$",
     "^https://opentelemetry\\.io/docs/specs/semconv/general/attributes/#server-client-and-shared-network-attributes$",
     "^https://opentelemetry\\.io/docs/specs/otel/metrics/data-model/#sums$",
