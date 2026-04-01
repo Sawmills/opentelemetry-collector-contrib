@@ -28,7 +28,7 @@ const FOCUS_COMPONENT_LABELS = new Set([
   'receiver/hostmetrics',
   'processor/k8sattributes',
   'processor/resourcedetection',
-  'receiver/filelog',
+  'receiver/file_log',
   'processor/filter',
   'pkg/stanza',
   'pkg/ottl',
@@ -55,8 +55,8 @@ function progress(msg) {
  * - periodStart: midnight UTC at the start of the day that was 35 days ago (inclusive).
  * - periodEnd: midnight UTC at the start of the day that was 5 days ago (exclusive: we include
  *   created_at < periodEnd only, so the last full day included is 6 days ago).
- * filterOnDateRange uses createdAt >= periodStart && createdAt <= periodEnd, so the end date
- * in the report is exclusive (PRs created on the end date after 00:00:00 are excluded).
+ * filterOnDateRange uses createdAt >= periodStart && createdAt < periodEnd, so the end date
+ * in the report is exclusive (PRs created on the end date are excluded).
  */
 function genLookbackDates() {
   const now = new Date();
@@ -152,7 +152,7 @@ async function searchIssuesAndPrs(octokit, query, periodStart, periodEnd) {
   const perPage = 100;
   while (true) {
     progress(`Search API: page ${page}...`);
-    const { data } = await octokit.search.issuesAndPullRequests({
+    const { data } = await octokit.rest.search.issuesAndPullRequests({
       q,
       per_page: perPage,
       page,
@@ -181,22 +181,10 @@ async function getReviewAndRequestedLogins(octokit, owner, repo, prNumber) {
   const requested = new Set();
   let draft = false;
   try {
-    const reviewPromise = octokit.paginate(octokit.pulls.listReviews, {
-      owner,
-      repo,
-      pull_number: prNumber,
-      per_page: 100,
-    });
-    const commentPromise = octokit.paginate(octokit.issues.listComments, {
-      owner,
-      repo,
-      issue_number: prNumber,
-      per_page: 100,
-    });
-    const [{ data: prData }, { data: reviews }, { data: comments }] = await Promise.all([
-      octokit.pulls.get({ owner, repo, pull_number: prNumber }),
-      reviewPromise.then((data) => ({ data })),
-      commentPromise.then((data) => ({ data })),
+    const [prData, reviews, comments] = await Promise.all([
+      octokit.rest.pulls.get({ owner, repo, pull_number: prNumber }).then(({ data }) => data),
+      octokit.paginate(octokit.rest.pulls.listReviews, { owner, repo, pull_number: prNumber }),
+      octokit.paginate(octokit.rest.issues.listComments, { owner, repo, issue_number: prNumber }),
     ]);
     draft = prData.draft === true;
     for (const r of prData.requested_reviewers || []) {
@@ -251,6 +239,7 @@ async function computePrStats(octokit, prs, labelToOwners, componentLabels, peri
     if (labelsOnPr.length === 0) continue;
 
     const ownerToLabels = getCodeOwnersByLabel(labelsOnPr, labelToOwners);
+    if (ownerToLabels.size === 0) continue;
 
     if (processed === 0 || processed % PROGRESS_INTERVAL === 0) progress(`PRs: fetching #${pr.number} (${processed + 1})...`);
     const { requested: requestedReviewers, respondents, draft } = await getReviewAndRequestedLogins(octokit, REPO_OWNER, REPO_NAME, pr.number);
@@ -258,15 +247,17 @@ async function computePrStats(octokit, prs, labelToOwners, componentLabels, peri
     if (draft) continue;
 
     for (const label of labelsOnPr) {
-      const ownersForLabel = [];
+      const requestedOwnersForLabel = [];
       for (const [login, labels] of ownerToLabels) {
         if (!labels.has(label)) continue;
         if (authorLogin && login === authorLogin) continue;
-        ownersForLabel.push(login);
+        if (!requestedReviewers.has(login)) continue;
+        requestedOwnersForLabel.push(login);
       }
+      if (requestedOwnersForLabel.length === 0) continue; // only count PRs where a code owner for this component was requested
       if (!componentPrStats[label]) componentPrStats[label] = { prsTotal: 0, prsWithResponse: 0 };
       componentPrStats[label].prsTotal++;
-      if (ownersForLabel.some((login) => respondents.has(login))) {
+      if (requestedOwnersForLabel.some((login) => respondents.has(login))) {
         componentPrStats[label].prsWithResponse++;
       }
     }
@@ -295,6 +286,13 @@ async function computePrStats(octokit, prs, labelToOwners, componentLabels, peri
  * Per-code-owner target is 75% / (number of code owners for that component).
  */
 function formatTable(byCodeOwnerAndComponent, kind) {
+  const codeOwnerCountByComponent = {};
+  for (const [, byComponent] of Object.entries(byCodeOwnerAndComponent)) {
+    for (const component of Object.keys(byComponent)) {
+      codeOwnerCountByComponent[component] = (codeOwnerCountByComponent[component] || 0) + 1;
+    }
+  }
+
   const rows = [];
   for (const [login, byComponent] of Object.entries(byCodeOwnerAndComponent)) {
     for (const [component, v] of Object.entries(byComponent)) {
@@ -322,7 +320,13 @@ function formatTable(byCodeOwnerAndComponent, kind) {
 /**
  * Per-component summary: % of the component's PRs that received at least one code-owner review (target ≥75%).
  */
-function formatComponentSummaryTable(codeOwnerCountByComponent, componentPrStats) {
+function formatComponentSummaryTable(byCodeOwnerAndComponent, componentPrStats) {
+  const codeOwnerCountByComponent = {};
+  for (const [login, components] of Object.entries(byCodeOwnerAndComponent)) {
+    for (const component of Object.keys(components)) {
+      codeOwnerCountByComponent[component] = (codeOwnerCountByComponent[component] || 0) + 1;
+    }
+  }
   const rows = Object.entries(componentPrStats || {})
     .filter(([, v]) => v.prsTotal > 0)
     .map(([component, v]) => {
@@ -342,14 +346,6 @@ function formatComponentSummaryTable(codeOwnerCountByComponent, componentPrStats
   return `${header}\n${sep}\n${body}\n`;
 }
 
-function countCodeOwnersByComponent(labelToOwners) {
-  const counts = {};
-  for (const [component, owners] of Object.entries(labelToOwners)) {
-    counts[component] = owners.length;
-  }
-  return counts;
-}
-
 function collapsibleSection(title, content) {
   return `<details>
 <summary>${title}</summary>
@@ -358,7 +354,7 @@ ${content}
 </details>`;
 }
 
-function generateReport(prStats, componentPrStats, codeOwnerCountByComponent, lookbackData) {
+function generateReport(prStats, componentPrStats, lookbackData) {
   const startStr = lookbackData.periodStart.toISOString().slice(0, 10);
   const endStr = lookbackData.periodEnd.toISOString().slice(0, 10);
   const out = [
@@ -370,7 +366,7 @@ function generateReport(prStats, componentPrStats, codeOwnerCountByComponent, lo
     ``,
     `### Component PR review rate (${COMPONENT_TARGET_PCT}% target)`,
     ``,
-    formatComponentSummaryTable(codeOwnerCountByComponent, componentPrStats),
+    formatComponentSummaryTable(prStats, componentPrStats),
     ``,
     collapsibleSection('PRs (per code owner)', formatTable(prStats, 'PRs')),
   ];
@@ -381,7 +377,7 @@ async function createIssue(octokit, context, report, lookbackData) {
   const startStr = lookbackData.periodStart.toISOString().slice(0, 10);
   const endStr = lookbackData.periodEnd.toISOString().slice(0, 10);
   const title = `Code owner activity: ${startStr} – ${endStr} (inclusive start, exclusive end)`;
-  return octokit.issues.create({
+  return octokit.rest.issues.create({
     owner: context.payload.repository.owner.login,
     repo: REPO_NAME,
     title,
@@ -392,7 +388,7 @@ async function createIssue(octokit, context, report, lookbackData) {
 
 async function main({ github, context }) {
   debug({ msg: 'generate-codeowners-activity running' });
-  const octokit = github.rest;
+  const octokit = github;
   const lookbackData = genLookbackDates();
 
   const codeownersPath = path.join(process.cwd(), '.github', 'CODEOWNERS');
@@ -404,7 +400,6 @@ async function main({ github, context }) {
   const pathToOwners = parseCodeowners(codeownersPath);
   const { pathToLabel, allLabels } = parseComponentLabels(labelsPath);
   const labelToOwners = buildLabelToCodeOwners(pathToOwners, pathToLabel);
-  const codeOwnerCountByComponent = countCodeOwnersByComponent(labelToOwners);
   // Only consider PRs/issues that have at least one of the focus component labels
   const componentLabels = new Set([...allLabels].filter(isAllowedLabel));
 
@@ -413,7 +408,7 @@ async function main({ github, context }) {
 
   const { byCodeOwnerAndComponent: prStats, componentPrStats } = await computePrStats(octokit, prs30, labelToOwners, componentLabels, lookbackData.periodStart, lookbackData.periodEnd);
 
-  const report = generateReport(prStats, componentPrStats, codeOwnerCountByComponent, lookbackData);
+  const report = generateReport(prStats, componentPrStats, lookbackData);
 
   // Dry run: set DRY_RUN=true or DRY_RUN=1 to print the report without creating an issue.
   const dryRun = process.env.DRY_RUN === 'true' || process.env.DRY_RUN === '1';

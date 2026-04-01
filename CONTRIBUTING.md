@@ -295,7 +295,7 @@ If the contributor has not replied to maintainer communications after two weeks,
 
 #### Code Owners
 
-The OpenTelemetry community strives to foster and maintain a high-trust community. As a result, rules below are more discretionary than strictly procedural.
+The OpenTelemetry community strives to foster and maintain a high-trust community. As result, rules below are more discretionary than strictly procedural.
 
 It's highly encouraged for Code Owners who know they will be unavailable for a prolonged period of time (1+ months) to inform other Code Owners for their components in advance. If a Code Owner expects they may be unavailable for a long, undetermined period of time, they should consider moving themselves to emeritus status, and may request to be made active again once they can devote time to maintaining the component.
 

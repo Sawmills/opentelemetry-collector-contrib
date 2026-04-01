@@ -38,5 +38,5 @@ jobs:
         with:
           retries: 3
           script: |
-            const script = require('./.github/workflows/scripts/generate-codeowners-activity.js')
+            const script = require('.github/workflows/scripts/generate-codeowners-activity.js')
             await script({github, context})

@@ -265,15 +265,7 @@ lint: checklicense misspell
 
 .PHONY: govulncheck
 govulncheck:
-	@attempt=1; max=3; \
-	while true; do \
-		$(GOVULNCHECK) ./... && exit 0; \
-		status=$$?; \
-		if [ $$attempt -ge $$max ]; then exit $$status; fi; \
-		echo "govulncheck failed on attempt $$attempt/$$max, retrying..." >&2; \
-		attempt=$$((attempt + 1)); \
-		sleep $$((attempt * 5)); \
-	done
+	$(GOVULNCHECK) ./...
 
 .PHONY: modernize
 modernize:
@@ -358,4 +350,4 @@ FLAGS ?= '-o=$(CURDIR)/'
 .PHONY: schemagen
 schemagen:
 	@echo "Running schemagen with filepath='$(SRC)' and flags='$(FLAGS)'"
-	cd $(SRC_ROOT)/cmd/schemagen && $(GOCMD) run . $(FLAGS) $(SRC)
+	cd $(SRC_ROOT)/cmd/schemagen && go run . $(FLAGS) $(SRC)
