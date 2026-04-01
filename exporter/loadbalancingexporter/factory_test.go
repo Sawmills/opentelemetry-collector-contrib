@@ -155,7 +155,7 @@ func TestBuildLogsExporterConfigPreservesParentQueueCompressionAndBatcherSetting
 	cfg.LogBatcher.MaxBytes = 456
 	cfg.LogBatcher.FlushInterval = 789 * time.Millisecond
 	cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
-	cfg.QueueSettings.QueueBatchConfig.Enabled = true
+	cfg.QueueSettings.Enabled = true
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionZstd
 	cfg.QueueSettings.CompressInMemory = true
 
@@ -209,7 +209,7 @@ func TestBuildMetricsExporterConfigPreservesParentQueueCompression(t *testing.T)
 	cfg := createDefaultConfig().(*Config)
 	cfg.Enabled = true
 	cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
-	cfg.QueueSettings.QueueBatchConfig.Enabled = true
+	cfg.QueueSettings.Enabled = true
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionZstd
 	cfg.QueueSettings.CompressInMemory = true
 	cfg.Protocol.OTLP.QueueConfig = exporterhelper.NewDefaultQueueConfig()
