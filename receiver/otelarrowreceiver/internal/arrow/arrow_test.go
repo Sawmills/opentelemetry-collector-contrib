@@ -38,7 +38,9 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/mock/gomock"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
+	"go.uber.org/zap/zaptest/observer"
 	"golang.org/x/net/http2/hpack"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -438,6 +440,42 @@ func requireStatus(t *testing.T, code codes.Code, err error) {
 	status, ok := status.FromError(err)
 	require.True(t, ok, "is status-wrapped %v", err)
 	require.Equal(t, code, status.Code())
+}
+
+func TestRecoverErrIncludesSawmillsPanicContext(t *testing.T) {
+	core, logs := observer.New(zap.ErrorLevel)
+
+	telset := componenttest.NewNopTelemetrySettings()
+	telset.Logger = zap.New(core)
+
+	r := &Receiver{telemetry: telset}
+	ctx := client.NewContext(context.Background(), client.Info{
+		Metadata: client.NewMetadata(map[string][]string{
+			"org_id": {"acme"},
+		}),
+	})
+	records := &arrowpb.BatchArrowRecords{
+		BatchId: 42,
+		ArrowPayloads: []*arrowpb.ArrowPayload{
+			{Type: arrowpb.ArrowPayloadType_LOGS},
+		},
+	}
+
+	var err error
+	func() {
+		defer r.recoverErr(ctx, records, &err)
+		panic("boom")
+	}()
+
+	requireInternalStatus(t, err)
+
+	entries := logs.AllUntimed()
+	require.Len(t, entries, 1)
+	fields := entries[0].ContextMap()
+	require.Equal(t, "acme", fields["org_id"])
+	require.EqualValues(t, int64(42), fields["batch_id"])
+	require.Equal(t, "LOGS", fields["payload_type"])
+	require.Contains(t, fields["batch_data"], "\"batchId\":\"42\"")
 }
 
 func TestBoundedQueueLimits(t *testing.T) {

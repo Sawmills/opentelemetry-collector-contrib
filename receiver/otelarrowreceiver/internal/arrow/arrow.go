@@ -342,12 +342,30 @@ type batchResp struct {
 	err error
 }
 
-func (r *Receiver) recoverErr(retErr *error) {
+func (r *Receiver) recoverErr(ctx context.Context, records *arrowpb.BatchArrowRecords, retErr *error) {
 	if err := recover(); err != nil {
+		orgID := extractOrgID(ctx)
+		batchID := int64(0)
+		payloadType := "unknown"
+		batchJSON := ""
+
+		if records != nil {
+			batchID = records.GetBatchId()
+			payloads := records.GetArrowPayloads()
+			if len(payloads) > 0 {
+				payloadType = payloads[0].Type.String()
+			}
+			batchJSON = serializeBatchRecords(records)
+		}
+
 		// When this happens, the stacktrace is
 		// important and lost if we don't capture it
 		// here.
 		r.telemetry.Logger.Error("panic detail in otel-arrow-adapter",
+			zap.String("org_id", orgID),
+			zap.Int64("batch_id", batchID),
+			zap.String("payload_type", payloadType),
+			zap.String("batch_data", batchJSON),
 			zap.Reflect("recovered", err),
 			zap.Stack("stacktrace"),
 		)
@@ -364,7 +382,7 @@ func (r *Receiver) anyStream(serverStream anyStreamServer, sig signalType) (retE
 			r.telemetry.Logger.Error("arrow stream close", zap.Error(err))
 		}
 	}()
-	defer r.recoverErr(&retErr)
+	defer r.recoverErr(streamCtx, nil, &retErr)
 
 	// doneCancel allows an error in the sender/receiver to
 	// interrupt the corresponding thread.
@@ -394,7 +412,7 @@ func (r *Receiver) anyStream(serverStream anyStreamServer, sig signalType) (retE
 	go func() {
 		var err error
 		defer recvWG.Done()
-		defer r.recoverErr(&err)
+		defer r.recoverErr(doneCtx, nil, &err)
 		err = rstream.srvReceiveLoop(doneCtx, serverStream, pendingCh, sig, ac)
 		recvErrCh <- err
 	}()
@@ -402,7 +420,7 @@ func (r *Receiver) anyStream(serverStream anyStreamServer, sig signalType) (retE
 	go func() {
 		var err error
 		defer sendWG.Done()
-		defer r.recoverErr(&err)
+		defer r.recoverErr(flushCtx, nil, &err)
 		// the sender receives flushCtx, which is canceled after the
 		// receiver returns (success or no).
 		err = rstream.srvSendLoop(flushCtx, serverStream, &recvWG, pendingCh)
@@ -670,7 +688,7 @@ func (r *Receiver) consumeAndRespond(ctx, streamCtx context.Context, data any, f
 	// recoverErr is a special function because it recovers panics, so we
 	// keep it in a separate defer than the processing above, which will
 	// run after the panic is recovered into an ordinary error.
-	defer r.recoverErr(&err)
+	defer r.recoverErr(streamCtx, nil, &err)
 
 	err = r.consumeData(ctx, data, flight)
 }
