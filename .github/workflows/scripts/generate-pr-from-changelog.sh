@@ -105,15 +105,13 @@ main() {
             fi
         fi
 
-        if [[ -n "${COMPONENT}" ]]; then
-            COMPONENTS+=("${COMPONENT}")
+        if [[ -z "${NOTE}" ]]; then
+            continue
         fi
-        if [[ -n "${NOTE}" ]]; then
-            NOTES+=("${NOTE}")
-        fi
-        if [[ -n "${CHANGE_TYPE}" ]]; then
-            CHANGE_TYPES+=("${CHANGE_TYPE}")
-        fi
+
+        COMPONENTS+=("${COMPONENT}")
+        NOTES+=("${NOTE}")
+        CHANGE_TYPES+=("${CHANGE_TYPE}")
         if [[ -n "${ISSUES}" ]]; then
             # Split comma-separated issues
             IFS=',' read -ra ISSUE_ARRAY <<< "${ISSUES}"
