@@ -7,6 +7,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -111,6 +112,62 @@ func TestBuildExporterConfig(t *testing.T) {
 	assert.Equal(t, defaultCfg.TimeoutConfig, exporterCfg.TimeoutConfig)
 	assert.Equal(t, defaultCfg.QueueConfig, exporterCfg.QueueConfig)
 	assert.Equal(t, defaultCfg.RetryConfig, exporterCfg.RetryConfig)
+}
+
+func TestBuildLogsExporterConfigDisablesChildRetryAndQueueWhenLogBatcherOwnsReroute(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	cfg.LogBatcher.Enabled = true
+	cfg.Protocol.OTLP.QueueConfig = exporterhelper.NewDefaultQueueConfig()
+	cfg.Protocol.OTLP.QueueConfig.Enabled = true
+	cfg.Protocol.OTLP.QueueConfig.QueueSize = 321
+	cfg.Protocol.OTLP.RetryConfig = configretry.NewDefaultBackOffConfig()
+	cfg.Protocol.OTLP.RetryConfig.Enabled = true
+	cfg.Protocol.OTLP.RetryConfig.MaxElapsedTime = 42 * time.Second
+
+	exporterCfg := buildLogsExporterConfig(cfg, "the-endpoint")
+
+	assert.Equal(t, "the-endpoint", exporterCfg.ClientConfig.Endpoint)
+	assert.False(t, exporterCfg.QueueConfig.Enabled)
+	assert.False(t, exporterCfg.RetryConfig.Enabled)
+}
+
+func TestBuildLogsExporterConfigPreservesChildRetryAndQueueWithoutLogBatcher(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	cfg.Protocol.OTLP.QueueConfig = exporterhelper.NewDefaultQueueConfig()
+	cfg.Protocol.OTLP.QueueConfig.Enabled = true
+	cfg.Protocol.OTLP.QueueConfig.QueueSize = 321
+	cfg.Protocol.OTLP.RetryConfig = configretry.NewDefaultBackOffConfig()
+	cfg.Protocol.OTLP.RetryConfig.Enabled = true
+	cfg.Protocol.OTLP.RetryConfig.MaxElapsedTime = 42 * time.Second
+
+	exporterCfg := buildLogsExporterConfig(cfg, "the-endpoint")
+
+	assert.True(t, exporterCfg.QueueConfig.Enabled)
+	assert.EqualValues(t, 321, exporterCfg.QueueConfig.QueueSize)
+	assert.True(t, exporterCfg.RetryConfig.Enabled)
+	assert.Equal(t, 42*time.Second, exporterCfg.RetryConfig.MaxElapsedTime)
+}
+
+func TestBuildLogsExporterConfigPreservesParentQueueCompressionAndBatcherSettings(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	cfg.LogBatcher.Enabled = true
+	cfg.LogBatcher.MaxRecords = 123
+	cfg.LogBatcher.MaxBytes = 456
+	cfg.LogBatcher.FlushInterval = 789 * time.Millisecond
+	cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
+	cfg.QueueSettings.QueueBatchConfig.Enabled = true
+	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionZstd
+	cfg.QueueSettings.CompressInMemory = true
+
+	exporterCfg := buildLogsExporterConfig(cfg, "the-endpoint")
+
+	assert.False(t, exporterCfg.QueueConfig.Enabled)
+	assert.Equal(t, QueuePayloadCompressionZstd, cfg.QueueSettings.PayloadCompression)
+	assert.True(t, cfg.QueueSettings.CompressInMemory)
+	assert.True(t, cfg.LogBatcher.Enabled)
+	assert.Equal(t, 123, cfg.LogBatcher.MaxRecords)
+	assert.Equal(t, 456, cfg.LogBatcher.MaxBytes)
+	assert.Equal(t, 789*time.Millisecond, cfg.LogBatcher.FlushInterval)
 }
 
 func TestBuildExporterSettings(t *testing.T) {

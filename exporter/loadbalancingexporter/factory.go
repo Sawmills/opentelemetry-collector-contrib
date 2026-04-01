@@ -72,6 +72,16 @@ func buildExporterConfig(cfg *Config, endpoint string) otlpexporter.Config {
 	return oCfg
 }
 
+func buildLogsExporterConfig(cfg *Config, endpoint string) otlpexporter.Config {
+	oCfg := buildExporterConfig(cfg, endpoint)
+	if cfg.LogBatcher.Enabled {
+		oCfg.QueueConfig.Enabled = false
+		oCfg.RetryConfig.Enabled = false
+	}
+
+	return oCfg
+}
+
 func buildExporterSettings(typ component.Type, params exporter.Settings, endpoint string) exporter.Settings {
 	if name := params.ID.Name(); name != "" {
 		params.ID = component.NewIDWithName(typ, name)
