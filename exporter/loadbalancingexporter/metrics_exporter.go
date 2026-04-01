@@ -45,7 +45,7 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 	}
 	exporterFactory := otlpexporter.NewFactory()
 	cfFunc := func(ctx context.Context, endpoint string) (component.Component, error) {
-		oCfg := buildExporterConfig(cfg.(*Config), endpoint)
+		oCfg := buildMetricsExporterConfig(cfg.(*Config), endpoint)
 		oParams := buildExporterSettings(exporterFactory.Type(), params, endpoint)
 
 		return exporterFactory.CreateMetrics(ctx, oParams, &oCfg)

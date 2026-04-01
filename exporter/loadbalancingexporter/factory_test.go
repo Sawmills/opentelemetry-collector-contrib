@@ -155,7 +155,7 @@ func TestBuildLogsExporterConfigPreservesParentQueueCompressionAndBatcherSetting
 	cfg.LogBatcher.MaxBytes = 456
 	cfg.LogBatcher.FlushInterval = 789 * time.Millisecond
 	cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
-	cfg.QueueSettings.QueueBatchConfig.Enabled = true
+	cfg.QueueSettings.Enabled = true
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionZstd
 	cfg.QueueSettings.CompressInMemory = true
 
@@ -168,6 +168,61 @@ func TestBuildLogsExporterConfigPreservesParentQueueCompressionAndBatcherSetting
 	assert.Equal(t, 123, cfg.LogBatcher.MaxRecords)
 	assert.Equal(t, 456, cfg.LogBatcher.MaxBytes)
 	assert.Equal(t, 789*time.Millisecond, cfg.LogBatcher.FlushInterval)
+}
+
+func TestBuildMetricsExporterConfigDisablesChildRetryAndQueueWhenParentRetryOwnsReroute(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	cfg.Enabled = true
+	cfg.Protocol.OTLP.QueueConfig = exporterhelper.NewDefaultQueueConfig()
+	cfg.Protocol.OTLP.QueueConfig.Enabled = true
+	cfg.Protocol.OTLP.QueueConfig.QueueSize = 321
+	cfg.Protocol.OTLP.RetryConfig = configretry.NewDefaultBackOffConfig()
+	cfg.Protocol.OTLP.RetryConfig.Enabled = true
+	cfg.Protocol.OTLP.RetryConfig.MaxElapsedTime = 42 * time.Second
+
+	exporterCfg := buildMetricsExporterConfig(cfg, "the-endpoint")
+
+	assert.Equal(t, "the-endpoint", exporterCfg.ClientConfig.Endpoint)
+	assert.False(t, exporterCfg.QueueConfig.Enabled)
+	assert.False(t, exporterCfg.RetryConfig.Enabled)
+}
+
+func TestBuildMetricsExporterConfigPreservesChildRetryAndQueueWithoutParentRetry(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	cfg.Enabled = false
+	cfg.Protocol.OTLP.QueueConfig = exporterhelper.NewDefaultQueueConfig()
+	cfg.Protocol.OTLP.QueueConfig.Enabled = true
+	cfg.Protocol.OTLP.QueueConfig.QueueSize = 321
+	cfg.Protocol.OTLP.RetryConfig = configretry.NewDefaultBackOffConfig()
+	cfg.Protocol.OTLP.RetryConfig.Enabled = true
+	cfg.Protocol.OTLP.RetryConfig.MaxElapsedTime = 42 * time.Second
+
+	exporterCfg := buildMetricsExporterConfig(cfg, "the-endpoint")
+
+	assert.True(t, exporterCfg.QueueConfig.Enabled)
+	assert.EqualValues(t, 321, exporterCfg.QueueConfig.QueueSize)
+	assert.True(t, exporterCfg.RetryConfig.Enabled)
+	assert.Equal(t, 42*time.Second, exporterCfg.RetryConfig.MaxElapsedTime)
+}
+
+func TestBuildMetricsExporterConfigPreservesParentQueueCompression(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	cfg.Enabled = true
+	cfg.QueueSettings.QueueBatchConfig = exporterhelper.NewDefaultQueueConfig()
+	cfg.QueueSettings.Enabled = true
+	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionZstd
+	cfg.QueueSettings.CompressInMemory = true
+	cfg.Protocol.OTLP.QueueConfig = exporterhelper.NewDefaultQueueConfig()
+	cfg.Protocol.OTLP.QueueConfig.Enabled = true
+	cfg.Protocol.OTLP.RetryConfig = configretry.NewDefaultBackOffConfig()
+	cfg.Protocol.OTLP.RetryConfig.Enabled = true
+
+	exporterCfg := buildMetricsExporterConfig(cfg, "the-endpoint")
+
+	assert.False(t, exporterCfg.QueueConfig.Enabled)
+	assert.False(t, exporterCfg.RetryConfig.Enabled)
+	assert.Equal(t, QueuePayloadCompressionZstd, cfg.QueueSettings.PayloadCompression)
+	assert.True(t, cfg.QueueSettings.CompressInMemory)
 }
 
 func TestBuildExporterSettings(t *testing.T) {
