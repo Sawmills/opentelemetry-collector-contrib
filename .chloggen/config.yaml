@@ -50,6 +50,7 @@ components:
     - exporter/faro
     - exporter/file
     - exporter/google_cloud_storage
+    - exporter/google_secops
     - exporter/googlecloud
     - exporter/googlecloudpubsub
     - exporter/googlemanagedprometheus
@@ -153,6 +154,7 @@ components:
     - pkg/coreinternal
     - pkg/datadog
     - pkg/experimentalmetricmetadata
+    - pkg/expohisto
     - pkg/faro
     - pkg/fileconsumer
     - pkg/golden
@@ -163,6 +165,7 @@ components:
     - pkg/pdatautil
     - pkg/resourcetotelemetry
     - pkg/sampling
+    - pkg/skywalking
     - pkg/stanza
     - pkg/stanza/operator/input/journald
     - pkg/status
@@ -174,7 +177,6 @@ components:
     - pkg/translator/prometheus
     - pkg/translator/prometheusremotewrite
     - pkg/translator/signalfx
-    - pkg/translator/skywalking
     - pkg/translator/splunk
     - pkg/winperfcounters
     - pkg/xk8stest
@@ -197,6 +199,7 @@ components:
     - processor/groupbytrace
     - processor/hetznerdetector
     - processor/hotreloadprocessor
+    - processor/ibmcloudclassicdetector
     - processor/ibmcloudvpcdetector
     - processor/interval
     - processor/isolationforest
@@ -257,7 +260,7 @@ components:
     - receiver/envoyals
     - receiver/expvar
     - receiver/faro
-    - receiver/filelog
+    - receiver/file_log
     - receiver/filestats
     - receiver/flinkmetrics
     - receiver/fluentforward

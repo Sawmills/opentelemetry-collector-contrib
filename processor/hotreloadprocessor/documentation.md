@@ -16,9 +16,9 @@ Refresh interval of the hotreloadprocessor
 
 #### Attributes
 
-| Name | Description | Values |
-| ---- | ----------- | ------ |
-| destination | The destination of the hotreloadprocessor | Any Str |
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| destination | The destination of the hotreloadprocessor | Any Str | - |
 
 ### otelcol_processor_hot_reload_config_shutdown_delay
 
@@ -30,9 +30,9 @@ Shutdown delay of the hotreloadprocessor
 
 #### Attributes
 
-| Name | Description | Values |
-| ---- | ----------- | ------ |
-| destination | The destination of the hotreloadprocessor | Any Str |
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| destination | The destination of the hotreloadprocessor | Any Str | - |
 
 ### otelcol_processor_hot_reload_newest_file_failed_timestamp
 
@@ -44,11 +44,11 @@ The timestamp of the newest file failed to load by the hotreloadprocessor in sec
 
 #### Attributes
 
-| Name | Description | Values |
-| ---- | ----------- | ------ |
-| destination | The destination of the hotreloadprocessor | Any Str |
-| key | The key of the file being scanned | Any Str |
-| reason | The reason for the error | Any Str |
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| destination | The destination of the hotreloadprocessor | Any Str | - |
+| key | The key of the file being scanned | Any Str | - |
+| reason | The reason for the error | Any Str | - |
 
 ### otelcol_processor_hot_reload_newest_file_success_timestamp
 
@@ -60,10 +60,10 @@ The timestamp of the newest file successfully loaded by the hotreloadprocessor i
 
 #### Attributes
 
-| Name | Description | Values |
-| ---- | ----------- | ------ |
-| destination | The destination of the hotreloadprocessor | Any Str |
-| key | The key of the file being scanned | Any Str |
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| destination | The destination of the hotreloadprocessor | Any Str | - |
+| key | The key of the file being scanned | Any Str | - |
 
 ### otelcol_processor_hot_reload_process_duration
 
@@ -91,11 +91,11 @@ The timestamp of the rollback file successfully loaded by the hotreloadprocessor
 
 #### Attributes
 
-| Name | Description | Values |
-| ---- | ----------- | ------ |
-| destination | The destination of the hotreloadprocessor | Any Str |
-| key | The key of the file being scanned | Any Str |
-| reason | The reason for the error | Any Str |
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| destination | The destination of the hotreloadprocessor | Any Str | - |
+| key | The key of the file being scanned | Any Str | - |
+| reason | The reason for the error | Any Str | - |
 
 ### otelcol_processor_hot_reload_running_processors_count
 
@@ -107,9 +107,9 @@ Number of running processors in the hotreloadprocessor
 
 #### Attributes
 
-| Name | Description | Values |
-| ---- | ----------- | ------ |
-| destination | The destination of the hotreloadprocessor | Any Str |
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| destination | The destination of the hotreloadprocessor | Any Str | - |
 
 ### otelcol_processor_hot_reload_scan
 
@@ -121,6 +121,6 @@ Number of scanned prefixes by the hotreloadprocessor
 
 #### Attributes
 
-| Name | Description | Values |
-| ---- | ----------- | ------ |
-| prefix | The prefix of the file being scanned | Any Str |
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| prefix | The prefix of the file being scanned | Any Str | - |

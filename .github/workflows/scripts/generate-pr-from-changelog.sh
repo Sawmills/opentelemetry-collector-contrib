@@ -10,21 +10,13 @@
 #   REPO    - The GitHub repository (e.g. "open-telemetry/opentelemetry-collector-contrib")
 #   PR      - The PR number
 #   PR_HEAD - The HEAD SHA of the PR
-#   PR_BASE_REF - The base branch ref of the PR
 
 set -euo pipefail
 
-if [[ -z "${REPO:-}" || -z "${PR:-}" || -z "${PR_HEAD:-}" || -z "${PR_BASE_REF:-}" || -z "${PR_TITLE:-}" ]]; then
-    echo "One or more of REPO, PR, PR_HEAD, PR_BASE_REF, and PR_TITLE have not been set, please ensure each is set."
+if [[ -z "${REPO:-}" || -z "${PR:-}" || -z "${PR_HEAD:-}" ]]; then
+    echo "One or more of REPO, PR, and PR_HEAD have not been set, please ensure each is set."
     exit 0
 fi
-
-shopt -s nocasematch
-if [[ ! "${PR_TITLE}" =~ as\ per\ (changelog|chloggen) ]]; then
-    echo "PR title does not request changelog-based generation, exiting."
-    exit 0
-fi
-shopt -u nocasematch
 
 # Map change_type values to human-readable prefixes
 change_type_label() {
@@ -42,10 +34,9 @@ main() {
     # Fetch the PR head ref so the commit is available locally for git diff
     # (pull_request_target only checks out the base branch).
     git fetch origin "refs/pull/${PR}/head"
-    git fetch origin "${PR_BASE_REF}"
 
     # Find changelog YAML files added in this PR (excluding TEMPLATE.yaml, config.yaml)
-    ADDED_FILES=$(git diff --diff-filter=A --name-only "$(git merge-base "origin/${PR_BASE_REF}" "${PR_HEAD}")" "${PR_HEAD}" ./.chloggen/ \
+    ADDED_FILES=$(git diff --diff-filter=A --name-only "$(git merge-base origin/main "${PR_HEAD}")" "${PR_HEAD}" ./.chloggen/ \
         | grep -E '\.yaml$' \
         | grep -v 'TEMPLATE\.yaml' \
         | grep -v 'config\.yaml' \
@@ -118,11 +109,7 @@ main() {
             continue
         fi
 
-        COMPONENT_FOR_BODY="${COMPONENT}"
-        if [[ -z "${COMPONENT_FOR_BODY}" ]]; then
-            COMPONENT_FOR_BODY="unknown"
-        fi
-        COMPONENTS+=("${COMPONENT_FOR_BODY}")
+        COMPONENTS+=("${COMPONENT}")
         NOTES+=("${NOTE}")
         CHANGE_TYPES+=("${CHANGE_TYPE}")
         if [[ -n "${ISSUES}" ]]; then
@@ -150,7 +137,7 @@ main() {
     # Format: [component1, component2] first note (+N more) (for multiple entries)
 
     # Deduplicate components
-    mapfile -t UNIQUE_COMPONENTS < <(printf '%s\n' "${COMPONENTS[@]}" | awk '$0 != "unknown" && NF' | sort -u)
+    mapfile -t UNIQUE_COMPONENTS < <(printf '%s\n' "${COMPONENTS[@]}" | awk 'NF' | sort -u)
     COMPONENT_PREFIX=""
     if [[ ${#UNIQUE_COMPONENTS[@]} -gt 0 ]]; then
         COMPONENT_PREFIX="[$(IFS=', '; echo "${UNIQUE_COMPONENTS[*]}")] "
