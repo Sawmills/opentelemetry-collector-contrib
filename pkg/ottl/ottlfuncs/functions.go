@@ -5,6 +5,7 @@ package ottlfuncs // import "github.com/open-telemetry/opentelemetry-collector-c
 
 import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/sawmillsfuncs"
 )
 
 // StandardFuncs is a helper function to provide quick access to all functions (editors and converters) in this package
@@ -135,5 +136,12 @@ func converters[K any]() []ottl.Factory[K] {
 		NewXXH3Factory[K](),
 		NewXXH128Factory[K](),
 		NewIsInCIDRFactory[K](),
+		sawmillsfuncs.NewDdStatusRemapperFactory[K](),
+		sawmillsfuncs.NewContainsFactory[K](),
+		sawmillsfuncs.NewEndsWithFactory[K](),
+		sawmillsfuncs.NewStartsWithFactory[K](),
+		sawmillsfuncs.NewIsInRangeFactory[K](),
+		sawmillsfuncs.NewSplitMetricFactory[K](),
+		sawmillsfuncs.NewFromContextFactory[K](),
 	}
 }
