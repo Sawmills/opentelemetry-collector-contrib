@@ -55,8 +55,8 @@ function progress(msg) {
  * - periodStart: midnight UTC at the start of the day that was 35 days ago (inclusive).
  * - periodEnd: midnight UTC at the start of the day that was 5 days ago (exclusive: we include
  *   created_at < periodEnd only, so the last full day included is 6 days ago).
- * filterOnDateRange uses createdAt >= periodStart && createdAt <= periodEnd, so the end date
- * in the report is exclusive (PRs created on the end date after 00:00:00 are excluded).
+ * filterOnDateRange uses createdAt >= periodStart && createdAt < periodEnd, so the end date
+ * in the report is exclusive (PRs created on the end date are excluded).
  */
 function genLookbackDates() {
   const now = new Date();
@@ -79,7 +79,7 @@ function genLookbackDates() {
 
 function filterOnDateRange({ created_at, periodStart, periodEnd }) {
   const createdAt = new Date(created_at);
-  return createdAt >= periodStart && createdAt <= periodEnd;
+  return createdAt >= periodStart && createdAt < periodEnd;
 }
 
 /**
@@ -152,7 +152,7 @@ async function searchIssuesAndPrs(octokit, query, periodStart, periodEnd) {
   const perPage = 100;
   while (true) {
     progress(`Search API: page ${page}...`);
-    const { data } = await octokit.search.issuesAndPullRequests({
+    const { data } = await octokit.rest.search.issuesAndPullRequests({
       q,
       per_page: perPage,
       page,
@@ -182,9 +182,9 @@ async function getReviewAndRequestedLogins(octokit, owner, repo, prNumber) {
   let draft = false;
   try {
     const [prData, reviews, comments] = await Promise.all([
-      octokit.pulls.get({ owner, repo, pull_number: prNumber }).then(({ data }) => data),
-      octokit.paginate(octokit.pulls.listReviews, { owner, repo, pull_number: prNumber }),
-      octokit.paginate(octokit.issues.listComments, { owner, repo, issue_number: prNumber }),
+      octokit.rest.pulls.get({ owner, repo, pull_number: prNumber }).then(({ data }) => data),
+      octokit.paginate(octokit.rest.pulls.listReviews, { owner, repo, pull_number: prNumber }),
+      octokit.paginate(octokit.rest.issues.listComments, { owner, repo, issue_number: prNumber }),
     ]);
     draft = prData.draft === true;
     for (const r of prData.requested_reviewers || []) {
@@ -377,7 +377,7 @@ async function createIssue(octokit, context, report, lookbackData) {
   const startStr = lookbackData.periodStart.toISOString().slice(0, 10);
   const endStr = lookbackData.periodEnd.toISOString().slice(0, 10);
   const title = `Code owner activity: ${startStr} – ${endStr} (inclusive start, exclusive end)`;
-  return octokit.issues.create({
+  return octokit.rest.issues.create({
     owner: context.payload.repository.owner.login,
     repo: REPO_NAME,
     title,
@@ -388,7 +388,7 @@ async function createIssue(octokit, context, report, lookbackData) {
 
 async function main({ github, context }) {
   debug({ msg: 'generate-codeowners-activity running' });
-  const octokit = github.rest;
+  const octokit = github;
   const lookbackData = genLookbackDates();
 
   const codeownersPath = path.join(process.cwd(), '.github', 'CODEOWNERS');

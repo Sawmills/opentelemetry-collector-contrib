@@ -36,7 +36,8 @@ jobs:
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
-      - run: ./.github/workflows/scripts/check-disk-space.sh
+      - shell: bash
+        run: ./.github/workflows/scripts/check-disk-space.sh
 
   windows-smoke-build:
     needs: [setup-environment]
@@ -54,7 +55,8 @@ jobs:
         run: make genotelcontribcol
       - name: Build Collector
         run: make otelcontribcol
-      - run: ./.github/workflows/scripts/check-disk-space.sh
+      - shell: bash
+        run: ./.github/workflows/scripts/check-disk-space.sh
 
   windows-unittest-matrix:
     needs: [setup-environment]
@@ -128,7 +130,8 @@ jobs:
           else
             echo "Tests passed or were skipped. Continuing."
           fi
-      - run: ./.github/workflows/scripts/check-disk-space.sh
+      - shell: bash
+        run: ./.github/workflows/scripts/check-disk-space.sh
   windows-unittest:
     if: ${{ github.actor != 'dependabot[bot]' && (contains(github.event.pull_request.labels.*.name, 'Run Windows') || github.event_name == 'push' || github.event_name == 'merge_group') }}
     runs-on: windows-latest
