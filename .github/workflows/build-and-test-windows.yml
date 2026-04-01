@@ -37,7 +37,6 @@ jobs:
         with:
           go-version: oldstable
       - run: ./.github/workflows/scripts/check-disk-space.sh
-        shell: bash
 
   windows-smoke-build:
     needs: [setup-environment]
@@ -56,7 +55,6 @@ jobs:
       - name: Build Collector
         run: make otelcontribcol
       - run: ./.github/workflows/scripts/check-disk-space.sh
-        shell: bash
 
   windows-unittest-matrix:
     needs: [setup-environment]
@@ -131,7 +129,6 @@ jobs:
             echo "Tests passed or were skipped. Continuing."
           fi
       - run: ./.github/workflows/scripts/check-disk-space.sh
-        shell: bash
   windows-unittest:
     if: ${{ github.actor != 'dependabot[bot]' && (contains(github.event.pull_request.labels.*.name, 'Run Windows') || github.event_name == 'push' || github.event_name == 'merge_group') }}
     runs-on: windows-latest
@@ -163,7 +160,7 @@ jobs:
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
-      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           merge-multiple: true
           pattern: test-results-windows-${{ matrix.os }}-*
@@ -174,4 +171,3 @@ jobs:
         run: |
           go tool -modfile=./internal/tools/go.mod go.opentelemetry.io/build-tools/issuegenerator -path ./internal/tools/testresults/ -labels "flaky tests,needs triage"
       - run: ./.github/workflows/scripts/check-disk-space.sh
-        shell: bash

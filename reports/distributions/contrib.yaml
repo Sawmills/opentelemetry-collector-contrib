@@ -77,13 +77,13 @@ components:
         - docker_observer
         - ecs_observer
         - file_storage
+        - inmemorystorage
         - google_cloud_logentry_encoding
         - googleclientauth
         - headers_setter
         - health_check
         - host_observer
         - http_forwarder
-        - inmemorystorage
         - jaeger_encoding
         - jaegerremotesampling
         - json_log_encoding
@@ -160,7 +160,7 @@ components:
         - envoyals
         - expvar
         - faro
-        - filelog
+        - file_log
         - filestats
         - flinkmetrics
         - fluentforward

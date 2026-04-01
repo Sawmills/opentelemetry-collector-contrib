@@ -17,7 +17,7 @@ jobs:
       issues: write # required for creating and managing issue labels
       pull-requests: write # required for creating and managing PR labels
     runs-on: ubuntu-24.04
-    if: ${{ github.repository_owner == 'open-telemetry' || github.repository_owner == 'Sawmills' }}
+    if: ${{ github.repository_owner == 'open-telemetry' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
@@ -25,3 +25,4 @@ jobs:
         run: ./.github/workflows/scripts/generate-component-labels.sh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

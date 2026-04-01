@@ -6,7 +6,6 @@
 declare BASELINE_SPACE
 
 free_space=$(df -BM --output=avail / | sed '1d;s/[^0-9]//g')
-BASELINE_SPACE=${BASELINE_SPACE:-$free_space}
 used_space=$((BASELINE_SPACE - free_space))
 echo "Job used $used_space MiB of disk space, $free_space MiB remain."
 if [ "$used_space" -gt 14336 ]; then
