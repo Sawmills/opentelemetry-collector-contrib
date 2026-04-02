@@ -5,12 +5,12 @@ package elasticsearchexporter
 
 import "net/http"
 
-// OpenSearchCompatibleTransport spoofs the header Elasticsearch clients expect.
-type OpenSearchCompatibleTransport struct {
+// openSearchCompatibleTransport spoofs the header Elasticsearch clients expect.
+type openSearchCompatibleTransport struct {
 	Transport http.RoundTripper
 }
 
-func (t *OpenSearchCompatibleTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (t *openSearchCompatibleTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	base := t.Transport
 	if base == nil {
 		base = http.DefaultTransport

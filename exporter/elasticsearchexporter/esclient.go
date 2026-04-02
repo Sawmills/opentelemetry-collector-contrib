@@ -253,7 +253,7 @@ func newElasticsearchClient(
 
 		DiscoverNodesInterval: config.Discovery.Interval,
 
-		Transport: &OpenSearchCompatibleTransport{Transport: httpClient.Transport},
+		Transport: &openSearchCompatibleTransport{Transport: httpClient.Transport},
 		Logger:    esLogger,
 		Instrumentation: elastictransport.NewOtelInstrumentation(
 			telemetry.TracerProvider,

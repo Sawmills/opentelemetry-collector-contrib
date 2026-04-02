@@ -23,7 +23,7 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func TestOpenSearchCompatibleTransport_AddsProductHeader(t *testing.T) {
 	t.Run("adds missing header", func(t *testing.T) {
-		transport := &OpenSearchCompatibleTransport{
+		transport := &openSearchCompatibleTransport{
 			Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 				return &http.Response{
 					StatusCode: http.StatusOK,
@@ -44,7 +44,7 @@ func TestOpenSearchCompatibleTransport_AddsProductHeader(t *testing.T) {
 	})
 
 	t.Run("preserves existing header", func(t *testing.T) {
-		transport := &OpenSearchCompatibleTransport{
+		transport := &openSearchCompatibleTransport{
 			Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 				return &http.Response{
 					StatusCode: http.StatusOK,
@@ -68,7 +68,7 @@ func TestOpenSearchCompatibleTransport_AddsProductHeader(t *testing.T) {
 
 	t.Run("propagates underlying error", func(t *testing.T) {
 		wantErr := errors.New("boom")
-		transport := &OpenSearchCompatibleTransport{
+		transport := &openSearchCompatibleTransport{
 			Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 				return nil, wantErr
 			}),
@@ -83,7 +83,7 @@ func TestOpenSearchCompatibleTransport_AddsProductHeader(t *testing.T) {
 	})
 
 	t.Run("initializes nil response headers", func(t *testing.T) {
-		transport := &OpenSearchCompatibleTransport{
+		transport := &openSearchCompatibleTransport{
 			Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 				return &http.Response{
 					StatusCode: http.StatusOK,
@@ -109,7 +109,7 @@ func TestOpenSearchCompatibleTransport_AddsProductHeader(t *testing.T) {
 		}))
 		defer server.Close()
 
-		transport := &OpenSearchCompatibleTransport{}
+		transport := &openSearchCompatibleTransport{}
 		req, err := http.NewRequest(http.MethodGet, server.URL, http.NoBody)
 		require.NoError(t, err)
 
