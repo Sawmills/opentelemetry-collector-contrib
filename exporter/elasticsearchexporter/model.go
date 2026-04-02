@@ -269,6 +269,31 @@ func (ecsModeEncoder) encodeLog(
 	return document.Serialize(buf, true, logProtectedFields)
 }
 
+func mergeMapsByPriority(second pcommon.Map, first pcommon.Map) pcommon.Map {
+	merged := pcommon.NewMap()
+	second.CopyTo(merged)
+	first.Range(func(k string, v pcommon.Value) bool {
+		switch v.Type() {
+		case pcommon.ValueTypeStr:
+			merged.PutStr(k, v.Str())
+		case pcommon.ValueTypeInt:
+			merged.PutInt(k, v.Int())
+		case pcommon.ValueTypeDouble:
+			merged.PutDouble(k, v.Double())
+		case pcommon.ValueTypeBool:
+			merged.PutBool(k, v.Bool())
+		case pcommon.ValueTypeMap:
+			v.Map().CopyTo(merged.PutEmptyMap(k))
+		case pcommon.ValueTypeSlice:
+			v.Slice().CopyTo(merged.PutEmptySlice(k))
+		case pcommon.ValueTypeBytes:
+			merged.PutEmptyBytes(k).FromRaw(v.Bytes().AsRaw())
+		}
+		return true
+	})
+	return merged
+}
+
 func (ecsModeEncoder) encodeSpan(
 	ec encodingContext,
 	span ptrace.Span,
