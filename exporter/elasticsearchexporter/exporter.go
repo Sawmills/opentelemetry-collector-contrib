@@ -95,7 +95,41 @@ func (e *elasticsearchExporter) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+func preprocessLogsForSawmills(ld plog.Logs) plog.Logs {
+	mutableLogs := plog.NewLogs()
+	ld.CopyTo(mutableLogs)
+
+	for _, resourceLogs := range mutableLogs.ResourceLogs().All() {
+		stripSawmillsServiceAttribute(resourceLogs.Resource().Attributes())
+		for _, scopeLogs := range resourceLogs.ScopeLogs().All() {
+			for _, logRecord := range scopeLogs.LogRecords().All() {
+				stripSawmillsServiceAttribute(logRecord.Attributes())
+			}
+		}
+	}
+
+	return mutableLogs
+}
+
+func mergeBodyMapIntoLogAttributes(record plog.LogRecord) {
+	if record.Body().Type() != pcommon.ValueTypeMap {
+		return
+	}
+	merged := mergeMapsByPriority(record.Body().Map(), record.Attributes())
+	merged.CopyTo(record.Attributes())
+}
+
+func stripSawmillsServiceAttribute(attrs pcommon.Map) {
+	value, ok := attrs.Get("sawmills")
+	if !ok || value.Type() != pcommon.ValueTypeMap {
+		return
+	}
+	value.Map().Remove("service")
+}
+
 func (e *elasticsearchExporter) pushLogsData(ctx context.Context, ld plog.Logs) error {
+	ld = preprocessLogsForSawmills(ld)
+
 	defaultMappingMode, err := e.getRequestMappingMode(ctx)
 	if err != nil {
 		return err
@@ -124,6 +158,9 @@ func (e *elasticsearchExporter) pushLogsData(ctx context.Context, ld plog.Logs) 
 			}
 
 			for _, lr := range ill.LogRecords().All() {
+				if mappingMode != MappingOTel {
+					mergeBodyMapIntoLogAttributes(lr)
+				}
 				if err := e.pushLogRecord(ctx, router, encoder, ec, lr, session); err != nil {
 					if cerr := ctx.Err(); cerr != nil {
 						return cerr
