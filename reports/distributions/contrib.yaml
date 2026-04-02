@@ -83,6 +83,7 @@ components:
         - health_check
         - host_observer
         - http_forwarder
+        - inmemorystorage
         - jaeger_encoding
         - jaegerremotesampling
         - json_log_encoding
@@ -112,6 +113,7 @@ components:
         - isolationforest
         - k8s_attributes
         - logdedup
+        - logstometricsprocessor
         - metric_start_time
         - metricsgeneration
         - metricstransform

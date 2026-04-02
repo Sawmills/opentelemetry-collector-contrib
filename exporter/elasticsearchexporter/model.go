@@ -269,6 +269,56 @@ func (ecsModeEncoder) encodeLog(
 	return document.Serialize(buf, true, logProtectedFields)
 }
 
+func mergeMapsByPriority(lowerPriority, higherPriority pcommon.Map) pcommon.Map {
+	merged := pcommon.NewMap()
+	lowerPriority.Range(func(k string, v pcommon.Value) bool {
+		if _, exists := higherPriority.Get(k); exists {
+			return true
+		}
+		if _, allowlisted := logRecordAttrsConversionMap[k]; !allowlisted {
+			return true
+		}
+		switch v.Type() {
+		case pcommon.ValueTypeStr:
+			merged.PutStr(k, v.Str())
+		case pcommon.ValueTypeInt:
+			merged.PutInt(k, v.Int())
+		case pcommon.ValueTypeDouble:
+			merged.PutDouble(k, v.Double())
+		case pcommon.ValueTypeBool:
+			merged.PutBool(k, v.Bool())
+		case pcommon.ValueTypeBytes:
+			merged.PutEmptyBytes(k).FromRaw(v.Bytes().AsRaw())
+		case pcommon.ValueTypeEmpty, pcommon.ValueTypeMap, pcommon.ValueTypeSlice:
+			// Skip lower-priority complex values so body object trees do not become
+			// indexed Elasticsearch field explosions when merged into attributes.
+		}
+		return true
+	})
+	higherPriority.Range(func(k string, v pcommon.Value) bool {
+		switch v.Type() {
+		case pcommon.ValueTypeStr:
+			merged.PutStr(k, v.Str())
+		case pcommon.ValueTypeInt:
+			merged.PutInt(k, v.Int())
+		case pcommon.ValueTypeDouble:
+			merged.PutDouble(k, v.Double())
+		case pcommon.ValueTypeBool:
+			merged.PutBool(k, v.Bool())
+		case pcommon.ValueTypeMap:
+			v.Map().CopyTo(merged.PutEmptyMap(k))
+		case pcommon.ValueTypeSlice:
+			v.Slice().CopyTo(merged.PutEmptySlice(k))
+		case pcommon.ValueTypeBytes:
+			merged.PutEmptyBytes(k).FromRaw(v.Bytes().AsRaw())
+		case pcommon.ValueTypeEmpty:
+			// Do not add empty values.
+		}
+		return true
+	})
+	return merged
+}
+
 func (ecsModeEncoder) encodeSpan(
 	ec encodingContext,
 	span ptrace.Span,

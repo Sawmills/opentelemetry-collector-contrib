@@ -24,25 +24,7 @@ func Test_createSetSemconvSpanNameFunction_parameterChecks(t *testing.T) {
 		wantError                 bool
 	}{
 		{
-			name:                      "valid semconv version 1.40.0 and original span name attribute",
-			semconvVersion:            "1.40.0",
-			originalSpanNameAttribute: ottl.NewTestingOptional("original_span_name"),
-			wantError:                 false,
-		},
-		{
-			name:                      "valid semconv version 1.39.0 and original span name attribute",
-			semconvVersion:            "1.39.0",
-			originalSpanNameAttribute: ottl.NewTestingOptional("original_span_name"),
-			wantError:                 false,
-		},
-		{
-			name:                      "valid semconv version 1.38.0 and original span name attribute",
-			semconvVersion:            "1.38.0",
-			originalSpanNameAttribute: ottl.NewTestingOptional("original_span_name"),
-			wantError:                 false,
-		},
-		{
-			name:                      "valid semconv version 1.37.0 and original span name attribute",
+			name:                      "valid semconv version and original span name attribute",
 			semconvVersion:            "1.37.0",
 			originalSpanNameAttribute: ottl.NewTestingOptional("original_span_name"),
 			wantError:                 false,
@@ -60,8 +42,8 @@ func Test_createSetSemconvSpanNameFunction_parameterChecks(t *testing.T) {
 			wantError:                 true,
 		},
 		{
-			name:                      "unsupported semconv version and valid original span name attribute",
-			semconvVersion:            "1.36.0",
+			name:                      "invalid semconv version and valid original span name attribute",
+			semconvVersion:            "1.38.0",
 			originalSpanNameAttribute: ottl.NewTestingOptional("original_span_name"),
 			wantError:                 true,
 		},
@@ -300,6 +282,7 @@ VALUES (@p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16);
 			},
 			want: "oteldemo.AdService/GetAds",
 		},
+
 		// MESSAGING - KAFKA
 		{
 			name:                   "Messaging OTel Demo - accounting - ",
@@ -498,7 +481,7 @@ VALUES (@p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16);
 			tt.addAttributes(span.Attributes())
 
 			setSemconvNameFunction, err := createSetSemconvSpanNameFunction(ottl.FunctionContext{}, &setSemconvSpanNameArguments{
-				SemconvVersion:            maxKnownSemConvVersion.String(),
+				SemconvVersion:            supportedSemconvVersion,
 				OriginalSpanNameAttribute: ottl.NewTestingOptional("original_span_name"),
 			})
 
@@ -694,38 +677,6 @@ func Test_rpcSpanName(t *testing.T) {
 				attrs.PutInt("rpc.grpc.status_code", 0)
 				attrs.PutStr("rpc.system", "grpc")
 				attrs.PutStr("server.address", "ad")
-			},
-			want: "grpc",
-		},
-		{
-			name:                   "'rpc.system.name' and 'rpc.method', no 'rpc.service' - semconv 1.39+",
-			spanName:               "a span name",
-			instrumentationLibrary: "hand crafted",
-			kind:                   ptrace.SpanKindServer,
-			addAttributes: func(attrs pcommon.Map) {
-				attrs.PutStr("rpc.system.name", "grpc")
-				attrs.PutStr("rpc.method", "oteldemo.AdService/a_method")
-			},
-			want: "oteldemo.AdService/a_method",
-		},
-		// Version-based priority: when both rpc.system.name and rpc.system are present
-		{
-			name:     "semconv 1.40.0: both 'rpc.system.name' and 'rpc.system' present - prioritizes 'rpc.system.name'",
-			spanName: "a span name",
-			kind:     ptrace.SpanKindServer,
-			addAttributes: func(attrs pcommon.Map) {
-				attrs.PutStr("rpc.system.name", "grpc")
-				attrs.PutStr("rpc.system", "other_rpc")
-			},
-			want: "grpc",
-		},
-		{
-			name:     "semconv 1.39.0: both 'rpc.system.name' and 'rpc.system' present - prioritizes 'rpc.system.name'",
-			spanName: "a span name",
-			kind:     ptrace.SpanKindServer,
-			addAttributes: func(attrs pcommon.Map) {
-				attrs.PutStr("rpc.system.name", "grpc")
-				attrs.PutStr("rpc.system", "other_rpc")
 			},
 			want: "grpc",
 		},

@@ -104,6 +104,15 @@ func (e *traceExporterImp) ConsumeTraces(ctx context.Context, td ptrace.Traces) 
 
 	exporterSegregatedTraces := make(exporterTraces)
 	endpoints := make(map[*wrappedExporter]string)
+	needsCleanup := true
+	defer func() {
+		if !needsCleanup {
+			return
+		}
+		for exp := range exporterSegregatedTraces {
+			exp.doneConsume()
+		}
+	}()
 	for _, batch := range batches {
 		routingID, err := routingIdentifiersFromTraces(batch, e.routingKey, e.routingAttrs)
 		if err != nil {
@@ -118,7 +127,9 @@ func (e *traceExporterImp) ConsumeTraces(ctx context.Context, td ptrace.Traces) 
 
 			_, ok := exporterSegregatedTraces[exp]
 			if !ok {
-				exp.consumeWG.Add(1)
+				if !exp.tryStartConsume() {
+					return errExporterIsStopping
+				}
 				exporterSegregatedTraces[exp] = ptrace.NewTraces()
 			}
 			exporterSegregatedTraces[exp] = mergeTraces(exporterSegregatedTraces[exp], batch)
@@ -127,12 +138,13 @@ func (e *traceExporterImp) ConsumeTraces(ctx context.Context, td ptrace.Traces) 
 		}
 	}
 
+	needsCleanup = false
 	var errs error
 
 	for exp, td := range exporterSegregatedTraces {
 		start := time.Now()
 		err := exp.ConsumeTraces(ctx, td)
-		exp.consumeWG.Done()
+		exp.doneConsume()
 		errs = multierr.Append(errs, err)
 		duration := time.Since(start)
 		e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(exp.endpointAttr))

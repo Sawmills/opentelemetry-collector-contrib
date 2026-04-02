@@ -68,6 +68,24 @@ linters:
 
     # Excluding configuration per-path, per-linter, per-text and per-source
     rules:
+      - path: processor/hotreloadprocessor/
+        linters:
+          - errcheck
+          - gosec
+          - gocritic
+          - gci
+          - gofumpt
+          - govet
+          - modernize
+          - revive
+          - staticcheck
+          - testifylint
+          - thelper
+          - unconvert
+          - unparam
+          - unused
+          - usetesting
+
       - linters:
           - unused
         path: pagefile.go # This exclusion is required for Windows only

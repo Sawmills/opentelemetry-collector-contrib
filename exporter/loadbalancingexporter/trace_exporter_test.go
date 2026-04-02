@@ -29,6 +29,8 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
 )
 
+const traceServiceNameKey = "service.name"
+
 func TestNewTracesExporter(t *testing.T) {
 	for _, tt := range []struct {
 		desc   string
@@ -827,17 +829,28 @@ func simpleTracesWithServiceName() ptrace.Traces {
 	traces.ResourceSpans().EnsureCapacity(1)
 
 	rspans := traces.ResourceSpans().AppendEmpty()
-	rspans.Resource().Attributes().PutStr("service.name", "service-name-1")
+	rspans.Resource().Attributes().PutStr(traceServiceNameKey, "service-name-1")
 	rspans.ScopeSpans().AppendEmpty().Spans().AppendEmpty().SetTraceID([16]byte{1, 2, 3, 4})
 
 	bspans := traces.ResourceSpans().AppendEmpty()
-	bspans.Resource().Attributes().PutStr("service.name", "service-name-2")
+	bspans.Resource().Attributes().PutStr(traceServiceNameKey, "service-name-2")
 	bspans.ScopeSpans().AppendEmpty().Spans().AppendEmpty().SetTraceID([16]byte{1, 2, 3, 4})
 
 	aspans := traces.ResourceSpans().AppendEmpty()
-	aspans.Resource().Attributes().PutStr("service.name", "service-name-3")
+	aspans.Resource().Attributes().PutStr(traceServiceNameKey, "service-name-3")
 	aspans.ScopeSpans().AppendEmpty().Spans().AppendEmpty().SetTraceID([16]byte{1, 2, 3, 5})
 
+	return traces
+}
+
+func tracesWithServiceNames(serviceNames ...string) ptrace.Traces {
+	traces := ptrace.NewTraces()
+	traces.ResourceSpans().EnsureCapacity(len(serviceNames))
+	for i, serviceName := range serviceNames {
+		rs := traces.ResourceSpans().AppendEmpty()
+		rs.Resource().Attributes().PutStr(traceServiceNameKey, serviceName)
+		appendSimpleTraceWithID(rs, pcommon.TraceID{byte(i + 1)})
+	}
 	return traces
 }
 
@@ -845,16 +858,54 @@ func twoServicesWithSameTraceID() ptrace.Traces {
 	traces := ptrace.NewTraces()
 	traces.ResourceSpans().EnsureCapacity(2)
 	rs1 := traces.ResourceSpans().AppendEmpty()
-	rs1.Resource().Attributes().PutStr("service.name", "ad-service-1")
+	rs1.Resource().Attributes().PutStr(traceServiceNameKey, "ad-service-1")
 	appendSimpleTraceWithID(rs1, [16]byte{1, 2, 3, 4})
 	rs2 := traces.ResourceSpans().AppendEmpty()
-	rs2.Resource().Attributes().PutStr("service.name", "get-recommendations-7")
+	rs2.Resource().Attributes().PutStr(traceServiceNameKey, "get-recommendations-7")
 	appendSimpleTraceWithID(rs2, [16]byte{1, 2, 3, 4})
 	return traces
 }
 
 func appendSimpleTraceWithID(dest ptrace.ResourceSpans, id pcommon.TraceID) {
 	dest.ScopeSpans().AppendEmpty().Spans().AppendEmpty().SetTraceID(id)
+}
+
+func TestConsumeTracesReleasesStartedConsumesOnEarlyReturn(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	lb, err := newLoadBalancer(ts.Logger, serviceBasedRoutingConfig(), nil, tb)
+	require.NoError(t, err)
+
+	lb.ring = newHashRing([]string{"endpoint-1", "endpoint-2"})
+
+	serviceForEndpoint1 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1")
+	serviceForEndpoint2 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-2")
+
+	exp1 := newWrappedExporter(newNopMockTracesExporter(), "endpoint-1:4317")
+	exp2 := newWrappedExporter(newNopMockTracesExporter(), "endpoint-2:4317")
+	exp2.markStopping()
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": exp1,
+		"endpoint-2:4317": exp2,
+	}
+
+	p, err := newTracesExporter(ts, serviceBasedRoutingConfig())
+	require.NoError(t, err)
+	p.loadBalancer = lb
+
+	err = p.ConsumeTraces(t.Context(), tracesWithServiceNames(serviceForEndpoint1, serviceForEndpoint2))
+	require.ErrorIs(t, err, errExporterIsStopping)
+
+	shutdownErr := make(chan error, 1)
+	go func() {
+		shutdownErr <- exp1.Shutdown(t.Context())
+	}()
+
+	select {
+	case err := <-shutdownErr:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("expected started consume slot to be released on early return")
+	}
 }
 
 func simpleConfig() *Config {
