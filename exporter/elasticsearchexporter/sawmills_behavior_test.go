@@ -99,6 +99,18 @@ func TestPreprocessLogsForSawmills_SkipsCopyWhenNoServiceKey(t *testing.T) {
 	assert.Equal(t, "yes", value.Str())
 }
 
+func TestPreprocessLogsForSawmills_CopiesWhenBodyMergeWouldMutate(t *testing.T) {
+	logs := plog.NewLogs()
+	record := logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+	record.Body().SetEmptyMap().PutStr("event.name", "body")
+
+	processed := preprocessLogsForSawmills(logs)
+	mergeBodyMapIntoLogAttributes(processed.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0))
+
+	_, ok := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Attributes().Get("event.name")
+	assert.False(t, ok)
+}
+
 func TestMergeMapsByPriority_HigherPriorityWins(t *testing.T) {
 	first := pcommon.NewMap()
 	first.PutStr("exception.message", "from-first")

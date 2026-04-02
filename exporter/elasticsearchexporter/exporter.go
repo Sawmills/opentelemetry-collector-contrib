@@ -132,13 +132,29 @@ func logsNeedSawmillsPreprocess(ld plog.Logs) bool {
 		}
 		for _, scopeLogs := range resourceLogs.ScopeLogs().All() {
 			for _, logRecord := range scopeLogs.LogRecords().All() {
-				if hasSawmillsServiceAttribute(logRecord.Attributes()) {
+				if hasSawmillsServiceAttribute(logRecord.Attributes()) || logRecordNeedsBodyAttributeMerge(logRecord) {
 					return true
 				}
 			}
 		}
 	}
 	return false
+}
+
+func logRecordNeedsBodyAttributeMerge(record plog.LogRecord) bool {
+	if record.Body().Type() != pcommon.ValueTypeMap {
+		return false
+	}
+
+	needsMerge := false
+	record.Body().Map().Range(func(k string, _ pcommon.Value) bool {
+		if _, allowlisted := logRecordAttrsConversionMap[k]; allowlisted {
+			needsMerge = true
+			return false
+		}
+		return true
+	})
+	return needsMerge
 }
 
 func hasSawmillsServiceAttribute(attrs pcommon.Map) bool {
