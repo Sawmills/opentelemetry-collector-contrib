@@ -14,25 +14,24 @@ import (
 
 func TestMergeBodyMapIntoLogAttributes(t *testing.T) {
 	record := plog.NewLogRecord()
-	record.Attributes().PutStr("from_attr", "attr")
-	record.Attributes().PutStr("overlap", "attr-wins")
+	record.Attributes().PutStr("exception.message", "attr-wins")
 	body := record.Body().SetEmptyMap()
-	body.PutStr("from_body", "body")
-	body.PutStr("overlap", "body-loses")
+	body.PutStr("event.name", "body")
+	body.PutStr("exception.message", "body-loses")
+	body.PutStr("userinfo.username", "blocked")
 
 	mergeBodyMapIntoLogAttributes(record)
 
-	value, ok := record.Attributes().Get("from_body")
+	value, ok := record.Attributes().Get("event.name")
 	require.True(t, ok)
 	assert.Equal(t, "body", value.Str())
 
-	value, ok = record.Attributes().Get("from_attr")
-	require.True(t, ok)
-	assert.Equal(t, "attr", value.Str())
-
-	value, ok = record.Attributes().Get("overlap")
+	value, ok = record.Attributes().Get("exception.message")
 	require.True(t, ok)
 	assert.Equal(t, "attr-wins", value.Str())
+
+	_, ok = record.Attributes().Get("userinfo.username")
+	assert.False(t, ok)
 
 	body.PutEmptyMap("nested").PutStr("key", "value")
 	mergeBodyMapIntoLogAttributes(record)
@@ -78,6 +77,16 @@ func TestPreprocessLogsForSawmills_RemovesSawmillsService(t *testing.T) {
 	assert.Equal(t, "record-service", value.Str())
 }
 
+func TestPreprocessLogsForSawmills_RemovesEmptySawmillsMap(t *testing.T) {
+	logs := plog.NewLogs()
+	record := logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+	record.Attributes().PutEmptyMap("sawmills").PutStr("service", "record-service")
+
+	processed := preprocessLogsForSawmills(logs)
+	_, ok := processed.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Attributes().Get("sawmills")
+	assert.False(t, ok)
+}
+
 func TestPreprocessLogsForSawmills_SkipsCopyWhenNoServiceKey(t *testing.T) {
 	logs := plog.NewLogs()
 	logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty().Attributes().PutStr("plain", "value")
@@ -90,36 +99,41 @@ func TestPreprocessLogsForSawmills_SkipsCopyWhenNoServiceKey(t *testing.T) {
 	assert.Equal(t, "yes", value.Str())
 }
 
-func TestMergeMapsByPriority_FirstMapWins(t *testing.T) {
+func TestMergeMapsByPriority_HigherPriorityWins(t *testing.T) {
 	first := pcommon.NewMap()
-	first.PutStr("overlap", "from-first")
-	first.PutStr("only_first", "first")
+	first.PutStr("exception.message", "from-first")
+	first.PutStr("event.name", "first")
 	first.PutEmptyMap("nested_from_first").PutStr("kept", "value")
+	first.PutEmpty("drop_lower")
 
 	second := pcommon.NewMap()
-	second.PutStr("overlap", "from-second")
-	second.PutStr("only_second", "second")
+	second.PutStr("exception.message", "from-second")
+	second.PutStr("event.name", "second")
+	second.PutStr("userinfo.username", "blocked")
 	second.PutEmptyMap("nested_from_second").PutStr("dropped", "value")
+	second.PutStr("drop_lower", "second")
 
 	merged := mergeMapsByPriority(second, first)
 
-	value, ok := merged.Get("overlap")
+	value, ok := merged.Get("exception.message")
 	require.True(t, ok)
 	assert.Equal(t, "from-first", value.Str())
 
-	value, ok = merged.Get("only_first")
+	value, ok = merged.Get("event.name")
 	require.True(t, ok)
 	assert.Equal(t, "first", value.Str())
-
-	value, ok = merged.Get("only_second")
-	require.True(t, ok)
-	assert.Equal(t, "second", value.Str())
 
 	value, ok = merged.Get("nested_from_first")
 	require.True(t, ok)
 	nestedValue, exists := value.Map().Get("kept")
 	require.True(t, exists)
 	assert.Equal(t, "value", nestedValue.Str())
+
+	_, ok = merged.Get("drop_lower")
+	assert.False(t, ok)
+
+	_, ok = merged.Get("userinfo.username")
+	assert.False(t, ok)
 
 	_, ok = merged.Get("nested_from_second")
 	assert.False(t, ok)

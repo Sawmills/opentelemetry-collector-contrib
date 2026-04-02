@@ -118,8 +118,9 @@ func mergeBodyMapIntoLogAttributes(record plog.LogRecord) {
 	if record.Body().Type() != pcommon.ValueTypeMap {
 		return
 	}
-	// Attributes win on conflicts. Only flat body values are merged so we do not
-	// expand arbitrary nested body objects into indexed Elasticsearch fields.
+	// Attributes win on conflicts. Only flat, allowlisted body values are merged
+	// so we do not promote arbitrary body fields into indexed Elasticsearch
+	// attributes.
 	merged := mergeMapsByPriority(record.Body().Map(), record.Attributes())
 	merged.CopyTo(record.Attributes())
 }
@@ -154,7 +155,11 @@ func stripSawmillsServiceAttribute(attrs pcommon.Map) {
 	if !ok || value.Type() != pcommon.ValueTypeMap {
 		return
 	}
-	value.Map().Remove("service")
+	m := value.Map()
+	m.Remove("service")
+	if m.Len() == 0 {
+		attrs.Remove("sawmills")
+	}
 }
 
 func (e *elasticsearchExporter) pushLogsData(ctx context.Context, ld plog.Logs) error {

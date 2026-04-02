@@ -272,6 +272,12 @@ func (ecsModeEncoder) encodeLog(
 func mergeMapsByPriority(lowerPriority pcommon.Map, higherPriority pcommon.Map) pcommon.Map {
 	merged := pcommon.NewMap()
 	lowerPriority.Range(func(k string, v pcommon.Value) bool {
+		if _, exists := higherPriority.Get(k); exists {
+			return true
+		}
+		if _, allowlisted := logRecordAttrsConversionMap[k]; !allowlisted {
+			return true
+		}
 		switch v.Type() {
 		case pcommon.ValueTypeStr:
 			merged.PutStr(k, v.Str())
