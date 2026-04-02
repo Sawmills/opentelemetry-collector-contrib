@@ -90,6 +90,26 @@ func TestConfigValidateLogBatcher(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 }
 
+func TestConfigValidateMetricBatcher(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	require.NoError(t, cfg.Validate())
+
+	cfg.MetricBatcher.Enabled = true
+	cfg.MetricBatcher.MaxDataPoints = 0
+	require.ErrorContains(t, cfg.Validate(), "metric_batcher.max_datapoints")
+
+	cfg.MetricBatcher.MaxDataPoints = 10
+	cfg.MetricBatcher.MaxBytes = 0
+	require.ErrorContains(t, cfg.Validate(), "metric_batcher.max_bytes")
+
+	cfg.MetricBatcher.MaxBytes = 1024
+	cfg.MetricBatcher.FlushInterval = 0
+	require.ErrorContains(t, cfg.Validate(), "metric_batcher.flush_interval")
+
+	cfg.MetricBatcher.FlushInterval = time.Second
+	require.NoError(t, cfg.Validate())
+}
+
 func TestLoadConfigWithQueueCompression(t *testing.T) {
 	cfg := createDefaultConfig().(*Config)
 	conf := confmap.NewFromStringMap(map[string]any{
@@ -152,4 +172,35 @@ func TestLoadConfigWithLogBatcher(t *testing.T) {
 	require.Equal(t, 1024, cfg.LogBatcher.MaxRecords)
 	require.Equal(t, 2097152, cfg.LogBatcher.MaxBytes)
 	require.Equal(t, 250*time.Millisecond, cfg.LogBatcher.FlushInterval)
+}
+
+func TestLoadConfigWithMetricBatcher(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	conf := confmap.NewFromStringMap(map[string]any{
+		"protocol": map[string]any{
+			"otlp": map[string]any{
+				"endpoint": "localhost:4317",
+				"tls": map[string]any{
+					"insecure": true,
+				},
+			},
+		},
+		"resolver": map[string]any{
+			"static": map[string]any{
+				"hostnames": []string{"localhost:4317"},
+			},
+		},
+		"metric_batcher": map[string]any{
+			"enabled":        true,
+			"max_datapoints": 4096,
+			"max_bytes":      2097152,
+			"flush_interval": "300ms",
+		},
+	})
+
+	require.NoError(t, conf.Unmarshal(cfg))
+	require.True(t, cfg.MetricBatcher.Enabled)
+	require.Equal(t, 4096, cfg.MetricBatcher.MaxDataPoints)
+	require.Equal(t, 2097152, cfg.MetricBatcher.MaxBytes)
+	require.Equal(t, 300*time.Millisecond, cfg.MetricBatcher.FlushInterval)
 }
