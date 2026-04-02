@@ -1,0 +1,6 @@
+change_type: bug_fix
+component: exporter/elasticsearch
+note: Port Sawmills OpenSearch compatibility and log preprocessing behavior into the Elasticsearch exporter.
+issues: [32]
+subtext: |-
+  Adds OpenSearch header spoofing, strips `sawmills.service`, and merges flat body-map fields into attributes for non-OTel log mappings.
