@@ -1,5 +1,5 @@
 change_type: bug_fix
-component: exporter/elasticsearchexporter
+component: exporter/elasticsearch
 note: Port Sawmills OpenSearch compatibility and log preprocessing behavior into the Elasticsearch exporter.
 issues: [32]
 subtext: |-
