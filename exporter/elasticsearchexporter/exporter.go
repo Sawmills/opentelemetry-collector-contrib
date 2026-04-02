@@ -115,7 +115,7 @@ func preprocessLogsForSawmills(ld plog.Logs) plog.Logs {
 }
 
 func mergeBodyMapIntoLogAttributes(record plog.LogRecord) {
-	if record.Body().Type() != pcommon.ValueTypeMap {
+	if !logRecordNeedsBodyAttributeMerge(record) {
 		return
 	}
 	// Attributes win on conflicts. Only flat, allowlisted body values are merged

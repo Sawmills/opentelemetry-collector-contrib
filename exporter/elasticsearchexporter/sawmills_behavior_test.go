@@ -111,6 +111,17 @@ func TestPreprocessLogsForSawmills_CopiesWhenBodyMergeWouldMutate(t *testing.T) 
 	assert.False(t, ok)
 }
 
+func TestMergeBodyMapIntoLogAttributes_SkipsNonAllowlistedMutation(t *testing.T) {
+	record := plog.NewLogRecord()
+	record.Body().SetEmptyMap().PutStr("userinfo.username", "blocked")
+
+	mergeBodyMapIntoLogAttributes(record)
+
+	_, ok := record.Attributes().Get("userinfo.username")
+	assert.False(t, ok)
+	assert.Equal(t, 0, record.Attributes().Len())
+}
+
 func TestMergeMapsByPriority_HigherPriorityWins(t *testing.T) {
 	first := pcommon.NewMap()
 	first.PutStr("exception.message", "from-first")
