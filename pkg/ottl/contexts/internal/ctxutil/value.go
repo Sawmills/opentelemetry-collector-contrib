@@ -15,9 +15,6 @@ import (
 )
 
 func SetValue(value pcommon.Value, val any) error {
-	if val == nil {
-		return nil
-	}
 	var err error
 	switch v := val.(type) {
 	case string:
@@ -79,8 +76,6 @@ func SetValue(value pcommon.Value, val any) error {
 		v.CopyTo(dest)
 	case map[string]any:
 		err = value.FromRaw(v)
-	default:
-		return fmt.Errorf("unsupported type %T for set operation; current value type is %v", val, value.Type())
 	}
 	return err
 }

@@ -6,6 +6,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.13
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.98.0
+	github.com/klauspost/compress v1.18.5
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/collector/confmap v1.55.0
 	go.uber.org/goleak v1.3.0

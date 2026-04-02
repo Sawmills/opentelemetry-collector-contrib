@@ -329,18 +329,13 @@ func TestPathGetSetter(t *testing.T) {
 			require.NoError(t, err)
 
 			resource := createResource()
-			ctx := newTestContext(resource)
 
-			got, err := accessor.Get(t.Context(), ctx)
+			got, err := accessor.Get(t.Context(), newTestContext(resource))
 			require.NoError(t, err)
 			assert.Equal(t, tt.orig, got)
 
-			err = accessor.Set(t.Context(), ctx, tt.newVal)
+			err = accessor.Set(t.Context(), newTestContext(resource), tt.newVal)
 			require.NoError(t, err)
-
-			// Verify that setting an invalid type returns an error
-			err = accessor.Set(t.Context(), ctx, struct{}{})
-			require.Error(t, err)
 
 			expectedResource := createResource()
 			tt.modified(expectedResource)
