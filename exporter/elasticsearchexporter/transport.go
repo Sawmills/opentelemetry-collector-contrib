@@ -11,7 +11,11 @@ type OpenSearchCompatibleTransport struct {
 }
 
 func (t *OpenSearchCompatibleTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	resp, err := t.Transport.RoundTrip(req)
+	base := t.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	resp, err := base.RoundTrip(req)
 	if err != nil {
 		return nil, err
 	}

@@ -33,6 +33,11 @@ func TestMergeBodyMapIntoLogAttributes(t *testing.T) {
 	value, ok = record.Attributes().Get("overlap")
 	require.True(t, ok)
 	assert.Equal(t, "attr-wins", value.Str())
+
+	body.PutEmptyMap("nested").PutStr("key", "value")
+	mergeBodyMapIntoLogAttributes(record)
+	_, ok = record.Attributes().Get("nested")
+	assert.False(t, ok)
 }
 
 func TestPreprocessLogsForSawmills_RemovesSawmillsService(t *testing.T) {
@@ -65,16 +70,36 @@ func TestPreprocessLogsForSawmills_RemovesSawmillsService(t *testing.T) {
 	value, exists = recordMap.Map().Get("keep")
 	require.True(t, exists)
 	assert.Equal(t, "record-keep", value.Str())
+
+	originalRecordMap, ok := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Attributes().Get("sawmills")
+	require.True(t, ok)
+	value, exists = originalRecordMap.Map().Get("service")
+	require.True(t, exists)
+	assert.Equal(t, "record-service", value.Str())
+}
+
+func TestPreprocessLogsForSawmills_SkipsCopyWhenNoServiceKey(t *testing.T) {
+	logs := plog.NewLogs()
+	logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty().Attributes().PutStr("plain", "value")
+
+	processed := preprocessLogsForSawmills(logs)
+	processed.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Attributes().PutStr("shared", "yes")
+
+	value, ok := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Attributes().Get("shared")
+	require.True(t, ok)
+	assert.Equal(t, "yes", value.Str())
 }
 
 func TestMergeMapsByPriority_FirstMapWins(t *testing.T) {
 	first := pcommon.NewMap()
 	first.PutStr("overlap", "from-first")
 	first.PutStr("only_first", "first")
+	first.PutEmptyMap("nested_from_first").PutStr("kept", "value")
 
 	second := pcommon.NewMap()
 	second.PutStr("overlap", "from-second")
 	second.PutStr("only_second", "second")
+	second.PutEmptyMap("nested_from_second").PutStr("dropped", "value")
 
 	merged := mergeMapsByPriority(second, first)
 
@@ -89,4 +114,13 @@ func TestMergeMapsByPriority_FirstMapWins(t *testing.T) {
 	value, ok = merged.Get("only_second")
 	require.True(t, ok)
 	assert.Equal(t, "second", value.Str())
+
+	value, ok = merged.Get("nested_from_first")
+	require.True(t, ok)
+	nestedValue, exists := value.Map().Get("kept")
+	require.True(t, exists)
+	assert.Equal(t, "value", nestedValue.Str())
+
+	_, ok = merged.Get("nested_from_second")
+	assert.False(t, ok)
 }
