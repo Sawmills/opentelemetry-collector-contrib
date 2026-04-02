@@ -95,7 +95,92 @@ func (e *elasticsearchExporter) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+func preprocessLogsForSawmills(ld plog.Logs) plog.Logs {
+	if !logsNeedSawmillsPreprocess(ld) {
+		return ld
+	}
+	mutableLogs := plog.NewLogs()
+	ld.CopyTo(mutableLogs)
+
+	for _, resourceLogs := range mutableLogs.ResourceLogs().All() {
+		stripSawmillsServiceAttribute(resourceLogs.Resource().Attributes())
+		for _, scopeLogs := range resourceLogs.ScopeLogs().All() {
+			for _, logRecord := range scopeLogs.LogRecords().All() {
+				stripSawmillsServiceAttribute(logRecord.Attributes())
+			}
+		}
+	}
+
+	return mutableLogs
+}
+
+func mergeBodyMapIntoLogAttributes(record plog.LogRecord) {
+	if !logRecordNeedsBodyAttributeMerge(record) {
+		return
+	}
+	// Attributes win on conflicts. Only flat, allowlisted body values are merged
+	// so we do not promote arbitrary body fields into indexed Elasticsearch
+	// attributes.
+	merged := mergeMapsByPriority(record.Body().Map(), record.Attributes())
+	merged.CopyTo(record.Attributes())
+}
+
+func logsNeedSawmillsPreprocess(ld plog.Logs) bool {
+	for _, resourceLogs := range ld.ResourceLogs().All() {
+		if hasSawmillsServiceAttribute(resourceLogs.Resource().Attributes()) {
+			return true
+		}
+		for _, scopeLogs := range resourceLogs.ScopeLogs().All() {
+			for _, logRecord := range scopeLogs.LogRecords().All() {
+				if hasSawmillsServiceAttribute(logRecord.Attributes()) || logRecordNeedsBodyAttributeMerge(logRecord) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func logRecordNeedsBodyAttributeMerge(record plog.LogRecord) bool {
+	if record.Body().Type() != pcommon.ValueTypeMap {
+		return false
+	}
+
+	needsMerge := false
+	record.Body().Map().Range(func(k string, _ pcommon.Value) bool {
+		if _, allowlisted := logRecordAttrsConversionMap[k]; allowlisted {
+			needsMerge = true
+			return false
+		}
+		return true
+	})
+	return needsMerge
+}
+
+func hasSawmillsServiceAttribute(attrs pcommon.Map) bool {
+	value, ok := attrs.Get("sawmills")
+	if !ok || value.Type() != pcommon.ValueTypeMap {
+		return false
+	}
+	_, ok = value.Map().Get("service")
+	return ok
+}
+
+func stripSawmillsServiceAttribute(attrs pcommon.Map) {
+	value, ok := attrs.Get("sawmills")
+	if !ok || value.Type() != pcommon.ValueTypeMap {
+		return
+	}
+	m := value.Map()
+	m.Remove("service")
+	if m.Len() == 0 {
+		attrs.Remove("sawmills")
+	}
+}
+
 func (e *elasticsearchExporter) pushLogsData(ctx context.Context, ld plog.Logs) error {
+	ld = preprocessLogsForSawmills(ld)
+
 	defaultMappingMode, err := e.getRequestMappingMode(ctx)
 	if err != nil {
 		return err
@@ -124,6 +209,9 @@ func (e *elasticsearchExporter) pushLogsData(ctx context.Context, ld plog.Logs) 
 			}
 
 			for _, lr := range ill.LogRecords().All() {
+				if mappingMode != MappingOTel && mappingMode != MappingBodyMap {
+					mergeBodyMapIntoLogAttributes(lr)
+				}
 				if err := e.pushLogRecord(ctx, router, encoder, ec, lr, session); err != nil {
 					if cerr := ctx.Err(); cerr != nil {
 						return cerr
