@@ -105,13 +105,14 @@ main() {
             fi
         fi
 
-        if [[ -z "${NOTE}" ]]; then
-            continue
+        if [[ -n "${NOTE}" && -n "${COMPONENT}" ]]; then
+            COMPONENTS+=("${COMPONENT}")
         fi
-
-        COMPONENTS+=("${COMPONENT}")
-        NOTES+=("${NOTE}")
-        CHANGE_TYPES+=("${CHANGE_TYPE}")
+        if [[ -n "${NOTE}" ]]; then
+            NOTES+=("${NOTE}")
+            CHANGE_TYPES+=("${CHANGE_TYPE}")
+            SUBTEXTS+=("${SUBTEXT}")
+        fi
         if [[ -n "${ISSUES}" ]]; then
             # Split comma-separated issues
             IFS=',' read -ra ISSUE_ARRAY <<< "${ISSUES}"
@@ -121,9 +122,6 @@ main() {
                     ALL_ISSUES+=("${ISSUE}")
                 fi
             done
-        fi
-        if [[ -n "${SUBTEXT}" ]]; then
-            SUBTEXTS+=("${SUBTEXT}")
         fi
     done
 
@@ -137,7 +135,7 @@ main() {
     # Format: [component1, component2] first note (+N more) (for multiple entries)
 
     # Deduplicate components
-    mapfile -t UNIQUE_COMPONENTS < <(printf '%s\n' "${COMPONENTS[@]}" | awk 'NF' | sort -u)
+    mapfile -t UNIQUE_COMPONENTS < <(echo "${COMPONENTS[@]}" | tr ' ' '\n' | sort -u)
     COMPONENT_PREFIX=""
     if [[ ${#UNIQUE_COMPONENTS[@]} -gt 0 ]]; then
         COMPONENT_PREFIX="[$(IFS=', '; echo "${UNIQUE_COMPONENTS[*]}")] "
@@ -176,7 +174,14 @@ main() {
     done
 
     # Add subtext if present
-    if [[ ${#SUBTEXTS[@]} -gt 0 ]]; then
+    HAS_SUBTEXT=false
+    for SUBTEXT in "${SUBTEXTS[@]}"; do
+        if [[ -n "${SUBTEXT}" ]]; then
+            HAS_SUBTEXT=true
+            break
+        fi
+    done
+    if [[ "${HAS_SUBTEXT}" == "true" ]]; then
         BODY+=$'\n'"**Details:**"$'\n'
         for SUBTEXT in "${SUBTEXTS[@]}"; do
             if [[ -n "${SUBTEXT}" ]]; then

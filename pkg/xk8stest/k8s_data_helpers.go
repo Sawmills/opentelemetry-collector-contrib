@@ -5,13 +5,12 @@ package xk8stest // import "github.com/open-telemetry/opentelemetry-collector-co
 
 import (
 	"context"
-	"net"
 	"runtime"
 	"testing"
 	"time"
 
-	network2 "github.com/docker/docker/api/types/network"
-	docker "github.com/docker/docker/client"
+	networktypes "github.com/moby/moby/api/types/network"
+	dockerclient "github.com/moby/moby/client"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/labels"
 )
@@ -21,35 +20,44 @@ func HostEndpoint(t *testing.T) string {
 		return "host.docker.internal"
 	}
 
-	client, err := docker.NewClientWithOpts(docker.FromEnv)
+	client, err := dockerclient.New(dockerclient.FromEnv)
 	require.NoError(t, err)
-	client.NegotiateAPIVersion(t.Context())
+	_, err = client.Ping(t.Context(), dockerclient.PingOptions{
+		NegotiateAPIVersion: true,
+	})
+	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	network, err := client.NetworkInspect(ctx, "kind", network2.InspectOptions{})
+	network, err := client.NetworkInspect(ctx, "kind", dockerclient.NetworkInspectOptions{})
 	require.NoError(t, err)
 
+	if endpoint, ok := hostEndpointFromIPAMConfigs(network.Network.IPAM.Config); ok {
+		return endpoint
+	}
+	require.Fail(t, "failed to find host endpoint")
+	return ""
+}
+
+func hostEndpointFromIPAMConfigs(configs []networktypes.IPAMConfig) (string, bool) {
 	// Prefer IPv4 gateways, but fallback to IPv6 if no IPv4 gateway is found.
 	// IPv6 addresses are wrapped in brackets so that callers can safely append
 	// ":port" (e.g. [fc00:f853:ccd:e793::1]:4317).
 	var ipv6Fallback string
-	for _, ipam := range network.IPAM.Config {
-		if ipam.Gateway == "" {
+	for _, ipam := range configs {
+		if !ipam.Gateway.IsValid() {
 			continue
 		}
-		ip := net.ParseIP(ipam.Gateway)
-		if ip != nil && ip.To4() != nil {
-			return ipam.Gateway
+		if ipam.Gateway.Is4() {
+			return ipam.Gateway.String(), true
 		}
 		if ipv6Fallback == "" {
-			ipv6Fallback = "[" + ipam.Gateway + "]"
+			ipv6Fallback = "[" + ipam.Gateway.String() + "]"
 		}
 	}
 	if ipv6Fallback != "" {
-		return ipv6Fallback
+		return ipv6Fallback, true
 	}
-	require.Fail(t, "failed to find host endpoint")
-	return ""
+	return "", false
 }
 
 func SelectorFromMap(labelMap map[string]any) labels.Selector {

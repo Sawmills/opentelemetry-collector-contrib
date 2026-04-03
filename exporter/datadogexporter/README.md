@@ -74,7 +74,7 @@ Support for Zorkian is now deprecated, please use the metrics export serializer.
 
 **NOTE** this workaround is only needed when feature gate `exporter.datadogexporter.UseLogsAgentExporter` is disabled. This feature gate is enabled by default starting v0.108.0.
 
-For Datadog Exporter versions 0.83.0 - v0.107.0, the `service` field of OTel logs is populated from the OTel semantic convention `service.name`. However, `service.name` is not one of the default [service attributes](https://docs.datadoghq.com/logs/log_configuration/pipelines/?tab=service#service-attribute) in Datadog’s log preprocessing.
+For Datadog Exporter versions v0.83.0-v0.107.0, the `service` field in OTel logs is populated from the OTel semantic convention resource attribute [`service.name`](https://opentelemetry.io/docs/specs/semconv/resource/#service). However, `service.name` is not one of the default [service attributes](https://docs.datadoghq.com/logs/log_configuration/pipelines/?tab=service#service-attribute) in Datadog's log preprocessing.
 
 To get the service field correctly populated in your logs, you can specify service.name to be the source of a log’s service by setting a [log service remapper processor](https://docs.datadoghq.com/logs/log_configuration/pipelines/?tab=service#service-attribute).
 
