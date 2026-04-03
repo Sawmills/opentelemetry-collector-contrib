@@ -1,0 +1,6 @@
+change_type: bug_fix
+component: exporter/loadbalancing
+note: Preserve legacy `sending_queue` semantics in the Sawmills loadbalancing exporter fork unless `sending_queue.enabled` is explicitly set to true.
+issues: [35]
+subtext: |-
+  This keeps older configs backward compatible even when queue fields like `storage`, `queue_size`, or `num_consumers` are present without an explicit `enabled` flag.
