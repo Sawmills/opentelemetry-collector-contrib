@@ -6,13 +6,28 @@
 
 set -euo pipefail
 
-if [[ -z "${PR_NUMBER:-}" || -z "${COMMENT:-}" || -z "${SENDER:-}" ]]; then
-    echo "PR_NUMBER, COMMENT, or SENDER not set"
+TRUSTED_ASSOCIATIONS=("COLLABORATOR" "MEMBER" "OWNER")
+
+if [[ -z "${PR_NUMBER:-}" || -z "${COMMENT:-}" || -z "${SENDER:-}" || -z "${ASSOCIATION:-}" ]]; then
+    echo "PR_NUMBER, COMMENT, SENDER, or ASSOCIATION not set"
     exit 0
 fi
 
 if [[ ${COMMENT:0:6} != "/rerun" ]]; then
     echo "Not a rerun command"
+    exit 0
+fi
+
+AUTHORIZED="false"
+for association in "${TRUSTED_ASSOCIATIONS[@]}"; do
+    if [[ "${ASSOCIATION}" == "${association}" ]]; then
+        AUTHORIZED="true"
+        break
+    fi
+done
+
+if [[ "${AUTHORIZED}" != "true" ]]; then
+    echo "Only trusted collaborators can rerun workflows"
     exit 0
 fi
 
