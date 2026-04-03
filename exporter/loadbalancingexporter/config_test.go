@@ -67,7 +67,7 @@ func TestConfigValidateCompressInMemory(t *testing.T) {
 	queueCfg.WaitForResult = true
 	cfg.QueueSettings.QueueConfig = configoptional.Some(queueCfg)
 	cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionSnappy
-	require.ErrorContains(t, cfg.Validate(), "`wait_for_result` is not supported with a persistent queue configured with `storage`")
+	require.NoError(t, cfg.Validate())
 }
 
 func TestConfigValidateLogBatcher(t *testing.T) {
@@ -119,6 +119,40 @@ func TestLoadConfigWithQueueCompression(t *testing.T) {
 	require.True(t, cfg.QueueSettings.QueueConfig.HasValue())
 	require.Equal(t, int64(1000), cfg.QueueSettings.QueueConfig.Get().QueueSize)
 	require.Equal(t, 2, cfg.QueueSettings.QueueConfig.Get().NumConsumers)
+	require.Equal(t, QueuePayloadCompressionZstd, cfg.QueueSettings.PayloadCompression)
+	require.True(t, cfg.QueueSettings.CompressInMemory)
+	require.Nil(t, cfg.QueueSettings.QueueConfig.Get().StorageID)
+}
+
+func TestLoadConfigWithQueueCompressionAndExplicitNullStorage(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	conf := confmap.NewFromStringMap(map[string]any{
+		"protocol": map[string]any{
+			"otlp": map[string]any{
+				"endpoint": "localhost:4317",
+				"tls": map[string]any{
+					"insecure": true,
+				},
+			},
+		},
+		"resolver": map[string]any{
+			"static": map[string]any{
+				"hostnames": []string{"localhost:4317"},
+			},
+		},
+		"sending_queue": map[string]any{
+			"enabled":             true,
+			"queue_size":          1000,
+			"num_consumers":       2,
+			"payload_compression": "zstd",
+			"compress_in_memory":  true,
+			"storage":             nil,
+		},
+	})
+
+	require.NoError(t, conf.Unmarshal(cfg))
+	require.True(t, cfg.QueueSettings.QueueConfig.HasValue())
+	require.Nil(t, cfg.QueueSettings.QueueConfig.Get().StorageID)
 	require.Equal(t, QueuePayloadCompressionZstd, cfg.QueueSettings.PayloadCompression)
 	require.True(t, cfg.QueueSettings.CompressInMemory)
 }

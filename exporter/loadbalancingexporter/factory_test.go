@@ -63,6 +63,33 @@ func TestLogExporterGetsCreatedWithValidConfiguration(t *testing.T) {
 	assert.NotNil(t, exp)
 }
 
+func TestLogExporterWithCompressedInMemoryQueueStartsWithoutStorageExtension(t *testing.T) {
+	factory := NewFactory()
+	creationParams := exportertest.NewNopSettings(metadata.Type)
+	queueCfg := exporterhelper.NewDefaultQueueConfig()
+	queueCfg.NumConsumers = 2
+	queueCfg.QueueSize = 1000
+	cfg := &Config{
+		Resolver: ResolverSettings{
+			Static: configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1"}}),
+		},
+		QueueSettings: QueueSettings{
+			QueueConfig: configoptional.Some(queueCfg),
+			PayloadCompression: QueuePayloadCompressionZstd,
+			CompressInMemory:   true,
+		},
+	}
+
+	exp, err := factory.CreateLogs(t.Context(), creationParams, cfg)
+	require.NoError(t, err)
+	require.NotNil(t, exp)
+
+	require.NoError(t, exp.Start(t.Context(), componenttest.NewNopHost()))
+	t.Cleanup(func() {
+		require.NoError(t, exp.Shutdown(t.Context()))
+	})
+}
+
 func TestOTLPConfigIsValid(t *testing.T) {
 	// prepare
 	factory := NewFactory()
@@ -270,7 +297,7 @@ func TestNewQueuePayloadCodecIfEnabled(t *testing.T) {
 	})
 }
 
-func TestQueueConfigForExportUsesInMemoryStorageWhenRequested(t *testing.T) {
+func TestQueueConfigForExportKeepsMemoryQueueWhenRequested(t *testing.T) {
 	cfg := createDefaultConfig().(*Config)
 	cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
 	cfg.QueueSettings.CompressInMemory = true
@@ -278,6 +305,5 @@ func TestQueueConfigForExportUsesInMemoryStorageWhenRequested(t *testing.T) {
 	queueCfg, ok := queueConfigForExport(cfg)
 	require.True(t, ok)
 	require.True(t, queueCfg.HasValue())
-	require.NotNil(t, queueCfg.Get().StorageID)
-	assert.Equal(t, inMemoryQueueStorageID, *queueCfg.Get().StorageID)
+	require.Nil(t, queueCfg.Get().StorageID)
 }
