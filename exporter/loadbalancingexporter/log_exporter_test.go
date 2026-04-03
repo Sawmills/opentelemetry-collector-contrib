@@ -25,7 +25,6 @@ import (
 	"go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper"
 	"go.opentelemetry.io/collector/exporter/exportertest"
 	"go.opentelemetry.io/collector/exporter/otlpexporter"
-	collectorextension "go.opentelemetry.io/collector/extension"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/otel/attribute"
@@ -35,7 +34,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/inmemorystorage"
 )
 
 func TestNewLogsExporter(t *testing.T) {
@@ -266,7 +264,7 @@ func TestConsumeLogsEmitsOnlyParentExporterMetrics(t *testing.T) {
 	assert.IsType(t, tracenoop.NewTracerProvider(), childSettings[0].TracerProvider)
 }
 
-func TestConsumeLogsWithQueueCompressionAndInMemoryStorage(t *testing.T) {
+func TestConsumeLogsWithQueueCompressionAndInMemoryQueue(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	sink := new(consumertest.LogsSink)
 
@@ -304,19 +302,7 @@ func TestConsumeLogsWithQueueCompressionAndInMemoryStorage(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	storageExt, err := inmemorystorage.NewFactory().Create(
-		t.Context(),
-		collectorextension.Settings{ID: component.NewID(inmemorystorage.Type)},
-		&inmemorystorage.Config{},
-	)
-	require.NoError(t, err)
-
-	host := testStorageHost{
-		extensions: map[component.ID]component.Component{
-			inMemoryQueueStorageID: storageExt,
-		},
-	}
-	require.NoError(t, wrapped.Start(t.Context(), host))
+	require.NoError(t, wrapped.Start(t.Context(), componenttest.NewNopHost()))
 	t.Cleanup(func() {
 		require.NoError(t, wrapped.Shutdown(t.Context()))
 	})
