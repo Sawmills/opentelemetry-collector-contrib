@@ -105,14 +105,11 @@ main() {
             fi
         fi
 
-        if [[ -n "${COMPONENT}" ]]; then
-            COMPONENTS+=("${COMPONENT}")
-        fi
         if [[ -n "${NOTE}" ]]; then
+            COMPONENTS+=("${COMPONENT}")
             NOTES+=("${NOTE}")
-        fi
-        if [[ -n "${CHANGE_TYPE}" ]]; then
             CHANGE_TYPES+=("${CHANGE_TYPE}")
+            SUBTEXTS+=("${SUBTEXT}")
         fi
         if [[ -n "${ISSUES}" ]]; then
             # Split comma-separated issues
@@ -123,9 +120,6 @@ main() {
                     ALL_ISSUES+=("${ISSUE}")
                 fi
             done
-        fi
-        if [[ -n "${SUBTEXT}" ]]; then
-            SUBTEXTS+=("${SUBTEXT}")
         fi
     done
 

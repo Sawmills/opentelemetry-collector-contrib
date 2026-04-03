@@ -22,3 +22,4 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number }}
           COMMENT: ${{ github.event.comment.body }}
           SENDER: ${{ github.event.comment.user.login }}
+          ASSOCIATION: ${{ github.event.comment.author_association }}

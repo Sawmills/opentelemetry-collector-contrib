@@ -5,7 +5,7 @@ issues: [40198]
 subtext: |
   Setters in OTTL contexts now validate that values are of the expected type and return
   descriptive errors when type mismatches occur. This is the continuation of work done in
-  \#43505, addressing remaining contexts: datapoint, profile, profilesample, resource, span,
+  #43505, addressing remaining contexts: datapoint, profile, profilesample, resource, span,
   and spanevent.
 
   Changes include:

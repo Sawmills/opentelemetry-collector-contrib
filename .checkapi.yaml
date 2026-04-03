@@ -6,7 +6,7 @@ ignored_paths:
   - extension/observer
   - extension/encoding
   - extension/opampcustommessages
-  - extension/storage
+  - extension/storage/inmemorystorage
   - pkg/batchperresourceattr
   - pkg/batchpersignal
   - pkg/core/xidutils
