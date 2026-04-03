@@ -21,14 +21,11 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/inmemorystorage"
 )
 
 const (
 	zapEndpointKey = "endpoint"
 )
-
-var inMemoryQueueStorageID = component.NewID(inmemorystorage.Type)
 
 // NewFactory creates a factory for the exporter.
 func NewFactory() exporter.Factory {
@@ -102,6 +99,9 @@ func buildExporterResilienceOptions(
 				encoding: qbs.Encoding,
 				codec:    payloadCodec,
 			}
+		}
+		if cfg.QueueSettings.CompressInMemory {
+			options = append(options, exporterhelper.WithQueueBatchInMemoryEncoding(true))
 		}
 		options = append(options, xexporterhelper.WithQueueBatch(queueCfg, qbs))
 	}
@@ -210,9 +210,6 @@ func queueConfigForExport(cfg *Config) (configoptional.Optional[exporterhelper.Q
 	}
 
 	queueCfg := *cfg.QueueSettings.QueueConfig.Get()
-	if cfg.QueueSettings.CompressInMemory && queueCfg.StorageID == nil {
-		queueCfg.StorageID = &inMemoryQueueStorageID
-	}
 
 	return configoptional.Some(queueCfg), true
 }

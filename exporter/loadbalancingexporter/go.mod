@@ -9,7 +9,6 @@ require (
 	github.com/goccy/go-json v0.10.5
 	github.com/golang/snappy v1.0.0
 	github.com/klauspost/compress v1.18.5
-	github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/inmemorystorage v0.148.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/internal/exp/metrics v0.148.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/batchpersignal v0.148.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden v0.149.0
@@ -28,7 +27,6 @@ require (
 	go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper v0.149.1-0.20260402195938-76ede073ee8e
 	go.opentelemetry.io/collector/exporter/exportertest v0.149.1-0.20260402195938-76ede073ee8e
 	go.opentelemetry.io/collector/exporter/otlpexporter v0.149.1-0.20260402195938-76ede073ee8e
-	go.opentelemetry.io/collector/extension v1.55.1-0.20260402195938-76ede073ee8e
 	go.opentelemetry.io/collector/otelcol/otelcoltest v0.149.1-0.20260402195938-76ede073ee8e
 	go.opentelemetry.io/collector/pdata v1.55.1-0.20260402195938-76ede073ee8e
 	go.opentelemetry.io/otel v1.42.0
@@ -135,7 +133,6 @@ require (
 	go.opentelemetry.io/collector/connector/xconnector v0.149.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/consumer/consumererror/xconsumererror v0.149.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/consumer/xconsumer v0.149.1-0.20260402195938-76ede073ee8e // indirect
-	go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper v0.149.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/exporter/xexporter v0.149.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/extension v1.55.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/extension/extensionauth v1.55.1-0.20260402195938-76ede073ee8e // indirect
@@ -220,3 +217,7 @@ replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden => 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/internal/exp/metrics => ../../internal/exp/metrics
 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/inmemorystorage => ../../extension/storage/inmemorystorage
+
+replace go.opentelemetry.io/collector/exporter/exporterhelper => github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.149.0-sawmills.1
+
+replace go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper => github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper/xexporterhelper v0.149.0-sawmills.1

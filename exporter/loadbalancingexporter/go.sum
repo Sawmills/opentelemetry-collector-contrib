@@ -1,5 +1,9 @@
 github.com/Masterminds/semver/v3 v3.4.0 h1:Zog+i5UMtVoCU8oKka5P7i9q9HgrJeGzI9SA1Xbatp0=
 github.com/Masterminds/semver/v3 v3.4.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lprf4nC11bSS5beM=
+github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.149.0-sawmills.1 h1:9SZhwUGER1B/naxD+gAxazKn2Sq/w/vxLe/jbrG8KWg=
+github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.149.0-sawmills.1/go.mod h1:vrebAHP8yYENZwHrOhfYqXDOlkqzB3pIOydIlbH/zoc=
+github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper/xexporterhelper v0.149.0-sawmills.1 h1:qaa2zAfOIKMpV4Z4OGBlQ0jVLh7LWphKZKWwYg6gzrM=
+github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper/xexporterhelper v0.149.0-sawmills.1/go.mod h1:rgd0kMwhRYZlCmQTau1zO/OI3tMcQqiFTYGooQ3RV5U=
 github.com/aws/aws-sdk-go-v2 v1.41.3 h1:4kQ/fa22KjDt13QCy1+bYADvdgcxpfH18f0zP542kZA=
 github.com/aws/aws-sdk-go-v2 v1.41.3/go.mod h1:mwsPRE8ceUUpiTgF7QmQIJ7lgsKUPQOUl3o72QBrE1o=
 github.com/aws/aws-sdk-go-v2/config v1.32.11 h1:ftxI5sgz8jZkckuUHXfC/wMUc8u3fG1vQS0plr2F2Zs=
@@ -261,10 +265,6 @@ go.opentelemetry.io/collector/consumer/xconsumer v0.149.1-0.20260402195938-76ede
 go.opentelemetry.io/collector/consumer/xconsumer v0.149.1-0.20260402195938-76ede073ee8e/go.mod h1:/6GxiFXbETTbPmdyyCcLjzF6cJg2AQ+CLF3yrjecL20=
 go.opentelemetry.io/collector/exporter v1.55.1-0.20260402195938-76ede073ee8e h1:EAcrFOISLJd/mOOeHlYGET7hFsWq/Y9t9xoAXJBFJ4c=
 go.opentelemetry.io/collector/exporter v1.55.1-0.20260402195938-76ede073ee8e/go.mod h1:CT1a6LcOvSq1+e8JtB8TOeokO7NvbA3GPapyPYQg4/0=
-go.opentelemetry.io/collector/exporter/exporterhelper v0.149.1-0.20260402195938-76ede073ee8e h1:KWSyQGSZBldbG1C6ly+F50myVhIty34nLqqSFNGgbJI=
-go.opentelemetry.io/collector/exporter/exporterhelper v0.149.1-0.20260402195938-76ede073ee8e/go.mod h1:mkCJzZNAUyO0PPXtOWyxRXOEIrsstwBaj0FHanzwXNU=
-go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper v0.149.1-0.20260402195938-76ede073ee8e h1:f2wMIWld0vfso0rE7ppW8fUSBTXfpoBB+Od6BiC+Gj0=
-go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper v0.149.1-0.20260402195938-76ede073ee8e/go.mod h1:rgd0kMwhRYZlCmQTau1zO/OI3tMcQqiFTYGooQ3RV5U=
 go.opentelemetry.io/collector/exporter/exportertest v0.149.1-0.20260402195938-76ede073ee8e h1:VaoNlT5JOq2ypGlpKGR7gXtw5Bs/YNRsJGoGvhWRkyc=
 go.opentelemetry.io/collector/exporter/exportertest v0.149.1-0.20260402195938-76ede073ee8e/go.mod h1:WbCmeP0j2EfCiM8FkrNrebht1pzfz5tU76fV9t3tKTc=
 go.opentelemetry.io/collector/exporter/otlpexporter v0.149.1-0.20260402195938-76ede073ee8e h1:eb9rbBrIP6xvY1alOIDWInu+hzRoyqDOcSdqmMOM6Cc=
