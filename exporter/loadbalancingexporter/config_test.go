@@ -123,6 +123,67 @@ func TestLoadConfigWithQueueCompression(t *testing.T) {
 	require.True(t, cfg.QueueSettings.CompressInMemory)
 }
 
+func TestLoadConfigWithLegacyQueueFieldsKeepsQueueDisabled(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	conf := confmap.NewFromStringMap(map[string]any{
+		"protocol": map[string]any{
+			"otlp": map[string]any{
+				"endpoint": "localhost:4317",
+				"tls": map[string]any{
+					"insecure": true,
+				},
+			},
+		},
+		"resolver": map[string]any{
+			"static": map[string]any{
+				"hostnames": []string{"localhost:4317"},
+			},
+		},
+		"sending_queue": map[string]any{
+			"queue_size":    1000,
+			"num_consumers": 2,
+			"storage":       "file_storage/queue",
+		},
+	})
+
+	require.NoError(t, conf.Unmarshal(cfg))
+	require.False(t, cfg.QueueSettings.QueueConfig.HasValue())
+	require.Empty(t, cfg.QueueSettings.PayloadCompression)
+	require.False(t, cfg.QueueSettings.CompressInMemory)
+	require.NoError(t, cfg.Validate())
+}
+
+func TestLoadConfigWithDisabledQueueIgnoresCompressionFields(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	conf := confmap.NewFromStringMap(map[string]any{
+		"protocol": map[string]any{
+			"otlp": map[string]any{
+				"endpoint": "localhost:4317",
+				"tls": map[string]any{
+					"insecure": true,
+				},
+			},
+		},
+		"resolver": map[string]any{
+			"static": map[string]any{
+				"hostnames": []string{"localhost:4317"},
+			},
+		},
+		"sending_queue": map[string]any{
+			"enabled":             false,
+			"queue_size":          1000,
+			"payload_compression": "zstd",
+			"compress_in_memory":  true,
+		},
+	})
+
+	require.NoError(t, conf.Unmarshal(cfg))
+	require.False(t, cfg.QueueSettings.QueueConfig.HasValue())
+	require.Empty(t, cfg.QueueSettings.PayloadCompression)
+	require.False(t, cfg.QueueSettings.CompressInMemory)
+	require.NoError(t, cfg.Validate())
+}
+
 func TestLoadConfigWithLogBatcher(t *testing.T) {
 	cfg := createDefaultConfig().(*Config)
 	conf := confmap.NewFromStringMap(map[string]any{

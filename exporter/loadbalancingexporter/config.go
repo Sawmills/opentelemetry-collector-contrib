@@ -82,13 +82,20 @@ func (q *QueueSettings) Unmarshal(conf *confmap.Conf) error {
 	delete(queueCfg, "compress_in_memory")
 	delete(queueCfg, "enabled")
 
-	enabled := hasPayload || hasCompressInMemory || len(queueCfg) > 0
+	enabled := false
 	if hasEnabled {
 		enabledVal, ok := enabledRaw.(bool)
 		if !ok {
 			return errors.New("sending_queue.enabled must be a bool")
 		}
 		enabled = enabledVal
+	}
+
+	if !enabled {
+		q.QueueConfig = configoptional.None[exporterhelper.QueueBatchConfig]()
+		q.PayloadCompression = ""
+		q.CompressInMemory = false
+		return nil
 	}
 
 	if hasPayload {
@@ -105,11 +112,6 @@ func (q *QueueSettings) Unmarshal(conf *confmap.Conf) error {
 			return errors.New("sending_queue.compress_in_memory must be a bool")
 		}
 		q.CompressInMemory = compressInMemory
-	}
-
-	if !enabled {
-		q.QueueConfig = configoptional.None[exporterhelper.QueueBatchConfig]()
-		return nil
 	}
 
 	queueConf := confmap.NewFromStringMap(queueCfg)
