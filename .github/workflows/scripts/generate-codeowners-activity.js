@@ -55,8 +55,6 @@ function progress(msg) {
  * - periodStart: midnight UTC at the start of the day that was 35 days ago (inclusive).
  * - periodEnd: midnight UTC at the start of the day that was 5 days ago (exclusive: we include
  *   created_at < periodEnd only, so the last full day included is 6 days ago).
- * filterOnDateRange uses createdAt >= periodStart && createdAt <= periodEnd, so the end date
- * in the report is exclusive (PRs created on the end date after 00:00:00 are excluded).
  */
 function genLookbackDates() {
   const now = new Date();
@@ -79,7 +77,7 @@ function genLookbackDates() {
 
 function filterOnDateRange({ created_at, periodStart, periodEnd }) {
   const createdAt = new Date(created_at);
-  return createdAt >= periodStart && createdAt <= periodEnd;
+  return createdAt >= periodStart && createdAt < periodEnd;
 }
 
 /**
@@ -385,7 +383,10 @@ async function createIssue(octokit, context, report, lookbackData) {
 
 async function main({ github, context }) {
   debug({ msg: 'generate-codeowners-activity running' });
-  const octokit = github.rest;
+  const octokit = {
+    ...github.rest,
+    paginate: github.paginate.bind(github),
+  };
   const lookbackData = genLookbackDates();
 
   const codeownersPath = path.join(process.cwd(), '.github', 'CODEOWNERS');

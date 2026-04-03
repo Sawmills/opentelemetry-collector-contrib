@@ -105,8 +105,10 @@ main() {
             fi
         fi
 
-        if [[ -n "${NOTE}" ]]; then
+        if [[ -n "${NOTE}" && -n "${COMPONENT}" ]]; then
             COMPONENTS+=("${COMPONENT}")
+        fi
+        if [[ -n "${NOTE}" ]]; then
             NOTES+=("${NOTE}")
             CHANGE_TYPES+=("${CHANGE_TYPE}")
             SUBTEXTS+=("${SUBTEXT}")
@@ -172,7 +174,14 @@ main() {
     done
 
     # Add subtext if present
-    if [[ ${#SUBTEXTS[@]} -gt 0 ]]; then
+    HAS_SUBTEXT=false
+    for SUBTEXT in "${SUBTEXTS[@]}"; do
+        if [[ -n "${SUBTEXT}" ]]; then
+            HAS_SUBTEXT=true
+            break
+        fi
+    done
+    if [[ "${HAS_SUBTEXT}" == "true" ]]; then
         BODY+=$'\n'"**Details:**"$'\n'
         for SUBTEXT in "${SUBTEXTS[@]}"; do
             if [[ -n "${SUBTEXT}" ]]; then

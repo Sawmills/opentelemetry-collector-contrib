@@ -51,7 +51,7 @@ The following exporter configuration parameters are supported.
 | `suffix`                | Key suffix to match against.                                                                                                               |             | Required |
 | `notifications:`        |                                                                                                                                            |             |          |
 | `opampextension`        | Name of the OpAMP Extension to use to send ingest progress notifications.                                                                  |             |          |
-| `tag_object_after_ingestion`        | If enabled the receiver will attempt to tag the object after successfully ingesting it.                                                                  | false       | Optional |
+| `s3downloader.tag_object_after_ingestion` | If enabled the receiver will attempt to tag the object after successfully ingesting it.                                                     | false       | Optional |
 
 There are two modes of operation:
 
@@ -65,7 +65,7 @@ The receiver can subscribe to an SQS queue that receives S3 event notifications:
 ```yaml
 sqs:
   # Required: The ARN of the SQS queue that receives S3 bucket notifications
-  queue_url: "https:https://sqs.us-east-1.amazonaws.com/123456789012/test-queue"
+  queue_url: "https://sqs.us-east-1.amazonaws.com/123456789012/test-queue"
   # Required: The AWS region of the SQS queue
   region: "us-east-1"
 ```
@@ -156,5 +156,5 @@ the time of the data being ingested when the failure occurred.
 If the ingest process completes successfully a status message with `ingest_status` set to "completed" is sent.
 
 ## Object Lifecycle Management
-If the `tag_object_after_ingestion` is enabled the receiver will make a best-effort attempt to tag objects with `otel-collector:status = ingested` after they are processed by the pipeline. This requires an additional `s3:PutObjectTagging` permission.
+If `s3downloader.tag_object_after_ingestion` is enabled the receiver will make a best-effort attempt to tag objects with `otel-collector:status = ingested` after they are processed by the pipeline. This requires an additional `s3:PutObjectTagging` permission.
 This tag can then be used with a lifecycle policy to expire ingested objects or transition them to cheaper storage classes.

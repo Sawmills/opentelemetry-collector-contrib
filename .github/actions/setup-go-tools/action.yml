@@ -23,6 +23,7 @@ runs:
   using: composite
   steps:
     - name: Free disk space
+      if: runner.os == 'Linux'
       shell: bash
       # Force 'bash' to use Git Bash on Windows runners.
       # This allows us to share the same cleanup script across OSs.
