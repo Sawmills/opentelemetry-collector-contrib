@@ -315,6 +315,22 @@ func getValidScrapes(t *testing.T, rms []pmetric.ResourceMetrics, target *testDa
 	return out
 }
 
+func countObservedScrapes(rms []pmetric.ResourceMetrics) int {
+	observed := 0
+	for i := range rms {
+		for _, metric := range getMetrics(rms[i]) {
+			if metric.Name() == "up" {
+				observed++
+				break
+			}
+		}
+	}
+	if observed > 0 {
+		return observed
+	}
+	return len(rms)
+}
+
 func isScrapeConfigResource(rms pmetric.ResourceMetrics, target *testData) bool {
 	targetJobName, ok := target.attributes.Get("service.name")
 	if !ok {
@@ -855,17 +871,16 @@ func testComponent(t *testing.T, targets []*testData, alterConfig func(*Config),
 	// Wait for consumer to receive all expected scrapes (deterministic, replaces polling).
 	cms.Wait(t, 30*time.Second)
 
+	require.Lenf(t, mp.endpoints, len(targets), "mock targets must map to distinct endpoints")
+
 	// Wait for per-target scrape counts, capturing the snapshot used for validation.
 	var pResults map[string][]pmetric.ResourceMetrics
 	require.Eventually(t, func() bool {
 		metrics := cms.AllMetrics()
 		pResults = splitMetricsByTarget(metrics)
-		for _, target := range targets[:len(mp.endpoints)] {
+		for _, target := range targets {
 			scrapes := pResults[getTargetName(target)]
-
-			// There may be an additional scrape entry between when the mock server provided
-			// all responses and when we capture the metrics.  It will be ignored later.
-			if len(scrapes) < getTargetExpectedScrapes(target) {
+			if countObservedScrapes(scrapes) < getTargetExpectedScrapes(target) {
 				return false
 			}
 		}
@@ -874,7 +889,7 @@ func testComponent(t *testing.T, targets []*testData, alterConfig func(*Config),
 
 	// loop to validate outputs for each targets
 	// Stop once we have evaluated all expected results, any others are superfluous.
-	for _, target := range targets[:len(mp.endpoints)] {
+	for _, target := range targets {
 		t.Run(target.name, func(t *testing.T) {
 			scrapes := pResults[getTargetName(target)]
 			if !target.validateScrapes {

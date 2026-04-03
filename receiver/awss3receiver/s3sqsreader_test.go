@@ -798,7 +798,7 @@ func TestS3SQSReader_ReadAllErrorHandling(t *testing.T) {
 			s3Prefix:                "",
 			maxNumberOfMessages:     10,
 			waitTimeSeconds:         20,
-			tagObjectAfterIngestion: true, // Enable deletion
+			tagObjectAfterIngestion: true, // Enable tagging after ingestion
 		}
 
 		ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
@@ -817,7 +817,7 @@ func TestS3SQSReader_ReadAllErrorHandling(t *testing.T) {
 		mockS3.AssertExpectations(t)
 
 		// Callback never called because there is no object to process
-		assert.False(t, callbackCalled, "Callback should have been called")
+		assert.False(t, callbackCalled, "Callback should not have been called when object does not exist")
 	})
 }
 
@@ -1162,7 +1162,7 @@ func TestS3SQSReader_Tag(t *testing.T) {
 				s3Prefix:                "",
 				maxNumberOfMessages:     10,
 				waitTimeSeconds:         20,
-				tagObjectAfterIngestion: true, // Enable deletion
+				tagObjectAfterIngestion: true, // Enable tagging after ingestion
 			}
 
 			ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
