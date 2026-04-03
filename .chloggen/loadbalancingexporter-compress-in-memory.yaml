@@ -1,0 +1,3 @@
+change_type: bug_fix
+component: exporter/loadbalancingexporter
+note: Restore real in-memory queue compression for `sending_queue.compress_in_memory` without forcing storage-backed queue semantics.
