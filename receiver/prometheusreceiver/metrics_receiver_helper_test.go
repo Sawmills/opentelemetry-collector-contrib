@@ -151,13 +151,26 @@ func (s *signalingSink) Wait(t *testing.T, timeout time.Duration) {
 func countExpectedScrapes(targets []*testData) int {
 	count := 0
 	for _, target := range targets {
-		for _, p := range target.pages {
-			if p.code != 404 {
-				count++
-			}
-		}
+		count += getTargetExpectedScrapes(target)
 	}
 	return count
+}
+
+func getTargetExpectedScrapes(target *testData) int {
+	wantTotal := 0
+	for _, p := range target.pages {
+		if p.code != 404 {
+			wantTotal++
+		}
+	}
+	return wantTotal
+}
+
+func getTargetName(target *testData) string {
+	if target.relabeledJob != "" {
+		return target.relabeledJob
+	}
+	return target.name
 }
 
 // -------------------------
@@ -300,6 +313,22 @@ func getValidScrapes(t *testing.T, rms []pmetric.ResourceMetrics, target *testDa
 		}
 	}
 	return out
+}
+
+func countObservedScrapes(rms []pmetric.ResourceMetrics) int {
+	observed := 0
+	for i := range rms {
+		for _, metric := range getMetrics(rms[i]) {
+			if metric.Name() == "up" {
+				observed++
+				break
+			}
+		}
+	}
+	if observed > 0 {
+		return observed
+	}
+	return len(rms)
 }
 
 func isScrapeConfigResource(rms pmetric.ResourceMetrics, target *testData) bool {
@@ -842,26 +871,29 @@ func testComponent(t *testing.T, targets []*testData, alterConfig func(*Config),
 	// Wait for consumer to receive all expected scrapes (deterministic, replaces polling).
 	cms.Wait(t, 30*time.Second)
 
-	// This begins the processing of the scrapes collected by the receiver
-	metrics := cms.AllMetrics()
-	// split and store results by target name
-	pResults := splitMetricsByTarget(metrics)
-	lres, lep := len(pResults), len(mp.endpoints)
-	// There may be an additional scrape entry between when the mock server provided
-	// all responses and when we capture the metrics.  It will be ignored later.
-	assert.GreaterOrEqualf(t, lres, lep, "want at least %d targets, but got %v\n", lep, lres)
+	require.Lenf(t, mp.endpoints, len(targets), "mock targets must map to distinct endpoints")
+
+	// Wait for per-target scrape counts, capturing the snapshot used for validation.
+	var pResults map[string][]pmetric.ResourceMetrics
+	require.Eventually(t, func() bool {
+		metrics := cms.AllMetrics()
+		pResults = splitMetricsByTarget(metrics)
+		for _, target := range targets {
+			scrapes := pResults[getTargetName(target)]
+			if countObservedScrapes(scrapes) < getTargetExpectedScrapes(target) {
+				return false
+			}
+		}
+		return true
+	}, 10*time.Second, 10*time.Millisecond, "failed to receive expected scrapes")
 
 	// loop to validate outputs for each targets
 	// Stop once we have evaluated all expected results, any others are superfluous.
-	for _, target := range targets[:lep] {
+	for _, target := range targets {
 		t.Run(target.name, func(t *testing.T) {
-			name := target.name
-			if target.relabeledJob != "" {
-				name = target.relabeledJob
-			}
-			scrapes := pResults[name]
+			scrapes := pResults[getTargetName(target)]
 			if !target.validateScrapes {
-				scrapes = getValidScrapes(t, pResults[name], target)
+				scrapes = getValidScrapes(t, scrapes, target)
 			}
 			target.validateFunc(t, target, scrapes)
 		})
