@@ -130,6 +130,16 @@ func (tCtx *TransformContext) GetLogRecord() plog.LogRecord {
 	return tCtx.logRecord
 }
 
+// GetCache returns the cache from the TransformContext.
+func (tCtx *TransformContext) GetCache() pcommon.Map {
+	return tCtx.cache
+}
+
+// CacheBodyStringIfNeeded stores a serialized body string for composite log bodies.
+func (tCtx *TransformContext) CacheBodyStringIfNeeded() {
+	ctxlog.CacheBodyStringIfNeeded(tCtx)
+}
+
 // GetInstrumentationScope returns the instrumentation scope from the TransformContext.
 func (tCtx *TransformContext) GetInstrumentationScope() pcommon.InstrumentationScope {
 	return tCtx.scopeLogs.Scope()

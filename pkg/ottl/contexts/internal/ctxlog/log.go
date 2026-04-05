@@ -178,15 +178,28 @@ func accessSeverityText[K Context]() ottl.StandardGetSetter[K] {
 	}
 }
 
-func accessBody[K Context]() ottl.StandardGetSetter[K] {
-	return ottl.StandardGetSetter[K]{
-		Getter: func(_ context.Context, tCtx K) (any, error) {
-			return ottlcommon.GetValue(tCtx.GetLogRecord().Body()), nil
-		},
-		Setter: func(_ context.Context, tCtx K, val any) error {
-			return ctxutil.SetValue(tCtx.GetLogRecord().Body(), val)
-		},
+type bodyGetSetter[K Context] struct{}
+
+func (bodyGetSetter[K]) Get(_ context.Context, tCtx K) (any, error) {
+	return ottlcommon.GetValue(tCtx.GetLogRecord().Body()), nil
+}
+
+func (bodyGetSetter[K]) Set(_ context.Context, tCtx K, val any) error {
+	// This setter intentionally does not invalidate the cached body string.
+	// That is safe for read-only ConditionSequence evaluation, but not for mixed read-write StatementSequence usage.
+	return ctxutil.SetValue(tCtx.GetLogRecord().Body(), val)
+}
+
+func (bodyGetSetter[K]) GetStringLike(_ context.Context, tCtx K) (*string, bool, error) {
+	if bodyString, ok := getCachedCompositeBodyString(tCtx); ok {
+		return &bodyString, true, nil
 	}
+
+	return nil, false, nil
+}
+
+func accessBody[K Context]() bodyGetSetter[K] {
+	return bodyGetSetter[K]{}
 }
 
 func accessBodyKey[K Context](key []ottl.Key[K]) ottl.StandardGetSetter[K] {
@@ -219,6 +232,9 @@ func accessBodyKey[K Context](key []ottl.Key[K]) ottl.StandardGetSetter[K] {
 func accessStringBody[K Context]() ottl.StandardGetSetter[K] {
 	return ottl.StandardGetSetter[K]{
 		Getter: func(_ context.Context, tCtx K) (any, error) {
+			if bodyString, ok := getCachedCompositeBodyString(tCtx); ok {
+				return bodyString, nil
+			}
 			return tCtx.GetLogRecord().Body().AsString(), nil
 		},
 		Setter: func(_ context.Context, tCtx K, val any) error {
@@ -230,6 +246,15 @@ func accessStringBody[K Context]() ottl.StandardGetSetter[K] {
 			return nil
 		},
 	}
+}
+
+func getCachedCompositeBodyString[K Context](tCtx K) (string, bool) {
+	body := tCtx.GetLogRecord().Body()
+	if !bodySupportsCachedString(body) {
+		return "", false
+	}
+
+	return getCachedBodyString(tCtx)
 }
 
 func accessAttributes[K Context]() ottl.StandardGetSetter[K] {

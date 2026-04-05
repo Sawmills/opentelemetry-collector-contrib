@@ -376,6 +376,86 @@ func TestPathGetSetter(t *testing.T) {
 	}
 }
 
+func TestPathGetSetterBodyStringUsesCachedCompositeBody(t *testing.T) {
+	tests := []struct {
+		name     string
+		bodyType string
+		expected string
+	}{
+		{
+			name:     "map",
+			bodyType: "map",
+			expected: "{\"key\":\"val\"}",
+		},
+		{
+			name:     "slice",
+			bodyType: "slice",
+			expected: "[\"body\"]",
+		},
+	}
+
+	path := &pathtest.Path[*testContext]{
+		N: "body",
+		NextPath: &pathtest.Path[*testContext]{
+			N: "string",
+		},
+	}
+
+	accessor, err := ctxlog.PathGetSetter(path)
+	require.NoError(t, err)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := createTelemetry(tt.bodyType)
+			tCtx := newTestContext(log)
+			ctxlog.CacheBodyStringIfNeeded(tCtx)
+
+			got, err := accessor.Get(t.Context(), tCtx)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestPathGetSetterBodyStringFallsBackWithoutCache(t *testing.T) {
+	path := &pathtest.Path[*testContext]{
+		N: "body",
+		NextPath: &pathtest.Path[*testContext]{
+			N: "string",
+		},
+	}
+
+	accessor, err := ctxlog.PathGetSetter(path)
+	require.NoError(t, err)
+
+	log := createTelemetry("map")
+	got, err := accessor.Get(t.Context(), newTestContext(log))
+	require.NoError(t, err)
+	assert.Equal(t, log.Body().AsString(), got)
+}
+
+func TestPathGetSetterBodyIndexIgnoresCachedCompositeBody(t *testing.T) {
+	path := &pathtest.Path[*testContext]{
+		N: "body",
+		KeySlice: []ottl.Key[*testContext]{
+			&pathtest.Key[*testContext]{
+				S: ottltest.Strp("key"),
+			},
+		},
+	}
+
+	accessor, err := ctxlog.PathGetSetter(path)
+	require.NoError(t, err)
+
+	log := createTelemetry("map")
+	tCtx := newTestContext(log)
+	ctxlog.CacheBodyStringIfNeeded(tCtx)
+
+	got, err := accessor.Get(t.Context(), tCtx)
+	require.NoError(t, err)
+	assert.Equal(t, "val", got)
+}
+
 func createTelemetry(bodyType string) plog.LogRecord {
 	log := plog.NewLogRecord()
 	log.SetTimestamp(pcommon.NewTimestampFromTime(time1))
@@ -439,13 +519,21 @@ func createTelemetry(bodyType string) plog.LogRecord {
 }
 
 type testContext struct {
-	log plog.LogRecord
+	log   plog.LogRecord
+	cache pcommon.Map
 }
 
 func (l *testContext) GetLogRecord() plog.LogRecord {
 	return l.log
 }
 
+func (l *testContext) GetCache() pcommon.Map {
+	return l.cache
+}
+
 func newTestContext(log plog.LogRecord) *testContext {
-	return &testContext{log: log}
+	return &testContext{
+		log:   log,
+		cache: pcommon.NewMap(),
+	}
 }
