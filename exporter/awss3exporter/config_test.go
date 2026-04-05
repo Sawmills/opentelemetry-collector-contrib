@@ -195,6 +195,32 @@ service:
 	assert.Contains(t, err.Error(), "invalid s3_key_template")
 }
 
+func TestLoadConfig_StaticCredentialsMustBePaired(t *testing.T) {
+	_, err := loadConfigFromYAML(t, `receivers:
+  nop:
+
+exporters:
+  awss3:
+    s3uploader:
+      region: us-east-1
+      s3_bucket: sawmills-test
+      access_key_id: only-key
+
+processors:
+  nop:
+
+service:
+  pipelines:
+    traces:
+      receivers: [nop]
+      processors: [nop]
+      exporters: [awss3]
+`)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "access_key_id and secret_access_key must be set together")
+}
+
 func TestLoadConfig(t *testing.T) {
 	factories, err := otelcoltest.NopFactories()
 	assert.NoError(t, err)

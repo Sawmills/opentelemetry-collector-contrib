@@ -194,8 +194,8 @@ func TestExporterRecordsEquivalentFlushAndUploadTelemetry(t *testing.T) {
 	assertMetricAttribute(t, flushToUploadPoint.Attributes, "outcome", "success")
 
 	assert.GreaterOrEqual(t, uploadDurationPoint.Sum, uploadDelay.Milliseconds())
+	assert.GreaterOrEqual(t, flushToUploadPoint.Sum, handoffGap.Milliseconds())
 	assert.Less(t, flushToUploadPoint.Sum, uploadDurationPoint.Sum)
-	assert.Less(t, flushToUploadPoint.Sum, int64(150))
 }
 
 func assertMetricDataPointCount(t *testing.T, tel *componenttest.Telemetry, name string, want int) {

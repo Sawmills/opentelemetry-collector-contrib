@@ -147,6 +147,8 @@ func (a *datadogParquetAdapter) transformWithDdTags(
 	status := ""
 	record.Attributes().Range(func(key string, value pcommon.Value) bool {
 		switch strings.ToLower(key) {
+		case "msg", "message", "log":
+			item.Message = value.AsString()
 		case "ddsource", "datadog.log.source":
 			item.Source = value.AsString()
 		case "hostname":
@@ -183,7 +185,7 @@ func (a *datadogParquetAdapter) transformWithDdTags(
 	}
 
 	item.Attributes["status"] = status
-	item.Status = strings.ToLower(status)
+	item.Status = status
 	if record.Timestamp() != 0 {
 		date := record.Timestamp().AsTime().Format("2006-01-02T15:04:05.000Z07:00")
 		item.Attributes["@timestamp"] = date

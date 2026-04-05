@@ -107,7 +107,7 @@ func TestUploaderOptions_LegacyAuthAndSSE(t *testing.T) {
 func TestUploaderOptions_StaticCredsAndRoleArnUsesAssumeRole(t *testing.T) {
 	assumedAccessKey := "assumed-access-key"
 	var stsCalls int32
-	var s3Authorization string
+	s3AuthorizationCh := make(chan string, 1)
 
 	stsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
@@ -145,7 +145,10 @@ func TestUploaderOptions_StaticCredsAndRoleArnUsesAssumeRole(t *testing.T) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		_ = r.Body.Close()
 
-		s3Authorization = r.Header.Get("Authorization")
+		select {
+		case s3AuthorizationCh <- r.Header.Get("Authorization"):
+		default:
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(s3Srv.Close)
@@ -183,6 +186,12 @@ func TestUploaderOptions_StaticCredsAndRoleArnUsesAssumeRole(t *testing.T) {
 	}
 
 	assert.Equal(t, int32(1), atomic.LoadInt32(&stsCalls))
+	var s3Authorization string
+	select {
+	case s3Authorization = <-s3AuthorizationCh:
+	default:
+		t.Fatal("expected S3 authorization header")
+	}
 	assert.Contains(t, s3Authorization, "Credential="+assumedAccessKey+"/")
 }
 

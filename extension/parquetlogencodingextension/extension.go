@@ -338,9 +338,10 @@ func (e *parquetLogExtension) defaultReadWriterBytes() ([]byte, error) {
 	}
 	pqBytes, err := io.ReadAll(pqFile)
 	if err != nil {
+		_ = pqFile.Close()
 		return nil, fmt.Errorf("read memory file: %w", err)
 	}
-	if err := e.memFile.Close(); err != nil {
+	if err := pqFile.Close(); err != nil {
 		return nil, fmt.Errorf("close memory file: %w", err)
 	}
 

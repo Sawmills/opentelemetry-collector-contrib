@@ -163,6 +163,9 @@ func (c *Config) Validate() error {
 	if c.S3Uploader.S3Partition != "" && c.S3Uploader.S3Partition != "hour" && c.S3Uploader.S3Partition != "minute" {
 		errs = multierr.Append(errs, errors.New("invalid s3_partition"))
 	}
+	if (c.S3Uploader.AccessKeyID == "") != (c.S3Uploader.SecretAccessKey == "") {
+		errs = multierr.Append(errs, errors.New("access_key_id and secret_access_key must be set together"))
+	}
 	if c.S3Uploader.S3KeyTemplate != "" {
 		if _, err := template.New("legacy-s3-key").Parse(c.S3Uploader.S3KeyTemplate); err != nil {
 			errs = multierr.Append(errs, fmt.Errorf("invalid s3_key_template: %w", err))
