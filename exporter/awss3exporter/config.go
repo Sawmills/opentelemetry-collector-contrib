@@ -30,6 +30,8 @@ type S3UploaderConfig struct {
 	S3BasePrefix string `mapstructure:"s3_base_prefix"`
 	// S3Prefix is the key (directory) prefix to write to inside the bucket. Appended to S3BasePrefix if provided.
 	S3Prefix string `mapstructure:"s3_prefix"`
+	// S3Partition is the legacy partition selector used by generated configs.
+	S3Partition string `mapstructure:"s3_partition"`
 	// S3PartitionFormat is used to provide the rollup on how data is written. Uses [strftime](https://www.man7.org/linux/man-pages/man3/strftime.3.html) formatting.
 	S3PartitionFormat string `mapstructure:"s3_partition_format"`
 	// S3PartitionTimezone is used to provide timezone for partition time. Defaults to Local timezone.
@@ -40,6 +42,14 @@ type S3UploaderConfig struct {
 	Endpoint string `mapstructure:"endpoint"`
 	// RoleArn is the role policy to use when interacting with S3
 	RoleArn string `mapstructure:"role_arn"`
+	// AccessKeyID is the legacy static AWS access key used by generated configs.
+	AccessKeyID string `mapstructure:"access_key_id"`
+	// SecretAccessKey is the legacy static AWS secret used by generated configs.
+	SecretAccessKey string `mapstructure:"secret_access_key"`
+	// ServerSideEncryption is the legacy SSE setting used by generated configs.
+	ServerSideEncryption string `mapstructure:"server_side_encryption"`
+	// S3KeyTemplate is the legacy key template used by datadog JSON configs.
+	S3KeyTemplate string `mapstructure:"s3_key_template"`
 	// S3ForcePathStyle sets the value for force path style.
 	S3ForcePathStyle bool `mapstructure:"s3_force_path_style"`
 	// DisableSLL forces communication to happen via HTTP instead of HTTPS.
@@ -102,6 +112,21 @@ type Config struct {
 	ResourceAttrsToS3     ResourceAttrsToS3 `mapstructure:"resource_attrs_to_s3"`
 }
 
+func (c *Config) normalizedS3PartitionFormat() string {
+	if c.S3Uploader.S3PartitionFormat != "" {
+		return c.S3Uploader.S3PartitionFormat
+	}
+
+	switch c.S3Uploader.S3Partition {
+	case "hour":
+		return "year=%Y/month=%m/day=%d/hour=%H"
+	case "minute":
+		return "year=%Y/month=%m/day=%d/hour=%H/minute=%M"
+	default:
+		return c.S3Uploader.S3PartitionFormat
+	}
+}
+
 func (c *Config) Validate() error {
 	var errs error
 	validStorageClasses := map[string]bool{
@@ -132,6 +157,9 @@ func (c *Config) Validate() error {
 	}
 	if c.S3Uploader.S3Bucket == "" && c.S3Uploader.Endpoint == "" {
 		errs = multierr.Append(errs, errors.New("bucket or endpoint is required"))
+	}
+	if c.S3Uploader.S3Partition != "" && c.S3Uploader.S3Partition != "hour" && c.S3Uploader.S3Partition != "minute" {
+		errs = multierr.Append(errs, errors.New("invalid s3_partition"))
 	}
 
 	if !validStorageClasses[c.S3Uploader.StorageClass] {

@@ -6,15 +6,18 @@ package awss3exporter // import "github.com/open-telemetry/opentelemetry-collect
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/aws/smithy-go/middleware"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awss3exporter/internal/upload"
@@ -32,6 +35,16 @@ func newUploadManager(
 
 	if region := conf.S3Uploader.Region; region != "" {
 		configOpts = append(configOpts, config.WithRegion(region))
+	}
+
+	if conf.S3Uploader.AccessKeyID != "" && conf.S3Uploader.SecretAccessKey != "" {
+		configOpts = append(configOpts, config.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(
+				conf.S3Uploader.AccessKeyID,
+				conf.S3Uploader.SecretAccessKey,
+				"",
+			),
+		))
 	}
 
 	switch conf.S3Uploader.RetryMode {
@@ -62,6 +75,12 @@ func newUploadManager(
 	if conf.S3Uploader.Endpoint != "" {
 		s3Opts = append(s3Opts, func(o *s3.Options) {
 			o.BaseEndpoint = aws.String(conf.S3Uploader.Endpoint)
+		})
+	}
+
+	if conf.S3Uploader.ServerSideEncryption != "" {
+		s3Opts = append(s3Opts, func(o *s3.Options) {
+			o.APIOptions = append(o.APIOptions, serverSideEncryptionAPIOption(conf.S3Uploader.ServerSideEncryption))
 		})
 	}
 
@@ -107,6 +126,7 @@ func newUploadManager(
 		&upload.PartitionKeyBuilder{
 			PartitionBasePrefix:   conf.S3Uploader.S3BasePrefix,
 			PartitionPrefix:       conf.S3Uploader.S3Prefix,
+			LegacyS3KeyTemplate:   conf.S3Uploader.S3KeyTemplate,
 			PartitionFormat:       conf.S3Uploader.S3PartitionFormat,
 			PartitionTimeLocation: s3PartitionTimeLocation,
 			FilePrefix:            conf.S3Uploader.FilePrefix,
@@ -120,4 +140,39 @@ func newUploadManager(
 		s3types.StorageClass(conf.S3Uploader.StorageClass),
 		managerOpts...,
 	), nil
+}
+
+func serverSideEncryptionAPIOption(value string) func(*middleware.Stack) error {
+	return func(stack *middleware.Stack) error {
+		return stack.Initialize.Add(middleware.InitializeMiddlewareFunc(
+			"awss3exporterServerSideEncryption",
+			func(ctx context.Context, in middleware.InitializeInput, next middleware.InitializeHandler) (middleware.InitializeOutput, middleware.Metadata, error) {
+				applyServerSideEncryption(in.Parameters, value)
+				return next.HandleInitialize(ctx, in)
+			},
+		), middleware.After)
+	}
+}
+
+func applyServerSideEncryption(parameters interface{}, value string) {
+	if value == "" || parameters == nil {
+		return
+	}
+
+	paramValue := reflect.ValueOf(parameters)
+	if paramValue.Kind() != reflect.Pointer || paramValue.IsNil() {
+		return
+	}
+
+	elem := paramValue.Elem()
+	if elem.Kind() != reflect.Struct {
+		return
+	}
+
+	field := elem.FieldByName("ServerSideEncryption")
+	if !field.IsValid() || !field.CanSet() || field.Kind() != reflect.String {
+		return
+	}
+
+	field.SetString(value)
 }

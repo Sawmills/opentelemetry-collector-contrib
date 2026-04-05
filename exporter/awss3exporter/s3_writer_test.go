@@ -4,12 +4,187 @@
 package awss3exporter
 
 import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/collector/config/configcompression"
 	"go.uber.org/zap"
 )
+
+type testUploaderClient struct {
+	putObjectInput    testPutObjectInput
+	staticCredentials testStaticCredentials
+}
+
+type testPutObjectInput struct {
+	ServerSideEncryption string
+}
+
+type testStaticCredentials struct {
+	AccessKeyID string
+}
+
+func newTestClientFromConfig(t *testing.T, conf Config) testUploaderClient {
+	t.Helper()
+
+	t.Setenv("AWS_ACCESS_KEY_ID", "env-access-key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "env-secret-key")
+
+	var captured testUploaderClient
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		_ = r.Body.Close()
+
+		captured.putObjectInput.ServerSideEncryption = r.Header.Get("x-amz-server-side-encryption")
+		captured.staticCredentials.AccessKeyID = credentialAccessKey(r.Header.Get("Authorization"))
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	conf.S3Uploader.Endpoint = srv.URL
+	conf.S3Uploader.Region = "us-east-1"
+	conf.S3Uploader.S3Bucket = "test-bucket"
+	conf.S3Uploader.S3ForcePathStyle = true
+
+	manager, err := newUploadManager(
+		context.Background(),
+		&conf,
+		zap.NewNop(),
+		"logs",
+		"otlp",
+		false,
+	)
+	if !assert.NoError(t, err) {
+		return captured
+	}
+
+	err = manager.Upload(context.Background(), []byte("payload"), nil)
+	if !assert.NoError(t, err) {
+		return captured
+	}
+
+	return captured
+}
+
+func credentialAccessKey(authHeader string) string {
+	const credentialPrefix = "Credential="
+
+	start := strings.Index(authHeader, credentialPrefix)
+	if start < 0 {
+		return ""
+	}
+
+	credential := authHeader[start+len(credentialPrefix):]
+	if end := strings.Index(credential, "/"); end >= 0 {
+		return credential[:end]
+	}
+
+	return credential
+}
+
+func TestUploaderOptions_LegacyAuthAndSSE(t *testing.T) {
+	client := newTestClientFromConfig(t, Config{
+		S3Uploader: S3UploaderConfig{
+			AccessKeyID:          "key",
+			SecretAccessKey:      "secret",
+			ServerSideEncryption: "AES256",
+		},
+	})
+
+	assert.Equal(t, "AES256", client.putObjectInput.ServerSideEncryption)
+	assert.Equal(t, "key", client.staticCredentials.AccessKeyID)
+}
+
+func TestUploaderOptions_StaticCredsAndRoleArnUsesAssumeRole(t *testing.T) {
+	assumedAccessKey := "assumed-access-key"
+	var stsCalls int32
+	var s3Authorization string
+
+	stsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		_ = r.Body.Close()
+
+		atomic.AddInt32(&stsCalls, 1)
+		assert.Equal(t, "POST", r.Method)
+
+		w.Header().Set("Content-Type", "text/xml")
+		_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
+<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/">
+  <AssumeRoleResult>
+    <Credentials>
+      <AccessKeyId>%s</AccessKeyId>
+      <SecretAccessKey>assumed-secret</SecretAccessKey>
+      <SessionToken>assumed-token</SessionToken>
+      <Expiration>%s</Expiration>
+    </Credentials>
+    <AssumedRoleUser>
+      <Arn>arn:aws:sts::123456789012:assumed-role/test/session</Arn>
+      <AssumedRoleId>ID:session</AssumedRoleId>
+    </AssumedRoleUser>
+  </AssumeRoleResult>
+  <ResponseMetadata>
+    <RequestId>request-id</RequestId>
+  </ResponseMetadata>
+</AssumeRoleResponse>`,
+			assumedAccessKey,
+			time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		)
+	}))
+	t.Cleanup(stsSrv.Close)
+
+	s3Srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		_ = r.Body.Close()
+
+		s3Authorization = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(s3Srv.Close)
+
+	t.Setenv("AWS_ENDPOINT_URL", stsSrv.URL)
+
+	conf := Config{
+		S3Uploader: S3UploaderConfig{
+			Region:               "us-east-1",
+			S3Bucket:             "test-bucket",
+			S3ForcePathStyle:     true,
+			Endpoint:             s3Srv.URL,
+			AccessKeyID:          "static-key",
+			SecretAccessKey:      "static-secret",
+			RoleArn:              "arn:aws:iam::123456789012:role/test",
+			ServerSideEncryption: "AES256",
+		},
+	}
+
+	manager, err := newUploadManager(
+		context.Background(),
+		&conf,
+		zap.NewNop(),
+		"logs",
+		"otlp",
+		false,
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	err = manager.Upload(context.Background(), []byte("payload"), nil)
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&stsCalls))
+	assert.Contains(t, s3Authorization, "Credential="+assumedAccessKey+"/")
+}
 
 func TestNewUploadManager(t *testing.T) {
 	t.Parallel()

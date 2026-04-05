@@ -4,10 +4,12 @@
 package upload // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awss3exporter/internal/upload"
 
 import (
+	"bytes"
 	"math/rand/v2"
 	"path"
 	"strconv"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,6 +30,8 @@ type PartitionKeyBuilder struct {
 	// prefix used to write the file.
 	// Appended to PartitionBasePrefix if provided.
 	PartitionPrefix string
+	// LegacyS3KeyTemplate preserves the legacy key template behavior used by generated configs.
+	LegacyS3KeyTemplate string
 	// PartitionFormat is used to separate values into
 	// different time buckets.
 	// Uses [strftime](https://www.man7.org/linux/man-pages/man3/strftime.3.html) formatting.
@@ -57,13 +61,40 @@ type PartitionKeyBuilder struct {
 }
 
 func (pki *PartitionKeyBuilder) Build(ts time.Time, overridePrefix string) string {
+	if pki.LegacyS3KeyTemplate != "" {
+		return buildLegacyTemplateKey(pki.legacyTemplatePrefix(overridePrefix), pki.LegacyS3KeyTemplate, ts)
+	}
+
 	return path.Join(pki.bucketKeyPrefix(ts, overridePrefix), pki.fileName())
 }
 
-func (pki *PartitionKeyBuilder) bucketKeyPrefix(ts time.Time, overridePrefix string) string {
-	// Don't want to overwrite the actual value
+type legacyTemplateData struct {
+	Prefix string
+	Date   string
+	UUID   string
+}
+
+func buildLegacyTemplateKey(prefix, templateText string, ts time.Time) string {
+	tmpl, err := template.New("legacy-s3-key").Parse(templateText)
+	if err != nil {
+		return ""
+	}
+
+	var rendered bytes.Buffer
+	err = tmpl.Execute(&rendered, legacyTemplateData{
+		Prefix: prefix,
+		Date:   ts.UTC().Format("2006/01/02"),
+		UUID:   uuid.NewString(),
+	})
+	if err != nil {
+		return ""
+	}
+
+	return rendered.String()
+}
+
+func (pki *PartitionKeyBuilder) legacyTemplatePrefix(overridePrefix string) string {
 	prefix := pki.PartitionPrefix
-	// Only override when it's not empty string
 	if overridePrefix != "" {
 		prefix = overridePrefix
 	}
@@ -73,6 +104,18 @@ func (pki *PartitionKeyBuilder) bucketKeyPrefix(ts time.Time, overridePrefix str
 	if pki.PartitionBasePrefix != "" {
 		pathParts = append(pathParts, pki.PartitionBasePrefix)
 	}
+
+	if prefix != "" {
+		pathParts = append(pathParts, prefix)
+	}
+
+	return strings.Join(pathParts, "/")
+}
+
+func (pki *PartitionKeyBuilder) bucketKeyPrefix(ts time.Time, overridePrefix string) string {
+	// Don't want to overwrite the actual value
+	prefix := pki.legacyTemplatePrefix(overridePrefix)
+	var pathParts []string
 
 	if prefix != "" {
 		pathParts = append(pathParts, prefix)

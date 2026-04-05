@@ -11,6 +11,30 @@ import (
 	"go.opentelemetry.io/collector/config/configcompression"
 )
 
+func TestBuildKey_LegacyTemplate(t *testing.T) {
+	t.Parallel()
+
+	key := buildLegacyTemplateKey(
+		"logs",
+		"{{.Prefix}}/{{.Date}}/{{.UUID}}.json.gz",
+		time.Date(2026, 4, 4, 12, 30, 0, 0, time.UTC),
+	)
+
+	assert.Regexp(t, `^logs/2026/04/04/.+\.json\.gz$`, key)
+}
+
+func TestPartitionKeyBuilderBuild_LegacyTemplateIncludesBasePrefix(t *testing.T) {
+	t.Parallel()
+
+	key := (&PartitionKeyBuilder{
+		PartitionBasePrefix: "base/path",
+		PartitionPrefix:     "telemetry",
+		LegacyS3KeyTemplate: "{{.Prefix}}/{{.Date}}/{{.UUID}}.json.gz",
+	}).Build(time.Date(2026, 4, 4, 12, 30, 0, 0, time.UTC), "")
+
+	assert.Regexp(t, `^base/path/telemetry/2026/04/04/.+\.json\.gz$`, key)
+}
+
 func TestPartitionKeyInputsNewPartitionKey(t *testing.T) {
 	t.Parallel()
 
