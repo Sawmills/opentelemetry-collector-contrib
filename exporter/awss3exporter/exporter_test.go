@@ -7,9 +7,18 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/exporter/exportertest"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/ptrace"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awss3exporter/internal/upload"
@@ -95,4 +104,144 @@ func TestLogWithBucketAndPrefixAttrs(t *testing.T) {
 	logs := getTestLogs(t)
 	exporter := getLogExporterWithBucketAndPrefixAttrs(t)
 	assert.NoError(t, exporter.ConsumeLogs(t.Context(), logs))
+}
+
+type flushMetadataMarshaler struct {
+	buf       []byte
+	flushMeta flushMetadata
+}
+
+func (m *flushMetadataMarshaler) MarshalTraces(ptrace.Traces) ([]byte, error) { return nil, nil }
+
+func (m *flushMetadataMarshaler) MarshalLogs(plog.Logs) ([]byte, error) {
+	return m.buf, nil
+}
+
+func (m *flushMetadataMarshaler) MarshalLogsWithFlushMetadata(
+	plog.Logs,
+) ([]byte, flushMetadata, error) {
+	return m.buf, m.flushMeta, nil
+}
+
+func (m *flushMetadataMarshaler) MarshalMetrics(pmetric.Metrics) ([]byte, error) { return nil, nil }
+
+func (m *flushMetadataMarshaler) format() string { return "parquet" }
+
+func (m *flushMetadataMarshaler) compressed() bool { return false }
+
+type uploaderStub struct {
+	err         error
+	uploadCalls int
+	delay       time.Duration
+}
+
+func (u *uploaderStub) Upload(context.Context, []byte, *upload.UploadOptions) error {
+	u.uploadCalls++
+	if u.delay > 0 {
+		time.Sleep(u.delay)
+	}
+	return u.err
+}
+
+func TestExporterRecordsEquivalentFlushAndUploadTelemetry(t *testing.T) {
+	tel := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, tel.Shutdown(context.Background()))
+	})
+
+	settings := exportertest.NewNopSettings(component.MustNewType("awss3"))
+	settings.TelemetrySettings = tel.NewTelemetrySettings()
+
+	exporter := newS3Exporter(createDefaultConfig().(*Config), "logs", settings)
+	const (
+		expectedReason = "manual"
+		handoffGap     = 50 * time.Millisecond
+		uploadDelay    = 200 * time.Millisecond
+	)
+	exporter.marshaler = &flushMetadataMarshaler{
+		buf: []byte("payload"),
+		flushMeta: flushMetadata{
+			reason:           expectedReason,
+			flushCompletedAt: time.Now().Add(-handoffGap),
+		},
+	}
+	uploader := &uploaderStub{delay: uploadDelay}
+	exporter.uploader = uploader
+
+	require.NoError(t, exporter.ConsumeLogs(context.Background(), getTestLogs(t)))
+	require.Equal(t, 1, uploader.uploadCalls)
+
+	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_flush_start_total", 1)
+	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_flush_complete_total", 1)
+	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_upload_start_total", 1)
+	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_upload_complete_total", 1)
+	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_flush_duration", 1)
+	uploadDurationPoint := requireHistogramPoint(t, tel, "otelcol_exporter_awss3_upload_duration")
+	flushToUploadPoint := requireHistogramPoint(t, tel, "otelcol_exporter_awss3_flush_to_upload_duration")
+	flushCompletePoint := requireSumPoint(t, tel, "otelcol_exporter_awss3_flush_complete_total")
+	uploadCompletePoint := requireSumPoint(t, tel, "otelcol_exporter_awss3_upload_complete_total")
+
+	assert.Equal(t, int64(1), flushCompletePoint.Value)
+	assert.Equal(t, int64(1), uploadCompletePoint.Value)
+	assertMetricAttribute(t, flushCompletePoint.Attributes, "reason", expectedReason)
+	assertMetricAttribute(t, flushCompletePoint.Attributes, "signal", "logs")
+	assertMetricAttribute(t, flushCompletePoint.Attributes, "outcome", "success")
+	assertMetricAttribute(t, uploadCompletePoint.Attributes, "reason", expectedReason)
+	assertMetricAttribute(t, uploadCompletePoint.Attributes, "signal", "logs")
+	assertMetricAttribute(t, uploadCompletePoint.Attributes, "outcome", "success")
+	assertMetricAttribute(t, flushToUploadPoint.Attributes, "reason", expectedReason)
+	assertMetricAttribute(t, flushToUploadPoint.Attributes, "signal", "logs")
+	assertMetricAttribute(t, flushToUploadPoint.Attributes, "outcome", "success")
+
+	assert.GreaterOrEqual(t, uploadDurationPoint.Sum, uploadDelay.Milliseconds())
+	assert.Less(t, flushToUploadPoint.Sum, uploadDurationPoint.Sum)
+	assert.Less(t, flushToUploadPoint.Sum, int64(150))
+}
+
+func assertMetricDataPointCount(t *testing.T, tel *componenttest.Telemetry, name string, want int) {
+	t.Helper()
+
+	metric, err := tel.GetMetric(name)
+	require.NoError(t, err)
+
+	switch data := metric.Data.(type) {
+	case metricdata.Sum[int64]:
+		require.Len(t, data.DataPoints, want)
+	case metricdata.Histogram[int64]:
+		require.Len(t, data.DataPoints, want)
+	default:
+		t.Fatalf("unexpected metric type %T for %s", metric.Data, name)
+	}
+}
+
+func requireHistogramPoint(t *testing.T, tel *componenttest.Telemetry, name string) metricdata.HistogramDataPoint[int64] {
+	t.Helper()
+
+	metric, err := tel.GetMetric(name)
+	require.NoError(t, err)
+
+	histogram, ok := metric.Data.(metricdata.Histogram[int64])
+	require.True(t, ok, "metric %s is not a histogram", name)
+	require.Len(t, histogram.DataPoints, 1)
+	return histogram.DataPoints[0]
+}
+
+func requireSumPoint(t *testing.T, tel *componenttest.Telemetry, name string) metricdata.DataPoint[int64] {
+	t.Helper()
+
+	metric, err := tel.GetMetric(name)
+	require.NoError(t, err)
+
+	sum, ok := metric.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "metric %s is not a sum", name)
+	require.Len(t, sum.DataPoints, 1)
+	return sum.DataPoints[0]
+}
+
+func assertMetricAttribute(t *testing.T, attrs attribute.Set, key, want string) {
+	t.Helper()
+
+	value, ok := attrs.Value(attribute.Key(key))
+	require.True(t, ok, "missing attribute %s", key)
+	assert.Equal(t, want, value.AsString())
 }

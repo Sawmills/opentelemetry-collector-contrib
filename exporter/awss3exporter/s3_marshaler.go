@@ -4,11 +4,17 @@
 package awss3exporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awss3exporter"
 
 import (
+	"time"
+
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
 	"go.uber.org/zap"
 )
+
+type LogMarshalerWithFlushMetadata interface {
+	MarshalLogsWithFlushMetadata(plog.Logs) ([]byte, string, time.Time, error)
+}
 
 type s3Marshaler struct {
 	logsMarshaler    plog.Marshaler
@@ -24,7 +30,26 @@ func (marshaler *s3Marshaler) MarshalTraces(td ptrace.Traces) ([]byte, error) {
 }
 
 func (marshaler *s3Marshaler) MarshalLogs(ld plog.Logs) ([]byte, error) {
-	return marshaler.logsMarshaler.MarshalLogs(ld)
+	buf, _, err := marshaler.MarshalLogsWithFlushMetadata(ld)
+	return buf, err
+}
+
+func (marshaler *s3Marshaler) MarshalLogsWithFlushMetadata(
+	ld plog.Logs,
+) ([]byte, flushMetadata, error) {
+	if metadataMarshaler, ok := marshaler.logsMarshaler.(LogMarshalerWithFlushMetadata); ok {
+		buf, reason, completedAt, err := metadataMarshaler.MarshalLogsWithFlushMetadata(ld)
+		if err != nil {
+			return nil, flushMetadata{}, err
+		}
+		return buf, flushMetadata{
+			reason:           reason,
+			flushCompletedAt: completedAt,
+		}, nil
+	}
+
+	buf, err := marshaler.logsMarshaler.MarshalLogs(ld)
+	return buf, flushMetadata{}, err
 }
 
 func (marshaler *s3Marshaler) MarshalMetrics(md pmetric.Metrics) ([]byte, error) {

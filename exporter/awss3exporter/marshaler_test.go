@@ -6,11 +6,13 @@ package awss3exporter
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/pdata/plog"
 	"go.uber.org/zap"
 )
 
@@ -47,7 +49,7 @@ func TestMarshaler(t *testing.T) {
 }
 
 type hostWithExtensions struct {
-	encoding encodingExtension
+	encoding component.Component
 }
 
 func (h hostWithExtensions) GetExtensions() map[component.ID]component.Component {
@@ -83,4 +85,52 @@ func TestMarshalerFromEncoding(t *testing.T) {
 		assert.EqualError(t, err, `unknown encoding "foo"`)
 		require.Nil(t, m)
 	}
+}
+
+type encodingExtensionWithFlushMetadata struct {
+	buf         []byte
+	reason      string
+	completedAt time.Time
+}
+
+func (encodingExtensionWithFlushMetadata) Start(context.Context, component.Host) error {
+	panic("unsupported")
+}
+
+func (encodingExtensionWithFlushMetadata) Shutdown(context.Context) error {
+	panic("unsupported")
+}
+
+func (e encodingExtensionWithFlushMetadata) MarshalLogs(plog.Logs) ([]byte, error) {
+	return e.buf, nil
+}
+
+func (e encodingExtensionWithFlushMetadata) MarshalLogsWithFlushMetadata(
+	plog.Logs,
+) ([]byte, string, time.Time, error) {
+	return e.buf, e.reason, e.completedAt, nil
+}
+
+func TestMarshalLogsWithFlushMetadata_FromEncodingExtension(t *testing.T) {
+	id := component.MustNewID("foo")
+	completedAt := time.Now()
+	host := hostWithExtensions{
+		encoding: encodingExtensionWithFlushMetadata{
+			buf:         []byte("payload"),
+			reason:      "manual",
+			completedAt: completedAt,
+		},
+	}
+
+	m, err := newMarshalerFromEncoding(&id, "parquet", host, zap.NewNop())
+	require.NoError(t, err)
+
+	s3m, ok := m.(*s3Marshaler)
+	require.True(t, ok)
+
+	buf, meta, err := s3m.MarshalLogsWithFlushMetadata(plog.NewLogs())
+	require.NoError(t, err)
+	require.Equal(t, []byte("payload"), buf)
+	assert.Equal(t, "manual", meta.reason)
+	assert.Equal(t, completedAt, meta.flushCompletedAt)
 }
