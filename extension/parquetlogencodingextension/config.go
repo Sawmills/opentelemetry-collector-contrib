@@ -10,7 +10,7 @@ import (
 const (
 	defaultMaxFileSizeBytes   = 100 * 1024 * 1024
 	defaultNumberOfGoRoutines = 4
-	defaultRowGroupSizeBytes  = 128 * 1024 * 1024
+	defaultRowGroupSizeBytes  = defaultMaxFileSizeBytes
 	defaultPageSizeBytes      = 1 * 1024 * 1024
 	defaultCompressionCodec   = "snappy"
 )
@@ -42,6 +42,9 @@ func (c *Config) Validate() error {
 	}
 	if c.RowGroupSizeBytes <= 0 {
 		return fmt.Errorf("row_group_size_bytes must be greater than 0")
+	}
+	if c.RowGroupSizeBytes > c.MaxFileSizeBytes {
+		return fmt.Errorf("row_group_size_bytes must be less than or equal to max_file_size_bytes")
 	}
 	if c.PageSizeBytes <= 0 {
 		return fmt.Errorf("page_size_bytes must be greater than 0")

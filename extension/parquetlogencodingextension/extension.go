@@ -22,10 +22,8 @@ import (
 )
 
 const (
-	flushReasonManual   = "manual"
-	flushReasonSize     = "size"
-	flushReasonTimer    = "timer"
-	flushReasonShutdown = "shutdown"
+	flushReasonManual = "manual"
+	flushReasonSize   = "size"
 )
 
 type parquetLogExtension struct {

@@ -8,36 +8,25 @@ import (
 	"github.com/xitongsys/parquet-go/source"
 )
 
-var memFs afero.Fs
-
 type OnCloseFunc func(string, io.Reader) error
 
 type MemFile struct {
 	FilePath string
 	File     afero.File
+	Fs       afero.Fs
 	OnClose  OnCloseFunc
 }
 
-func SetInMemFileFs(fs *afero.Fs) {
-	memFs = *fs
-}
-
-func GetMemFileFs() afero.Fs {
-	return memFs
-}
-
 func NewMemFileWriter(name string, f OnCloseFunc) (source.ParquetFile, error) {
-	if memFs == nil {
-		memFs = afero.NewMemMapFs()
+	m := MemFile{
+		Fs:      afero.NewMemMapFs(),
+		OnClose: f,
 	}
-
-	var m MemFile
-	m.OnClose = f
 	return m.Create(name)
 }
 
 func (fs *MemFile) Create(name string) (source.ParquetFile, error) {
-	file, err := memFs.Create(name)
+	file, err := fs.Fs.Create(name)
 	if err != nil {
 		return fs, err
 	}
@@ -52,7 +41,7 @@ func (fs *MemFile) Open(name string) (source.ParquetFile, error) {
 		name = fs.FilePath
 	}
 
-	file, err := memFs.Open(name)
+	file, err := fs.Fs.Open(name)
 	if err != nil {
 		return fs, err
 	}
@@ -90,7 +79,11 @@ func (fs *MemFile) Close() error {
 		return err
 	}
 	if fs.OnClose != nil {
-		f, _ := fs.Open(fs.FilePath)
+		f, err := fs.Open(fs.FilePath)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
 		if err := fs.OnClose(filepath.Base(fs.FilePath), f); err != nil {
 			return err
 		}

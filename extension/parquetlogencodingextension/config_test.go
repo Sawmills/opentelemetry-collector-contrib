@@ -30,3 +30,14 @@ func TestConfigValidateCompressionCodec(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigValidateRowGroupSizeWithinMaxFileSize(t *testing.T) {
+	cfg := CreateDefaultConfig().(*Config)
+	cfg.MaxFileSizeBytes = 10
+	cfg.RowGroupSizeBytes = 11
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error when row group size exceeds max file size")
+	}
+}

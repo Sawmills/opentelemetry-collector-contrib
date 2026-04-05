@@ -5,6 +5,7 @@ package upload // import "github.com/open-telemetry/opentelemetry-collector-cont
 
 import (
 	"bytes"
+	"log/slog"
 	"math/rand/v2"
 	"path"
 	"strconv"
@@ -77,6 +78,7 @@ type legacyTemplateData struct {
 func buildLegacyTemplateKey(prefix, templateText string, ts time.Time) string {
 	tmpl, err := template.New("legacy-s3-key").Parse(templateText)
 	if err != nil {
+		slog.Error("failed to parse legacy s3 key template", "error", err)
 		return ""
 	}
 
@@ -87,6 +89,7 @@ func buildLegacyTemplateKey(prefix, templateText string, ts time.Time) string {
 		UUID:   uuid.NewString(),
 	})
 	if err != nil {
+		slog.Error("failed to execute legacy s3 key template", "error", err)
 		return ""
 	}
 

@@ -168,7 +168,9 @@ func (a *datadogParquetAdapter) transformWithDdTags(
 			return true
 		}
 		for k, v := range flattenAttribute(key, value, 1) {
-			item.Attributes[k] = v
+			if _, exists := item.Attributes[k]; !exists {
+				item.Attributes[k] = v
+			}
 		}
 		return true
 	})
@@ -244,7 +246,9 @@ func (a *datadogParquetAdapter) transformDefault(
 	})
 
 	resource.Attributes().Range(func(key string, value pcommon.Value) bool {
-		item.Attributes[key] = valueToAny(value)
+		if _, exists := item.Attributes[key]; !exists {
+			item.Attributes[key] = valueToAny(value)
+		}
 		return true
 	})
 
