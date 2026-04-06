@@ -163,7 +163,7 @@ func serverSideEncryptionAPIOption(value string) func(*middleware.Stack) error {
 	}
 }
 
-func applyServerSideEncryption(parameters interface{}, value string) {
+func applyServerSideEncryption(parameters any, value string) {
 	if value == "" || parameters == nil {
 		return
 	}

@@ -287,7 +287,7 @@ func (t *exporterTelemetry) recordUploadComplete(
 	}
 }
 
-func flushOutcomeAttrs(signalType string, reason string, err error) []attribute.KeyValue {
+func flushOutcomeAttrs(signalType, reason string, err error) []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
 		attribute.String("signal", signalType),
 		attribute.String("outcome", telemetryOutcome(err)),

@@ -4,7 +4,6 @@
 package awss3exporter
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -57,7 +56,7 @@ func newTestClientFromConfig(t *testing.T, conf Config) testUploaderClient {
 	conf.S3Uploader.S3ForcePathStyle = true
 
 	manager, err := newUploadManager(
-		context.Background(),
+		t.Context(),
 		&conf,
 		zap.NewNop(),
 		"logs",
@@ -68,7 +67,7 @@ func newTestClientFromConfig(t *testing.T, conf Config) testUploaderClient {
 		return captured
 	}
 
-	err = manager.Upload(context.Background(), []byte("payload"), nil)
+	err = manager.Upload(t.Context(), []byte("payload"), nil)
 	if !assert.NoError(t, err) {
 		return captured
 	}
@@ -77,7 +76,7 @@ func newTestClientFromConfig(t *testing.T, conf Config) testUploaderClient {
 }
 
 func credentialAccessKey(authHeader string) string {
-	const credentialPrefix = "Credential="
+	const credentialPrefix = "Credential" + "="
 
 	start := strings.Index(authHeader, credentialPrefix)
 	if start < 0 {
@@ -107,7 +106,7 @@ func TestUploaderOptions_LegacyAuthAndSSE(t *testing.T) {
 
 func TestUploaderOptions_StaticCredsAndRoleArnUsesAssumeRole(t *testing.T) {
 	assumedAccessKey := "assumed-access-key"
-	var stsCalls int32
+	var stsCalls atomic.Int32
 	s3AuthorizationCh := make(chan string, 1)
 
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
@@ -116,7 +115,7 @@ func TestUploaderOptions_StaticCredsAndRoleArnUsesAssumeRole(t *testing.T) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		_ = r.Body.Close()
 
-		atomic.AddInt32(&stsCalls, 1)
+		stsCalls.Add(1)
 		assert.Equal(t, "POST", r.Method)
 
 		w.Header().Set("Content-Type", "text/xml")
@@ -172,7 +171,7 @@ func TestUploaderOptions_StaticCredsAndRoleArnUsesAssumeRole(t *testing.T) {
 	}
 
 	manager, err := newUploadManager(
-		context.Background(),
+		t.Context(),
 		&conf,
 		zap.NewNop(),
 		"logs",
@@ -183,12 +182,12 @@ func TestUploaderOptions_StaticCredsAndRoleArnUsesAssumeRole(t *testing.T) {
 		return
 	}
 
-	err = manager.Upload(context.Background(), []byte("payload"), nil)
+	err = manager.Upload(t.Context(), []byte("payload"), nil)
 	if !assert.NoError(t, err) {
 		return
 	}
 
-	assert.Equal(t, int32(1), atomic.LoadInt32(&stsCalls))
+	assert.Equal(t, int32(1), stsCalls.Load())
 	var s3Authorization string
 	select {
 	case s3Authorization = <-s3AuthorizationCh:

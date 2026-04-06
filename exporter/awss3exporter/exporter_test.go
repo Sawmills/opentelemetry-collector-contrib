@@ -6,6 +6,7 @@ package awss3exporter
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -48,6 +49,10 @@ func getTestLogs(tb testing.TB) plog.Logs {
 	logs, err := logsMarshaler.UnmarshalLogs([]byte(testLogs))
 	assert.NoError(tb, err, "Can't unmarshal testing the logs data -> %s", err)
 	return logs
+}
+
+func init() {
+	_ = os.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 }
 
 func getLogExporter(t *testing.T) *s3Exporter {
@@ -111,7 +116,7 @@ type flushMetadataMarshaler struct {
 	flushMeta flushMetadata
 }
 
-func (m *flushMetadataMarshaler) MarshalTraces(ptrace.Traces) ([]byte, error) { return nil, nil }
+func (*flushMetadataMarshaler) MarshalTraces(ptrace.Traces) ([]byte, error) { return nil, nil }
 
 func (m *flushMetadataMarshaler) MarshalLogs(plog.Logs) ([]byte, error) {
 	return m.buf, nil
@@ -123,11 +128,11 @@ func (m *flushMetadataMarshaler) MarshalLogsWithFlushMetadata(
 	return m.buf, m.flushMeta, nil
 }
 
-func (m *flushMetadataMarshaler) MarshalMetrics(pmetric.Metrics) ([]byte, error) { return nil, nil }
+func (*flushMetadataMarshaler) MarshalMetrics(pmetric.Metrics) ([]byte, error) { return nil, nil }
 
-func (m *flushMetadataMarshaler) format() string { return "parquet" }
+func (*flushMetadataMarshaler) format() string { return "parquet" }
 
-func (m *flushMetadataMarshaler) compressed() bool { return false }
+func (*flushMetadataMarshaler) compressed() bool { return false }
 
 type uploaderStub struct {
 	err         error
@@ -144,9 +149,11 @@ func (u *uploaderStub) Upload(context.Context, []byte, *upload.UploadOptions) er
 }
 
 func TestExporterRecordsEquivalentFlushAndUploadTelemetry(t *testing.T) {
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+
 	tel := componenttest.NewTelemetry()
 	t.Cleanup(func() {
-		require.NoError(t, tel.Shutdown(context.Background()))
+		require.NoError(t, tel.Shutdown(context.WithoutCancel(t.Context())))
 	})
 
 	settings := exportertest.NewNopSettings(component.MustNewType("awss3"))
@@ -168,14 +175,14 @@ func TestExporterRecordsEquivalentFlushAndUploadTelemetry(t *testing.T) {
 	uploader := &uploaderStub{delay: uploadDelay}
 	exporter.uploader = uploader
 
-	require.NoError(t, exporter.ConsumeLogs(context.Background(), getTestLogs(t)))
+	require.NoError(t, exporter.ConsumeLogs(t.Context(), getTestLogs(t)))
 	require.Equal(t, 1, uploader.uploadCalls)
 
-	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_flush_start_total", 1)
-	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_flush_complete_total", 1)
-	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_upload_start_total", 1)
-	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_upload_complete_total", 1)
-	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_flush_duration", 1)
+	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_flush_start_total")
+	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_flush_complete_total")
+	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_upload_start_total")
+	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_upload_complete_total")
+	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_flush_duration")
 	uploadDurationPoint := requireHistogramPoint(t, tel, "otelcol_exporter_awss3_upload_duration")
 	flushToUploadPoint := requireHistogramPoint(t, tel, "otelcol_exporter_awss3_flush_to_upload_duration")
 	flushCompletePoint := requireSumPoint(t, tel, "otelcol_exporter_awss3_flush_complete_total")
@@ -198,7 +205,7 @@ func TestExporterRecordsEquivalentFlushAndUploadTelemetry(t *testing.T) {
 	assert.Less(t, flushToUploadPoint.Sum, uploadDurationPoint.Sum)
 }
 
-func assertMetricDataPointCount(t *testing.T, tel *componenttest.Telemetry, name string, want int) {
+func assertMetricDataPointCount(t *testing.T, tel *componenttest.Telemetry, name string) {
 	t.Helper()
 
 	metric, err := tel.GetMetric(name)
@@ -206,9 +213,9 @@ func assertMetricDataPointCount(t *testing.T, tel *componenttest.Telemetry, name
 
 	switch data := metric.Data.(type) {
 	case metricdata.Sum[int64]:
-		require.Len(t, data.DataPoints, want)
+		require.Len(t, data.DataPoints, 1)
 	case metricdata.Histogram[int64]:
-		require.Len(t, data.DataPoints, want)
+		require.Len(t, data.DataPoints, 1)
 	default:
 		t.Fatalf("unexpected metric type %T for %s", metric.Data, name)
 	}
