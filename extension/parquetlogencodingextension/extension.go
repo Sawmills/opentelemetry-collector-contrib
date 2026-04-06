@@ -23,6 +23,7 @@ import (
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/parquetlogencodingextension/adapters"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/parquetlogencodingextension/adapters/datadog"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/parquetlogencodingextension/adapters/snowflake"
 )
 
 const (
@@ -64,7 +65,7 @@ func NewParquetLogExtension(
 		return nil, fmt.Errorf("unexpected parquet config type %T", baseCfg)
 	}
 
-	adapter, err := datadog.NewDatadogParquetAdapter(params)
+	adapter, err := newParquetAdapter(cfg.Schema, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create parquet adapter: %w", err)
 	}
@@ -98,6 +99,20 @@ func NewParquetLogExtension(
 	ext.recordBufferStateLocked()
 
 	return ext, nil
+}
+
+func newParquetAdapter(
+	schema string,
+	params extension.Settings,
+) (adapters.ParquetAdapter, error) {
+	switch strings.ToLower(schema) {
+	case "", defaultSchema:
+		return datadog.NewDatadogParquetAdapter(params)
+	case "snowflake":
+		return snowflake.NewSnowflakeParquetAdapter(params)
+	default:
+		return nil, fmt.Errorf("unsupported parquet schema: %s", schema)
+	}
 }
 
 func (e *parquetLogExtension) initializeWriter() error {

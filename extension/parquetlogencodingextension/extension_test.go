@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/parquetlogencodingextension/adapters/datadog"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/parquetlogencodingextension/adapters/snowflake"
 )
 
 var testExtensionType = component.MustNewType("parquet_log_encoding")
@@ -187,6 +188,35 @@ func TestMarshalLogsIgnoresCanceledFactoryContext(t *testing.T) {
 
 	_, err = ext.(*parquetLogExtension).MarshalLogs(newDatadogLogs(1))
 	require.NoError(t, err)
+}
+
+func TestNewParquetAdapterDefaultsToDatadog(t *testing.T) {
+	adapter, err := newParquetAdapter(
+		"",
+		extensiontest.NewNopSettings(testExtensionType),
+	)
+	require.NoError(t, err)
+
+	require.IsType(t, &datadog.ParquetLog{}, adapter.Schema())
+}
+
+func TestNewParquetAdapterSnowflakeRoutesToSnowflakeAdapter(t *testing.T) {
+	adapter, err := newParquetAdapter(
+		"snowflake",
+		extensiontest.NewNopSettings(testExtensionType),
+	)
+	require.NoError(t, err)
+
+	require.IsType(t, &snowflake.ParquetLog{}, adapter.Schema())
+}
+
+func TestNewParquetAdapterRejectsUnknownSchema(t *testing.T) {
+	adapter, err := newParquetAdapter(
+		"custom",
+		extensiontest.NewNopSettings(testExtensionType),
+	)
+	require.Error(t, err)
+	require.Nil(t, adapter)
 }
 
 func newTestParquetExtension(t *testing.T) *parquetLogExtension {
