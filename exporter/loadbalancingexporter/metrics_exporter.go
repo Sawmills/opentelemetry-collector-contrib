@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -378,7 +379,24 @@ func (e *metricExporterImp) rerouteDrainBatch(ctx context.Context, md pmetric.Me
 	}
 
 	metricsByExporter := map[*wrappedExporter]pmetric.Metrics{}
-	for routingID, mds := range batches {
+	needsCleanup := true
+	defer func() {
+		if !needsCleanup {
+			return
+		}
+		for exp := range metricsByExporter {
+			exp.doneConsume()
+		}
+	}()
+
+	routingIDs := make([]string, 0, len(batches))
+	for routingID := range batches {
+		routingIDs = append(routingIDs, routingID)
+	}
+	sort.Strings(routingIDs)
+
+	for _, routingID := range routingIDs {
+		mds := batches[routingID]
 		exp, _, lookupErr := e.loadBalancer.exporterAndEndpoint([]byte(routingID))
 		if lookupErr != nil {
 			return consumererror.NewMetrics(lookupErr, md)
@@ -398,6 +416,7 @@ func (e *metricExporterImp) rerouteDrainBatch(ctx context.Context, md pmetric.Me
 
 	failed := pmetric.NewMetrics()
 	var errs error
+	needsCleanup = false
 	for exp, mds := range metricsByExporter {
 		start := time.Now()
 		err = exp.ConsumeMetrics(ctx, mds)
