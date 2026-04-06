@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"math/big"
 	"slices"
 	"strconv"
 	"strings"
@@ -512,8 +513,19 @@ func normalizeJSONValue(value any) (any, error) {
 func normalizeJSONNumber(number json.Number) (any, error) {
 	text := number.String()
 	if strings.ContainsAny(text, ".eE") {
+		original, _, err := big.ParseFloat(text, 10, 256, big.ToNearestEven)
+		if err != nil {
+			return text, nil
+		}
+
 		value, err := number.Float64()
 		if err != nil {
+			return text, nil
+		}
+
+		roundTrip := new(big.Float).SetPrec(original.Prec()).SetMode(big.ToNearestEven)
+		roundTrip.SetFloat64(value)
+		if original.Cmp(roundTrip) != 0 {
 			return text, nil
 		}
 		return value, nil

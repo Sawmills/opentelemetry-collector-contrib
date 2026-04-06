@@ -192,6 +192,18 @@ func TestTagsToMapPreservesLargeIntegerPrecision(t *testing.T) {
 	}, tagsToMap([]string{"id:9007199254740993"}))
 }
 
+func TestNormalizeJSONNumberPreservesRepresentableFloat(t *testing.T) {
+	value, err := normalizeJSONNumber(json.Number("1.5"))
+	require.NoError(t, err)
+	require.Equal(t, 1.5, value)
+}
+
+func TestNormalizeJSONNumberFallsBackForPrecisionSensitiveFloat(t *testing.T) {
+	value, err := normalizeJSONNumber(json.Number("9007199254740993.0"))
+	require.NoError(t, err)
+	require.Equal(t, "9007199254740993.0", value)
+}
+
 func TestResourceFlattenedAttributesDoNotOverrideRecordAttributes(t *testing.T) {
 	adapter, err := NewSnowflakeParquetAdapter(
 		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
