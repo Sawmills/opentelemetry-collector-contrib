@@ -16,6 +16,7 @@ const (
 	defaultRowGroupSizeBytes  = defaultMaxFileSizeBytes
 	defaultPageSizeBytes      = 1 * 1024 * 1024
 	defaultCompressionCodec   = "snappy"
+	defaultSchema             = "datadog"
 )
 
 type Config struct {
@@ -24,6 +25,7 @@ type Config struct {
 	RowGroupSizeBytes  int64  `mapstructure:"row_group_size_bytes"`
 	PageSizeBytes      int64  `mapstructure:"page_size_bytes"`
 	CompressionCodec   string `mapstructure:"compression_codec"`
+	Schema             string `mapstructure:"schema"`
 }
 
 func CreateDefaultConfig() component.Config {
@@ -33,6 +35,7 @@ func CreateDefaultConfig() component.Config {
 		RowGroupSizeBytes:  defaultRowGroupSizeBytes,
 		PageSizeBytes:      defaultPageSizeBytes,
 		CompressionCodec:   defaultCompressionCodec,
+		Schema:             defaultSchema,
 	}
 }
 
@@ -55,8 +58,14 @@ func (c *Config) Validate() error {
 
 	switch strings.ToLower(c.CompressionCodec) {
 	case "snappy", "zstd", "gzip", "uncompressed":
-		return nil
 	default:
 		return errors.New("compression_codec must be one of [snappy, zstd, gzip, uncompressed]")
+	}
+
+	switch strings.ToLower(c.Schema) {
+	case "", defaultSchema, "snowflake":
+		return nil
+	default:
+		return errors.New("schema must be one of [datadog, snowflake]")
 	}
 }
