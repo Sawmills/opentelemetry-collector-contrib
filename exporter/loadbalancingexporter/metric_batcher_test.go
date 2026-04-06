@@ -29,7 +29,7 @@ func TestMetricBatcherFlushesOnMaxDataPoints(t *testing.T) {
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, batcher.Shutdown(context.Background()))
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
 	})
 
 	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
@@ -59,7 +59,7 @@ func TestMetricBatcherFlushesOnInterval(t *testing.T) {
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, batcher.Shutdown(context.Background()))
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
 	})
 
 	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
@@ -88,7 +88,7 @@ func TestMetricBatcherRemoveFlushesPending(t *testing.T) {
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, batcher.Shutdown(context.Background()))
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
 	})
 
 	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
@@ -117,7 +117,7 @@ func TestMetricBatcherShutdownFlushesPending(t *testing.T) {
 
 	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
 	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, singleDataPointMetric("m1")))
-	require.NoError(t, batcher.Shutdown(context.Background()))
+	require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
 
 	select {
 	case got := <-flushed:
@@ -137,7 +137,7 @@ func TestMetricBatcherRemoveTimeoutSchedulesCleanup(t *testing.T) {
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, batcher.Shutdown(context.Background()))
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
 	})
 
 	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
@@ -149,7 +149,7 @@ func TestMetricBatcherRemoveTimeoutSchedulesCleanup(t *testing.T) {
 	require.NotNil(t, backend)
 
 	backend.inflight.Add(1)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
 	err = batcher.Remove(ctx, "endpoint-1:4317", exp)
 	require.Error(t, err)
@@ -183,7 +183,7 @@ func TestMetricBatcherRestoresPendingOnTimeoutFlushFailure(t *testing.T) {
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, batcher.Shutdown(context.Background()))
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
 	})
 
 	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
@@ -215,7 +215,7 @@ func TestMetricBatcherTryEnqueueReturnsFalseWhenBackendQueueIsFull(t *testing.T)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		close(blockSend)
-		require.NoError(t, batcher.Shutdown(context.Background()))
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
 	})
 
 	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
@@ -227,7 +227,7 @@ func TestMetricBatcherTryEnqueueReturnsFalseWhenBackendQueueIsFull(t *testing.T)
 		t.Fatal("expected backend send to start")
 	}
 
-	for i := 0; i < 16; i++ {
+	for range 16 {
 		enqueued, enqueueErr := batcher.TryEnqueue("endpoint-1:4317", exp, singleDataPointMetric("m1"))
 		require.NoError(t, enqueueErr)
 		require.True(t, enqueued)

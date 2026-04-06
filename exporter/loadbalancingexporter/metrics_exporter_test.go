@@ -485,7 +485,7 @@ func TestEnqueueEndpointBatchesMakesProgressWhenOneQueueIsFull(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 
 	err := p.enqueueEndpointBatches(ctx, map[string]*endpointMetricsBatch{
@@ -502,7 +502,7 @@ func TestEnqueueEndpointBatchesMakesProgressWhenOneQueueIsFull(t *testing.T) {
 	var mErr consumererror.Metrics
 	require.ErrorAs(t, err, &mErr)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Equal(t, 1, len(openBackend.requests))
+	require.Len(t, openBackend.requests, 1)
 	require.NoError(t, pmetrictest.CompareMetrics(
 		singleDataPointMetric("m1"),
 		mErr.Data(),
@@ -527,7 +527,7 @@ func TestEnqueueEndpointBatchesReturnsFailedSubsetOnBackendError(t *testing.T) {
 		},
 	}
 
-	err := p.enqueueEndpointBatches(context.Background(), map[string]*endpointMetricsBatch{
+	err := p.enqueueEndpointBatches(t.Context(), map[string]*endpointMetricsBatch{
 		"stopped:4317": {
 			metrics: singleDataPointMetric("m1"),
 			exp:     newWrappedExporter(newNopMockMetricsExporter(), "stopped:4317"),
@@ -541,7 +541,7 @@ func TestEnqueueEndpointBatchesReturnsFailedSubsetOnBackendError(t *testing.T) {
 	var mErr consumererror.Metrics
 	require.ErrorAs(t, err, &mErr)
 	require.ErrorContains(t, err, "metric batcher backend is stopped")
-	require.Equal(t, 1, len(openBackend.requests))
+	require.Len(t, openBackend.requests, 1)
 	require.NoError(t, pmetrictest.CompareMetrics(
 		singleDataPointMetric("m1"),
 		mErr.Data(),

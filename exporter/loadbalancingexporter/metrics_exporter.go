@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync/atomic"
 	"time"
 
@@ -213,9 +214,7 @@ func (e *metricExporterImp) enqueueEndpointBatches(
 	}
 
 	pending := make(map[string]*endpointMetricsBatch, len(batches))
-	for ep, batch := range batches {
-		pending[ep] = batch
-	}
+	maps.Copy(pending, batches)
 
 	for len(pending) > 0 {
 		madeProgress := false
@@ -304,7 +303,6 @@ func (e *metricExporterImp) consumeMetricsByExporter(
 	ctx context.Context,
 	batches map[string]pmetric.Metrics,
 ) error {
-
 	// Now assign each batch to an exporter, and merge as we go
 	metricsByExporter := map[*wrappedExporter]pmetric.Metrics{}
 	needsCleanup := true
