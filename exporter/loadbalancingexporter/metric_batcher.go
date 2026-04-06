@@ -30,6 +30,8 @@ const (
 	defaultMetricBatchMaxDataPoints = 8192
 	defaultMetricBatchMaxBytes      = 2 << 20
 	defaultMetricBatchFlushTimeout  = 200 * time.Millisecond
+	maxMetricBatchRetryAttempts     = 5
+	maxMetricBatchRetryBackoff      = 5 * time.Second
 )
 
 var errMetricBatcherExporterStopping = errors.New("metric batcher exporter is stopping")
@@ -91,6 +93,8 @@ type backendMetricBatcher struct {
 
 	pendingDataPoints atomic.Int64
 	pendingBytes      atomic.Int64
+
+	flushFailures int
 }
 
 type metricBatcherTelemetry struct {
@@ -471,13 +475,23 @@ func (b *backendMetricBatcher) flush(
 	if err != nil {
 		b.telemetry.flushErrors.Add(ctx, 1, attrs)
 		if reason == metricFlushReasonSize || reason == metricFlushReasonTimeout {
+			b.flushFailures++
+			if b.flushFailures >= maxMetricBatchRetryAttempts {
+				b.logger.Error("dropping metric batch after repeated flush failures", zap.String("endpoint", b.endpoint), zap.String("reason", reason), zap.Int("failures", b.flushFailures), zap.Error(err))
+				b.telemetry.droppedDataPoints.Add(ctx, int64(datapoints), attrs)
+				return err
+			}
 			*pending = drained
 			*pendingDataPoints = datapoints
 			*pendingBytes = bytes
 			b.pendingDataPoints.Store(int64(datapoints))
 			b.pendingBytes.Store(int64(bytes))
 			if *timerC == nil {
-				timer.Reset(b.settings.flushInterval)
+				delay := b.settings.flushInterval * time.Duration(1<<min(b.flushFailures-1, 4))
+				if delay > maxMetricBatchRetryBackoff {
+					delay = maxMetricBatchRetryBackoff
+				}
+				timer.Reset(delay)
 				*timerC = timer.C
 			}
 		} else {
@@ -497,6 +511,9 @@ func (b *backendMetricBatcher) flush(
 		}
 	}
 
+	if err == nil {
+		b.flushFailures = 0
+	}
 	return err
 }
 

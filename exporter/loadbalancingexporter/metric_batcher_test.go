@@ -310,6 +310,41 @@ func TestMetricBatcherRemoveReroutesOnResolverChangeFlushFailure(t *testing.T) {
 	}
 }
 
+func TestMetricBatcherCapsRepeatedFlushFailures(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	var sends atomic.Int64
+	batcher, err := newMetricBatcher(
+		ts.Logger,
+		ts.TelemetrySettings,
+		metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: 10 * time.Millisecond},
+		func(_ context.Context, _ *wrappedExporter, _ pmetric.Metrics, _ string) error {
+			sends.Add(1)
+			return errors.New("flush failed")
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
+
+	deadline := time.After(2 * time.Second)
+	for sends.Load() < maxMetricBatchRetryAttempts {
+		select {
+		case <-deadline:
+			t.Fatalf("expected %d send attempts, got %d", maxMetricBatchRetryAttempts, sends.Load())
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	count := sends.Load()
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, count, sends.Load())
+}
+
 func TestMetricBatcherShutdownReroutesOnShutdownFlushFailure(t *testing.T) {
 	ts, _ := getTelemetryAssets(t)
 	rerouted := make(chan int, 1)
