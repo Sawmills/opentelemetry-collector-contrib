@@ -1,0 +1,6 @@
+change_type: enhancement
+component: extension/parquet_log_encoding
+note: Add an additive `schema: snowflake` mode for Snowflake-oriented parquet log export in the Sawmills contrib fork.
+issues: [38]
+subtext: |-
+  This keeps `datadog` as the default parquet schema, adds Snowflake-oriented raw parquet columns for Track A evaluation, and validates the paired `awss3` config path for `encoding: parquet_log_encoding`.
