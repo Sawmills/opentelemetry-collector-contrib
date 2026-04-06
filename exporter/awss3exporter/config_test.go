@@ -5,6 +5,7 @@ package awss3exporter
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -19,6 +20,232 @@ import (
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awss3exporter/internal/metadata"
 )
+
+func loadConfig(t *testing.T, fixture string) *Config {
+	t.Helper()
+	t.Setenv("S3_PREFIX", "123456")
+	t.Setenv("S3_ACCESS_KEY_ID", "123456")
+	t.Setenv("S3_SECRET_ACCESS_KEY", "123456")
+
+	factories, err := otelcoltest.NopFactories()
+	require.NoError(t, err)
+
+	factory := NewFactory()
+	factories.Exporters[metadata.Type] = factory
+
+	cfg, err := otelcoltest.LoadConfigAndValidate(filepath.Join("testdata", fixture), factories)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	return cfg.Exporters[component.MustNewID("awss3")].(*Config)
+}
+
+func loadConfigFromYAML(t *testing.T, yaml string) (*Config, error) {
+	t.Helper()
+
+	dir := t.TempDir()
+	fixture := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(fixture, []byte(yaml), 0o600))
+
+	factories, err := otelcoltest.NopFactories()
+	require.NoError(t, err)
+
+	factory := NewFactory()
+	factories.Exporters[metadata.Type] = factory
+
+	cfg, err := otelcoltest.LoadConfigAndValidate(fixture, factories)
+	if err != nil {
+		return nil, err
+	}
+
+	return cfg.Exporters[component.MustNewID("awss3")].(*Config), nil
+}
+
+func TestLoadConfig_LegacyFields(t *testing.T) {
+	cfg := loadConfig(t, "legacy-config.yaml")
+
+	assert.Equal(t, "minute", cfg.S3Uploader.S3Partition)
+	assert.Equal(t, "123456", cfg.S3Uploader.S3Prefix)
+	assert.Equal(t, "123456", cfg.S3Uploader.AccessKeyID)
+	assert.Equal(t, "123456", cfg.S3Uploader.SecretAccessKey)
+	assert.Equal(t, "AES256", cfg.S3Uploader.ServerSideEncryption)
+	assert.Equal(t, "year=%Y/month=%m/day=%d/hour=%H/minute=%M", cfg.normalizedS3PartitionFormat())
+}
+
+func TestLoadConfig_LegacyDatadogTemplate(t *testing.T) {
+	cfg := loadConfig(t, "legacy-datadog-json.yaml")
+
+	assert.Equal(t, "{{.Prefix}}/{{.Date}}/{{.UUID}}.json.gz", cfg.S3Uploader.S3KeyTemplate)
+	require.NotNil(t, cfg.Encoding)
+	assert.Equal(t, "datadog_log_encoding/awss3/destination-json", cfg.Encoding.String())
+}
+
+func TestLoadConfig_LegacyParquetEncoding(t *testing.T) {
+	cfg := loadConfig(t, "legacy-parquet.yaml")
+
+	assert.Equal(t, "parquet", cfg.EncodingFileExtension)
+	require.NotNil(t, cfg.Encoding)
+	assert.Equal(t, "parquet_log_encoding/awss3/destination-parquet", cfg.Encoding.String())
+}
+
+func TestLoadConfig_LegacyPartitionValidation(t *testing.T) {
+	_, err := loadConfigFromYAML(t, `receivers:
+  nop:
+
+exporters:
+  awss3:
+    s3uploader:
+      region: us-east-1
+      s3_bucket: sawmills-test
+      s3_partition: fortnight
+
+processors:
+  nop:
+
+service:
+  pipelines:
+    traces:
+      receivers: [nop]
+      processors: [nop]
+      exporters: [awss3]
+`)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid s3_partition")
+}
+
+func TestLoadConfig_LegacyMalformedTypes(t *testing.T) {
+	_, err := loadConfigFromYAML(t, `receivers:
+  nop:
+
+exporters:
+  awss3:
+    s3uploader:
+      region: us-east-1
+      s3_bucket: sawmills-test
+      s3_partition: minute
+      s3_prefix: 123456
+
+processors:
+  nop:
+
+service:
+  pipelines:
+    traces:
+      receivers: [nop]
+      processors: [nop]
+      exporters: [awss3]
+`)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "s3uploader.s3_prefix")
+}
+
+func TestLoadConfig_LegacyPartitionFormatPrecedence(t *testing.T) {
+	cfg, err := loadConfigFromYAML(t, `receivers:
+  nop:
+
+exporters:
+  awss3:
+    s3uploader:
+      region: us-east-1
+      s3_bucket: sawmills-test
+      s3_partition: minute
+      s3_partition_format: "%Y/%m/%d/%H"
+
+processors:
+  nop:
+
+service:
+  pipelines:
+    traces:
+      receivers: [nop]
+      processors: [nop]
+      exporters: [awss3]
+`)
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.Equal(t, "%Y/%m/%d/%H", cfg.normalizedS3PartitionFormat())
+}
+
+func TestLoadConfig_LegacyTemplateValidation(t *testing.T) {
+	_, err := loadConfigFromYAML(t, `receivers:
+  nop:
+
+exporters:
+  awss3:
+    s3uploader:
+      region: us-east-1
+      s3_bucket: sawmills-test
+      s3_key_template: "{{.Prefix"
+
+processors:
+  nop:
+
+service:
+  pipelines:
+    traces:
+      receivers: [nop]
+      processors: [nop]
+      exporters: [awss3]
+`)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid s3_key_template")
+}
+
+func TestLoadConfig_LegacyTemplateValidationRejectsUnknownFields(t *testing.T) {
+	_, err := loadConfigFromYAML(t, `receivers:
+  nop:
+
+exporters:
+  awss3:
+    s3uploader:
+      region: us-east-1
+      s3_bucket: sawmills-test
+      s3_key_template: "{{.Prefix}}/{{.Bogus}}/{{.UUID}}"
+
+processors:
+  nop:
+
+service:
+  pipelines:
+    traces:
+      receivers: [nop]
+      processors: [nop]
+      exporters: [awss3]
+`)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid s3_key_template")
+}
+
+func TestLoadConfig_StaticCredentialsMustBePaired(t *testing.T) {
+	_, err := loadConfigFromYAML(t, `receivers:
+  nop:
+
+exporters:
+  awss3:
+    s3uploader:
+      region: us-east-1
+      s3_bucket: sawmills-test
+      access_key_id: only-key
+
+processors:
+  nop:
+
+service:
+  pipelines:
+    traces:
+      receivers: [nop]
+      processors: [nop]
+      exporters: [awss3]
+`)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "access_key_id and secret_access_key must be set together")
+}
 
 func TestLoadConfig(t *testing.T) {
 	factories, err := otelcoltest.NopFactories()

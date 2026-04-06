@@ -1,0 +1,6 @@
+change_type: enhancement
+component: exporter/awss3
+note: Add Sawmills awss3 legacy config compatibility and parquet log encoding support to the contrib fork.
+issues: [37]
+subtext: |-
+  This accepts legacy `s3_partition`, static credential, SSE, and key-template config used by generated Sawmills configs, and restores the parquet flush bridge needed for the migrated exporter path.

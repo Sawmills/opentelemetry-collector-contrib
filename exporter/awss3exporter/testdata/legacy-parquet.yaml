@@ -1,0 +1,21 @@
+receivers:
+  nop:
+
+exporters:
+  awss3:
+    encoding: parquet_log_encoding/awss3/destination-parquet
+    encoding_file_extension: parquet
+    s3uploader:
+      region: us-east-1
+      s3_bucket: sawmills-test
+      s3_partition: minute
+
+processors:
+  nop:
+
+service:
+  pipelines:
+    traces:
+      receivers: [nop]
+      processors: [nop]
+      exporters: [awss3]

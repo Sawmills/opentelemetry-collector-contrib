@@ -73,6 +73,7 @@ func createLogsExporter(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	cfg.S3Uploader.S3PartitionFormat = cfg.normalizedS3PartitionFormat()
 
 	s3Exporter := newS3Exporter(cfg, "logs", params)
 
@@ -106,6 +107,7 @@ func createMetricsExporter(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	cfg.S3Uploader.S3PartitionFormat = cfg.normalizedS3PartitionFormat()
 
 	s3Exporter := newS3Exporter(cfg, "metrics", params)
 
@@ -143,6 +145,7 @@ func createTracesExporter(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	cfg.S3Uploader.S3PartitionFormat = cfg.normalizedS3PartitionFormat()
 
 	s3Exporter := newS3Exporter(cfg, "traces", params)
 

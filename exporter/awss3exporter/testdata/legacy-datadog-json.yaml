@@ -1,0 +1,22 @@
+receivers:
+  nop:
+
+exporters:
+  awss3:
+    encoding: datadog_log_encoding/awss3/destination-json
+    s3uploader:
+      compression: gzip
+      region: us-east-1
+      s3_bucket: sawmills-test
+      s3_partition: hour
+      s3_key_template: '{{.Prefix}}/{{.Date}}/{{.UUID}}.json.gz'
+
+processors:
+  nop:
+
+service:
+  pipelines:
+    traces:
+      receivers: [nop]
+      processors: [nop]
+      exporters: [awss3]

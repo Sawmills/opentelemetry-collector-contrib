@@ -218,6 +218,6 @@ replace github.com/open-telemetry/opentelemetry-collector-contrib/internal/exp/m
 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/inmemorystorage => ../../extension/storage/inmemorystorage
 
-replace go.opentelemetry.io/collector/exporter/exporterhelper => github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.149.0-sawmills.1
+replace go.opentelemetry.io/collector/exporter/exporterhelper v0.149.1-0.20260402195938-76ede073ee8e => github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.149.0-sawmills.1
 
-replace go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper => github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper/xexporterhelper v0.149.0-sawmills.1
+replace go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper v0.149.1-0.20260402195938-76ede073ee8e => github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper/xexporterhelper v0.149.0-sawmills.1
