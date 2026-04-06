@@ -416,7 +416,7 @@ func TestConsumeMetrics_SingleEndpointWithMetricBatcher(t *testing.T) {
 		RoutingKey: metricNameRoutingStr,
 		MetricBatcher: MetricBatcherConfig{
 			Enabled:       true,
-			MaxDataPoints: 1,
+			MaxDataPoints: 2,
 			MaxBytes:      1 << 20,
 			FlushInterval: time.Hour,
 		},
@@ -450,9 +450,15 @@ func TestConsumeMetrics_SingleEndpointWithMetricBatcher(t *testing.T) {
 		require.NoError(t, p.Shutdown(t.Context()))
 	}()
 
-	input := singleDataPointMetric("batcher-metric")
-	input.ResourceMetrics().At(0).Resource().Attributes().PutStr(serviceNameKey, serviceName1)
-	err = p.ConsumeMetrics(t.Context(), input)
+	input1 := singleDataPointMetric("batcher-metric-1")
+	input1.ResourceMetrics().At(0).Resource().Attributes().PutStr(serviceNameKey, serviceName1)
+	err = p.ConsumeMetrics(t.Context(), input1)
+	require.NoError(t, err)
+	require.Empty(t, sink.AllMetrics(), "first call should stay buffered in metric batcher")
+
+	input2 := singleDataPointMetric("batcher-metric-2")
+	input2.ResourceMetrics().At(0).Resource().Attributes().PutStr(serviceNameKey, serviceName1)
+	err = p.ConsumeMetrics(t.Context(), input2)
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
@@ -461,14 +467,25 @@ func TestConsumeMetrics_SingleEndpointWithMetricBatcher(t *testing.T) {
 
 	allOutputs := sink.AllMetrics()
 	require.Len(t, allOutputs, 1)
-	require.NoError(t, pmetrictest.CompareMetrics(
-		input,
-		allOutputs[0],
-		pmetrictest.IgnoreResourceMetricsOrder(),
-		pmetrictest.IgnoreScopeMetricsOrder(),
-		pmetrictest.IgnoreMetricsOrder(),
-		pmetrictest.IgnoreMetricDataPointsOrder(),
-	))
+	actual := allOutputs[0]
+	require.Equal(t, 2, actual.DataPointCount())
+
+	names := map[string]struct{}{}
+	resourceMetrics := actual.ResourceMetrics()
+	for i := range resourceMetrics.Len() {
+		scopeMetrics := resourceMetrics.At(i).ScopeMetrics()
+		for j := range scopeMetrics.Len() {
+			metrics := scopeMetrics.At(j).Metrics()
+			for k := range metrics.Len() {
+				names[metrics.At(k).Name()] = struct{}{}
+			}
+		}
+	}
+
+	_, hasMetric1 := names["batcher-metric-1"]
+	_, hasMetric2 := names["batcher-metric-2"]
+	require.True(t, hasMetric1)
+	require.True(t, hasMetric2)
 }
 
 func TestEnqueueEndpointBatchesMakesProgressWhenOneQueueIsFull(t *testing.T) {
@@ -540,11 +557,58 @@ func TestEnqueueEndpointBatchesReturnsFailedSubsetOnBackendError(t *testing.T) {
 
 	var mErr consumererror.Metrics
 	require.ErrorAs(t, err, &mErr)
-	require.ErrorContains(t, err, "metric batcher backend is stopped")
+	require.ErrorIs(t, err, errMetricBatcherExporterStopping)
 	require.Len(t, openBackend.requests, 1)
 	require.NoError(t, pmetrictest.CompareMetrics(
 		singleDataPointMetric("m1"),
 		mErr.Data(),
+		pmetrictest.IgnoreResourceMetricsOrder(),
+		pmetrictest.IgnoreScopeMetricsOrder(),
+		pmetrictest.IgnoreMetricsOrder(),
+		pmetrictest.IgnoreMetricDataPointsOrder(),
+	))
+}
+
+func TestEnqueueEndpointBatchesReroutesOnExporterStopping(t *testing.T) {
+	stoppedBackend := &backendMetricBatcher{requests: make(chan metricBatcherRequest, 1), done: make(chan struct{})}
+	openBackend := &backendMetricBatcher{requests: make(chan metricBatcherRequest, 1), done: make(chan struct{})}
+
+	openExporter := newWrappedExporter(newNopMockMetricsExporter(), "open:4317")
+
+	p := &metricExporterImp{
+		routingKey: metricNameRouting,
+		loadBalancer: &loadBalancer{
+			ring: newHashRing([]string{"open:4317"}),
+			exporters: map[string]*wrappedExporter{
+				"open:4317": openExporter,
+			},
+		},
+		batcher: &metricBatcher{
+			backends: map[string]*backendMetricBatcher{
+				"stopped:4317": stoppedBackend,
+				"open:4317":    openBackend,
+			},
+		},
+	}
+
+	stoppingExporter := newWrappedExporter(newNopMockMetricsExporter(), "stopped:4317")
+	stoppingExporter.markStopping()
+
+	err := p.enqueueEndpointBatches(t.Context(), map[string]*endpointMetricsBatch{
+		"stopped:4317": {
+			metrics: singleDataPointMetric("reroute-metric"),
+			exp:     stoppingExporter,
+		},
+	}, true)
+	require.NoError(t, err)
+	require.Empty(t, stoppedBackend.requests)
+
+	require.Len(t, openBackend.requests, 1)
+	request := <-openBackend.requests
+	require.Equal(t, metricBatcherRequestEnqueue, request.kind)
+	require.NoError(t, pmetrictest.CompareMetrics(
+		singleDataPointMetric("reroute-metric"),
+		request.md,
 		pmetrictest.IgnoreResourceMetricsOrder(),
 		pmetrictest.IgnoreScopeMetricsOrder(),
 		pmetrictest.IgnoreMetricsOrder(),

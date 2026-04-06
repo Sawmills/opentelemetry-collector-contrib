@@ -138,7 +138,7 @@ func (b *metricBatcher) TryEnqueue(endpoint string, exp *wrappedExporter, md pme
 
 	select {
 	case <-backend.done:
-		return false, errors.New("metric batcher backend is stopped")
+		return false, errMetricBatcherExporterStopping
 	default:
 	}
 
@@ -146,7 +146,7 @@ func (b *metricBatcher) TryEnqueue(endpoint string, exp *wrappedExporter, md pme
 	case backend.requests <- metricBatcherRequest{kind: metricBatcherRequestEnqueue, md: md}:
 		return true, nil
 	case <-backend.done:
-		return false, errors.New("metric batcher backend is stopped")
+		return false, errMetricBatcherExporterStopping
 	default:
 		return false, nil
 	}
