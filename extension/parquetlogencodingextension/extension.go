@@ -306,6 +306,7 @@ func (e *parquetLogExtension) restoreBufferedStateLocked(snapshot bufferedStateS
 
 func (e *parquetLogExtension) Write(src any) error {
 	pw := e.writer
+	// Buffer records without parquet-go auto-flushing; flush lifecycle is owned here.
 	ln := int64(len(pw.Objs))
 
 	val := reflect.ValueOf(src)

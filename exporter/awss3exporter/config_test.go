@@ -195,6 +195,32 @@ service:
 	assert.Contains(t, err.Error(), "invalid s3_key_template")
 }
 
+func TestLoadConfig_LegacyTemplateValidationRejectsUnknownFields(t *testing.T) {
+	_, err := loadConfigFromYAML(t, `receivers:
+  nop:
+
+exporters:
+  awss3:
+    s3uploader:
+      region: us-east-1
+      s3_bucket: sawmills-test
+      s3_key_template: "{{.Prefix}}/{{.Bogus}}/{{.UUID}}"
+
+processors:
+  nop:
+
+service:
+  pipelines:
+    traces:
+      receivers: [nop]
+      processors: [nop]
+      exporters: [awss3]
+`)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid s3_key_template")
+}
+
 func TestLoadConfig_StaticCredentialsMustBePaired(t *testing.T) {
 	_, err := loadConfigFromYAML(t, `receivers:
   nop:

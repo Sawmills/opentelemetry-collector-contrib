@@ -6,7 +6,6 @@ package awss3exporter // import "github.com/open-telemetry/opentelemetry-collect
 import (
 	"errors"
 	"fmt"
-	"text/template"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
@@ -14,6 +13,8 @@ import (
 	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	"go.uber.org/multierr"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awss3exporter/internal/upload"
 )
 
 const (
@@ -167,7 +168,10 @@ func (c *Config) Validate() error {
 		errs = multierr.Append(errs, errors.New("access_key_id and secret_access_key must be set together"))
 	}
 	if c.S3Uploader.S3KeyTemplate != "" {
-		if _, err := template.New("legacy-s3-key").Parse(c.S3Uploader.S3KeyTemplate); err != nil {
+		tmpl, err := upload.ParseLegacyTemplateForValidation(c.S3Uploader.S3KeyTemplate)
+		if err != nil {
+			errs = multierr.Append(errs, fmt.Errorf("invalid s3_key_template: %w", err))
+		} else if err := upload.ValidateLegacyTemplateForValidation(tmpl); err != nil {
 			errs = multierr.Append(errs, fmt.Errorf("invalid s3_key_template: %w", err))
 		}
 	}

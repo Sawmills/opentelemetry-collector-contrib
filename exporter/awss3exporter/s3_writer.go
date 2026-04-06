@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"text/template"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -120,21 +121,30 @@ func newUploadManager(
 		s3PartitionTimeLocation = time.Local
 	}
 
+	var parsedLegacyTemplate *template.Template
+	if conf.S3Uploader.S3KeyTemplate != "" {
+		parsedLegacyTemplate, err = upload.ParseLegacyTemplateForValidation(conf.S3Uploader.S3KeyTemplate)
+		if err != nil {
+			return nil, fmt.Errorf("parse legacy s3 key template: %w", err)
+		}
+	}
+
 	return upload.NewS3Manager(
 		logger,
 		conf.S3Uploader.S3Bucket,
 		&upload.PartitionKeyBuilder{
-			PartitionBasePrefix:   conf.S3Uploader.S3BasePrefix,
-			PartitionPrefix:       conf.S3Uploader.S3Prefix,
-			LegacyS3KeyTemplate:   conf.S3Uploader.S3KeyTemplate,
-			PartitionFormat:       conf.S3Uploader.S3PartitionFormat,
-			PartitionTimeLocation: s3PartitionTimeLocation,
-			FilePrefix:            conf.S3Uploader.FilePrefix,
-			FileFormat:            format,
-			Metadata:              metadata,
-			Compression:           conf.S3Uploader.Compression,
-			UniqueKeyFunc:         uniqueKeyFunc,
-			IsCompressed:          isCompressed,
+			PartitionBasePrefix:       conf.S3Uploader.S3BasePrefix,
+			PartitionPrefix:           conf.S3Uploader.S3Prefix,
+			LegacyS3KeyTemplate:       conf.S3Uploader.S3KeyTemplate,
+			LegacyS3KeyTemplateParsed: parsedLegacyTemplate,
+			PartitionFormat:           conf.S3Uploader.S3PartitionFormat,
+			PartitionTimeLocation:     s3PartitionTimeLocation,
+			FilePrefix:                conf.S3Uploader.FilePrefix,
+			FileFormat:                format,
+			Metadata:                  metadata,
+			Compression:               conf.S3Uploader.Compression,
+			UniqueKeyFunc:             uniqueKeyFunc,
+			IsCompressed:              isCompressed,
 		},
 		s3.NewFromConfig(cfg, s3Opts...),
 		s3types.StorageClass(conf.S3Uploader.StorageClass),
