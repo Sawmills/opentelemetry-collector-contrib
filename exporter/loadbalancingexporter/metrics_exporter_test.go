@@ -616,6 +616,67 @@ func TestEnqueueEndpointBatchesReroutesOnExporterStopping(t *testing.T) {
 	))
 }
 
+func TestRerouteDrainBatchReturnsFailedSubsetOnPartialSuccess(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+
+	lb := &loadBalancer{ring: newHashRing([]string{"ok", "fail"})}
+	metricForOK := findRoutingIDForEndpoint(t, lb.ring, "ok")
+	metricForFail := findRoutingIDForEndpoint(t, lb.ring, "fail")
+
+	consumed := make(chan int, 1)
+	okExporter := newWrappedExporter(newMockMetricsExporter(func(_ context.Context, md pmetric.Metrics) error {
+		consumed <- md.DataPointCount()
+		return nil
+	}), "ok:4317")
+	failExporter := newWrappedExporter(newMockMetricsExporter(func(context.Context, pmetric.Metrics) error {
+		return errors.New("backend failed")
+	}), "fail:4317")
+
+	lb.exporters = map[string]*wrappedExporter{
+		"ok:4317":   okExporter,
+		"fail:4317": failExporter,
+	}
+
+	p := &metricExporterImp{
+		routingKey:   metricNameRouting,
+		loadBalancer: lb,
+		telemetry:    tb,
+		logger:       ts.Logger,
+	}
+
+	input := pmetric.NewMetrics()
+	rm := input.ResourceMetrics().AppendEmpty()
+	sm := rm.ScopeMetrics().AppendEmpty()
+	m1 := sm.Metrics().AppendEmpty()
+	m1.SetName(metricForOK)
+	m1.SetEmptyGauge().DataPoints().AppendEmpty().SetIntValue(1)
+	m2 := sm.Metrics().AppendEmpty()
+	m2.SetName(metricForFail)
+	m2.SetEmptyGauge().DataPoints().AppendEmpty().SetIntValue(1)
+
+	err := p.rerouteDrainBatch(t.Context(), input, metricFlushReasonResolverChange)
+	require.Error(t, err)
+
+	var mErr consumererror.Metrics
+	require.ErrorAs(t, err, &mErr)
+
+	select {
+	case got := <-consumed:
+		require.Equal(t, 1, got)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected successful reroute send")
+	}
+
+	require.NoError(t, pmetrictest.CompareMetrics(
+		singleDataPointMetric(metricForFail),
+		mErr.Data(),
+		pmetrictest.IgnoreResourceMetricsOrder(),
+		pmetrictest.IgnoreScopeMetricsOrder(),
+		pmetrictest.IgnoreMetricsOrder(),
+		pmetrictest.IgnoreMetricDataPointsOrder(),
+	))
+}
+
 func TestConsumeMetrics_SingleEndpointNoServiceName(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 

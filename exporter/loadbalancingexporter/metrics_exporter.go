@@ -90,6 +90,7 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 				flushInterval: cfg.(*Config).MetricBatcher.FlushInterval,
 			},
 			metricExporter.consumeBatch,
+			metricExporter.rerouteDrainBatch,
 		)
 		if err != nil {
 			return nil, err
@@ -368,6 +369,55 @@ func (e *metricExporterImp) consumeBatch(ctx context.Context, we *wrappedExporte
 	e.recordBackendResult(ctx, we, duration, err)
 
 	return err
+}
+
+func (e *metricExporterImp) rerouteDrainBatch(ctx context.Context, md pmetric.Metrics, _ string) error {
+	batches, err := e.splitMetricsByRouting(md)
+	if err != nil {
+		return err
+	}
+
+	metricsByExporter := map[*wrappedExporter]pmetric.Metrics{}
+	for routingID, mds := range batches {
+		exp, _, lookupErr := e.loadBalancer.exporterAndEndpoint([]byte(routingID))
+		if lookupErr != nil {
+			return consumererror.NewMetrics(lookupErr, md)
+		}
+
+		expMetrics, ok := metricsByExporter[exp]
+		if !ok {
+			if !exp.tryStartConsume() {
+				return consumererror.NewMetrics(errExporterIsStopping, md)
+			}
+			expMetrics = pmetric.NewMetrics()
+			metricsByExporter[exp] = expMetrics
+		}
+
+		metrics.Merge(expMetrics, mds)
+	}
+
+	failed := pmetric.NewMetrics()
+	var errs error
+	for exp, mds := range metricsByExporter {
+		start := time.Now()
+		err = exp.ConsumeMetrics(ctx, mds)
+		duration := time.Since(start)
+
+		exp.doneConsume()
+		e.recordBackendResult(ctx, exp, duration, err)
+		if err == nil {
+			continue
+		}
+
+		errs = errors.Join(errs, err)
+		metrics.Merge(failed, mds)
+	}
+
+	if failed.DataPointCount() > 0 {
+		return consumererror.NewMetrics(errs, failed)
+	}
+
+	return errs
 }
 
 func (e *metricExporterImp) recordBackendResult(ctx context.Context, we *wrappedExporter, duration time.Duration, err error) {

@@ -26,6 +26,7 @@ func TestMetricBatcherFlushesOnMaxDataPoints(t *testing.T) {
 			flushed <- md.DataPointCount()
 			return nil
 		},
+		nil,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -56,6 +57,7 @@ func TestMetricBatcherFlushesOnInterval(t *testing.T) {
 			flushed <- md.DataPointCount()
 			return nil
 		},
+		nil,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -85,6 +87,7 @@ func TestMetricBatcherFlushesOnMaxBytes(t *testing.T) {
 			flushed <- md.DataPointCount()
 			return nil
 		},
+		nil,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -114,6 +117,7 @@ func TestMetricBatcherRemoveFlushesPending(t *testing.T) {
 			flushes.Add(1)
 			return nil
 		},
+		nil,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -141,6 +145,7 @@ func TestMetricBatcherShutdownFlushesPending(t *testing.T) {
 			}
 			return nil
 		},
+		nil,
 	)
 	require.NoError(t, err)
 
@@ -163,6 +168,7 @@ func TestMetricBatcherRemoveTimeoutSchedulesCleanup(t *testing.T) {
 		ts.TelemetrySettings,
 		metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
 		func(_ context.Context, _ *wrappedExporter, _ pmetric.Metrics, _ string) error { return nil },
+		nil,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -209,6 +215,7 @@ func TestMetricBatcherRestoresPendingOnTimeoutFlushFailure(t *testing.T) {
 			}
 			return nil
 		},
+		nil,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -240,6 +247,7 @@ func TestMetricBatcherTryEnqueueReturnsFalseWhenBackendQueueIsFull(t *testing.T)
 			<-blockSend
 			return nil
 		},
+		nil,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -265,6 +273,73 @@ func TestMetricBatcherTryEnqueueReturnsFalseWhenBackendQueueIsFull(t *testing.T)
 	enqueued, enqueueErr := batcher.TryEnqueue("endpoint-1:4317", exp, singleDataPointMetric("m1"))
 	require.NoError(t, enqueueErr)
 	require.False(t, enqueued)
+}
+
+func TestMetricBatcherRemoveReroutesOnResolverChangeFlushFailure(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	rerouted := make(chan int, 1)
+
+	batcher, err := newMetricBatcher(
+		ts.Logger,
+		ts.TelemetrySettings,
+		metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		func(_ context.Context, _ *wrappedExporter, _ pmetric.Metrics, _ string) error {
+			return errors.New("flush failed")
+		},
+		func(_ context.Context, md pmetric.Metrics, reason string) error {
+			require.Equal(t, metricFlushReasonResolverChange, reason)
+			rerouted <- md.DataPointCount()
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
+
+	require.NoError(t, batcher.Remove(t.Context(), "endpoint-1:4317", exp))
+
+	select {
+	case got := <-rerouted:
+		require.Equal(t, 1, got)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected resolver-change drain reroute callback")
+	}
+}
+
+func TestMetricBatcherShutdownReroutesOnShutdownFlushFailure(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	rerouted := make(chan int, 1)
+
+	batcher, err := newMetricBatcher(
+		ts.Logger,
+		ts.TelemetrySettings,
+		metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		func(_ context.Context, _ *wrappedExporter, _ pmetric.Metrics, _ string) error {
+			return errors.New("flush failed")
+		},
+		func(_ context.Context, md pmetric.Metrics, reason string) error {
+			require.Equal(t, metricFlushReasonShutdown, reason)
+			rerouted <- md.DataPointCount()
+			return nil
+		},
+	)
+	require.NoError(t, err)
+
+	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
+
+	require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
+
+	select {
+	case got := <-rerouted:
+		require.Equal(t, 1, got)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected shutdown drain reroute callback")
+	}
 }
 
 func singleDataPointMetric(name string) pmetric.Metrics {
