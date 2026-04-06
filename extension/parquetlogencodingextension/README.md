@@ -53,7 +53,11 @@ Supported fields:
   - `tags_hot_text`
   - `tags_cold_text`
 - current built-in hot buckets:
-  - attributes: `customer.id`, `transaction.id`
+  - attributes: none by default
   - tags: `env`, `version`
+- cold attributes are bounded before archival:
+  - excludes `k8s.node.uid`, `k8s.pod.ip`, `k8s.pod.uid`
+  - caps archived cold-attribute keys at `128`
+  - truncates archived string values at `4096` bytes
 
 The `snowflake` storage contract is intended to pair with a Snowflake external table and secure view. The parquet files keep raw JSON text payloads; the Snowflake view is expected to parse those fields into query-friendly `VARIANT` columns.

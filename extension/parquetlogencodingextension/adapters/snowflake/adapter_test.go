@@ -5,6 +5,8 @@ package snowflake
 
 import (
 	"encoding/json"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,11 +45,12 @@ func TestConvertToParquetJSONStringBodyProducesSnowflakeRow(t *testing.T) {
 
 	var hotAttrs map[string]any
 	require.NoError(t, json.Unmarshal([]byte(row.AttributesHotText), &hotAttrs))
-	require.Equal(t, "12345", hotAttrs["customer.id"])
-	require.Equal(t, "tx-789", hotAttrs["transaction.id"])
+	require.Empty(t, hotAttrs)
 
 	var coldAttrs map[string]any
 	require.NoError(t, json.Unmarshal([]byte(row.AttributesColdText), &coldAttrs))
+	require.Equal(t, "12345", coldAttrs["customer.id"])
+	require.Equal(t, "tx-789", coldAttrs["transaction.id"])
 	require.Equal(t, "checkout", coldAttrs["service"])
 	require.Equal(t, "host-1", coldAttrs["hostname"])
 	require.Equal(t, "nodejs", coldAttrs["source"])
@@ -102,6 +105,51 @@ func TestConvertToParquetMapBodyCanonicalizesBodyJSON(t *testing.T) {
 	require.Equal(t, "nested hello", row.MessageText)
 }
 
+func TestConvertToParquetSanitizesColdAttributes(t *testing.T) {
+	adapter, err := NewSnowflakeParquetAdapter(
+		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
+	)
+	require.NoError(t, err)
+
+	rows, err := adapter.ConvertToParquet(t.Context(), newLargeAttributeLogs())
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	row := rows[0].(ParquetLog)
+	var coldAttrs map[string]any
+	require.NoError(t, json.Unmarshal([]byte(row.AttributesColdText), &coldAttrs))
+
+	require.NotContains(t, coldAttrs, "k8s.pod.uid")
+	require.NotContains(t, coldAttrs, "k8s.pod.ip")
+	require.NotContains(t, coldAttrs, "k8s.node.uid")
+	require.Len(t, coldAttrs, maxArchivedColdAttributes)
+	require.Len(t, coldAttrs["000payload"].(string), maxArchivedStringValueSize)
+}
+
+func TestTagsToMapRejectsNonFiniteNumbers(t *testing.T) {
+	require.Equal(t, map[string]any{
+		"env":   "prod",
+		"value": "NaN",
+		"peak":  "+Inf",
+	}, tagsToMap([]string{"env:prod", "value:NaN", "peak:+Inf"}))
+}
+
+func TestResourceFlattenedAttributesDoNotOverrideRecordAttributes(t *testing.T) {
+	adapter, err := NewSnowflakeParquetAdapter(
+		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
+	)
+	require.NoError(t, err)
+
+	rows, err := adapter.ConvertToParquet(t.Context(), newAttributePrecedenceLogs())
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	row := rows[0].(ParquetLog)
+	var coldAttrs map[string]any
+	require.NoError(t, json.Unmarshal([]byte(row.AttributesColdText), &coldAttrs))
+	require.Equal(t, "record-value", coldAttrs["cloud.region"])
+}
+
 func newJSONBodyLogs() plog.Logs {
 	logs := plog.NewLogs()
 	resourceLogs := logs.ResourceLogs().AppendEmpty()
@@ -152,5 +200,29 @@ func newMapBodyLogs() plog.Logs {
 	errMap := body.PutEmptyMap("error")
 	errMap.PutStr("message", "nested hello")
 
+	return logs
+}
+
+func newLargeAttributeLogs() plog.Logs {
+	logs := newPlainStringLogs()
+	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0)
+	record.Attributes().PutStr("k8s.pod.uid", "pod-uid")
+	record.Attributes().PutStr("k8s.pod.ip", "10.0.0.1")
+	record.Attributes().PutStr("k8s.node.uid", "node-uid")
+	record.Attributes().PutStr("000payload", strings.Repeat("x", maxArchivedStringValueSize+32))
+	for i := 0; i < maxArchivedColdAttributes+5; i++ {
+		record.Attributes().PutStr("attr."+strconv.Itoa(i), "value")
+	}
+	return logs
+}
+
+func newAttributePrecedenceLogs() plog.Logs {
+	logs := newPlainStringLogs()
+	resource := logs.ResourceLogs().At(0).Resource()
+	cloud := resource.Attributes().PutEmptyMap("cloud")
+	cloud.PutStr("region", "resource-value")
+
+	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0)
+	record.Attributes().PutStr("cloud.region", "record-value")
 	return logs
 }

@@ -389,7 +389,7 @@ No new Go test is required here; the failing check is the binary generation/buil
 Run:
 
 ```bash
-cd /Users/amirjakoby/Code/sawmills-collector-contrib/.worktrees/amiri/saw-6662-contrib
+cd /path/to/opentelemetry-collector-contrib
 make genotelcontribcol
 ```
 
@@ -416,7 +416,7 @@ Document:
 Run:
 
 ```bash
-cd /Users/amirjakoby/Code/sawmills-collector-contrib/.worktrees/amiri/saw-6662-contrib
+cd /path/to/opentelemetry-collector-contrib
 make genotelcontribcol
 cd extension/parquetlogencodingextension
 go test ./...
@@ -457,7 +457,7 @@ Primary requirement:
 Run:
 
 ```bash
-cd /Users/amirjakoby/Code/sawmills-collector-contrib/.worktrees/amiri/saw-6662-contrib
+cd /path/to/opentelemetry-collector-contrib
 ls docs/sql
 ```
 
@@ -501,7 +501,7 @@ FROM bp_logs_raw;
 Run:
 
 ```bash
-cd /Users/amirjakoby/Code/sawmills-collector-contrib/.worktrees/amiri/saw-6662-contrib
+cd /path/to/opentelemetry-collector-contrib
 sed -n '1,220p' docs/sql/saw-6662-track-a-raw-external-table.sql
 sed -n '1,260p' docs/sql/saw-6662-track-a-public-secure-view.sql
 sed -n '1,260p' docs/sql/saw-6662-track-a-benchmark-queries.sql
@@ -537,7 +537,7 @@ Expected: PASS
 **Step 2: Run local contrib generation**
 
 ```bash
-cd /Users/amirjakoby/Code/sawmills-collector-contrib/.worktrees/amiri/saw-6662-contrib
+cd /path/to/opentelemetry-collector-contrib
 make genotelcontribcol
 ```
 
@@ -546,7 +546,7 @@ Expected: PASS
 **Step 3: Inspect git state**
 
 ```bash
-cd /Users/amirjakoby/Code/sawmills-collector-contrib/.worktrees/amiri/saw-6662-contrib
+cd /path/to/opentelemetry-collector-contrib
 git status --short
 git log --oneline --decorate -n 10
 ```

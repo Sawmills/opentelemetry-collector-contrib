@@ -48,11 +48,18 @@ type parquetLogExtension struct {
 	reinitializeWriterFn func() error
 	nowFn                func() time.Time
 	recordFlushFn        func(string, int64, int64, time.Duration)
+	queuedFlushes        []flushResult
 }
 
 type bufferedStateSnapshot struct {
 	records              []any
 	oldestBufferedRecord time.Time
+}
+
+type flushResult struct {
+	buf         []byte
+	reason      string
+	completedAt time.Time
 }
 
 func NewParquetLogExtension(
@@ -175,6 +182,10 @@ func (e *parquetLogExtension) FlushLogsWithReason(reason string) ([]byte, error)
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
+	if queued, ok := e.popQueuedFlushLocked(); ok {
+		return queued.buf, nil
+	}
+
 	buf, _, _, err := e.checkAndFlushWithMetadata(true, reason)
 	return buf, err
 }
@@ -184,6 +195,10 @@ func (e *parquetLogExtension) FlushLogsWithReasonAndMetadata(
 ) ([]byte, string, time.Time, error) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
+
+	if queued, ok := e.popQueuedFlushLocked(); ok {
+		return queued.buf, queued.reason, queued.completedAt, nil
+	}
 
 	return e.checkAndFlushWithMetadata(true, reason)
 }
@@ -201,10 +216,23 @@ func (e *parquetLogExtension) MarshalLogsWithFlushMetadata(
 		return nil, "", time.Time{}, err
 	}
 	if len(toParquet) == 0 {
+		if queued, ok := e.popQueuedFlush(); ok {
+			return queued.buf, queued.reason, queued.completedAt, nil
+		}
 		return nil, "", time.Time{}, nil
 	}
 
-	return e.addLogRecordWithFlushMetadata(toParquet)
+	buf, reason, completedAt, err := e.addLogRecordWithFlushMetadata(toParquet)
+	if err != nil {
+		return nil, "", time.Time{}, err
+	}
+	if buf != nil {
+		return buf, reason, completedAt, nil
+	}
+	if queued, ok := e.popQueuedFlush(); ok {
+		return queued.buf, queued.reason, queued.completedAt, nil
+	}
+	return nil, "", time.Time{}, nil
 }
 
 func (e *parquetLogExtension) addLogRecordWithFlushMetadata(
@@ -233,7 +261,7 @@ func (e *parquetLogExtension) addLogRecordWithFlushMetadata(
 			return nil, "", time.Time{}, fmt.Errorf("failed to write record: %w", err)
 		}
 		e.recordBufferStateLocked()
-		if flushedBytes != nil || e.getCurrentCompressedSize() < e.maxFileSizeBytes {
+		if e.getCurrentCompressedSize() < e.maxFileSizeBytes {
 			continue
 		}
 
@@ -244,9 +272,17 @@ func (e *parquetLogExtension) addLogRecordWithFlushMetadata(
 		if len(buf) == 0 {
 			continue
 		}
-		flushedBytes = buf
-		flushReason = reason
-		flushCompletedAt = completedAt
+		if flushedBytes == nil {
+			flushedBytes = buf
+			flushReason = reason
+			flushCompletedAt = completedAt
+			continue
+		}
+		e.queuedFlushes = append(e.queuedFlushes, flushResult{
+			buf:         buf,
+			reason:      reason,
+			completedAt: completedAt,
+		})
 	}
 	e.recordBufferStateLocked()
 
@@ -255,6 +291,21 @@ func (e *parquetLogExtension) addLogRecordWithFlushMetadata(
 	}
 
 	return nil, "", time.Time{}, nil
+}
+
+func (e *parquetLogExtension) popQueuedFlushLocked() (flushResult, bool) {
+	if len(e.queuedFlushes) == 0 {
+		return flushResult{}, false
+	}
+	result := e.queuedFlushes[0]
+	e.queuedFlushes = e.queuedFlushes[1:]
+	return result, true
+}
+
+func (e *parquetLogExtension) popQueuedFlush() (flushResult, bool) {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+	return e.popQueuedFlushLocked()
 }
 
 func (e *parquetLogExtension) checkAndFlushWithMetadata(

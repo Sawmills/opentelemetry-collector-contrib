@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,20 +27,24 @@ import (
 )
 
 const (
-	schemaVersion  = "snowflake_v1"
-	serviceNameKey = "service.name"
+	schemaVersion              = "snowflake_v1"
+	serviceNameKey             = "service.name"
+	maxArchivedColdAttributes  = 128
+	maxArchivedStringValueSize = 4096
 )
 
 var (
 	signalTypeSet = attribute.NewSet(attribute.String("signal", "logs"))
 
-	defaultAttributesHotKeys = []string{
-		"customer.id",
-		"transaction.id",
-	}
-	defaultTagsHotKeys = []string{
+	defaultAttributesHotKeys = []string{}
+	defaultTagsHotKeys       = []string{
 		"env",
 		"version",
+	}
+	excludedColdAttributeKeys = map[string]struct{}{
+		"k8s.node.uid": {},
+		"k8s.pod.ip":   {},
+		"k8s.pod.uid":  {},
 	}
 )
 
@@ -187,10 +192,10 @@ func (a *snowflakeParquetAdapter) transform(
 		if key == "ddtags" || key == "hostname" || key == "service" {
 			return true
 		}
-		if _, exists := attrs[key]; exists {
-			return true
-		}
 		for k, v := range flattenAttribute(key, value, 1) {
+			if _, exists := attrs[k]; exists {
+				continue
+			}
 			attrs[k] = v
 		}
 		return true
@@ -228,6 +233,7 @@ func (a *snowflakeParquetAdapter) transform(
 
 	tags := extractTags(resource, record)
 	attributesHot, attributesCold := splitMap(attrs, defaultAttributesHotKeys)
+	attributesCold = sanitizeArchivedMap(attributesCold, maxArchivedColdAttributes, excludedColdAttributeKeys)
 	tagsHot, tagsCold := splitMap(tags, defaultTagsHotKeys)
 
 	item.AttributesHotText, err = canonicalJSONString(attributesHot)
@@ -282,6 +288,54 @@ func splitMap(source map[string]any, hotKeys []string) (map[string]any, map[stri
 		cold[key] = value
 	}
 	return hot, cold
+}
+
+func sanitizeArchivedMap(source map[string]any, maxKeys int, excludedKeys map[string]struct{}) map[string]any {
+	if len(source) == 0 {
+		return source
+	}
+
+	keys := make([]string, 0, len(source))
+	for key := range source {
+		if _, excluded := excludedKeys[key]; excluded {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	if maxKeys > 0 && len(keys) > maxKeys {
+		keys = keys[:maxKeys]
+	}
+
+	sanitized := make(map[string]any, len(keys))
+	for _, key := range keys {
+		sanitized[key] = sanitizeArchivedValue(source[key])
+	}
+	return sanitized
+}
+
+func sanitizeArchivedValue(value any) any {
+	switch v := value.(type) {
+	case string:
+		if len(v) <= maxArchivedStringValueSize {
+			return v
+		}
+		return v[:maxArchivedStringValueSize]
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, child := range v {
+			out[key] = sanitizeArchivedValue(child)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, child := range v {
+			out = append(out, sanitizeArchivedValue(child))
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 func deriveBodyJSONAndMessage(body pcommon.Value) (*string, string, error) {
@@ -601,8 +655,11 @@ func tagsToMap(tags []string) map[string]any {
 }
 
 func isNumeric(value string) bool {
-	_, err := strconv.ParseFloat(value, 64)
-	return err == nil
+	number, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return false
+	}
+	return !math.IsNaN(number) && !math.IsInf(number, 0)
 }
 
 func stringPtr(value string) *string {

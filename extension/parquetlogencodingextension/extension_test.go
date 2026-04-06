@@ -6,13 +6,14 @@ package parquetlogencodingextension
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/xitongsys/parquet-go/reader"
 	"github.com/xitongsys/parquet-go-source/buffer"
+	"github.com/xitongsys/parquet-go/reader"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/extension/extensiontest"
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -144,9 +145,41 @@ func TestMarshalLogsFlushesImmediatelyWhenSizeThresholdIsExceeded(t *testing.T) 
 	require.NotEmpty(t, buf)
 	assert.Equal(t, flushReasonSize, reason)
 	assert.False(t, completedAt.IsZero())
-	assert.Len(t, ext.writer.Objs, 1)
-	assert.Equal(t, now, ext.oldestBufferedRecord)
-	assert.Positive(t, ext.bufferOldestRecordAgeSeconds())
+	assert.Len(t, ext.writer.Objs, 0)
+	assert.Len(t, ext.queuedFlushes, 1)
+	assert.True(t, ext.oldestBufferedRecord.IsZero())
+	assert.Zero(t, ext.bufferOldestRecordAgeSeconds())
+}
+
+func TestMarshalLogsQueuesAdditionalSizeFlushesFromSameBatch(t *testing.T) {
+	ext := newTestParquetExtension(t)
+	ext.config.CompressionCodec = "uncompressed"
+	ext.maxFileSizeBytes = 1
+	largeMessage := strings.Repeat("x", 4096)
+
+	buf, reason, completedAt, err := ext.addLogRecordWithFlushMetadata([]any{
+		datadog.ParquetLog{Message: largeMessage + "1"},
+		datadog.ParquetLog{Message: largeMessage + "2"},
+		datadog.ParquetLog{Message: largeMessage + "3"},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, buf)
+	assert.Equal(t, flushReasonSize, reason)
+	assert.False(t, completedAt.IsZero())
+	assert.Len(t, ext.queuedFlushes, 2)
+	assert.Len(t, ext.writer.Objs, 0)
+
+	secondBuf, secondReason, _, err := ext.FlushLogsWithReasonAndMetadata(flushReasonManual)
+	require.NoError(t, err)
+	require.NotEmpty(t, secondBuf)
+	assert.Equal(t, flushReasonSize, secondReason)
+	assert.Len(t, ext.queuedFlushes, 1)
+
+	thirdBuf, thirdReason, _, err := ext.FlushLogsWithReasonAndMetadata(flushReasonManual)
+	require.NoError(t, err)
+	require.NotEmpty(t, thirdBuf)
+	assert.Equal(t, flushReasonSize, thirdReason)
+	assert.Empty(t, ext.queuedFlushes)
 }
 
 func TestFlushReinitializeFailureReturnsPayloadAndRepairsOnNextWrite(t *testing.T) {
@@ -281,8 +314,8 @@ func TestMarshalLogsSnowflakeSchemaFlushReadback(t *testing.T) {
 	require.Equal(t, "snowflake_v1", row.SchemaVersion)
 	require.NotNil(t, row.BodyJSONText)
 	require.JSONEq(t, `{"a":1,"b":2,"message":"hello"}`, *row.BodyJSONText)
-	require.JSONEq(t, `{"customer.id":"12345","transaction.id":"tx-789"}`, row.AttributesHotText)
-	require.JSONEq(t, `{"host.name":"host-1","hostname":"host-1","request.id":"req-123","service":"checkout","service.name":"checkout","source":"nodejs","status":"error"}`, row.AttributesColdText)
+	require.JSONEq(t, `{}`, row.AttributesHotText)
+	require.JSONEq(t, `{"customer.id":"12345","host.name":"host-1","hostname":"host-1","request.id":"req-123","service":"checkout","service.name":"checkout","source":"nodejs","status":"error","transaction.id":"tx-789"}`, row.AttributesColdText)
 	require.JSONEq(t, `{"env":"prod","version":"1.2.3"}`, row.TagsHotText)
 	require.JSONEq(t, `{"service":"checkout"}`, row.TagsColdText)
 }
@@ -310,12 +343,12 @@ func newSnowflakeTestParquetExtension(t *testing.T) *parquetLogExtension {
 		t.Context(),
 		extensiontest.NewNopSettings(testExtensionType),
 		&Config{
-			Schema:              "snowflake",
-			MaxFileSizeBytes:    defaultMaxFileSizeBytes,
-			NumberOfGoRoutines:  defaultNumberOfGoRoutines,
-			CompressionCodec:    defaultCompressionCodec,
-			PageSizeBytes:       defaultPageSizeBytes,
-			RowGroupSizeBytes:   defaultRowGroupSizeBytes,
+			Schema:             "snowflake",
+			MaxFileSizeBytes:   defaultMaxFileSizeBytes,
+			NumberOfGoRoutines: defaultNumberOfGoRoutines,
+			CompressionCodec:   defaultCompressionCodec,
+			PageSizeBytes:      defaultPageSizeBytes,
+			RowGroupSizeBytes:  defaultRowGroupSizeBytes,
 		},
 	)
 	require.NoError(t, err)
