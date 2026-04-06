@@ -73,6 +73,35 @@ func TestMetricBatcherFlushesOnInterval(t *testing.T) {
 	}
 }
 
+func TestMetricBatcherFlushesOnMaxBytes(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	flushed := make(chan int, 1)
+
+	batcher, err := newMetricBatcher(
+		ts.Logger,
+		ts.TelemetrySettings,
+		metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1, flushInterval: time.Hour},
+		func(_ context.Context, _ *wrappedExporter, md pmetric.Metrics, _ string) error {
+			flushed <- md.DataPointCount()
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
+
+	select {
+	case got := <-flushed:
+		require.Equal(t, 1, got)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected metric batch flush on max_bytes")
+	}
+}
+
 func TestMetricBatcherRemoveFlushesPending(t *testing.T) {
 	ts, _ := getTelemetryAssets(t)
 	var flushes atomic.Int64
