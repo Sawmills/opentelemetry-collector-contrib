@@ -129,23 +129,6 @@ func newMetricBatcher(
 	return b, nil
 }
 
-func (b *metricBatcher) Enqueue(ctx context.Context, endpoint string, exp *wrappedExporter, md pmetric.Metrics) error {
-	backend, err := b.acquireBackend(endpoint, exp)
-	if err != nil {
-		return err
-	}
-	defer backend.inflight.Done()
-
-	select {
-	case backend.requests <- metricBatcherRequest{kind: metricBatcherRequestEnqueue, md: md}:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-backend.done:
-		return errors.New("metric batcher backend is stopped")
-	}
-}
-
 func (b *metricBatcher) TryEnqueue(endpoint string, exp *wrappedExporter, md pmetric.Metrics) (bool, error) {
 	backend, err := b.acquireBackend(endpoint, exp)
 	if err != nil {
