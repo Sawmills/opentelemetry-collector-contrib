@@ -1,8 +1,12 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package datadog
 
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -86,11 +90,7 @@ func (a *datadogParquetAdapter) ConvertToParquet(ctx context.Context, ld plog.Lo
 					}
 				}
 
-				item, err := a.transform(record, host, service, res)
-				if err != nil {
-					a.logger.Error("failed to transform log record", zap.Error(err))
-					continue
-				}
+				item := a.transform(record, host, service, res)
 
 				attributesJSON, err := jsoniter.MarshalToString(item.Attributes)
 				if err != nil {
@@ -118,22 +118,22 @@ func (a *datadogParquetAdapter) ConvertToParquet(ctx context.Context, ld plog.Lo
 	return records, nil
 }
 
-func (a *datadogParquetAdapter) Schema() any {
+func (*datadogParquetAdapter) Schema() any {
 	return new(ParquetLog)
 }
 
-func (a *datadogParquetAdapter) transform(
+func (*datadogParquetAdapter) transform(
 	record plog.LogRecord,
 	host, service string,
 	resource pcommon.Resource,
-) (*archiveItem, error) {
+) *archiveItem {
 	if hasDdtagsAttribute(resource) {
-		return a.transformWithDdTags(record, host, service, resource), nil
+		return transformWithDdTags(record, host, service, resource)
 	}
-	return a.transformDefault(record, host, service, resource), nil
+	return transformDefault(record, host, service, resource)
 }
 
-func (a *datadogParquetAdapter) transformWithDdTags(
+func transformWithDdTags(
 	record plog.LogRecord,
 	host, service string,
 	resource pcommon.Resource,
@@ -216,7 +216,7 @@ func (a *datadogParquetAdapter) transformWithDdTags(
 	return item
 }
 
-func (a *datadogParquetAdapter) transformDefault(
+func transformDefault(
 	record plog.LogRecord,
 	host, service string,
 	resource pcommon.Resource,
@@ -319,9 +319,7 @@ func flattenAttribute(key string, value pcommon.Value, depth int) map[string]str
 	}
 
 	value.Map().Range(func(childKey string, childValue pcommon.Value) bool {
-		for nestedKey, nestedValue := range flattenAttribute(key+"."+childKey, childValue, depth+1) {
-			result[nestedKey] = nestedValue
-		}
+		maps.Copy(result, flattenAttribute(key+"."+childKey, childValue, depth+1))
 		return true
 	})
 

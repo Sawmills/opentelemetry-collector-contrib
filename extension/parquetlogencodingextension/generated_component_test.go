@@ -1,7 +1,9 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package parquetlogencodingextension
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -31,8 +33,8 @@ func TestComponentLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, sub.Unmarshal(&cfg))
 
-	ext, err := factory.Create(context.Background(), extensiontest.NewNopSettings(typ), cfg)
+	ext, err := factory.Create(t.Context(), extensiontest.NewNopSettings(typ), cfg)
 	require.NoError(t, err)
-	require.NoError(t, ext.Start(context.Background(), componenttest.NewNopHost()))
-	require.NoError(t, ext.Shutdown(context.Background()))
+	require.NoError(t, ext.Start(t.Context(), componenttest.NewNopHost()))
+	require.NoError(t, ext.Shutdown(t.Context()))
 }

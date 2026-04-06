@@ -1,7 +1,9 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package datadog
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 
@@ -32,7 +34,7 @@ func TestConvertToParquetScopesRecordFallbacksPerSibling(t *testing.T) {
 	second.Attributes().PutStr("host.name", "host-b")
 	second.Attributes().PutStr("service.name", "svc-b")
 
-	records, err := adapter.ConvertToParquet(context.Background(), logs)
+	records, err := adapter.ConvertToParquet(t.Context(), logs)
 	require.NoError(t, err)
 	require.Len(t, records, 2)
 
@@ -64,7 +66,7 @@ func TestConvertToParquetResourceAttributesDoNotOverrideRecordAttributes(t *test
 	record.Attributes().PutStr("service.name", "record-service")
 	record.Attributes().PutStr("request.id", "record-request")
 
-	records, err := adapter.ConvertToParquet(context.Background(), logs)
+	records, err := adapter.ConvertToParquet(t.Context(), logs)
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 
@@ -94,7 +96,7 @@ func TestConvertToParquetDdtagsResourceAttributesDoNotOverrideFlattenedRecordAtt
 	record.Body().SetStr("ddtags path")
 	record.Attributes().PutEmptyMap("request").PutStr("id", "record-request")
 
-	records, err := adapter.ConvertToParquet(context.Background(), logs)
+	records, err := adapter.ConvertToParquet(t.Context(), logs)
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 

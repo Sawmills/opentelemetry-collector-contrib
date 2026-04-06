@@ -5,6 +5,7 @@ package awss3exporter // import "github.com/open-telemetry/opentelemetry-collect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"text/template"
 	"time"
@@ -35,6 +36,10 @@ func newUploadManager(
 
 	if region := conf.S3Uploader.Region; region != "" {
 		configOpts = append(configOpts, config.WithRegion(region))
+	}
+
+	if (conf.S3Uploader.AccessKeyID == "") != (conf.S3Uploader.SecretAccessKey == "") {
+		return nil, errors.New("access_key_id and secret_access_key must be set together")
 	}
 
 	if conf.S3Uploader.AccessKeyID != "" && conf.S3Uploader.SecretAccessKey != "" {

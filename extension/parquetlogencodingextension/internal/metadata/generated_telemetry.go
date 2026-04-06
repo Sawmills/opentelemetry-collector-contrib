@@ -1,3 +1,6 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package metadata
 
 import (
@@ -33,7 +36,7 @@ func (builder *TelemetryBuilder) Shutdown() {
 	builder.mu.Lock()
 	defer builder.mu.Unlock()
 	for _, reg := range builder.registrations {
-		reg.Unregister()
+		_ = reg.Unregister()
 	}
 }
 

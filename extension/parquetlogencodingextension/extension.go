@@ -1,7 +1,11 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package parquetlogencodingextension
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -41,6 +45,8 @@ type parquetLogExtension struct {
 	writeStopFn          func() error
 	readWriterBytes      func() ([]byte, error)
 	reinitializeWriterFn func() error
+	nowFn                func() time.Time
+	recordFlushFn        func(string, int64, int64, time.Duration)
 }
 
 type bufferedStateSnapshot struct {
@@ -70,16 +76,18 @@ func NewParquetLogExtension(
 
 	ext := &parquetLogExtension{
 		logger:           params.Logger,
-		ctx:              ctx,
+		ctx:              context.WithoutCancel(ctx),
 		config:           cfg,
 		adapter:          adapter,
 		telemetry:        telemetry,
 		maxFileSizeBytes: cfg.MaxFileSizeBytes,
 		fileName:         fmt.Sprintf("parquet-log-%d.parquet", time.Now().UnixNano()),
+		nowFn:            time.Now,
 	}
 	ext.writeStopFn = ext.defaultWriteStop
 	ext.readWriterBytes = ext.defaultReadWriterBytes
 	ext.reinitializeWriterFn = ext.initializeWriter
+	ext.recordFlushFn = ext.telemetry.recordFlush
 
 	if err := ext.initializeWriter(); err != nil {
 		return nil, err
@@ -127,7 +135,7 @@ func (e *parquetLogExtension) initializeWriter() error {
 	return nil
 }
 
-func (e *parquetLogExtension) Start(context.Context, component.Host) error {
+func (*parquetLogExtension) Start(context.Context, component.Host) error {
 	return nil
 }
 
@@ -137,7 +145,7 @@ func (e *parquetLogExtension) Shutdown(context.Context) error {
 
 	if e.writer != nil && len(e.writer.Objs) > 0 {
 		e.telemetry.shutdown()
-		return fmt.Errorf("buffered parquet records remain at shutdown; flush before shutdown")
+		return errors.New("buffered parquet records remain at shutdown; flush before shutdown")
 	}
 
 	e.telemetry.shutdown()
@@ -190,23 +198,55 @@ func (e *parquetLogExtension) addLogRecordWithFlushMetadata(
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	if len(records) > 0 && len(e.writer.Objs) == 0 {
-		e.oldestBufferedRecord = time.Now()
+	if err := e.ensureWriterLocked(); err != nil {
+		return nil, "", time.Time{}, err
 	}
+
+	if len(records) > 0 && len(e.writer.Objs) == 0 {
+		e.oldestBufferedRecord = e.nowFn()
+	}
+
+	var flushedBytes []byte
+	var flushReason string
+	var flushCompletedAt time.Time
+
 	for _, record := range records {
 		if err := e.Write(record); err != nil {
 			return nil, "", time.Time{}, fmt.Errorf("failed to write record: %w", err)
 		}
+		e.recordBufferStateLocked()
+		if flushedBytes != nil || e.getCurrentCompressedSize() < e.maxFileSizeBytes {
+			continue
+		}
+
+		buf, reason, completedAt, err := e.checkAndFlushWithMetadata(false, flushReasonSize)
+		if err != nil {
+			return nil, "", time.Time{}, err
+		}
+		if len(buf) == 0 {
+			continue
+		}
+		flushedBytes = buf
+		flushReason = reason
+		flushCompletedAt = completedAt
 	}
 	e.recordBufferStateLocked()
 
-	return e.checkAndFlushWithMetadata(false, flushReasonSize)
+	if flushedBytes != nil {
+		return flushedBytes, flushReason, flushCompletedAt, nil
+	}
+
+	return nil, "", time.Time{}, nil
 }
 
 func (e *parquetLogExtension) checkAndFlushWithMetadata(
 	forceFlush bool,
 	reason string,
 ) ([]byte, string, time.Time, error) {
+	if e.writer == nil {
+		return nil, "", time.Time{}, nil
+	}
+
 	if e.getCurrentCompressedSize() < e.maxFileSizeBytes && !forceFlush {
 		return nil, "", time.Time{}, nil
 	}
@@ -220,10 +260,7 @@ func (e *parquetLogExtension) checkAndFlushWithMetadata(
 		return nil, "", time.Time{}, nil
 	}
 
-	flushStartedAt := e.oldestBufferedRecord
-	if flushStartedAt.IsZero() {
-		flushStartedAt = time.Now()
-	}
+	flushStartedAt := e.nowFn()
 	snapshot := e.snapshotBufferedStateLocked()
 
 	if err := e.writeStopFn(); err != nil {
@@ -231,10 +268,9 @@ func (e *parquetLogExtension) checkAndFlushWithMetadata(
 		e.logger.Error("failed to stop parquet writer", zap.Error(err))
 		if restoreErr := e.restoreBufferedStateLocked(snapshot); restoreErr != nil {
 			e.logger.Error("failed to restore buffered parquet state", zap.Error(restoreErr))
-			return nil, "", time.Time{}, fmt.Errorf(
-				"write stop failed: %w; restore failed: %v",
-				err,
-				restoreErr,
+			return nil, "", time.Time{}, errors.Join(
+				fmt.Errorf("write stop failed: %w", err),
+				fmt.Errorf("restore buffered parquet state: %w", restoreErr),
 			)
 		}
 		return nil, "", time.Time{}, err
@@ -246,10 +282,9 @@ func (e *parquetLogExtension) checkAndFlushWithMetadata(
 		e.logger.Error("failed to read parquet bytes", zap.Error(err))
 		if restoreErr := e.restoreBufferedStateLocked(snapshot); restoreErr != nil {
 			e.logger.Error("failed to restore buffered parquet state", zap.Error(restoreErr))
-			return nil, "", time.Time{}, fmt.Errorf(
-				"read parquet bytes failed: %w; restore failed: %v",
-				err,
-				restoreErr,
+			return nil, "", time.Time{}, errors.Join(
+				fmt.Errorf("read parquet bytes failed: %w", err),
+				fmt.Errorf("restore buffered parquet state: %w", restoreErr),
 			)
 		}
 		return nil, "", time.Time{}, err
@@ -258,17 +293,27 @@ func (e *parquetLogExtension) checkAndFlushWithMetadata(
 	if err := e.reinitializeWriterFn(); err != nil {
 		e.telemetry.recordFailedFlush(reason)
 		e.logger.Error("failed to reinitialize parquet writer", zap.Error(err))
-		// Restore would immediately retry the same failed reinitialization path.
-		return nil, "", time.Time{}, err
+		e.writer = nil
+		e.memFile = nil
+		e.oldestBufferedRecord = time.Time{}
+		e.recordBufferStateLocked()
+		completedAt := e.nowFn()
+		e.recordFlushFn(
+			reason,
+			int64(bufferedRecords),
+			int64(len(pqBytes)),
+			completedAt.Sub(flushStartedAt),
+		)
+		return pqBytes, reason, completedAt, nil
 	}
 
-	e.telemetry.recordFlush(
+	completedAt := e.nowFn()
+	e.recordFlushFn(
 		reason,
 		int64(bufferedRecords),
 		int64(len(pqBytes)),
-		time.Since(flushStartedAt),
+		completedAt.Sub(flushStartedAt),
 	)
-	completedAt := time.Now()
 	e.oldestBufferedRecord = time.Time{}
 	e.recordBufferStateLocked()
 
@@ -297,6 +342,16 @@ func (e *parquetLogExtension) restoreBufferedStateLocked(snapshot bufferedStateS
 	}
 	e.recordBufferStateLocked()
 
+	return nil
+}
+
+func (e *parquetLogExtension) ensureWriterLocked() error {
+	if e.writer != nil {
+		return nil
+	}
+	if err := e.reinitializeWriterFn(); err != nil {
+		return fmt.Errorf("reinitialize parquet writer: %w", err)
+	}
 	return nil
 }
 
