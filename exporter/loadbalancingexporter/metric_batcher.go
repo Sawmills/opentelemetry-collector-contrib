@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -39,12 +40,16 @@ type metricBatcherSettings struct {
 	flushInterval time.Duration
 }
 
-type metricBatcherSendFunc func(context.Context, *wrappedExporter, pmetric.Metrics, string) error
+type (
+	metricBatcherSendFunc         func(context.Context, *wrappedExporter, pmetric.Metrics, string) error
+	metricBatcherDrainFailureFunc func(context.Context, pmetric.Metrics, string) error
+)
 
 type metricBatcher struct {
 	logger   *zap.Logger
 	settings metricBatcherSettings
 	send     metricBatcherSendFunc
+	drainErr metricBatcherDrainFailureFunc
 
 	telemetry *metricBatcherTelemetry
 
@@ -73,6 +78,7 @@ type backendMetricBatcher struct {
 	logger   *zap.Logger
 	settings metricBatcherSettings
 	send     metricBatcherSendFunc
+	drainErr metricBatcherDrainFailureFunc
 
 	telemetry *metricBatcherTelemetry
 
@@ -108,6 +114,7 @@ func newMetricBatcher(
 	settings component.TelemetrySettings,
 	cfg metricBatcherSettings,
 	send metricBatcherSendFunc,
+	drainErr metricBatcherDrainFailureFunc,
 ) (*metricBatcher, error) {
 	telemetry, err := newMetricBatcherTelemetry(settings)
 	if err != nil {
@@ -118,6 +125,7 @@ func newMetricBatcher(
 		logger:    logger,
 		settings:  cfg,
 		send:      send,
+		drainErr:  drainErr,
 		telemetry: telemetry,
 		backends:  make(map[string]*backendMetricBatcher),
 	}
@@ -266,7 +274,7 @@ func (b *metricBatcher) acquireBackend(endpoint string, exp *wrappedExporter) (*
 		return nil, errMetricBatcherExporterStopping
 	}
 
-	backend = newBackendMetricBatcher(endpoint, exp, b.logger, b.settings, b.telemetry, b.send)
+	backend = newBackendMetricBatcher(endpoint, exp, b.logger, b.settings, b.telemetry, b.send, b.drainErr)
 	backend.inflight.Add(1)
 	b.backends[endpoint] = backend
 	return backend, nil
@@ -279,6 +287,7 @@ func newBackendMetricBatcher(
 	settings metricBatcherSettings,
 	telemetry *metricBatcherTelemetry,
 	send metricBatcherSendFunc,
+	drainErr metricBatcherDrainFailureFunc,
 ) *backendMetricBatcher {
 	backend := &backendMetricBatcher{
 		endpoint:  endpoint,
@@ -287,6 +296,7 @@ func newBackendMetricBatcher(
 		settings:  settings,
 		telemetry: telemetry,
 		send:      send,
+		drainErr:  drainErr,
 		requests:  make(chan metricBatcherRequest, 16),
 		done:      make(chan struct{}),
 	}
@@ -471,6 +481,18 @@ func (b *backendMetricBatcher) flush(
 				*timerC = timer.C
 			}
 		} else {
+			if b.drainErr != nil && (reason == metricFlushReasonResolverChange || reason == metricFlushReasonShutdown) {
+				rerouteErr := b.drainErr(ctx, drained, reason)
+				if rerouteErr == nil {
+					return nil
+				}
+				var mErr consumererror.Metrics
+				if errors.As(rerouteErr, &mErr) {
+					drained = mErr.Data()
+					datapoints = drained.DataPointCount()
+				}
+				err = errors.Join(err, rerouteErr)
+			}
 			b.telemetry.droppedDataPoints.Add(ctx, int64(datapoints), attrs)
 		}
 	}
