@@ -127,6 +127,11 @@ func TestMarshalLogsUsesFlushTimeNotBufferAgeForFlushDuration(t *testing.T) {
 func TestMarshalLogsFlushesImmediatelyWhenSizeThresholdIsExceeded(t *testing.T) {
 	ext := newTestParquetExtension(t)
 	ext.maxFileSizeBytes = 1
+	now := time.Unix(200, 0)
+	ext.nowFn = func() time.Time {
+		now = now.Add(time.Second)
+		return now
+	}
 
 	buf, reason, completedAt, err := ext.addLogRecordWithFlushMetadata([]any{
 		datadog.ParquetLog{Message: "large enough"},
@@ -137,6 +142,8 @@ func TestMarshalLogsFlushesImmediatelyWhenSizeThresholdIsExceeded(t *testing.T) 
 	assert.Equal(t, flushReasonSize, reason)
 	assert.False(t, completedAt.IsZero())
 	assert.Len(t, ext.writer.Objs, 1)
+	assert.Equal(t, now, ext.oldestBufferedRecord)
+	assert.Positive(t, ext.bufferOldestRecordAgeSeconds())
 }
 
 func TestFlushReinitializeFailureReturnsPayloadAndRepairsOnNextWrite(t *testing.T) {

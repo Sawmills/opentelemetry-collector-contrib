@@ -211,6 +211,9 @@ func (e *parquetLogExtension) addLogRecordWithFlushMetadata(
 	var flushCompletedAt time.Time
 
 	for _, record := range records {
+		if e.oldestBufferedRecord.IsZero() {
+			e.oldestBufferedRecord = e.nowFn()
+		}
 		if err := e.Write(record); err != nil {
 			return nil, "", time.Time{}, fmt.Errorf("failed to write record: %w", err)
 		}
