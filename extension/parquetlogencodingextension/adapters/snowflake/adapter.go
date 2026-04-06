@@ -114,6 +114,7 @@ func (a *snowflakeParquetAdapter) ConvertToParquet(ctx context.Context, ld plog.
 			for k := 0; k < logRecords.Len(); k++ {
 				record := logRecords.At(k)
 				if record.Timestamp() == 0 {
+					a.logger.Debug("dropping log record with zero timestamp")
 					continue
 				}
 
@@ -236,6 +237,7 @@ func (a *snowflakeParquetAdapter) transform(
 	attributesHot, attributesCold := splitMap(attrs, defaultAttributesHotKeys)
 	attributesCold = sanitizeArchivedMap(attributesCold, maxArchivedColdAttributes, excludedColdAttributeKeys)
 	tagsHot, tagsCold := splitMap(tags, defaultTagsHotKeys)
+	tagsCold = sanitizeArchivedMap(tagsCold, maxArchivedColdAttributes, excludedColdAttributeKeys)
 
 	item.AttributesHotText, err = canonicalJSONString(attributesHot)
 	if err != nil {

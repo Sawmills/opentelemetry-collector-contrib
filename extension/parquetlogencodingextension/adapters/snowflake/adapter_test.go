@@ -127,6 +127,27 @@ func TestConvertToParquetSanitizesColdAttributes(t *testing.T) {
 	require.Len(t, coldAttrs["000payload"].(string), maxArchivedStringValueSize)
 }
 
+func TestConvertToParquetSanitizesColdTags(t *testing.T) {
+	adapter, err := NewSnowflakeParquetAdapter(
+		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
+	)
+	require.NoError(t, err)
+
+	rows, err := adapter.ConvertToParquet(t.Context(), newLargeTagLogs())
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	row := rows[0].(ParquetLog)
+	var coldTags map[string]any
+	require.NoError(t, json.Unmarshal([]byte(row.TagsColdText), &coldTags))
+
+	require.NotContains(t, coldTags, "k8s.pod.uid")
+	require.NotContains(t, coldTags, "k8s.pod.ip")
+	require.NotContains(t, coldTags, "k8s.node.uid")
+	require.Len(t, coldTags, maxArchivedColdAttributes)
+	require.Len(t, coldTags["000payload"].(string), maxArchivedStringValueSize)
+}
+
 func TestTagsToMapRejectsNonFiniteNumbers(t *testing.T) {
 	require.Equal(t, map[string]any{
 		"env":   "prod",
@@ -238,5 +259,19 @@ func newAttributePrecedenceLogs() plog.Logs {
 
 	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0)
 	record.Attributes().PutStr("cloud.region", "record-value")
+	return logs
+}
+
+func newLargeTagLogs() plog.Logs {
+	logs := newPlainStringLogs()
+	resource := logs.ResourceLogs().At(0).Resource()
+	ddtags := resource.Attributes().PutEmptyMap("ddtags")
+	ddtags.PutStr("k8s.pod.uid", "pod-uid")
+	ddtags.PutStr("k8s.pod.ip", "10.0.0.1")
+	ddtags.PutStr("k8s.node.uid", "node-uid")
+	ddtags.PutStr("000payload", strings.Repeat("x", maxArchivedStringValueSize+32))
+	for i := 0; i < maxArchivedColdAttributes+5; i++ {
+		ddtags.PutStr("tag."+strconv.Itoa(i), "value")
+	}
 	return logs
 }
