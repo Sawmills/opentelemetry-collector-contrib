@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -337,27 +336,22 @@ func (e *metricExporterImp) consumeMetricsByExporter(
 	}
 
 	needsCleanup = false
-	var (
-		errMu sync.Mutex
-		errs  error
-		wg    sync.WaitGroup
-	)
+	var errs error
 	for exp, mds := range metricsByExporter {
-		wg.Add(1)
-		go func(exp *wrappedExporter, mds pmetric.Metrics) {
-			defer wg.Done()
-			start := time.Now()
-			err := exp.ConsumeMetrics(ctx, mds)
-			duration := time.Since(start)
+		start := time.Now()
+		err := exp.ConsumeMetrics(ctx, mds)
+		duration := time.Since(start)
 
-			exp.doneConsume()
-			errMu.Lock()
-			errs = multierr.Append(errs, err)
-			errMu.Unlock()
-			e.recordBackendResult(ctx, exp, duration, err)
-		}(exp, mds)
+		exp.doneConsume()
+		errs = multierr.Append(errs, err)
+		e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(exp.endpointAttr))
+		if err == nil {
+			e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(exp.successAttr))
+		} else {
+			e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(exp.failureAttr))
+			e.logger.Debug("failed to export metrics", zap.Error(err))
+		}
 	}
-	wg.Wait()
 
 	return errs
 }
