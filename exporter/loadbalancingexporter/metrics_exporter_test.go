@@ -677,6 +677,68 @@ func TestRerouteDrainBatchReturnsFailedSubsetOnPartialSuccess(t *testing.T) {
 	))
 }
 
+func TestRerouteDrainBatchReleasesStartedConsumesOnEarlyReturn(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+
+	endpointA := "endpoint-a:4317"
+	endpointB := "endpoint-b:4317"
+	lb := &loadBalancer{ring: newHashRing([]string{endpointA, endpointB})}
+
+	routingA := findRoutingIDForEndpoint(t, lb.ring, endpointA)
+	routingB := findRoutingIDForEndpoint(t, lb.ring, endpointB)
+
+	openEndpoint, openRouting := endpointA, routingA
+	stoppingEndpoint, stoppingRouting := endpointB, routingB
+	if routingA > routingB {
+		openEndpoint, openRouting = endpointB, routingB
+		stoppingEndpoint, stoppingRouting = endpointA, routingA
+	}
+
+	openExporter := newWrappedExporter(newNopMockMetricsExporter(), openEndpoint)
+	stoppingExporter := newWrappedExporter(newNopMockMetricsExporter(), stoppingEndpoint)
+	stoppingExporter.markStopping()
+
+	lb.exporters = map[string]*wrappedExporter{
+		openEndpoint:     openExporter,
+		stoppingEndpoint: stoppingExporter,
+	}
+
+	p := &metricExporterImp{
+		routingKey:   metricNameRouting,
+		loadBalancer: lb,
+		telemetry:    tb,
+		logger:       ts.Logger,
+	}
+
+	input := pmetric.NewMetrics()
+	rm := input.ResourceMetrics().AppendEmpty()
+	sm := rm.ScopeMetrics().AppendEmpty()
+	mOpen := sm.Metrics().AppendEmpty()
+	mOpen.SetName(openRouting)
+	mOpen.SetEmptyGauge().DataPoints().AppendEmpty().SetIntValue(1)
+	mStopping := sm.Metrics().AppendEmpty()
+	mStopping.SetName(stoppingRouting)
+	mStopping.SetEmptyGauge().DataPoints().AppendEmpty().SetIntValue(1)
+
+	err := p.rerouteDrainBatch(t.Context(), input, metricFlushReasonResolverChange)
+	require.Error(t, err)
+
+	var mErr consumererror.Metrics
+	require.ErrorAs(t, err, &mErr)
+
+	shutdownErr := make(chan error, 1)
+	go func() {
+		shutdownErr <- openExporter.Shutdown(t.Context())
+	}()
+
+	select {
+	case shutdown := <-shutdownErr:
+		require.NoError(t, shutdown)
+	case <-time.After(time.Second):
+		t.Fatal("expected started consume slot to be released on reroute early return")
+	}
+}
+
 func TestConsumeMetrics_SingleEndpointNoServiceName(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 
