@@ -1,0 +1,24 @@
+receivers:
+  nop:
+
+exporters:
+  awss3:
+    s3uploader:
+      compression: gzip
+      region: us-east-1
+      s3_bucket: sawmills-test
+      s3_partition: minute
+      s3_prefix: ${S3_PREFIX}
+      access_key_id: ${S3_ACCESS_KEY_ID}
+      secret_access_key: ${S3_SECRET_ACCESS_KEY}
+      server_side_encryption: AES256
+
+processors:
+  nop:
+
+service:
+  pipelines:
+    traces:
+      receivers: [nop]
+      processors: [nop]
+      exporters: [awss3]

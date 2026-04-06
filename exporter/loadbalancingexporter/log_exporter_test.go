@@ -911,15 +911,3 @@ func newMockLogsExporter(consumelogsfn func(ctx context.Context, ld plog.Logs) e
 func newNopMockLogsExporter() exporter.Logs {
 	return &mockLogsExporter{Component: mockComponent{}}
 }
-
-type testStorageHost struct {
-	extensions map[component.ID]component.Component
-}
-
-func (h testStorageHost) GetExtensions() map[component.ID]component.Component {
-	return h.extensions
-}
-
-func (testStorageHost) GetFactory(component.Kind, component.Type) component.Factory {
-	return nil
-}

@@ -74,7 +74,7 @@ func TestLogExporterWithCompressedInMemoryQueueStartsWithoutStorageExtension(t *
 			Static: configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1"}}),
 		},
 		QueueSettings: QueueSettings{
-			QueueConfig: configoptional.Some(queueCfg),
+			QueueConfig:        configoptional.Some(queueCfg),
 			PayloadCompression: QueuePayloadCompressionZstd,
 			CompressInMemory:   true,
 		},
