@@ -102,6 +102,7 @@ func NewSnowflakeParquetAdapter(params extension.Settings) (adapters.ParquetAdap
 func (a *snowflakeParquetAdapter) ConvertToParquet(ctx context.Context, ld plog.Logs) ([]any, error) {
 	resourceLogs := ld.ResourceLogs()
 	records := make([]any, 0)
+	droppedZeroTimestamp := 0
 
 	for i := 0; i < resourceLogs.Len(); i++ {
 		rl := resourceLogs.At(i)
@@ -114,7 +115,7 @@ func (a *snowflakeParquetAdapter) ConvertToParquet(ctx context.Context, ld plog.
 			for k := 0; k < logRecords.Len(); k++ {
 				record := logRecords.At(k)
 				if record.Timestamp() == 0 {
-					a.logger.Debug("dropping log record with zero timestamp")
+					droppedZeroTimestamp++
 					continue
 				}
 
@@ -151,6 +152,10 @@ func (a *snowflakeParquetAdapter) ConvertToParquet(ctx context.Context, ld plog.
 				})
 			}
 		}
+	}
+
+	if droppedZeroTimestamp > 0 {
+		a.logger.Warn("dropped log records with zero timestamp", zap.Int("count", droppedZeroTimestamp))
 	}
 
 	return records, nil
@@ -207,7 +212,7 @@ func (a *snowflakeParquetAdapter) transform(
 		status = record.SeverityText()
 	}
 	if status == "" && record.SeverityNumber() != 0 {
-		status = statusFromSeverityNumber(record.SeverityNumber())
+		status = adapters.StatusFromSeverityNumber(record.SeverityNumber())
 	}
 	item.Status = strings.ToLower(status)
 
@@ -590,25 +595,6 @@ func flattenAttribute(key string, value pcommon.Value, depth int) map[string]any
 	return result
 }
 
-func statusFromSeverityNumber(severity plog.SeverityNumber) string {
-	switch {
-	case severity <= 4:
-		return "trace"
-	case severity <= 8:
-		return "debug"
-	case severity <= 12:
-		return "info"
-	case severity <= 16:
-		return "warn"
-	case severity <= 20:
-		return "error"
-	case severity <= 24:
-		return "fatal"
-	default:
-		return "error"
-	}
-}
-
 func valueToAny(value pcommon.Value) any {
 	switch value.Type() {
 	case pcommon.ValueTypeStr:
@@ -642,26 +628,12 @@ func valueToAny(value pcommon.Value) any {
 }
 
 func tagsToMap(tags []string) map[string]any {
-	tagMap := make(map[string]any, len(tags))
-	for _, tag := range tags {
-		parts := strings.SplitN(strings.TrimSpace(tag), ":", 2)
-		if len(parts) != 2 {
-			continue
+	return adapters.TagsToMap(tags, true, func(value string) (any, bool) {
+		if !isNumeric(value) {
+			return nil, false
 		}
-
-		value := parts[1]
-		switch {
-		case value == "true":
-			tagMap[parts[0]] = true
-		case value == "false":
-			tagMap[parts[0]] = false
-		case isNumeric(value):
-			tagMap[parts[0]] = json.Number(value)
-		default:
-			tagMap[parts[0]] = value
-		}
-	}
-	return tagMap
+		return json.Number(value), true
+	})
 }
 
 func isNumeric(value string) bool {

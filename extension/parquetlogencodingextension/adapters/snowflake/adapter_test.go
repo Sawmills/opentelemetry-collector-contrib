@@ -16,6 +16,8 @@ import (
 	"go.opentelemetry.io/collector/extension/extensiontest"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestConvertToParquetJSONStringBodyProducesSnowflakeRow(t *testing.T) {
@@ -104,6 +106,34 @@ func TestConvertToParquetMapBodyCanonicalizesBodyJSON(t *testing.T) {
 	require.NotNil(t, row.BodyJSONText)
 	require.JSONEq(t, `{"error":{"message":"nested hello"},"z":1}`, *row.BodyJSONText)
 	require.Equal(t, "nested hello", row.MessageText)
+}
+
+func TestConvertToParquetWarnsOnceForZeroTimestampDrops(t *testing.T) {
+	core, observed := observer.New(zap.WarnLevel)
+	settings := extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding"))
+	settings.Logger = zap.New(core)
+
+	adapter, err := NewSnowflakeParquetAdapter(settings)
+	require.NoError(t, err)
+
+	logs := newPlainStringLogs()
+	resourceLogs := logs.ResourceLogs().At(0)
+	scopeLogs := resourceLogs.ScopeLogs().At(0)
+
+	firstDropped := scopeLogs.LogRecords().AppendEmpty()
+	firstDropped.Body().SetStr("dropped-1")
+
+	secondDropped := scopeLogs.LogRecords().AppendEmpty()
+	secondDropped.Body().SetStr("dropped-2")
+
+	rows, err := adapter.ConvertToParquet(t.Context(), logs)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	entries := observed.All()
+	require.Len(t, entries, 1)
+	require.Equal(t, "dropped log records with zero timestamp", entries[0].Message)
+	require.Equal(t, int64(2), entries[0].ContextMap()["count"])
 }
 
 func TestConvertToParquetSanitizesColdAttributes(t *testing.T) {
