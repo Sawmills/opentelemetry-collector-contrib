@@ -33,8 +33,8 @@ func TestMetricBatcherFlushesOnMaxDataPoints(t *testing.T) {
 	})
 
 	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
-	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, singleDataPointMetric("m1")))
-	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, singleDataPointMetric("m1")))
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
 
 	select {
 	case got := <-flushed:
@@ -63,7 +63,7 @@ func TestMetricBatcherFlushesOnInterval(t *testing.T) {
 	})
 
 	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
-	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, singleDataPointMetric("m1")))
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
 
 	select {
 	case got := <-flushed:
@@ -92,7 +92,7 @@ func TestMetricBatcherRemoveFlushesPending(t *testing.T) {
 	})
 
 	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
-	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, singleDataPointMetric("m1")))
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
 	require.NoError(t, batcher.Remove(t.Context(), "endpoint-1:4317", exp))
 
 	require.Equal(t, int64(1), flushes.Load())
@@ -116,7 +116,7 @@ func TestMetricBatcherShutdownFlushesPending(t *testing.T) {
 	require.NoError(t, err)
 
 	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
-	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, singleDataPointMetric("m1")))
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
 	require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
 
 	select {
@@ -141,7 +141,7 @@ func TestMetricBatcherRemoveTimeoutSchedulesCleanup(t *testing.T) {
 	})
 
 	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
-	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, singleDataPointMetric("m1")))
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
 
 	batcher.mu.RLock()
 	backend := batcher.backends["endpoint-1:4317"]
@@ -187,7 +187,7 @@ func TestMetricBatcherRestoresPendingOnTimeoutFlushFailure(t *testing.T) {
 	})
 
 	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
-	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, singleDataPointMetric("m1")))
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
 
 	require.Eventually(t, func() bool {
 		return calls.Load() >= 2
@@ -219,7 +219,7 @@ func TestMetricBatcherTryEnqueueReturnsFalseWhenBackendQueueIsFull(t *testing.T)
 	})
 
 	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
-	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, singleDataPointMetric("m1")))
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
 
 	select {
 	case <-sendStarted:
@@ -247,4 +247,11 @@ func singleDataPointMetric(name string) pmetric.Metrics {
 	g := m.SetEmptyGauge()
 	g.DataPoints().AppendEmpty().SetIntValue(1)
 	return md
+}
+
+func requireMetricBatcherEnqueued(t *testing.T, batcher *metricBatcher, exp *wrappedExporter, md pmetric.Metrics) {
+	t.Helper()
+	enqueued, err := batcher.TryEnqueue("endpoint-1:4317", exp, md)
+	require.NoError(t, err)
+	require.True(t, enqueued)
 }
