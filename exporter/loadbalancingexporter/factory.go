@@ -100,9 +100,6 @@ func buildExporterResilienceOptions(
 				codec:    payloadCodec,
 			}
 		}
-		if cfg.QueueSettings.CompressInMemory {
-			options = append(options, exporterhelper.WithQueueBatchInMemoryEncoding(true))
-		}
 		options = append(options, xexporterhelper.WithQueueBatch(queueCfg, qbs))
 	}
 	if cfg.Enabled {
