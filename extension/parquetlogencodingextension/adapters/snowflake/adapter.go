@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/DataDog/opentelemetry-mapping-go/pkg/otlp/attributes"
 	"github.com/DataDog/opentelemetry-mapping-go/pkg/otlp/attributes/source"
@@ -317,10 +318,7 @@ func sanitizeArchivedMap(source map[string]any, maxKeys int, excludedKeys map[st
 func sanitizeArchivedValue(value any) any {
 	switch v := value.(type) {
 	case string:
-		if len(v) <= maxArchivedStringValueSize {
-			return v
-		}
-		return v[:maxArchivedStringValueSize]
+		return truncateUTF8(v, maxArchivedStringValueSize)
 	case map[string]any:
 		out := make(map[string]any, len(v))
 		for key, child := range v {
@@ -336,6 +334,17 @@ func sanitizeArchivedValue(value any) any {
 	default:
 		return v
 	}
+}
+
+func truncateUTF8(value string, maxBytes int) string {
+	if len(value) <= maxBytes {
+		return value
+	}
+	truncated := value[:maxBytes]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated
 }
 
 func deriveBodyJSONAndMessage(body pcommon.Value) (*string, string, error) {
@@ -645,8 +654,7 @@ func tagsToMap(tags []string) map[string]any {
 		case value == "false":
 			tagMap[parts[0]] = false
 		case isNumeric(value):
-			number, _ := strconv.ParseFloat(value, 64)
-			tagMap[parts[0]] = number
+			tagMap[parts[0]] = json.Number(value)
 		default:
 			tagMap[parts[0]] = value
 		}

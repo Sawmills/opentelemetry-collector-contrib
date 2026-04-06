@@ -165,6 +165,11 @@ func (e *parquetLogExtension) Shutdown(context.Context) error {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
+	if len(e.queuedFlushes) > 0 {
+		e.telemetry.shutdown()
+		return errors.New("queued parquet flush payloads remain at shutdown; drain before shutdown")
+	}
+
 	if e.writer != nil && len(e.writer.Objs) > 0 {
 		e.telemetry.shutdown()
 		return errors.New("buffered parquet records remain at shutdown; flush before shutdown")
@@ -298,6 +303,7 @@ func (e *parquetLogExtension) popQueuedFlushLocked() (flushResult, bool) {
 		return flushResult{}, false
 	}
 	result := e.queuedFlushes[0]
+	e.queuedFlushes[0] = flushResult{}
 	e.queuedFlushes = e.queuedFlushes[1:]
 	return result, true
 }

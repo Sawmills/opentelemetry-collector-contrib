@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
@@ -134,6 +135,12 @@ func TestTagsToMapRejectsNonFiniteNumbers(t *testing.T) {
 	}, tagsToMap([]string{"env:prod", "value:NaN", "peak:+Inf"}))
 }
 
+func TestTagsToMapPreservesLargeIntegerPrecision(t *testing.T) {
+	require.Equal(t, map[string]any{
+		"id": json.Number("9007199254740993"),
+	}, tagsToMap([]string{"id:9007199254740993"}))
+}
+
 func TestResourceFlattenedAttributesDoNotOverrideRecordAttributes(t *testing.T) {
 	adapter, err := NewSnowflakeParquetAdapter(
 		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
@@ -148,6 +155,13 @@ func TestResourceFlattenedAttributesDoNotOverrideRecordAttributes(t *testing.T) 
 	var coldAttrs map[string]any
 	require.NoError(t, json.Unmarshal([]byte(row.AttributesColdText), &coldAttrs))
 	require.Equal(t, "record-value", coldAttrs["cloud.region"])
+}
+
+func TestSanitizeArchivedValuePreservesValidUTF8(t *testing.T) {
+	value := strings.Repeat("é", (maxArchivedStringValueSize/2)+2)
+	truncated := sanitizeArchivedValue(value).(string)
+	require.True(t, utf8.ValidString(truncated))
+	require.LessOrEqual(t, len(truncated), maxArchivedStringValueSize)
 }
 
 func newJSONBodyLogs() plog.Logs {

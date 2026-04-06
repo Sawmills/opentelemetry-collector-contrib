@@ -56,6 +56,15 @@ func TestShutdownWithBufferedDataReturnsErrorAndPreservesBuffer(t *testing.T) {
 	assert.Len(t, ext.writer.Objs, 1)
 }
 
+func TestShutdownWithQueuedFlushesReturnsError(t *testing.T) {
+	ext := newTestParquetExtension(t)
+	ext.queuedFlushes = append(ext.queuedFlushes, flushResult{buf: []byte("queued")})
+
+	err := ext.Shutdown(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "queued")
+}
+
 func TestFlushWriteStopFailurePreservesBufferedStateForRetry(t *testing.T) {
 	ext := newTestParquetExtension(t)
 	writeDatadogLogs(t, ext, 2)
@@ -180,6 +189,19 @@ func TestMarshalLogsQueuesAdditionalSizeFlushesFromSameBatch(t *testing.T) {
 	require.NotEmpty(t, thirdBuf)
 	assert.Equal(t, flushReasonSize, thirdReason)
 	assert.Empty(t, ext.queuedFlushes)
+}
+
+func TestPopQueuedFlushClearsRetainedBufferReference(t *testing.T) {
+	ext := newTestParquetExtension(t)
+	ext.queuedFlushes = []flushResult{
+		{buf: []byte("first")},
+		{buf: []byte("second")},
+	}
+
+	_, ok := ext.popQueuedFlushLocked()
+	require.True(t, ok)
+	require.Len(t, ext.queuedFlushes, 1)
+	assert.Equal(t, "second", string(ext.queuedFlushes[0].buf))
 }
 
 func TestFlushReinitializeFailureReturnsPayloadAndRepairsOnNextWrite(t *testing.T) {
