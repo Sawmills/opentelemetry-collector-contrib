@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/xitongsys/parquet-go/reader"
+	"github.com/xitongsys/parquet-go-source/buffer"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/extension/extensiontest"
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -219,6 +221,72 @@ func TestNewParquetAdapterRejectsUnknownSchema(t *testing.T) {
 	require.Nil(t, adapter)
 }
 
+func TestMarshalLogsSnowflakeSchemaFlushReadback(t *testing.T) {
+	ext := newSnowflakeTestParquetExtension(t)
+
+	buf, err := ext.MarshalLogs(snowflakeJSONBodyLogs())
+	require.NoError(t, err)
+	require.Nil(t, buf)
+
+	pqBytes, reason, completedAt, err := ext.FlushLogsWithReasonAndMetadata(flushReasonManual)
+	require.NoError(t, err)
+	require.NotEmpty(t, pqBytes)
+	require.Equal(t, flushReasonManual, reason)
+	require.False(t, completedAt.IsZero())
+
+	pqFile, err := buffer.NewBufferFile(pqBytes)
+	require.NoError(t, err)
+
+	pr, err := reader.NewParquetReader(pqFile, new(snowflake.ParquetLog), 1)
+	require.NoError(t, err)
+	defer func() {
+		pr.ReadStop()
+	}()
+
+	require.Equal(t, int64(1), pr.GetNumRows())
+	var schemaNames []string
+	for _, info := range pr.SchemaHandler.Infos {
+		schemaNames = append(schemaNames, info.ExName)
+	}
+	require.Equal(t, []string{
+		"parquet_go_root",
+		"ts",
+		"service",
+		"status",
+		"message_text",
+		"host",
+		"source",
+		"trace_id",
+		"span_id",
+		"schema_version",
+		"body_json_text",
+		"attributes_hot_text",
+		"attributes_cold_text",
+		"tags_hot_text",
+		"tags_cold_text",
+	}, schemaNames)
+
+	rows := make([]snowflake.ParquetLog, 1)
+	require.NoError(t, pr.Read(&rows))
+
+	row := rows[0]
+	require.Equal(t, int64(1700000000000), row.TS)
+	require.Equal(t, "checkout", row.Service)
+	require.Equal(t, "error", row.Status)
+	require.Equal(t, "hello", row.MessageText)
+	require.Equal(t, "host-1", row.Host)
+	require.Equal(t, "nodejs", row.Source)
+	require.Equal(t, "0102030405060708090a0b0c0d0e0f10", row.TraceID)
+	require.Equal(t, "0102030405060708", row.SpanID)
+	require.Equal(t, "snowflake_v1", row.SchemaVersion)
+	require.NotNil(t, row.BodyJSONText)
+	require.JSONEq(t, `{"a":1,"b":2,"message":"hello"}`, *row.BodyJSONText)
+	require.JSONEq(t, `{"customer.id":"12345","transaction.id":"tx-789"}`, row.AttributesHotText)
+	require.JSONEq(t, `{"host.name":"host-1","hostname":"host-1","request.id":"req-123","service":"checkout","service.name":"checkout","source":"nodejs","status":"error"}`, row.AttributesColdText)
+	require.JSONEq(t, `{"env":"prod","version":"1.2.3"}`, row.TagsHotText)
+	require.JSONEq(t, `{"service":"checkout"}`, row.TagsColdText)
+}
+
 func newTestParquetExtension(t *testing.T) *parquetLogExtension {
 	t.Helper()
 
@@ -228,6 +296,26 @@ func newTestParquetExtension(t *testing.T) *parquetLogExtension {
 		&Config{
 			MaxFileSizeBytes:   defaultMaxFileSizeBytes,
 			NumberOfGoRoutines: defaultNumberOfGoRoutines,
+		},
+	)
+	require.NoError(t, err)
+
+	return ext.(*parquetLogExtension)
+}
+
+func newSnowflakeTestParquetExtension(t *testing.T) *parquetLogExtension {
+	t.Helper()
+
+	ext, err := NewParquetLogExtension(
+		t.Context(),
+		extensiontest.NewNopSettings(testExtensionType),
+		&Config{
+			Schema:              "snowflake",
+			MaxFileSizeBytes:    defaultMaxFileSizeBytes,
+			NumberOfGoRoutines:  defaultNumberOfGoRoutines,
+			CompressionCodec:    defaultCompressionCodec,
+			PageSizeBytes:       defaultPageSizeBytes,
+			RowGroupSizeBytes:   defaultRowGroupSizeBytes,
 		},
 	)
 	require.NoError(t, err)
@@ -259,6 +347,30 @@ func newDatadogLogs(count int) plog.Logs {
 		record.Attributes().PutStr("ddsource", "nodejs")
 		record.Attributes().PutStr("request.id", "req-123")
 	}
+
+	return logs
+}
+
+func snowflakeJSONBodyLogs() plog.Logs {
+	logs := plog.NewLogs()
+	resourceLogs := logs.ResourceLogs().AppendEmpty()
+	resourceLogs.Resource().Attributes().PutStr("service.name", "checkout")
+	resourceLogs.Resource().Attributes().PutStr("host.name", "host-1")
+	ddtags := resourceLogs.Resource().Attributes().PutEmptyMap("ddtags")
+	ddtags.PutStr("env", "prod")
+	ddtags.PutStr("version", "1.2.3")
+
+	scopeLogs := resourceLogs.ScopeLogs().AppendEmpty()
+	record := scopeLogs.LogRecords().AppendEmpty()
+	record.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(1700000000, 0)))
+	record.SetSeverityText("ERROR")
+	record.SetTraceID([16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
+	record.SetSpanID([8]byte{1, 2, 3, 4, 5, 6, 7, 8})
+	record.Body().SetStr(`{"b":2,"message":"hello","a":1}`)
+	record.Attributes().PutStr("ddsource", "nodejs")
+	record.Attributes().PutStr("customer.id", "12345")
+	record.Attributes().PutStr("transaction.id", "tx-789")
+	record.Attributes().PutStr("request.id", "req-123")
 
 	return logs
 }
