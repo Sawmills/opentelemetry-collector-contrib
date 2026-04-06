@@ -1,0 +1,156 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package snowflake
+
+import (
+	"encoding/json"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/extension/extensiontest"
+	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/plog"
+)
+
+func TestConvertToParquetJSONStringBodyProducesSnowflakeRow(t *testing.T) {
+	adapter, err := NewSnowflakeParquetAdapter(
+		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
+	)
+	require.NoError(t, err)
+
+	rows, err := adapter.ConvertToParquet(t.Context(), newJSONBodyLogs())
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	row, ok := rows[0].(ParquetLog)
+	require.True(t, ok)
+
+	require.Equal(t, int64(1700000000000), row.TS)
+	require.Equal(t, "checkout", row.Service)
+	require.Equal(t, "error", row.Status)
+	require.Equal(t, "hello", row.MessageText)
+	require.Equal(t, "host-1", row.Host)
+	require.Equal(t, "nodejs", row.Source)
+	require.Equal(t, "snowflake_v1", row.SchemaVersion)
+	require.Equal(t, "0102030405060708090a0b0c0d0e0f10", row.TraceID)
+	require.Equal(t, "0102030405060708", row.SpanID)
+
+	require.NotNil(t, row.BodyJSONText)
+	require.JSONEq(t, `{"a":1,"b":2,"message":"hello"}`, *row.BodyJSONText)
+
+	var hotAttrs map[string]any
+	require.NoError(t, json.Unmarshal([]byte(row.AttributesHotText), &hotAttrs))
+	require.Equal(t, "12345", hotAttrs["customer.id"])
+	require.Equal(t, "tx-789", hotAttrs["transaction.id"])
+
+	var coldAttrs map[string]any
+	require.NoError(t, json.Unmarshal([]byte(row.AttributesColdText), &coldAttrs))
+	require.Equal(t, "checkout", coldAttrs["service"])
+	require.Equal(t, "host-1", coldAttrs["hostname"])
+	require.Equal(t, "nodejs", coldAttrs["source"])
+	require.Equal(t, "error", coldAttrs["status"])
+	require.Equal(t, "req-123", coldAttrs["request.id"])
+
+	var hotTags map[string]any
+	require.NoError(t, json.Unmarshal([]byte(row.TagsHotText), &hotTags))
+	require.Equal(t, "prod", hotTags["env"])
+	require.Equal(t, "1.2.3", hotTags["version"])
+
+	var coldTags map[string]any
+	require.NoError(t, json.Unmarshal([]byte(row.TagsColdText), &coldTags))
+	require.Equal(t, "checkout", coldTags["service"])
+}
+
+func TestConvertToParquetPlainStringBodyLeavesBodyJSONNil(t *testing.T) {
+	adapter, err := NewSnowflakeParquetAdapter(
+		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
+	)
+	require.NoError(t, err)
+
+	rows, err := adapter.ConvertToParquet(t.Context(), newPlainStringLogs())
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	row, ok := rows[0].(ParquetLog)
+	require.True(t, ok)
+
+	require.Nil(t, row.BodyJSONText)
+	require.Equal(t, "plain body", row.MessageText)
+	require.Equal(t, "warn", row.Status)
+	require.JSONEq(t, `{}`, row.AttributesHotText)
+	require.JSONEq(t, `{}`, row.TagsHotText)
+}
+
+func TestConvertToParquetMapBodyCanonicalizesBodyJSON(t *testing.T) {
+	adapter, err := NewSnowflakeParquetAdapter(
+		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
+	)
+	require.NoError(t, err)
+
+	rows, err := adapter.ConvertToParquet(t.Context(), newMapBodyLogs())
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	row, ok := rows[0].(ParquetLog)
+	require.True(t, ok)
+
+	require.NotNil(t, row.BodyJSONText)
+	require.JSONEq(t, `{"error":{"message":"nested hello"},"z":1}`, *row.BodyJSONText)
+	require.Equal(t, "nested hello", row.MessageText)
+}
+
+func newJSONBodyLogs() plog.Logs {
+	logs := plog.NewLogs()
+	resourceLogs := logs.ResourceLogs().AppendEmpty()
+	resourceLogs.Resource().Attributes().PutStr("service.name", "checkout")
+	resourceLogs.Resource().Attributes().PutStr("host.name", "host-1")
+	ddtags := resourceLogs.Resource().Attributes().PutEmptyMap("ddtags")
+	ddtags.PutStr("env", "prod")
+	ddtags.PutStr("version", "1.2.3")
+
+	scopeLogs := resourceLogs.ScopeLogs().AppendEmpty()
+	record := scopeLogs.LogRecords().AppendEmpty()
+	record.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(1700000000, 0)))
+	record.SetSeverityText("ERROR")
+	record.SetTraceID([16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
+	record.SetSpanID([8]byte{1, 2, 3, 4, 5, 6, 7, 8})
+	record.Body().SetStr(`{"b":2,"message":"hello","a":1}`)
+	record.Attributes().PutStr("ddsource", "nodejs")
+	record.Attributes().PutStr("customer.id", "12345")
+	record.Attributes().PutStr("transaction.id", "tx-789")
+	record.Attributes().PutStr("request.id", "req-123")
+
+	return logs
+}
+
+func newPlainStringLogs() plog.Logs {
+	logs := plog.NewLogs()
+	resourceLogs := logs.ResourceLogs().AppendEmpty()
+	scopeLogs := resourceLogs.ScopeLogs().AppendEmpty()
+
+	record := scopeLogs.LogRecords().AppendEmpty()
+	record.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(1700000100, 0)))
+	record.SetSeverityText("WARN")
+	record.Body().SetStr("plain body")
+
+	return logs
+}
+
+func newMapBodyLogs() plog.Logs {
+	logs := plog.NewLogs()
+	resourceLogs := logs.ResourceLogs().AppendEmpty()
+	scopeLogs := resourceLogs.ScopeLogs().AppendEmpty()
+
+	record := scopeLogs.LogRecords().AppendEmpty()
+	record.SetTimestamp(pcommon.NewTimestampFromTime(time.Unix(1700000200, 0)))
+	record.SetSeverityText("INFO")
+	body := record.Body().SetEmptyMap()
+	body.PutInt("z", 1)
+	errMap := body.PutEmptyMap("error")
+	errMap.PutStr("message", "nested hello")
+
+	return logs
+}
