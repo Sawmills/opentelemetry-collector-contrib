@@ -349,6 +349,81 @@ Primary benchmark SQL should remain plain:
 - avoid casts where possible
 - avoid reparsing JSON in the query when the view can absorb it
 
+## Expected Impact by Query Shape
+
+This design is explicitly aligned to the BigPanda query shapes gathered during SAW-6662 discovery.
+
+### 1. Time range + service + message substring
+
+Example shape:
+
+- filter by `ts`
+- filter by `service`
+- filter by substring search over `message_text`
+
+Expected impact:
+
+- `ts` and `service` become typed top-level columns rather than being inferred from generic payloads
+- `message_text` becomes a dedicated query field rather than a giant serialized envelope
+- Snowflake can narrow the candidate set using time and service filters before applying substring search
+
+Important limitation:
+
+- Track A is not a true full-text index
+- the main gain for this query shape is pruning before text search, not making raw `%...%` search intrinsically cheap
+
+### 2. Time bucket + status + service aggregation
+
+Example shape:
+
+- `DATE_TRUNC(..., ts)`
+- filter by `status`
+- filter by `service`
+- aggregate `COUNT(*)`
+
+Expected impact:
+
+- this is the query shape most directly improved by the new schema
+- `ts`, `status`, and `service` are typed top-level columns
+- `status` is normalized at write time
+- aggregation queries can avoid pulling large JSON/text payloads into the plan unless needed
+
+### 3. JSON-property lookup from the log body
+
+Example shape:
+
+- filter by `ts`
+- filter by `service`
+- filter by a property inside the structured log body
+
+Expected impact:
+
+- `body_json_text` is stored when the original body is a JSON object
+- the secure view exposes parsed `body_json` as `VARIANT`
+- customer queries do not need to reparse a giant message string in-query
+
+### 4. Curated troubleshooting filters
+
+Example shape:
+
+- filter by fields such as `env`, `version`, `customer_id`, `transaction_id`
+
+Expected impact:
+
+- these columns are exposed directly in the secure view
+- precedence is deterministic and documented
+- conflicts are observable through metrics
+
+### Overall expectation
+
+The design is expected to help BigPanda most on:
+
+1. `status` / `service` / `time` aggregations
+2. time-window + service point lookups
+3. body-JSON property queries
+
+It is expected to help free-text message search primarily by reducing the number of rows and files that must be searched first, not by introducing a text-search-specific indexing strategy.
+
 ## Scope
 
 ### In scope
