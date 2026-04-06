@@ -6,7 +6,6 @@ package awss3exporter // import "github.com/open-telemetry/opentelemetry-collect
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"text/template"
 	"time"
 
@@ -169,20 +168,10 @@ func applyServerSideEncryption(parameters interface{}, value string) {
 		return
 	}
 
-	paramValue := reflect.ValueOf(parameters)
-	if paramValue.Kind() != reflect.Pointer || paramValue.IsNil() {
-		return
+	switch input := parameters.(type) {
+	case *s3.PutObjectInput:
+		input.ServerSideEncryption = s3types.ServerSideEncryption(value)
+	case *s3.CreateMultipartUploadInput:
+		input.ServerSideEncryption = s3types.ServerSideEncryption(value)
 	}
-
-	elem := paramValue.Elem()
-	if elem.Kind() != reflect.Struct {
-		return
-	}
-
-	field := elem.FieldByName("ServerSideEncryption")
-	if !field.IsValid() || !field.CanSet() || field.Kind() != reflect.String {
-		return
-	}
-
-	field.SetString(value)
 }

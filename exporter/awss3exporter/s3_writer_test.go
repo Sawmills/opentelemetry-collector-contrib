@@ -37,6 +37,7 @@ func newTestClientFromConfig(t *testing.T, conf Config) testUploaderClient {
 
 	t.Setenv("AWS_ACCESS_KEY_ID", "env-access-key")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "env-secret-key")
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 
 	var captured testUploaderClient
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,6 +109,8 @@ func TestUploaderOptions_StaticCredsAndRoleArnUsesAssumeRole(t *testing.T) {
 	assumedAccessKey := "assumed-access-key"
 	var stsCalls int32
 	s3AuthorizationCh := make(chan string, 1)
+
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
 
 	stsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)

@@ -53,7 +53,10 @@ func NewParquetLogExtension(
 	params extension.Settings,
 	baseCfg component.Config,
 ) (extension.Extension, error) {
-	cfg := baseCfg.(*Config)
+	cfg, ok := baseCfg.(*Config)
+	if !ok {
+		return nil, fmt.Errorf("unexpected parquet config type %T", baseCfg)
+	}
 
 	adapter, err := datadog.NewDatadogParquetAdapter(params)
 	if err != nil {
@@ -255,14 +258,7 @@ func (e *parquetLogExtension) checkAndFlushWithMetadata(
 	if err := e.reinitializeWriterFn(); err != nil {
 		e.telemetry.recordFailedFlush(reason)
 		e.logger.Error("failed to reinitialize parquet writer", zap.Error(err))
-		if restoreErr := e.restoreBufferedStateLocked(snapshot); restoreErr != nil {
-			e.logger.Error("failed to restore buffered parquet state", zap.Error(restoreErr))
-			return nil, "", time.Time{}, fmt.Errorf(
-				"reinitialize parquet writer failed: %w; restore failed: %v",
-				err,
-				restoreErr,
-			)
-		}
+		// Restore would immediately retry the same failed reinitialization path.
 		return nil, "", time.Time{}, err
 	}
 
