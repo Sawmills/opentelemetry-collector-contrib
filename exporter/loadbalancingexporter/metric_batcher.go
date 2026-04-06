@@ -203,7 +203,7 @@ func (b *metricBatcher) scheduleBackendCleanup(backend *backendMetricBatcher, re
 			return
 		}
 		if err := backend.stopAndFlush(context.Background(), reason); err != nil {
-			b.logger.Warn("failed to stop metric batcher backend during background cleanup", zap.String("endpoint", backend.endpoint), zap.String("reason", reason), zap.Error(err))
+			b.logger.Error("failed to stop metric batcher backend during background cleanup", zap.String("endpoint", backend.endpoint), zap.String("reason", reason), zap.Error(err))
 		}
 	}()
 }
