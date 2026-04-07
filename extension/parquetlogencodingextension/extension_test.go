@@ -79,6 +79,37 @@ func TestShutdownWithPendingRecordsReturnsErrorAndMovesSpillIntoBuffer(t *testin
 	assert.Len(t, ext.writer.Objs, 1)
 }
 
+func TestShutdownWithPendingRecordsWriteFailureRequeuesOnlyUnwrittenTail(t *testing.T) {
+	ext := newTestParquetExtension(t)
+	now := time.Unix(100, 0)
+	ext.nowFn = func() time.Time { return now }
+	ext.pendingRecords = []any{
+		datadog.ParquetLog{Message: "first"},
+		datadog.ParquetLog{Message: "second"},
+		datadog.ParquetLog{Message: "third"},
+	}
+	ext.oldestPendingRecord = now.Add(-time.Minute)
+
+	writes := 0
+	ext.writeRecordFn = func(record any) error {
+		writes++
+		if writes == 3 {
+			return errors.New("boom")
+		}
+		return ext.Write(record)
+	}
+
+	err := ext.Shutdown(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "write pending record")
+	require.Len(t, ext.writer.Objs, 2)
+	assert.Equal(t, datadog.ParquetLog{Message: "first"}, ext.writer.Objs[0])
+	assert.Equal(t, datadog.ParquetLog{Message: "second"}, ext.writer.Objs[1])
+	require.Len(t, ext.pendingRecords, 1)
+	assert.Equal(t, datadog.ParquetLog{Message: "third"}, ext.pendingRecords[0])
+	assert.Equal(t, now.Add(-time.Minute), ext.oldestPendingRecord)
+}
+
 func TestShutdownErrorLeavesBufferStateLoopRunning(t *testing.T) {
 	ext := newTestParquetExtension(t)
 	ext.bufferStateInterval = 5 * time.Millisecond

@@ -55,6 +55,7 @@ type parquetLogExtension struct {
 	nowFn                 func() time.Time
 	recordBufferStateFn   func(int, int64, int64)
 	recordFlushFn         func(string, int64, int64, time.Duration)
+	writeRecordFn         func(any) error
 }
 
 type bufferedStateSnapshot struct {
@@ -98,6 +99,7 @@ func NewParquetLogExtension(
 	ext.reinitializeWriterFn = ext.initializeWriter
 	ext.recordBufferStateFn = ext.telemetry.recordBufferState
 	ext.recordFlushFn = ext.telemetry.recordFlush
+	ext.writeRecordFn = ext.Write
 
 	if err := ext.initializeWriter(); err != nil {
 		return nil, err
@@ -523,21 +525,28 @@ func (e *parquetLogExtension) movePendingRecordsIntoWriterLocked() error {
 		}
 	}
 
-	for _, record := range pendingRecords {
+	for i, record := range pendingRecords {
 		if e.oldestBufferedRecord.IsZero() {
 			e.oldestBufferedRecord = e.nowFn()
 		}
-		if err := e.Write(record); err != nil {
+		if err := e.writeRecordLocked(record); err != nil {
 			e.appendPendingRecordsLocked(
-				pendingRecords,
-				pendingOldestRecord,
-				e.estimateCompressedBytesForRecords(len(pendingRecords)),
+				pendingRecords[i:],
+				tailOldestRecord(len(pendingRecords), pendingOldestRecord, i, e.nowFn()),
+				e.estimateCompressedBytesForRecords(len(pendingRecords[i:])),
 			)
 			return fmt.Errorf("write pending record: %w", err)
 		}
 	}
 	e.recordBufferStateLocked()
 	return nil
+}
+
+func (e *parquetLogExtension) writeRecordLocked(record any) error {
+	if e.writeRecordFn != nil {
+		return e.writeRecordFn(record)
+	}
+	return e.Write(record)
 }
 
 func (e *parquetLogExtension) ensureWriterLocked() error {
