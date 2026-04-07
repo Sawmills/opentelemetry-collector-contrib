@@ -56,6 +56,15 @@ func TestShutdownWithBufferedDataReturnsErrorAndPreservesBuffer(t *testing.T) {
 	assert.Len(t, ext.writer.Objs, 1)
 }
 
+func TestShutdownWithPendingRecordsReturnsError(t *testing.T) {
+	ext := newTestParquetExtension(t)
+	ext.pendingRecords = []any{datadog.ParquetLog{Message: "pending"}}
+
+	err := ext.Shutdown(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pending")
+}
+
 func TestFlushWriteStopFailurePreservesBufferedStateForRetry(t *testing.T) {
 	ext := newTestParquetExtension(t)
 	writeDatadogLogs(t, ext, 2)
@@ -145,12 +154,13 @@ func TestMarshalLogsFlushesImmediatelyWhenSizeThresholdIsExceeded(t *testing.T) 
 	require.NotEmpty(t, buf)
 	assert.Equal(t, flushReasonSize, reason)
 	assert.False(t, completedAt.IsZero())
-	assert.Len(t, ext.writer.Objs, 1)
-	assert.False(t, ext.oldestBufferedRecord.IsZero())
-	assert.Positive(t, ext.bufferOldestRecordAgeSeconds())
+	assert.Empty(t, ext.writer.Objs)
+	assert.Len(t, ext.pendingRecords, 1)
+	assert.True(t, ext.oldestBufferedRecord.IsZero())
+	assert.Zero(t, ext.bufferOldestRecordAgeSeconds())
 }
 
-func TestMarshalLogsBuffersRemainingRecordsAfterSizeFlush(t *testing.T) {
+func TestMarshalLogsQueuesRemainingRecordsAfterSizeFlush(t *testing.T) {
 	ext := newTestParquetExtension(t)
 	ext.config.CompressionCodec = "uncompressed"
 	ext.maxFileSizeBytes = 1
@@ -165,13 +175,22 @@ func TestMarshalLogsBuffersRemainingRecordsAfterSizeFlush(t *testing.T) {
 	require.NotEmpty(t, buf)
 	assert.Equal(t, flushReasonSize, reason)
 	assert.False(t, completedAt.IsZero())
-	assert.Len(t, ext.writer.Objs, 2)
+	assert.Empty(t, ext.writer.Objs)
+	assert.Len(t, ext.pendingRecords, 2)
 
 	secondBuf, secondReason, _, err := ext.FlushLogsWithReasonAndMetadata(flushReasonManual)
 	require.NoError(t, err)
 	require.NotEmpty(t, secondBuf)
-	assert.Equal(t, flushReasonManual, secondReason)
+	assert.Equal(t, flushReasonSize, secondReason)
 	assert.Empty(t, ext.writer.Objs)
+	assert.Len(t, ext.pendingRecords, 1)
+
+	thirdBuf, thirdReason, _, err := ext.FlushLogsWithReasonAndMetadata(flushReasonManual)
+	require.NoError(t, err)
+	require.NotEmpty(t, thirdBuf)
+	assert.Equal(t, flushReasonSize, thirdReason)
+	assert.Empty(t, ext.writer.Objs)
+	assert.Empty(t, ext.pendingRecords)
 }
 
 func TestFlushReinitializeFailureReturnsPayloadAndRepairsOnNextWrite(t *testing.T) {

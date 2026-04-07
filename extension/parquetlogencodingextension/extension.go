@@ -37,6 +37,7 @@ type parquetLogExtension struct {
 	ctx                  context.Context
 	config               *Config
 	mutex                sync.Mutex
+	pendingRecords       []any
 	writer               *writer.ParquetWriter
 	adapter              adapters.ParquetAdapter
 	telemetry            *parquetTelemetry
@@ -164,6 +165,10 @@ func (e *parquetLogExtension) Shutdown(context.Context) error {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
+	if len(e.pendingRecords) > 0 {
+		e.telemetry.shutdown()
+		return errors.New("pending parquet records remain at shutdown; flush before shutdown")
+	}
 	if e.writer != nil && len(e.writer.Objs) > 0 {
 		e.telemetry.shutdown()
 		return errors.New("buffered parquet records remain at shutdown; flush before shutdown")
@@ -190,6 +195,16 @@ func (e *parquetLogExtension) FlushLogsWithReasonAndMetadata(
 ) ([]byte, string, time.Time, error) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
+
+	if len(e.pendingRecords) > 0 {
+		buf, flushReason, completedAt, err := e.addRecordsWithFlushMetadataLocked(nil)
+		if err != nil {
+			return nil, "", time.Time{}, err
+		}
+		if len(buf) > 0 {
+			return buf, flushReason, completedAt, nil
+		}
+	}
 
 	return e.checkAndFlushWithMetadata(true, reason)
 }
@@ -226,8 +241,19 @@ func (e *parquetLogExtension) addLogRecordWithFlushMetadata(
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
+	return e.addRecordsWithFlushMetadataLocked(records)
+}
+
+func (e *parquetLogExtension) addRecordsWithFlushMetadataLocked(
+	records []any,
+) ([]byte, string, time.Time, error) {
 	if err := e.ensureWriterLocked(); err != nil {
 		return nil, "", time.Time{}, err
+	}
+
+	if len(e.pendingRecords) > 0 {
+		records = append(append(make([]any, 0, len(e.pendingRecords)+len(records)), e.pendingRecords...), records...)
+		e.pendingRecords = nil
 	}
 
 	if len(records) > 0 && len(e.writer.Objs) == 0 {
@@ -238,7 +264,7 @@ func (e *parquetLogExtension) addLogRecordWithFlushMetadata(
 	var flushReason string
 	var flushCompletedAt time.Time
 
-	for _, record := range records {
+	for i, record := range records {
 		if e.oldestBufferedRecord.IsZero() {
 			e.oldestBufferedRecord = e.nowFn()
 		}
@@ -246,9 +272,6 @@ func (e *parquetLogExtension) addLogRecordWithFlushMetadata(
 			return nil, "", time.Time{}, fmt.Errorf("failed to write record: %w", err)
 		}
 		e.recordBufferStateLocked()
-		if flushedBytes != nil {
-			continue
-		}
 		if e.getCurrentCompressedSize() < e.maxFileSizeBytes {
 			continue
 		}
@@ -263,6 +286,10 @@ func (e *parquetLogExtension) addLogRecordWithFlushMetadata(
 		flushedBytes = buf
 		flushReason = reason
 		flushCompletedAt = completedAt
+		if i+1 < len(records) {
+			e.pendingRecords = append(e.pendingRecords, records[i+1:]...)
+		}
+		break
 	}
 	e.recordBufferStateLocked()
 
