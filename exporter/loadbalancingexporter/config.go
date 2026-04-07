@@ -40,8 +40,9 @@ const (
 type Config struct {
 	TimeoutSettings           exporterhelper.TimeoutConfig `mapstructure:",squash"`
 	configretry.BackOffConfig `mapstructure:"retry_on_failure"`
-	QueueSettings             QueueSettings    `mapstructure:"sending_queue"`
-	LogBatcher                LogBatcherConfig `mapstructure:"log_batcher"`
+	QueueSettings             QueueSettings       `mapstructure:"sending_queue"`
+	LogBatcher                LogBatcherConfig    `mapstructure:"log_batcher"`
+	MetricBatcher             MetricBatcherConfig `mapstructure:"metric_batcher"`
 
 	Protocol Protocol         `mapstructure:"protocol"`
 	Resolver ResolverSettings `mapstructure:"resolver"`
@@ -67,6 +68,14 @@ type LogBatcherConfig struct {
 	MaxRecords    int           `mapstructure:"max_records"`
 	MaxBytes      int           `mapstructure:"max_bytes"`
 	FlushInterval time.Duration `mapstructure:"flush_interval"`
+}
+
+type MetricBatcherConfig struct {
+	Enabled                  bool          `mapstructure:"enabled"`
+	MaxDataPoints            int           `mapstructure:"max_datapoints"`
+	MaxBytes                 int           `mapstructure:"max_bytes"`
+	FlushInterval            time.Duration `mapstructure:"flush_interval"`
+	MaxRetryBufferMultiplier int           `mapstructure:"max_retry_buffer_multiplier"`
 }
 
 func (q *QueueSettings) Unmarshal(conf *confmap.Conf) error {
@@ -160,7 +169,10 @@ func (cfg *Config) Validate() error {
 	if err := cfg.QueueSettings.Validate(); err != nil {
 		return err
 	}
-	return cfg.LogBatcher.Validate()
+	if err := cfg.LogBatcher.Validate(); err != nil {
+		return err
+	}
+	return cfg.MetricBatcher.Validate()
 }
 
 func (c LogBatcherConfig) Validate() error {
@@ -175,6 +187,25 @@ func (c LogBatcherConfig) Validate() error {
 	}
 	if c.FlushInterval <= 0 {
 		return errors.New("log_batcher.flush_interval must be greater than 0 when log_batcher.enabled=true")
+	}
+	return nil
+}
+
+func (c MetricBatcherConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if c.MaxDataPoints <= 0 {
+		return errors.New("metric_batcher.max_datapoints must be greater than 0 when metric_batcher.enabled=true")
+	}
+	if c.MaxBytes <= 0 {
+		return errors.New("metric_batcher.max_bytes must be greater than 0 when metric_batcher.enabled=true")
+	}
+	if c.FlushInterval <= 0 {
+		return errors.New("metric_batcher.flush_interval must be greater than 0 when metric_batcher.enabled=true")
+	}
+	if c.MaxRetryBufferMultiplier <= 0 {
+		return errors.New("metric_batcher.max_retry_buffer_multiplier must be greater than 0 when metric_batcher.enabled=true")
 	}
 	return nil
 }

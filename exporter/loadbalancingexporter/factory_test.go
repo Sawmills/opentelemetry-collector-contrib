@@ -111,6 +111,16 @@ func TestDefaultLogBatcherConfig(t *testing.T) {
 	assert.Equal(t, defaultLogBatchFlushTimeout, cfg.LogBatcher.FlushInterval)
 }
 
+func TestDefaultMetricBatcherConfig(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+
+	assert.False(t, cfg.MetricBatcher.Enabled)
+	assert.Equal(t, defaultMetricBatchMaxDataPoints, cfg.MetricBatcher.MaxDataPoints)
+	assert.Equal(t, defaultMetricBatchMaxBytes, cfg.MetricBatcher.MaxBytes)
+	assert.Equal(t, defaultMetricBatchFlushTimeout, cfg.MetricBatcher.FlushInterval)
+	assert.Equal(t, defaultMetricBatchRetryBufferMultiplier, cfg.MetricBatcher.MaxRetryBufferMultiplier)
+}
+
 func TestBuildExporterConfig(t *testing.T) {
 	// prepare
 	factories, err := otelcoltest.NopFactories()
