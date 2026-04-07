@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package adapters
+package adapters // import "github.com/open-telemetry/opentelemetry-collector-contrib/extension/parquetlogencodingextension/adapters"
 
 import (
 	"context"
