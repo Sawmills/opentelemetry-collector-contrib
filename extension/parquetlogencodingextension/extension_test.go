@@ -110,6 +110,34 @@ func TestShutdownWithPendingRecordsWriteFailureRequeuesOnlyUnwrittenTail(t *test
 	assert.Equal(t, now.Add(-time.Minute), ext.oldestPendingRecord)
 }
 
+func TestShutdownPendingWriteFailureStopsBufferStateLoop(t *testing.T) {
+	ext := newTestParquetExtension(t)
+	ext.bufferStateInterval = 5 * time.Millisecond
+	require.NoError(t, ext.Start(t.Context(), nil))
+
+	now := time.Unix(100, 0)
+	ext.nowFn = func() time.Time { return now }
+	ext.pendingRecords = []any{
+		datadog.ParquetLog{Message: "first"},
+		datadog.ParquetLog{Message: "second"},
+	}
+
+	writes := 0
+	ext.writeRecordFn = func(record any) error {
+		writes++
+		if writes == 2 {
+			return errors.New("boom")
+		}
+		return ext.Write(record)
+	}
+
+	err := ext.Shutdown(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "move pending parquet spill payloads into buffer")
+	assert.Nil(t, ext.bufferStateTickerStop)
+	assert.Nil(t, ext.bufferStateTickerDone)
+}
+
 func TestAddLogRecordWriteFailureRequeuesFailedRecordAndTail(t *testing.T) {
 	ext := newTestParquetExtension(t)
 	now := time.Unix(100, 0)

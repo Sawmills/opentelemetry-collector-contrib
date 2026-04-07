@@ -177,6 +177,8 @@ func (e *parquetLogExtension) Shutdown(context.Context) error {
 	if len(e.pendingRecords) > 0 {
 		if err := e.movePendingRecordsIntoWriterLocked(); err != nil {
 			e.mutex.Unlock()
+			e.stopBufferStateLoop()
+			e.telemetry.shutdown()
 			return fmt.Errorf("move pending parquet spill payloads into buffer: %w", err)
 		}
 	}
