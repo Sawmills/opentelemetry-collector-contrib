@@ -43,28 +43,18 @@ func CreateDefaultConfig() component.Config {
 	}
 }
 
-func cloneStringSlice(values []string) []string {
-	if values == nil {
-		return nil
-	}
-	if len(values) == 0 {
-		return []string{}
-	}
-	return append([]string(nil), values...)
-}
-
 func (c *Config) snowflakeAttributesHotKeys() []string {
 	if c.AttributesHotKeys == nil {
-		return cloneStringSlice(snowflake.DefaultAttributesHotKeys())
+		return snowflake.DefaultAttributesHotKeys()
 	}
-	return cloneStringSlice(c.AttributesHotKeys)
+	return c.AttributesHotKeys
 }
 
 func (c *Config) snowflakeTagsHotKeys() []string {
 	if c.TagsHotKeys == nil {
-		return cloneStringSlice(snowflake.DefaultTagsHotKeys())
+		return snowflake.DefaultTagsHotKeys()
 	}
-	return cloneStringSlice(c.TagsHotKeys)
+	return c.TagsHotKeys
 }
 
 func (c *Config) Validate() error {

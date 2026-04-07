@@ -57,7 +57,7 @@ func TestShutdownWithBufferedDataReturnsErrorAndPreservesBuffer(t *testing.T) {
 	assert.Len(t, ext.writer.Objs, 1)
 }
 
-func TestShutdownWithPendingRecordsReturnsErrorAndPreservesSpill(t *testing.T) {
+func TestShutdownWithPendingRecordsReturnsErrorAndMovesSpillIntoBuffer(t *testing.T) {
 	ext := newTestParquetExtension(t)
 	ext.config.CompressionCodec = "uncompressed"
 	ext.maxFileSizeBytes = 1
@@ -74,9 +74,9 @@ func TestShutdownWithPendingRecordsReturnsErrorAndPreservesSpill(t *testing.T) {
 
 	err = ext.Shutdown(t.Context())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "pending parquet spill payloads remain at shutdown")
-	assert.Len(t, ext.pendingRecords, 1)
-	assert.Empty(t, ext.writer.Objs)
+	assert.Contains(t, err.Error(), "buffered parquet records remain at shutdown")
+	assert.Empty(t, ext.pendingRecords)
+	assert.Len(t, ext.writer.Objs, 1)
 }
 
 func TestShutdownErrorLeavesBufferStateLoopRunning(t *testing.T) {

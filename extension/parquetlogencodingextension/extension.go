@@ -173,8 +173,10 @@ func (e *parquetLogExtension) Start(context.Context, component.Host) error {
 func (e *parquetLogExtension) Shutdown(context.Context) error {
 	e.mutex.Lock()
 	if len(e.pendingRecords) > 0 {
-		e.mutex.Unlock()
-		return errors.New("pending parquet spill payloads remain at shutdown; flush before shutdown")
+		if err := e.movePendingRecordsIntoWriterLocked(); err != nil {
+			e.mutex.Unlock()
+			return fmt.Errorf("move pending parquet spill payloads into buffer: %w", err)
+		}
 	}
 	if e.writer != nil && len(e.writer.Objs) > 0 {
 		e.mutex.Unlock()
@@ -499,6 +501,42 @@ func (e *parquetLogExtension) restoreBufferedStateLocked(snapshot bufferedStateS
 	}
 	e.recordBufferStateLocked()
 
+	return nil
+}
+
+func (e *parquetLogExtension) movePendingRecordsIntoWriterLocked() error {
+	if len(e.pendingRecords) == 0 {
+		return nil
+	}
+	if err := e.ensureWriterLocked(); err != nil {
+		return err
+	}
+
+	pendingRecords := append([]any(nil), e.pendingRecords...)
+	pendingOldestRecord := e.oldestPendingRecord
+	e.clearPendingRecordsLocked()
+
+	if len(e.writer.Objs) == 0 {
+		e.oldestBufferedRecord = e.nowFn()
+		if !pendingOldestRecord.IsZero() {
+			e.oldestBufferedRecord = pendingOldestRecord
+		}
+	}
+
+	for _, record := range pendingRecords {
+		if e.oldestBufferedRecord.IsZero() {
+			e.oldestBufferedRecord = e.nowFn()
+		}
+		if err := e.Write(record); err != nil {
+			e.appendPendingRecordsLocked(
+				pendingRecords,
+				pendingOldestRecord,
+				e.estimateCompressedBytesForRecords(len(pendingRecords)),
+			)
+			return fmt.Errorf("write pending record: %w", err)
+		}
+	}
+	e.recordBufferStateLocked()
 	return nil
 }
 
