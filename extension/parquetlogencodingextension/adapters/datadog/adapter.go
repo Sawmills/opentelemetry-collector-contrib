@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"math"
 	"strconv"
 	"strings"
 
@@ -367,6 +368,6 @@ func tagsToMap(tags []string) map[string]any {
 }
 
 func isNumeric(value string) bool {
-	_, err := strconv.ParseFloat(value, 64)
-	return err == nil
+	number, err := strconv.ParseFloat(value, 64)
+	return err == nil && !math.IsNaN(number) && !math.IsInf(number, 0)
 }

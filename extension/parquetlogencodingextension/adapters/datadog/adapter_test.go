@@ -114,3 +114,12 @@ func TestTagsToMapPreservesWhitespaceForBackwardCompatibility(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, " value ", got[" env "])
 }
+
+func TestTagsToMapStringifiesNonFiniteNumbers(t *testing.T) {
+	got := tagsToMap([]string{"nan:NaN", "inf:+Inf", "value:1.5"})
+
+	require.Len(t, got, 3)
+	assert.Equal(t, "NaN", got["nan"])
+	assert.Equal(t, "+Inf", got["inf"])
+	assert.Equal(t, 1.5, got["value"])
+}
