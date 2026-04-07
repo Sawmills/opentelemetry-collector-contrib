@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"math"
 	"math/big"
@@ -444,6 +445,10 @@ func deriveFromStringBody(raw string) (*string, string, error) {
 	decoder := json.NewDecoder(strings.NewReader(trimmed))
 	decoder.UseNumber()
 	if err := decoder.Decode(&payload); err != nil {
+		return nil, raw, nil
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
 		return nil, raw, nil
 	}
 

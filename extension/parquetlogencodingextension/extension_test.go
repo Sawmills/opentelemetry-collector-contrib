@@ -79,6 +79,42 @@ func TestShutdownWithPendingRecordsReturnsErrorAndPreservesSpill(t *testing.T) {
 	assert.Empty(t, ext.writer.Objs)
 }
 
+func TestShutdownErrorLeavesBufferStateLoopRunning(t *testing.T) {
+	ext := newTestParquetExtension(t)
+	ext.bufferStateInterval = 5 * time.Millisecond
+
+	current := time.Unix(100, 0)
+	var currentUnix atomic.Int64
+	currentUnix.Store(current.UnixNano())
+	ext.nowFn = func() time.Time { return time.Unix(0, currentUnix.Load()) }
+	writeDatadogLogs(t, ext, 1)
+
+	recordAges := make(chan int64, 8)
+	ext.recordBufferStateFn = func(records int, estimatedBytes, oldestRecordAge int64) {
+		_ = records
+		_ = estimatedBytes
+		recordAges <- oldestRecordAge
+	}
+
+	require.NoError(t, ext.Start(t.Context(), nil))
+	t.Cleanup(ext.stopBufferStateLoop)
+
+	err := ext.Shutdown(t.Context())
+	require.Error(t, err)
+	require.NotNil(t, ext.bufferStateTickerStop)
+
+	current = current.Add(7 * time.Second)
+	currentUnix.Store(current.UnixNano())
+	require.Eventually(t, func() bool {
+		select {
+		case age := <-recordAges:
+			return age >= 7
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestFlushWriteStopFailurePreservesBufferedStateForRetry(t *testing.T) {
 	ext := newTestParquetExtension(t)
 	writeDatadogLogs(t, ext, 2)

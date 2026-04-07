@@ -167,6 +167,26 @@ func TestConvertToParquetWarnsOnceForZeroTimestampDrops(t *testing.T) {
 	require.Equal(t, int64(2), dropCount)
 }
 
+func TestConvertToParquetRejectsJSONStringBodyWithTrailingGarbage(t *testing.T) {
+	adapter, err := NewSnowflakeParquetAdapter(
+		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
+		Config{},
+	)
+	require.NoError(t, err)
+
+	logs := newPlainStringLogs()
+	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0)
+	record.Body().SetStr(`{"message":"hello"} trailing`)
+
+	rows, err := adapter.ConvertToParquet(t.Context(), logs)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	row := rows[0].(ParquetLog)
+	require.Nil(t, row.BodyJSONText)
+	require.Equal(t, `{"message":"hello"} trailing`, row.MessageText)
+}
+
 func TestConvertToParquetSanitizesColdAttributes(t *testing.T) {
 	adapter, err := NewSnowflakeParquetAdapter(
 		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),

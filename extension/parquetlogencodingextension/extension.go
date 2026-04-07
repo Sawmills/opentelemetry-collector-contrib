@@ -171,20 +171,18 @@ func (e *parquetLogExtension) Start(context.Context, component.Host) error {
 }
 
 func (e *parquetLogExtension) Shutdown(context.Context) error {
-	e.stopBufferStateLoop()
-
 	e.mutex.Lock()
-	defer e.mutex.Unlock()
-
 	if len(e.pendingRecords) > 0 {
-		e.telemetry.shutdown()
+		e.mutex.Unlock()
 		return errors.New("pending parquet spill payloads remain at shutdown; flush before shutdown")
 	}
 	if e.writer != nil && len(e.writer.Objs) > 0 {
-		e.telemetry.shutdown()
+		e.mutex.Unlock()
 		return errors.New("buffered parquet records remain at shutdown; flush before shutdown")
 	}
+	e.mutex.Unlock()
 
+	e.stopBufferStateLoop()
 	e.telemetry.shutdown()
 	return nil
 }
@@ -601,7 +599,7 @@ func (e *parquetLogExtension) appendPendingRecordsLocked(records []any, oldest t
 		return
 	}
 
-	e.pendingRecords = append(e.pendingRecords, records...)
+	e.pendingRecords = append(e.pendingRecords, append([]any(nil), records...)...)
 	if e.oldestPendingRecord.IsZero() || (!oldest.IsZero() && oldest.Before(e.oldestPendingRecord)) {
 		e.oldestPendingRecord = oldest
 	}
