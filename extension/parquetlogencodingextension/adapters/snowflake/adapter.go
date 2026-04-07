@@ -12,7 +12,6 @@ import (
 	"io"
 	"maps"
 	"math"
-	"math/big"
 	"slices"
 	"strconv"
 	"strings"
@@ -571,19 +570,14 @@ func normalizeJSONValue(value any) (any, error) {
 func normalizeJSONNumber(number json.Number) (any, error) {
 	text := number.String()
 	if strings.ContainsAny(text, ".eE") {
-		original, _, err := big.ParseFloat(text, 10, 256, big.ToNearestEven)
-		if err != nil {
-			return text, nil
-		}
-
 		value, err := number.Float64()
 		if err != nil {
 			return text, nil
 		}
-
-		roundTrip := new(big.Float).SetPrec(original.Prec()).SetMode(big.ToNearestEven)
-		roundTrip.SetFloat64(value)
-		if original.Cmp(roundTrip) != 0 {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return text, nil
+		}
+		if decimalSignificantDigits(text) > 15 {
 			return text, nil
 		}
 		return value, nil
@@ -593,6 +587,18 @@ func normalizeJSONNumber(number json.Number) (any, error) {
 		return value, nil
 	}
 	return text, nil
+}
+
+func decimalSignificantDigits(text string) int {
+	significand := text
+	if exponent := strings.IndexAny(significand, "eE"); exponent >= 0 {
+		significand = significand[:exponent]
+	}
+	significand = strings.TrimPrefix(significand, "+")
+	significand = strings.TrimPrefix(significand, "-")
+	significand = strings.ReplaceAll(significand, ".", "")
+	significand = strings.TrimLeft(significand, "0")
+	return len(significand)
 }
 
 func traceIDString(record plog.LogRecord, attrs map[string]any) string {
