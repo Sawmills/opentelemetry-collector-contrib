@@ -33,23 +33,27 @@ const (
 )
 
 type parquetLogExtension struct {
-	memFile              *MemFile
-	logger               *zap.Logger
-	ctx                  context.Context
-	config               *Config
-	mutex                sync.Mutex
-	pendingRecords       []any
-	writer               *writer.ParquetWriter
-	adapter              adapters.ParquetAdapter
-	telemetry            *parquetTelemetry
-	maxFileSizeBytes     int64
-	fileName             string
-	oldestBufferedRecord time.Time
-	writeStopFn          func() error
-	readWriterBytes      func() ([]byte, error)
-	reinitializeWriterFn func() error
-	nowFn                func() time.Time
-	recordFlushFn        func(string, int64, int64, time.Duration)
+	memFile               *MemFile
+	logger                *zap.Logger
+	ctx                   context.Context
+	config                *Config
+	mutex                 sync.Mutex
+	pendingRecords        []any
+	writer                *writer.ParquetWriter
+	adapter               adapters.ParquetAdapter
+	telemetry             *parquetTelemetry
+	maxFileSizeBytes      int64
+	fileName              string
+	oldestBufferedRecord  time.Time
+	bufferStateTickerDone chan struct{}
+	bufferStateTickerStop chan struct{}
+	bufferStateInterval   time.Duration
+	writeStopFn           func() error
+	readWriterBytes       func() ([]byte, error)
+	reinitializeWriterFn  func() error
+	nowFn                 func() time.Time
+	recordBufferStateFn   func(int, int64, int64)
+	recordFlushFn         func(string, int64, int64, time.Duration)
 }
 
 type bufferedStateSnapshot struct {
@@ -78,18 +82,20 @@ func NewParquetLogExtension(
 	}
 
 	ext := &parquetLogExtension{
-		logger:           params.Logger,
-		ctx:              context.WithoutCancel(ctx),
-		config:           cfg,
-		adapter:          adapter,
-		telemetry:        telemetry,
-		maxFileSizeBytes: cfg.MaxFileSizeBytes,
-		fileName:         fmt.Sprintf("parquet-log-%d.parquet", time.Now().UnixNano()),
-		nowFn:            time.Now,
+		logger:              params.Logger,
+		ctx:                 context.WithoutCancel(ctx),
+		config:              cfg,
+		adapter:             adapter,
+		telemetry:           telemetry,
+		maxFileSizeBytes:    cfg.MaxFileSizeBytes,
+		fileName:            fmt.Sprintf("parquet-log-%d.parquet", time.Now().UnixNano()),
+		bufferStateInterval: 5 * time.Second,
+		nowFn:               time.Now,
 	}
 	ext.writeStopFn = ext.defaultWriteStop
 	ext.readWriterBytes = ext.defaultReadWriterBytes
 	ext.reinitializeWriterFn = ext.initializeWriter
+	ext.recordBufferStateFn = ext.telemetry.recordBufferState
 	ext.recordFlushFn = ext.telemetry.recordFlush
 
 	if err := ext.initializeWriter(); err != nil {
@@ -158,11 +164,14 @@ func (e *parquetLogExtension) initializeWriter() error {
 	return nil
 }
 
-func (*parquetLogExtension) Start(context.Context, component.Host) error {
+func (e *parquetLogExtension) Start(context.Context, component.Host) error {
+	e.startBufferStateLoop()
 	return nil
 }
 
 func (e *parquetLogExtension) Shutdown(context.Context) error {
+	e.stopBufferStateLoop()
+
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
@@ -177,6 +186,58 @@ func (e *parquetLogExtension) Shutdown(context.Context) error {
 
 	e.telemetry.shutdown()
 	return nil
+}
+
+func (e *parquetLogExtension) startBufferStateLoop() {
+	if e.bufferStateInterval <= 0 {
+		return
+	}
+
+	e.mutex.Lock()
+	if e.bufferStateTickerStop != nil {
+		e.mutex.Unlock()
+		return
+	}
+	stopCh := make(chan struct{})
+	doneCh := make(chan struct{})
+	e.bufferStateTickerStop = stopCh
+	e.bufferStateTickerDone = doneCh
+	interval := e.bufferStateInterval
+	e.mutex.Unlock()
+
+	go func() {
+		defer close(doneCh)
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				e.mutex.Lock()
+				e.recordBufferStateLocked()
+				e.mutex.Unlock()
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+}
+
+func (e *parquetLogExtension) stopBufferStateLoop() {
+	e.mutex.Lock()
+	stopCh := e.bufferStateTickerStop
+	doneCh := e.bufferStateTickerDone
+	e.bufferStateTickerStop = nil
+	e.bufferStateTickerDone = nil
+	e.mutex.Unlock()
+
+	if stopCh != nil {
+		close(stopCh)
+	}
+	if doneCh != nil {
+		<-doneCh
+	}
 }
 
 func (e *parquetLogExtension) FlushLogs() ([]byte, error) {
@@ -484,11 +545,11 @@ func (e *parquetLogExtension) recordBufferStateLocked() {
 		records = len(e.writer.Objs)
 		estimatedBytes = e.getCurrentCompressedSize()
 		if records > 0 && !e.oldestBufferedRecord.IsZero() {
-			oldestRecordAge = int64(time.Since(e.oldestBufferedRecord).Seconds())
+			oldestRecordAge = int64(e.nowFn().Sub(e.oldestBufferedRecord).Seconds())
 		}
 	}
 
-	e.telemetry.recordBufferState(records, estimatedBytes, oldestRecordAge)
+	e.recordBufferStateFn(records, estimatedBytes, oldestRecordAge)
 }
 
 func parquetCompressionCodec(codec string) (parquet.CompressionCodec, error) {

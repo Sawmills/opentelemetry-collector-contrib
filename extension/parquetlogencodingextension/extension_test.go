@@ -150,6 +150,35 @@ func TestMarshalLogsUsesFlushTimeNotBufferAgeForFlushDuration(t *testing.T) {
 	assert.Zero(t, recordedDuration)
 }
 
+func TestStartRefreshesBufferedRecordAgeWhileIdle(t *testing.T) {
+	ext := newTestParquetExtension(t)
+	ext.bufferStateInterval = 5 * time.Millisecond
+
+	current := time.Unix(100, 0)
+	ext.nowFn = func() time.Time { return current }
+	writeDatadogLogs(t, ext, 1)
+
+	recordAges := make(chan int64, 8)
+	ext.recordBufferStateFn = func(records int, estimatedBytes, oldestRecordAge int64) {
+		_ = records
+		_ = estimatedBytes
+		recordAges <- oldestRecordAge
+	}
+
+	require.NoError(t, ext.Start(t.Context(), nil))
+	defer ext.stopBufferStateLoop()
+
+	current = current.Add(7 * time.Second)
+	require.Eventually(t, func() bool {
+		select {
+		case age := <-recordAges:
+			return age >= 7
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestMarshalLogsFlushesImmediatelyWhenSizeThresholdIsExceeded(t *testing.T) {
 	ext := newTestParquetExtension(t)
 	ext.maxFileSizeBytes = 1
