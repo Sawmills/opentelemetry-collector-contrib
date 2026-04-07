@@ -56,13 +56,15 @@ func TestShutdownWithBufferedDataReturnsErrorAndPreservesBuffer(t *testing.T) {
 	assert.Len(t, ext.writer.Objs, 1)
 }
 
-func TestShutdownWithPendingRecordsReturnsError(t *testing.T) {
+func TestShutdownWithPendingRecordsDrainsIntoWriterBeforeReturningError(t *testing.T) {
 	ext := newTestParquetExtension(t)
 	ext.pendingRecords = []any{datadog.ParquetLog{Message: "pending"}}
 
 	err := ext.Shutdown(t.Context())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "pending")
+	assert.Contains(t, err.Error(), "buffered")
+	assert.Empty(t, ext.pendingRecords)
+	assert.Len(t, ext.writer.Objs, 1)
 }
 
 func TestFlushWriteStopFailurePreservesBufferedStateForRetry(t *testing.T) {

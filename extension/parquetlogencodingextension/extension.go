@@ -165,9 +165,9 @@ func (e *parquetLogExtension) Shutdown(context.Context) error {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	if len(e.pendingRecords) > 0 {
+	if err := e.drainPendingRecordsLocked(); err != nil {
 		e.telemetry.shutdown()
-		return errors.New("pending parquet records remain at shutdown; flush before shutdown")
+		return err
 	}
 	if e.writer != nil && len(e.writer.Objs) > 0 {
 		e.telemetry.shutdown()
@@ -213,6 +213,31 @@ func (e *parquetLogExtension) flushWithPendingLocked(
 	}
 
 	return e.checkAndFlushWithMetadata(true, reason)
+}
+
+func (e *parquetLogExtension) drainPendingRecordsLocked() error {
+	if len(e.pendingRecords) == 0 {
+		return nil
+	}
+	if err := e.ensureWriterLocked(); err != nil {
+		return err
+	}
+	if len(e.writer.Objs) == 0 {
+		e.oldestBufferedRecord = e.nowFn()
+	}
+
+	pending := e.pendingRecords
+	e.pendingRecords = nil
+	for i, record := range pending {
+		if err := e.Write(record); err != nil {
+			e.pendingRecords = append(e.pendingRecords, pending[i:]...)
+			e.recordBufferStateLocked()
+			return fmt.Errorf("drain pending parquet records: %w", err)
+		}
+	}
+	e.recordBufferStateLocked()
+
+	return nil
 }
 
 func (e *parquetLogExtension) MarshalLogs(ld plog.Logs) ([]byte, error) {
