@@ -111,7 +111,7 @@ func TestConvertToParquetMapBodyCanonicalizesBodyJSON(t *testing.T) {
 	require.Equal(t, "nested hello", row.MessageText)
 }
 
-func TestConvertToParquetRedactsSensitiveBodyFields(t *testing.T) {
+func TestConvertToParquetPreservesStructuredBodyFieldsVerbatim(t *testing.T) {
 	adapter, err := NewSnowflakeParquetAdapter(
 		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
 		Config{},
@@ -120,7 +120,7 @@ func TestConvertToParquetRedactsSensitiveBodyFields(t *testing.T) {
 
 	logs := newPlainStringLogs()
 	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0)
-	record.Body().SetStr(`{"message":"hello","password":"hunter2","nested":{"api_key":"abc123"},"items":[{"authorization":"Bearer secret"}]}`)
+	record.Body().SetStr(`{"message":"hello","session_id":"sess-1","org_id":"org-9","nested":{"remote_addr":"10.0.0.1"}}`)
 
 	rows, err := adapter.ConvertToParquet(t.Context(), logs)
 	require.NoError(t, err)
@@ -128,7 +128,7 @@ func TestConvertToParquetRedactsSensitiveBodyFields(t *testing.T) {
 
 	row := rows[0].(ParquetLog)
 	require.NotNil(t, row.BodyJSONText)
-	require.JSONEq(t, `{"items":[{"authorization":"[REDACTED]"}],"message":"hello","nested":{"api_key":"[REDACTED]"},"password":"[REDACTED]"}`, *row.BodyJSONText)
+	require.JSONEq(t, `{"message":"hello","nested":{"remote_addr":"10.0.0.1"},"org_id":"org-9","session_id":"sess-1"}`, *row.BodyJSONText)
 	require.Equal(t, "hello", row.MessageText)
 }
 
@@ -187,6 +187,31 @@ func TestConvertToParquetSanitizesColdAttributes(t *testing.T) {
 	require.NotContains(t, coldAttrs, "k8s.node.uid")
 	require.Len(t, coldAttrs, maxArchivedColdAttributes)
 	require.Len(t, coldAttrs["000payload"].(string), maxArchivedStringValueSize)
+}
+
+func TestConvertToParquetPreservesCuratedColdAttributesBeyondCap(t *testing.T) {
+	adapter, err := NewSnowflakeParquetAdapter(
+		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
+		Config{},
+	)
+	require.NoError(t, err)
+
+	logs := newJSONBodyLogs()
+	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0)
+	for i := range maxArchivedColdAttributes + 8 {
+		record.Attributes().PutStr("attr."+strconv.Itoa(i), "value")
+	}
+
+	rows, err := adapter.ConvertToParquet(t.Context(), logs)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	row := rows[0].(ParquetLog)
+	var coldAttrs map[string]any
+	require.NoError(t, json.Unmarshal([]byte(row.AttributesColdText), &coldAttrs))
+	require.Equal(t, "12345", coldAttrs["customer.id"])
+	require.Equal(t, "tx-789", coldAttrs["transaction.id"])
+	require.GreaterOrEqual(t, len(coldAttrs), maxArchivedColdAttributes)
 }
 
 func TestConvertToParquetSanitizesColdTags(t *testing.T) {

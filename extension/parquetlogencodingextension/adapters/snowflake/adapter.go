@@ -33,7 +33,6 @@ const (
 	serviceNameKey             = "service.name"
 	maxArchivedColdAttributes  = 128
 	maxArchivedStringValueSize = 4096
-	redactedBodyValue          = "[REDACTED]"
 )
 
 var (
@@ -45,19 +44,9 @@ var (
 		"k8s.pod.ip":   {},
 		"k8s.pod.uid":  {},
 	}
-	sensitiveBodyFieldMatchers = []string{
-		"access_token",
-		"api_key",
-		"apikey",
-		"authorization",
-		"auth_token",
-		"client_secret",
-		"password",
-		"private_key",
-		"refresh_token",
-		"secret",
-		"session_token",
-		"token",
+	protectedColdAttributeKeys = map[string]struct{}{
+		"customer.id":    {},
+		"transaction.id": {},
 	}
 )
 
@@ -279,9 +268,14 @@ func (a *snowflakeParquetAdapter) transform(
 
 	tags := extractTags(resource, record)
 	attributesHot, attributesCold := splitMap(attrs, a.attributesHotKeys)
-	attributesCold = sanitizeArchivedMap(attributesCold, maxArchivedColdAttributes, excludedColdAttributeKeys)
+	attributesCold = sanitizeArchivedMap(
+		attributesCold,
+		maxArchivedColdAttributes,
+		excludedColdAttributeKeys,
+		protectedColdAttributeKeys,
+	)
 	tagsHot, tagsCold := splitMap(tags, a.tagsHotKeys)
-	tagsCold = sanitizeArchivedMap(tagsCold, maxArchivedColdAttributes, excludedColdAttributeKeys)
+	tagsCold = sanitizeArchivedMap(tagsCold, maxArchivedColdAttributes, excludedColdAttributeKeys, nil)
 
 	item.AttributesHotText, err = canonicalJSONString(attributesHot)
 	if err != nil {
@@ -333,24 +327,38 @@ func splitMap(source map[string]any, hotKeys []string) (map[string]any, map[stri
 	return hot, cold
 }
 
-func sanitizeArchivedMap(source map[string]any, maxKeys int, excludedKeys map[string]struct{}) map[string]any {
+func sanitizeArchivedMap(
+	source map[string]any,
+	maxKeys int,
+	excludedKeys map[string]struct{},
+	protectedKeys map[string]struct{},
+) map[string]any {
 	if len(source) == 0 {
 		return source
 	}
 
 	keys := make([]string, 0, len(source))
+	protected := make([]string, 0, len(source))
 	for key := range source {
 		if _, excluded := excludedKeys[key]; excluded {
 			continue
 		}
+		if _, keep := protectedKeys[key]; keep {
+			protected = append(protected, key)
+			continue
+		}
 		keys = append(keys, key)
 	}
+	slices.Sort(protected)
 	slices.Sort(keys)
 	if maxKeys > 0 && len(keys) > maxKeys {
 		keys = keys[:maxKeys]
 	}
 
-	sanitized := make(map[string]any, len(keys))
+	sanitized := make(map[string]any, len(protected)+len(keys))
+	for _, key := range protected {
+		sanitized[key] = sanitizeArchivedValue(source[key])
+	}
 	for _, key := range keys {
 		sanitized[key] = sanitizeArchivedValue(source[key])
 	}
@@ -399,7 +407,7 @@ func deriveBodyJSONAndMessage(body pcommon.Value) (*string, string, error) {
 		return deriveFromStringBody(body.Str())
 	case pcommon.ValueTypeMap:
 		raw := valueToAny(body)
-		text, err := canonicalJSONString(redactSensitiveBodyFields(raw))
+		text, err := canonicalJSONString(raw)
 		if err != nil {
 			return nil, "", err
 		}
@@ -438,7 +446,7 @@ func deriveFromStringBody(raw string) (*string, string, error) {
 		return nil, raw, nil
 	}
 
-	text, err := canonicalJSONString(redactSensitiveBodyFields(object))
+	text, err := canonicalJSONString(object)
 	if err != nil {
 		return nil, "", err
 	}
@@ -480,39 +488,6 @@ func extractStringKey(payload any, key string) (string, bool) {
 	}
 	text, ok := value.(string)
 	return text, ok
-}
-
-func redactSensitiveBodyFields(value any) any {
-	switch v := value.(type) {
-	case map[string]any:
-		redacted := make(map[string]any, len(v))
-		for key, child := range v {
-			if isSensitiveBodyField(key) {
-				redacted[key] = redactedBodyValue
-				continue
-			}
-			redacted[key] = redactSensitiveBodyFields(child)
-		}
-		return redacted
-	case []any:
-		redacted := make([]any, 0, len(v))
-		for _, child := range v {
-			redacted = append(redacted, redactSensitiveBodyFields(child))
-		}
-		return redacted
-	default:
-		return value
-	}
-}
-
-func isSensitiveBodyField(key string) bool {
-	normalized := strings.ToLower(key)
-	for _, matcher := range sensitiveBodyFieldMatchers {
-		if strings.Contains(normalized, matcher) {
-			return true
-		}
-	}
-	return false
 }
 
 func canonicalBodyString(body pcommon.Value) (string, error) {
