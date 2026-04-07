@@ -347,7 +347,16 @@ func (e *parquetLogExtension) addRecordsWithFlushMetadataLocked(
 		if e.oldestBufferedRecord.IsZero() {
 			e.oldestBufferedRecord = e.nowFn()
 		}
-		if err := e.Write(record); err != nil {
+		if err := e.writeRecordLocked(record); err != nil {
+			e.appendPendingRecordsLocked(
+				records[i:],
+				tailOldestRecord(pendingRecordCount, pendingOldestRecord, i, e.nowFn()),
+				e.estimatePendingBytesFromBufferedState(
+					len(e.writer.Objs),
+					e.getCurrentCompressedSize(),
+					len(records[i:]),
+				),
+			)
 			return nil, "", time.Time{}, fmt.Errorf("failed to write record: %w", err)
 		}
 		e.recordBufferStateLocked()
