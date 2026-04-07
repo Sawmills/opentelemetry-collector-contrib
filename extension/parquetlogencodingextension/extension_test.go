@@ -56,15 +56,25 @@ func TestShutdownWithBufferedDataReturnsErrorAndPreservesBuffer(t *testing.T) {
 	assert.Len(t, ext.writer.Objs, 1)
 }
 
-func TestShutdownWithPendingRecordsDrainsIntoWriterBeforeReturningError(t *testing.T) {
+func TestShutdownWithPendingRecordsFlushesQueuedSpill(t *testing.T) {
 	ext := newTestParquetExtension(t)
-	ext.pendingRecords = []any{datadog.ParquetLog{Message: "pending"}}
+	ext.config.CompressionCodec = "uncompressed"
+	ext.maxFileSizeBytes = 1
+	largeMessage := strings.Repeat("x", 4096)
 
-	err := ext.Shutdown(t.Context())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "buffered")
+	buf, reason, _, err := ext.addLogRecordWithFlushMetadata([]any{
+		datadog.ParquetLog{Message: largeMessage + "1"},
+		datadog.ParquetLog{Message: largeMessage + "2"},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, buf)
+	assert.Equal(t, flushReasonSize, reason)
+	assert.Len(t, ext.pendingRecords, 1)
+
+	err = ext.Shutdown(t.Context())
+	require.NoError(t, err)
 	assert.Empty(t, ext.pendingRecords)
-	assert.Len(t, ext.writer.Objs, 1)
+	assert.Empty(t, ext.writer.Objs)
 }
 
 func TestFlushWriteStopFailurePreservesBufferedStateForRetry(t *testing.T) {

@@ -27,8 +27,9 @@ import (
 )
 
 const (
-	flushReasonManual = "manual"
-	flushReasonSize   = "size"
+	flushReasonManual   = "manual"
+	flushReasonSize     = "size"
+	flushReasonShutdown = "shutdown"
 )
 
 type parquetLogExtension struct {
@@ -165,7 +166,7 @@ func (e *parquetLogExtension) Shutdown(context.Context) error {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	if err := e.drainPendingRecordsLocked(); err != nil {
+	if err := e.flushPendingRecordsAtShutdownLocked(); err != nil {
 		e.telemetry.shutdown()
 		return err
 	}
@@ -215,27 +216,31 @@ func (e *parquetLogExtension) flushWithPendingLocked(
 	return e.checkAndFlushWithMetadata(true, reason)
 }
 
-func (e *parquetLogExtension) drainPendingRecordsLocked() error {
+func (e *parquetLogExtension) flushPendingRecordsAtShutdownLocked() error {
 	if len(e.pendingRecords) == 0 {
 		return nil
 	}
-	if err := e.ensureWriterLocked(); err != nil {
-		return err
-	}
-	if len(e.writer.Objs) == 0 {
-		e.oldestBufferedRecord = e.nowFn()
-	}
 
-	pending := e.pendingRecords
-	e.pendingRecords = nil
-	for i, record := range pending {
-		if err := e.Write(record); err != nil {
-			e.pendingRecords = append(e.pendingRecords, pending[i:]...)
-			e.recordBufferStateLocked()
-			return fmt.Errorf("drain pending parquet records: %w", err)
+	droppedChunks := 0
+	droppedBytes := 0
+	for len(e.pendingRecords) > 0 {
+		buf, _, _, err := e.flushWithPendingLocked(flushReasonShutdown)
+		if err != nil {
+			return fmt.Errorf("flush pending parquet records at shutdown: %w", err)
 		}
+		if len(buf) == 0 {
+			break
+		}
+		droppedChunks++
+		droppedBytes += len(buf)
 	}
-	e.recordBufferStateLocked()
+	if droppedChunks > 0 {
+		e.logger.Warn(
+			"dropping flushed parquet spill payloads during shutdown; flush before shutdown to avoid data loss",
+			zap.Int("chunks", droppedChunks),
+			zap.Int("bytes", droppedBytes),
+		)
+	}
 
 	return nil
 }
