@@ -12,6 +12,7 @@ import (
 )
 
 func TestStatusFromSeverityNumber(t *testing.T) {
+	require.Empty(t, StatusFromSeverityNumber(plog.SeverityNumber(0)))
 	require.Equal(t, "trace", StatusFromSeverityNumber(plog.SeverityNumberTrace4))
 	require.Equal(t, "debug", StatusFromSeverityNumber(plog.SeverityNumberDebug4))
 	require.Equal(t, "info", StatusFromSeverityNumber(plog.SeverityNumberInfo4))

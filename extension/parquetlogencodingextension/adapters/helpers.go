@@ -12,6 +12,10 @@ import (
 type TagValueParser func(string) (any, bool)
 
 func StatusFromSeverityNumber(severity plog.SeverityNumber) string {
+	if severity == 0 {
+		return ""
+	}
+
 	switch {
 	case severity <= 4:
 		return "trace"
