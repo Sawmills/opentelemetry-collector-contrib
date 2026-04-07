@@ -1,0 +1,4 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Improve metric batch enqueue retry behavior by avoiding blocking endpoint fanout and returning only failed metric subsets for retries.
+issues: [34]

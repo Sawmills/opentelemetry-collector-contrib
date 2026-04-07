@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/consumer"
+	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -402,6 +403,339 @@ func TestConsumeMetrics_SingleEndpoint(t *testing.T) {
 				pmetrictest.IgnoreMetricDataPointsOrder(),
 			))
 		})
+	}
+}
+
+func TestConsumeMetrics_SingleEndpointWithMetricBatcher(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+
+	config := &Config{
+		Resolver: ResolverSettings{
+			Static: configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1"}}),
+		},
+		RoutingKey: metricNameRoutingStr,
+		MetricBatcher: MetricBatcherConfig{
+			Enabled:       true,
+			MaxDataPoints: 2,
+			MaxBytes:      1 << 20,
+			FlushInterval: time.Hour,
+		},
+	}
+
+	p, err := newMetricsExporter(ts, config)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+
+	sink := consumertest.MetricsSink{}
+	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		return newMockMetricsExporter(sink.ConsumeMetrics), nil
+	}
+
+	lb, err := newLoadBalancer(ts.Logger, config, componentFactory, tb)
+	require.NoError(t, err)
+	require.NotNil(t, lb)
+
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1"})
+	lb.res = &mockResolver{
+		triggerCallbacks: true,
+		onResolve: func(_ context.Context) ([]string, error) {
+			return []string{"endpoint-1"}, nil
+		},
+	}
+	p.loadBalancer = lb
+
+	err = p.Start(t.Context(), componenttest.NewNopHost())
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, p.Shutdown(t.Context()))
+	}()
+
+	input1 := singleDataPointMetric("batcher-metric-1")
+	input1.ResourceMetrics().At(0).Resource().Attributes().PutStr(serviceNameKey, serviceName1)
+	err = p.ConsumeMetrics(t.Context(), input1)
+	require.NoError(t, err)
+	require.Empty(t, sink.AllMetrics(), "first call should stay buffered in metric batcher")
+
+	input2 := singleDataPointMetric("batcher-metric-2")
+	input2.ResourceMetrics().At(0).Resource().Attributes().PutStr(serviceNameKey, serviceName1)
+	err = p.ConsumeMetrics(t.Context(), input2)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		return len(sink.AllMetrics()) == 1
+	}, time.Second, 10*time.Millisecond)
+
+	allOutputs := sink.AllMetrics()
+	require.Len(t, allOutputs, 1)
+	actual := allOutputs[0]
+	require.Equal(t, 2, actual.DataPointCount())
+
+	names := map[string]struct{}{}
+	resourceMetrics := actual.ResourceMetrics()
+	for i := range resourceMetrics.Len() {
+		scopeMetrics := resourceMetrics.At(i).ScopeMetrics()
+		for j := range scopeMetrics.Len() {
+			metrics := scopeMetrics.At(j).Metrics()
+			for k := range metrics.Len() {
+				names[metrics.At(k).Name()] = struct{}{}
+			}
+		}
+	}
+
+	_, hasMetric1 := names["batcher-metric-1"]
+	_, hasMetric2 := names["batcher-metric-2"]
+	require.True(t, hasMetric1)
+	require.True(t, hasMetric2)
+}
+
+func TestEnqueueEndpointBatchesMakesProgressWhenOneQueueIsFull(t *testing.T) {
+	fullBackend := &backendMetricBatcher{requests: make(chan metricBatcherRequest, 1), done: make(chan struct{})}
+	openBackend := &backendMetricBatcher{requests: make(chan metricBatcherRequest, 1), done: make(chan struct{})}
+	fullBackend.requests <- metricBatcherRequest{kind: metricBatcherRequestEnqueue, md: singleDataPointMetric("prefilled")}
+
+	p := &metricExporterImp{
+		batcher: &metricBatcher{
+			backends: map[string]*backendMetricBatcher{
+				"full:4317": fullBackend,
+				"open:4317": openBackend,
+			},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+
+	err := p.enqueueEndpointBatches(ctx, map[string]*endpointMetricsBatch{
+		"full:4317": {
+			metrics: singleDataPointMetric("m1"),
+			exp:     newWrappedExporter(newNopMockMetricsExporter(), "full:4317"),
+		},
+		"open:4317": {
+			metrics: singleDataPointMetric("m2"),
+			exp:     newWrappedExporter(newNopMockMetricsExporter(), "open:4317"),
+		},
+	}, false)
+
+	var mErr consumererror.Metrics
+	require.ErrorAs(t, err, &mErr)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Len(t, openBackend.requests, 1)
+	require.NoError(t, pmetrictest.CompareMetrics(
+		singleDataPointMetric("m1"),
+		mErr.Data(),
+		pmetrictest.IgnoreResourceMetricsOrder(),
+		pmetrictest.IgnoreScopeMetricsOrder(),
+		pmetrictest.IgnoreMetricsOrder(),
+		pmetrictest.IgnoreMetricDataPointsOrder(),
+	))
+}
+
+func TestEnqueueEndpointBatchesReturnsFailedSubsetOnBackendError(t *testing.T) {
+	stoppedBackend := &backendMetricBatcher{requests: make(chan metricBatcherRequest, 1), done: make(chan struct{})}
+	close(stoppedBackend.done)
+	openBackend := &backendMetricBatcher{requests: make(chan metricBatcherRequest, 1), done: make(chan struct{})}
+
+	p := &metricExporterImp{
+		batcher: &metricBatcher{
+			backends: map[string]*backendMetricBatcher{
+				"stopped:4317": stoppedBackend,
+				"open:4317":    openBackend,
+			},
+		},
+	}
+
+	err := p.enqueueEndpointBatches(t.Context(), map[string]*endpointMetricsBatch{
+		"stopped:4317": {
+			metrics: singleDataPointMetric("m1"),
+			exp:     newWrappedExporter(newNopMockMetricsExporter(), "stopped:4317"),
+		},
+		"open:4317": {
+			metrics: singleDataPointMetric("m2"),
+			exp:     newWrappedExporter(newNopMockMetricsExporter(), "open:4317"),
+		},
+	}, false)
+
+	var mErr consumererror.Metrics
+	require.ErrorAs(t, err, &mErr)
+	require.ErrorIs(t, err, errMetricBatcherExporterStopping)
+	require.Len(t, openBackend.requests, 1)
+	require.NoError(t, pmetrictest.CompareMetrics(
+		singleDataPointMetric("m1"),
+		mErr.Data(),
+		pmetrictest.IgnoreResourceMetricsOrder(),
+		pmetrictest.IgnoreScopeMetricsOrder(),
+		pmetrictest.IgnoreMetricsOrder(),
+		pmetrictest.IgnoreMetricDataPointsOrder(),
+	))
+}
+
+func TestEnqueueEndpointBatchesReroutesOnExporterStopping(t *testing.T) {
+	stoppedBackend := &backendMetricBatcher{requests: make(chan metricBatcherRequest, 1), done: make(chan struct{})}
+	openBackend := &backendMetricBatcher{requests: make(chan metricBatcherRequest, 1), done: make(chan struct{})}
+
+	openExporter := newWrappedExporter(newNopMockMetricsExporter(), "open:4317")
+
+	p := &metricExporterImp{
+		routingKey: metricNameRouting,
+		loadBalancer: &loadBalancer{
+			ring: newHashRing([]string{"open:4317"}),
+			exporters: map[string]*wrappedExporter{
+				"open:4317": openExporter,
+			},
+		},
+		batcher: &metricBatcher{
+			backends: map[string]*backendMetricBatcher{
+				"stopped:4317": stoppedBackend,
+				"open:4317":    openBackend,
+			},
+		},
+	}
+
+	stoppingExporter := newWrappedExporter(newNopMockMetricsExporter(), "stopped:4317")
+	stoppingExporter.markStopping()
+
+	err := p.enqueueEndpointBatches(t.Context(), map[string]*endpointMetricsBatch{
+		"stopped:4317": {
+			metrics: singleDataPointMetric("reroute-metric"),
+			exp:     stoppingExporter,
+		},
+	}, true)
+	require.NoError(t, err)
+	require.Empty(t, stoppedBackend.requests)
+
+	require.Len(t, openBackend.requests, 1)
+	request := <-openBackend.requests
+	require.Equal(t, metricBatcherRequestEnqueue, request.kind)
+	require.NoError(t, pmetrictest.CompareMetrics(
+		singleDataPointMetric("reroute-metric"),
+		request.md,
+		pmetrictest.IgnoreResourceMetricsOrder(),
+		pmetrictest.IgnoreScopeMetricsOrder(),
+		pmetrictest.IgnoreMetricsOrder(),
+		pmetrictest.IgnoreMetricDataPointsOrder(),
+	))
+}
+
+func TestRerouteDrainBatchReturnsFailedSubsetOnPartialSuccess(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+
+	lb := &loadBalancer{ring: newHashRing([]string{"ok", "fail"})}
+	metricForOK := findRoutingIDForEndpoint(t, lb.ring, "ok")
+	metricForFail := findRoutingIDForEndpoint(t, lb.ring, "fail")
+
+	consumed := make(chan int, 1)
+	okExporter := newWrappedExporter(newMockMetricsExporter(func(_ context.Context, md pmetric.Metrics) error {
+		consumed <- md.DataPointCount()
+		return nil
+	}), "ok:4317")
+	failExporter := newWrappedExporter(newMockMetricsExporter(func(context.Context, pmetric.Metrics) error {
+		return errors.New("backend failed")
+	}), "fail:4317")
+
+	lb.exporters = map[string]*wrappedExporter{
+		"ok:4317":   okExporter,
+		"fail:4317": failExporter,
+	}
+
+	p := &metricExporterImp{
+		routingKey:   metricNameRouting,
+		loadBalancer: lb,
+		telemetry:    tb,
+		logger:       ts.Logger,
+	}
+
+	input := pmetric.NewMetrics()
+	rm := input.ResourceMetrics().AppendEmpty()
+	sm := rm.ScopeMetrics().AppendEmpty()
+	m1 := sm.Metrics().AppendEmpty()
+	m1.SetName(metricForOK)
+	m1.SetEmptyGauge().DataPoints().AppendEmpty().SetIntValue(1)
+	m2 := sm.Metrics().AppendEmpty()
+	m2.SetName(metricForFail)
+	m2.SetEmptyGauge().DataPoints().AppendEmpty().SetIntValue(1)
+
+	err := p.rerouteDrainBatch(t.Context(), input, metricFlushReasonResolverChange)
+	require.Error(t, err)
+
+	var mErr consumererror.Metrics
+	require.ErrorAs(t, err, &mErr)
+
+	select {
+	case got := <-consumed:
+		require.Equal(t, 1, got)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected successful reroute send")
+	}
+
+	require.NoError(t, pmetrictest.CompareMetrics(
+		singleDataPointMetric(metricForFail),
+		mErr.Data(),
+		pmetrictest.IgnoreResourceMetricsOrder(),
+		pmetrictest.IgnoreScopeMetricsOrder(),
+		pmetrictest.IgnoreMetricsOrder(),
+		pmetrictest.IgnoreMetricDataPointsOrder(),
+	))
+}
+
+func TestRerouteDrainBatchReleasesStartedConsumesOnEarlyReturn(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+
+	endpointA := "endpoint-a:4317"
+	endpointB := "endpoint-b:4317"
+	lb := &loadBalancer{ring: newHashRing([]string{endpointA, endpointB})}
+
+	routingA := findRoutingIDForEndpoint(t, lb.ring, endpointA)
+	routingB := findRoutingIDForEndpoint(t, lb.ring, endpointB)
+
+	openEndpoint, openRouting := endpointA, routingA
+	stoppingEndpoint, stoppingRouting := endpointB, routingB
+	if routingA > routingB {
+		openEndpoint, openRouting = endpointB, routingB
+		stoppingEndpoint, stoppingRouting = endpointA, routingA
+	}
+
+	openExporter := newWrappedExporter(newNopMockMetricsExporter(), openEndpoint)
+	stoppingExporter := newWrappedExporter(newNopMockMetricsExporter(), stoppingEndpoint)
+	stoppingExporter.markStopping()
+
+	lb.exporters = map[string]*wrappedExporter{
+		openEndpoint:     openExporter,
+		stoppingEndpoint: stoppingExporter,
+	}
+
+	p := &metricExporterImp{
+		routingKey:   metricNameRouting,
+		loadBalancer: lb,
+		telemetry:    tb,
+		logger:       ts.Logger,
+	}
+
+	input := pmetric.NewMetrics()
+	rm := input.ResourceMetrics().AppendEmpty()
+	sm := rm.ScopeMetrics().AppendEmpty()
+	mOpen := sm.Metrics().AppendEmpty()
+	mOpen.SetName(openRouting)
+	mOpen.SetEmptyGauge().DataPoints().AppendEmpty().SetIntValue(1)
+	mStopping := sm.Metrics().AppendEmpty()
+	mStopping.SetName(stoppingRouting)
+	mStopping.SetEmptyGauge().DataPoints().AppendEmpty().SetIntValue(1)
+
+	err := p.rerouteDrainBatch(t.Context(), input, metricFlushReasonResolverChange)
+	require.Error(t, err)
+
+	var mErr consumererror.Metrics
+	require.ErrorAs(t, err, &mErr)
+
+	shutdownErr := make(chan error, 1)
+	go func() {
+		shutdownErr <- openExporter.Shutdown(t.Context())
+	}()
+
+	select {
+	case shutdown := <-shutdownErr:
+		require.NoError(t, shutdown)
+	case <-time.After(time.Second):
+		t.Fatal("expected started consume slot to be released on reroute early return")
 	}
 }
 
