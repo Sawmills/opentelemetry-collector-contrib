@@ -168,6 +168,38 @@ func TestAddLogRecordWriteFailureRequeuesFailedRecordAndTail(t *testing.T) {
 	assert.NotZero(t, ext.pendingEstimatedBytes)
 }
 
+func TestAddLogRecordWriteFailureRefreshesBufferStateAfterRequeue(t *testing.T) {
+	ext := newTestParquetExtension(t)
+	now := time.Unix(100, 0)
+	ext.nowFn = func() time.Time { return now }
+
+	var gotRecords int
+	var gotEstimatedBytes int64
+	ext.recordBufferStateFn = func(records int, estimatedBytes, oldestRecordAge int64) {
+		_ = oldestRecordAge
+		gotRecords = records
+		gotEstimatedBytes = estimatedBytes
+	}
+
+	writes := 0
+	ext.writeRecordFn = func(record any) error {
+		writes++
+		if writes == 2 {
+			return errors.New("boom")
+		}
+		return ext.Write(record)
+	}
+
+	_, _, _, err := ext.addLogRecordWithFlushMetadata([]any{
+		datadog.ParquetLog{Message: "first"},
+		datadog.ParquetLog{Message: "second"},
+		datadog.ParquetLog{Message: "third"},
+	})
+	require.Error(t, err)
+	assert.Equal(t, 3, gotRecords)
+	assert.NotZero(t, gotEstimatedBytes)
+}
+
 func TestShutdownErrorLeavesBufferStateLoopRunning(t *testing.T) {
 	ext := newTestParquetExtension(t)
 	ext.bufferStateInterval = 5 * time.Millisecond

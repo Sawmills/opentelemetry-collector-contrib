@@ -359,6 +359,7 @@ func (e *parquetLogExtension) addRecordsWithFlushMetadataLocked(
 					len(records[i:]),
 				),
 			)
+			e.recordBufferStateLocked()
 			return nil, "", time.Time{}, fmt.Errorf("failed to write record: %w", err)
 		}
 		e.recordBufferStateLocked()
