@@ -3,7 +3,11 @@
 
 package parquetlogencodingextension
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestConfigValidateCompressionCodec(t *testing.T) {
 	tests := []struct {
@@ -78,4 +82,34 @@ func TestCreateDefaultConfigSchema(t *testing.T) {
 	if cfg.Schema != defaultSchema {
 		t.Fatalf("expected default schema %q, got %q", defaultSchema, cfg.Schema)
 	}
+}
+
+func TestSnowflakeAttributesHotKeysDefaultsWhenOmitted(t *testing.T) {
+	cfg := CreateDefaultConfig().(*Config)
+
+	require.Equal(t, defaultSnowflakeAttributesHotKeys, cfg.snowflakeAttributesHotKeys())
+}
+
+func TestSnowflakeTagsHotKeysDefaultsWhenOmitted(t *testing.T) {
+	cfg := CreateDefaultConfig().(*Config)
+
+	require.Equal(t, defaultSnowflakeTagsHotKeys, cfg.snowflakeTagsHotKeys())
+}
+
+func TestSnowflakeHotKeyConfigAllowsEmptyLists(t *testing.T) {
+	cfg := CreateDefaultConfig().(*Config)
+	cfg.AttributesHotKeys = []string{}
+	cfg.TagsHotKeys = []string{}
+
+	require.Empty(t, cfg.snowflakeAttributesHotKeys())
+	require.Empty(t, cfg.snowflakeTagsHotKeys())
+}
+
+func TestSnowflakeHotKeyConfigOverridesDefaults(t *testing.T) {
+	cfg := CreateDefaultConfig().(*Config)
+	cfg.AttributesHotKeys = []string{"customer.id"}
+	cfg.TagsHotKeys = []string{"service"}
+
+	require.Equal(t, []string{"customer.id"}, cfg.snowflakeAttributesHotKeys())
+	require.Equal(t, []string{"service"}, cfg.snowflakeTagsHotKeys())
 }

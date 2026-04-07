@@ -56,15 +56,6 @@ func TestShutdownWithBufferedDataReturnsErrorAndPreservesBuffer(t *testing.T) {
 	assert.Len(t, ext.writer.Objs, 1)
 }
 
-func TestShutdownWithQueuedFlushesReturnsError(t *testing.T) {
-	ext := newTestParquetExtension(t)
-	ext.queuedFlushes = append(ext.queuedFlushes, flushResult{buf: []byte("queued")})
-
-	err := ext.Shutdown(t.Context())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "queued")
-}
-
 func TestFlushWriteStopFailurePreservesBufferedStateForRetry(t *testing.T) {
 	ext := newTestParquetExtension(t)
 	writeDatadogLogs(t, ext, 2)
@@ -154,13 +145,12 @@ func TestMarshalLogsFlushesImmediatelyWhenSizeThresholdIsExceeded(t *testing.T) 
 	require.NotEmpty(t, buf)
 	assert.Equal(t, flushReasonSize, reason)
 	assert.False(t, completedAt.IsZero())
-	assert.Len(t, ext.writer.Objs, 0)
-	assert.Len(t, ext.queuedFlushes, 1)
-	assert.True(t, ext.oldestBufferedRecord.IsZero())
-	assert.Zero(t, ext.bufferOldestRecordAgeSeconds())
+	assert.Len(t, ext.writer.Objs, 1)
+	assert.False(t, ext.oldestBufferedRecord.IsZero())
+	assert.Positive(t, ext.bufferOldestRecordAgeSeconds())
 }
 
-func TestMarshalLogsQueuesAdditionalSizeFlushesFromSameBatch(t *testing.T) {
+func TestMarshalLogsBuffersRemainingRecordsAfterSizeFlush(t *testing.T) {
 	ext := newTestParquetExtension(t)
 	ext.config.CompressionCodec = "uncompressed"
 	ext.maxFileSizeBytes = 1
@@ -175,33 +165,13 @@ func TestMarshalLogsQueuesAdditionalSizeFlushesFromSameBatch(t *testing.T) {
 	require.NotEmpty(t, buf)
 	assert.Equal(t, flushReasonSize, reason)
 	assert.False(t, completedAt.IsZero())
-	assert.Len(t, ext.queuedFlushes, 2)
-	assert.Len(t, ext.writer.Objs, 0)
+	assert.Len(t, ext.writer.Objs, 2)
 
 	secondBuf, secondReason, _, err := ext.FlushLogsWithReasonAndMetadata(flushReasonManual)
 	require.NoError(t, err)
 	require.NotEmpty(t, secondBuf)
-	assert.Equal(t, flushReasonSize, secondReason)
-	assert.Len(t, ext.queuedFlushes, 1)
-
-	thirdBuf, thirdReason, _, err := ext.FlushLogsWithReasonAndMetadata(flushReasonManual)
-	require.NoError(t, err)
-	require.NotEmpty(t, thirdBuf)
-	assert.Equal(t, flushReasonSize, thirdReason)
-	assert.Empty(t, ext.queuedFlushes)
-}
-
-func TestPopQueuedFlushClearsRetainedBufferReference(t *testing.T) {
-	ext := newTestParquetExtension(t)
-	ext.queuedFlushes = []flushResult{
-		{buf: []byte("first")},
-		{buf: []byte("second")},
-	}
-
-	_, ok := ext.popQueuedFlushLocked()
-	require.True(t, ok)
-	require.Len(t, ext.queuedFlushes, 1)
-	assert.Equal(t, "second", string(ext.queuedFlushes[0].buf))
+	assert.Equal(t, flushReasonManual, secondReason)
+	assert.Empty(t, ext.writer.Objs)
 }
 
 func TestFlushReinitializeFailureReturnsPayloadAndRepairsOnNextWrite(t *testing.T) {
@@ -249,8 +219,9 @@ func TestMarshalLogsIgnoresCanceledFactoryContext(t *testing.T) {
 
 func TestNewParquetAdapterDefaultsToDatadog(t *testing.T) {
 	adapter, err := newParquetAdapter(
-		"",
+		&Config{},
 		extensiontest.NewNopSettings(testExtensionType),
+		nil,
 	)
 	require.NoError(t, err)
 
@@ -259,8 +230,9 @@ func TestNewParquetAdapterDefaultsToDatadog(t *testing.T) {
 
 func TestNewParquetAdapterSnowflakeRoutesToSnowflakeAdapter(t *testing.T) {
 	adapter, err := newParquetAdapter(
-		"snowflake",
+		&Config{Schema: "snowflake"},
 		extensiontest.NewNopSettings(testExtensionType),
+		nil,
 	)
 	require.NoError(t, err)
 
@@ -269,8 +241,9 @@ func TestNewParquetAdapterSnowflakeRoutesToSnowflakeAdapter(t *testing.T) {
 
 func TestNewParquetAdapterRejectsUnknownSchema(t *testing.T) {
 	adapter, err := newParquetAdapter(
-		"custom",
+		&Config{Schema: "custom"},
 		extensiontest.NewNopSettings(testExtensionType),
+		nil,
 	)
 	require.Error(t, err)
 	require.Nil(t, adapter)

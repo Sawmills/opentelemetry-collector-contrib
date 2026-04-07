@@ -48,18 +48,11 @@ type parquetLogExtension struct {
 	reinitializeWriterFn func() error
 	nowFn                func() time.Time
 	recordFlushFn        func(string, int64, int64, time.Duration)
-	queuedFlushes        []flushResult
 }
 
 type bufferedStateSnapshot struct {
 	records              []any
 	oldestBufferedRecord time.Time
-}
-
-type flushResult struct {
-	buf         []byte
-	reason      string
-	completedAt time.Time
 }
 
 func NewParquetLogExtension(
@@ -72,14 +65,14 @@ func NewParquetLogExtension(
 		return nil, fmt.Errorf("unexpected parquet config type %T", baseCfg)
 	}
 
-	adapter, err := newParquetAdapter(cfg.Schema, params)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create parquet adapter: %w", err)
-	}
-
 	telemetry, err := newParquetTelemetry(params)
 	if err != nil {
 		return nil, err
+	}
+
+	adapter, err := newParquetAdapter(cfg, params, telemetry)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create parquet adapter: %w", err)
 	}
 
 	ext := &parquetLogExtension{
@@ -100,25 +93,31 @@ func NewParquetLogExtension(
 	if err := ext.initializeWriter(); err != nil {
 		return nil, err
 	}
-	if err := telemetry.registerOldestRecordAgeCallback(ext.bufferOldestRecordAgeSeconds); err != nil {
-		return nil, err
-	}
 	ext.recordBufferStateLocked()
 
 	return ext, nil
 }
 
 func newParquetAdapter(
-	schema string,
+	cfg *Config,
 	params extension.Settings,
+	telemetry *parquetTelemetry,
 ) (adapters.ParquetAdapter, error) {
-	switch strings.ToLower(schema) {
+	switch strings.ToLower(cfg.Schema) {
 	case "", defaultSchema:
 		return datadog.NewDatadogParquetAdapter(params)
 	case "snowflake":
-		return snowflake.NewSnowflakeParquetAdapter(params)
+		var recordDropFn func(string, int64)
+		if telemetry != nil {
+			recordDropFn = telemetry.recordDroppedRecords
+		}
+		return snowflake.NewSnowflakeParquetAdapter(params, snowflake.Config{
+			AttributesHotKeys: cfg.snowflakeAttributesHotKeys(),
+			TagsHotKeys:       cfg.snowflakeTagsHotKeys(),
+			RecordDropFn:      recordDropFn,
+		})
 	default:
-		return nil, fmt.Errorf("unsupported parquet schema: %s", schema)
+		return nil, fmt.Errorf("unsupported parquet schema: %s", cfg.Schema)
 	}
 }
 
@@ -165,11 +164,6 @@ func (e *parquetLogExtension) Shutdown(context.Context) error {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	if len(e.queuedFlushes) > 0 {
-		e.telemetry.shutdown()
-		return errors.New("queued parquet flush payloads remain at shutdown; drain before shutdown")
-	}
-
 	if e.writer != nil && len(e.writer.Objs) > 0 {
 		e.telemetry.shutdown()
 		return errors.New("buffered parquet records remain at shutdown; flush before shutdown")
@@ -187,10 +181,6 @@ func (e *parquetLogExtension) FlushLogsWithReason(reason string) ([]byte, error)
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	if queued, ok := e.popQueuedFlushLocked(); ok {
-		return queued.buf, nil
-	}
-
 	buf, _, _, err := e.checkAndFlushWithMetadata(true, reason)
 	return buf, err
 }
@@ -200,10 +190,6 @@ func (e *parquetLogExtension) FlushLogsWithReasonAndMetadata(
 ) ([]byte, string, time.Time, error) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
-
-	if queued, ok := e.popQueuedFlushLocked(); ok {
-		return queued.buf, queued.reason, queued.completedAt, nil
-	}
 
 	return e.checkAndFlushWithMetadata(true, reason)
 }
@@ -221,9 +207,6 @@ func (e *parquetLogExtension) MarshalLogsWithFlushMetadata(
 		return nil, "", time.Time{}, err
 	}
 	if len(toParquet) == 0 {
-		if queued, ok := e.popQueuedFlush(); ok {
-			return queued.buf, queued.reason, queued.completedAt, nil
-		}
 		return nil, "", time.Time{}, nil
 	}
 
@@ -233,9 +216,6 @@ func (e *parquetLogExtension) MarshalLogsWithFlushMetadata(
 	}
 	if buf != nil {
 		return buf, reason, completedAt, nil
-	}
-	if queued, ok := e.popQueuedFlush(); ok {
-		return queued.buf, queued.reason, queued.completedAt, nil
 	}
 	return nil, "", time.Time{}, nil
 }
@@ -266,6 +246,9 @@ func (e *parquetLogExtension) addLogRecordWithFlushMetadata(
 			return nil, "", time.Time{}, fmt.Errorf("failed to write record: %w", err)
 		}
 		e.recordBufferStateLocked()
+		if flushedBytes != nil {
+			continue
+		}
 		if e.getCurrentCompressedSize() < e.maxFileSizeBytes {
 			continue
 		}
@@ -277,17 +260,9 @@ func (e *parquetLogExtension) addLogRecordWithFlushMetadata(
 		if len(buf) == 0 {
 			continue
 		}
-		if flushedBytes == nil {
-			flushedBytes = buf
-			flushReason = reason
-			flushCompletedAt = completedAt
-			continue
-		}
-		e.queuedFlushes = append(e.queuedFlushes, flushResult{
-			buf:         buf,
-			reason:      reason,
-			completedAt: completedAt,
-		})
+		flushedBytes = buf
+		flushReason = reason
+		flushCompletedAt = completedAt
 	}
 	e.recordBufferStateLocked()
 
@@ -296,22 +271,6 @@ func (e *parquetLogExtension) addLogRecordWithFlushMetadata(
 	}
 
 	return nil, "", time.Time{}, nil
-}
-
-func (e *parquetLogExtension) popQueuedFlushLocked() (flushResult, bool) {
-	if len(e.queuedFlushes) == 0 {
-		return flushResult{}, false
-	}
-	result := e.queuedFlushes[0]
-	e.queuedFlushes[0] = flushResult{}
-	e.queuedFlushes = e.queuedFlushes[1:]
-	return result, true
-}
-
-func (e *parquetLogExtension) popQueuedFlush() (flushResult, bool) {
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
-	return e.popQueuedFlushLocked()
 }
 
 func (e *parquetLogExtension) checkAndFlushWithMetadata(
@@ -497,12 +456,16 @@ func (e *parquetLogExtension) bufferOldestRecordAgeSeconds() int64 {
 func (e *parquetLogExtension) recordBufferStateLocked() {
 	records := 0
 	estimatedBytes := int64(0)
+	oldestRecordAge := int64(0)
 	if e.writer != nil {
 		records = len(e.writer.Objs)
 		estimatedBytes = e.getCurrentCompressedSize()
+		if records > 0 && !e.oldestBufferedRecord.IsZero() {
+			oldestRecordAge = int64(time.Since(e.oldestBufferedRecord).Seconds())
+		}
 	}
 
-	e.telemetry.recordBufferState(records, estimatedBytes)
+	e.telemetry.recordBufferState(records, estimatedBytes, oldestRecordAge)
 }
 
 func parquetCompressionCodec(codec string) (parquet.CompressionCodec, error) {

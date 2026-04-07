@@ -23,6 +23,7 @@ import (
 func TestConvertToParquetJSONStringBodyProducesSnowflakeRow(t *testing.T) {
 	adapter, err := NewSnowflakeParquetAdapter(
 		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
+		Config{},
 	)
 	require.NoError(t, err)
 
@@ -73,6 +74,7 @@ func TestConvertToParquetJSONStringBodyProducesSnowflakeRow(t *testing.T) {
 func TestConvertToParquetPlainStringBodyLeavesBodyJSONNil(t *testing.T) {
 	adapter, err := NewSnowflakeParquetAdapter(
 		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
+		Config{},
 	)
 	require.NoError(t, err)
 
@@ -93,6 +95,7 @@ func TestConvertToParquetPlainStringBodyLeavesBodyJSONNil(t *testing.T) {
 func TestConvertToParquetMapBodyCanonicalizesBodyJSON(t *testing.T) {
 	adapter, err := NewSnowflakeParquetAdapter(
 		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
+		Config{},
 	)
 	require.NoError(t, err)
 
@@ -113,7 +116,13 @@ func TestConvertToParquetWarnsOnceForZeroTimestampDrops(t *testing.T) {
 	settings := extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding"))
 	settings.Logger = zap.New(core)
 
-	adapter, err := NewSnowflakeParquetAdapter(settings)
+	var dropCount int64
+	adapter, err := NewSnowflakeParquetAdapter(settings, Config{
+		RecordDropFn: func(reason string, count int64) {
+			require.Equal(t, "row_drop_invalid_ts", reason)
+			dropCount += count
+		},
+	})
 	require.NoError(t, err)
 
 	logs := newPlainStringLogs()
@@ -134,11 +143,13 @@ func TestConvertToParquetWarnsOnceForZeroTimestampDrops(t *testing.T) {
 	require.Len(t, entries, 1)
 	require.Equal(t, "dropped log records with zero timestamp", entries[0].Message)
 	require.Equal(t, int64(2), entries[0].ContextMap()["count"])
+	require.Equal(t, int64(2), dropCount)
 }
 
 func TestConvertToParquetSanitizesColdAttributes(t *testing.T) {
 	adapter, err := NewSnowflakeParquetAdapter(
 		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
+		Config{},
 	)
 	require.NoError(t, err)
 
@@ -160,6 +171,7 @@ func TestConvertToParquetSanitizesColdAttributes(t *testing.T) {
 func TestConvertToParquetSanitizesColdTags(t *testing.T) {
 	adapter, err := NewSnowflakeParquetAdapter(
 		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
+		Config{},
 	)
 	require.NoError(t, err)
 
@@ -207,6 +219,7 @@ func TestNormalizeJSONNumberFallsBackForPrecisionSensitiveFloat(t *testing.T) {
 func TestResourceFlattenedAttributesDoNotOverrideRecordAttributes(t *testing.T) {
 	adapter, err := NewSnowflakeParquetAdapter(
 		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
+		Config{},
 	)
 	require.NoError(t, err)
 
@@ -218,6 +231,51 @@ func TestResourceFlattenedAttributesDoNotOverrideRecordAttributes(t *testing.T) 
 	var coldAttrs map[string]any
 	require.NoError(t, json.Unmarshal([]byte(row.AttributesColdText), &coldAttrs))
 	require.Equal(t, "record-value", coldAttrs["cloud.region"])
+}
+
+func TestConvertToParquetUsesConfiguredHotKeys(t *testing.T) {
+	adapter, err := NewSnowflakeParquetAdapter(
+		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
+		Config{
+			AttributesHotKeys: []string{"customer.id"},
+			TagsHotKeys:       []string{"service"},
+		},
+	)
+	require.NoError(t, err)
+
+	rows, err := adapter.ConvertToParquet(t.Context(), newJSONBodyLogs())
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	row := rows[0].(ParquetLog)
+	require.JSONEq(t, `{"customer.id":"12345"}`, row.AttributesHotText)
+	require.JSONEq(t, `{"host.name":"host-1","hostname":"host-1","request.id":"req-123","service":"checkout","service.name":"checkout","source":"nodejs","status":"error","transaction.id":"tx-789"}`, row.AttributesColdText)
+	require.JSONEq(t, `{"service":"checkout"}`, row.TagsHotText)
+	require.JSONEq(t, `{"env":"prod","version":"1.2.3"}`, row.TagsColdText)
+}
+
+func TestConvertToParquetStringifiesNonFiniteOTLPDoubles(t *testing.T) {
+	adapter, err := NewSnowflakeParquetAdapter(
+		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
+		Config{},
+	)
+	require.NoError(t, err)
+
+	logs := newPlainStringLogs()
+	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0)
+	nanValue, err := strconv.ParseFloat("NaN", 64)
+	require.NoError(t, err)
+	infValue, err := strconv.ParseFloat("+Inf", 64)
+	require.NoError(t, err)
+	record.Attributes().PutDouble("float.nan", nanValue)
+	logs.ResourceLogs().At(0).Resource().Attributes().PutDouble("float.inf", infValue)
+
+	rows, err := adapter.ConvertToParquet(t.Context(), logs)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	row := rows[0].(ParquetLog)
+	require.JSONEq(t, `{"float.inf":"+Inf","float.nan":"NaN","status":"warn"}`, row.AttributesColdText)
 }
 
 func TestSanitizeArchivedValuePreservesValidUTF8(t *testing.T) {
@@ -287,7 +345,7 @@ func newLargeAttributeLogs() plog.Logs {
 	record.Attributes().PutStr("k8s.pod.ip", "10.0.0.1")
 	record.Attributes().PutStr("k8s.node.uid", "node-uid")
 	record.Attributes().PutStr("000payload", strings.Repeat("x", maxArchivedStringValueSize+32))
-	for i := 0; i < maxArchivedColdAttributes+5; i++ {
+	for i := range maxArchivedColdAttributes + 5 {
 		record.Attributes().PutStr("attr."+strconv.Itoa(i), "value")
 	}
 	return logs
@@ -312,7 +370,7 @@ func newLargeTagLogs() plog.Logs {
 	ddtags.PutStr("k8s.pod.ip", "10.0.0.1")
 	ddtags.PutStr("k8s.node.uid", "node-uid")
 	ddtags.PutStr("000payload", strings.Repeat("x", maxArchivedStringValueSize+32))
-	for i := 0; i < maxArchivedColdAttributes+5; i++ {
+	for i := range maxArchivedColdAttributes + 5 {
 		ddtags.PutStr("tag."+strconv.Itoa(i), "value")
 	}
 	return logs

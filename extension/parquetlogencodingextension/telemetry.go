@@ -47,37 +47,25 @@ func (pt *parquetTelemetry) shutdown() {
 	pt.telemetryBuilder.Shutdown()
 }
 
-func (pt *parquetTelemetry) registerOldestRecordAgeCallback(observe func() int64) error {
-	if pt == nil {
-		return nil
-	}
-
-	return pt.telemetryBuilder.RegisterExtensionParquetLogEncodingBufferOldestRecordAgeCallback(
-		func(_ context.Context, observer metric.Observer) error {
-			observer.ObserveInt64(
-				pt.telemetryBuilder.ExtensionParquetLogEncodingBufferOldestRecordAge,
-				observe(),
-				metric.WithAttributes(pt.attrs()...),
-			)
-			return nil
-		},
-	)
-}
-
-func (pt *parquetTelemetry) recordBufferState(records int, estimatedBytes int64) {
+func (pt *parquetTelemetry) recordBufferState(records int, estimatedBytes, oldestRecordAge int64) {
 	if pt == nil {
 		return
 	}
 
 	attrs := metric.WithAttributes(pt.attrs()...)
-	pt.telemetryBuilder.ExtensionParquetLogEncodingBufferRecords.Record(
+	pt.telemetryBuilder.ParquetLogEncodingBufferRecords.Record(
 		pt.exportCtx,
 		int64(records),
 		attrs,
 	)
-	pt.telemetryBuilder.ExtensionParquetLogEncodingBufferEstimatedBytes.Record(
+	pt.telemetryBuilder.ParquetLogEncodingBufferEstimatedBytes.Record(
 		pt.exportCtx,
 		estimatedBytes,
+		attrs,
+	)
+	pt.telemetryBuilder.ParquetLogEncodingBufferOldestRecordAge.Record(
+		pt.exportCtx,
+		oldestRecordAge,
 		attrs,
 	)
 }
@@ -86,7 +74,7 @@ func (pt *parquetTelemetry) recordFlushAttempt(reason string) {
 	if pt == nil {
 		return
 	}
-	pt.telemetryBuilder.ExtensionParquetLogEncodingFlushAttemptTotal.Add(
+	pt.telemetryBuilder.ParquetLogEncodingFlushAttemptTotal.Add(
 		pt.exportCtx,
 		1,
 		metric.WithAttributes(pt.attrs(attribute.String("reason", reason))...),
@@ -97,7 +85,7 @@ func (pt *parquetTelemetry) recordEmptyFlush(reason string) {
 	if pt == nil {
 		return
 	}
-	pt.telemetryBuilder.ExtensionParquetLogEncodingFlushEmptyTotal.Add(
+	pt.telemetryBuilder.ParquetLogEncodingFlushEmptyTotal.Add(
 		pt.exportCtx,
 		1,
 		metric.WithAttributes(pt.attrs(attribute.String("reason", reason))...),
@@ -108,9 +96,20 @@ func (pt *parquetTelemetry) recordFailedFlush(reason string) {
 	if pt == nil {
 		return
 	}
-	pt.telemetryBuilder.ExtensionParquetLogEncodingFlushFailedTotal.Add(
+	pt.telemetryBuilder.ParquetLogEncodingFlushFailedTotal.Add(
 		pt.exportCtx,
 		1,
+		metric.WithAttributes(pt.attrs(attribute.String("reason", reason))...),
+	)
+}
+
+func (pt *parquetTelemetry) recordDroppedRecords(reason string, count int64) {
+	if pt == nil || count <= 0 {
+		return
+	}
+	pt.telemetryBuilder.ParquetLogEncodingDroppedRecordsTotal.Add(
+		pt.exportCtx,
+		count,
 		metric.WithAttributes(pt.attrs(attribute.String("reason", reason))...),
 	)
 }
@@ -125,18 +124,18 @@ func (pt *parquetTelemetry) recordFlush(
 	}
 
 	attrs := metric.WithAttributes(pt.attrs(attribute.String("reason", reason))...)
-	pt.telemetryBuilder.ExtensionParquetLogEncodingFlushTotal.Add(pt.exportCtx, 1, attrs)
-	pt.telemetryBuilder.ExtensionParquetLogEncodingFlushedRecords.Add(
+	pt.telemetryBuilder.ParquetLogEncodingFlushTotal.Add(pt.exportCtx, 1, attrs)
+	pt.telemetryBuilder.ParquetLogEncodingFlushedRecords.Add(
 		pt.exportCtx,
 		flushedRecords,
 		attrs,
 	)
-	pt.telemetryBuilder.ExtensionParquetLogEncodingFlushedBytes.Add(
+	pt.telemetryBuilder.ParquetLogEncodingFlushedBytes.Add(
 		pt.exportCtx,
 		flushedBytes,
 		attrs,
 	)
-	pt.telemetryBuilder.ExtensionParquetLogEncodingTimeToFlush.Record(
+	pt.telemetryBuilder.ParquetLogEncodingTimeToFlush.Record(
 		pt.exportCtx,
 		durationMs(timeToFlush),
 		attrs,

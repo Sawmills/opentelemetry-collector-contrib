@@ -19,13 +19,20 @@ const (
 	defaultSchema             = "datadog"
 )
 
+var (
+	defaultSnowflakeAttributesHotKeys = []string{}
+	defaultSnowflakeTagsHotKeys       = []string{"env", "version"}
+)
+
 type Config struct {
-	MaxFileSizeBytes   int64  `mapstructure:"max_file_size_bytes"`
-	NumberOfGoRoutines int64  `mapstructure:"number_of_go_routines"`
-	RowGroupSizeBytes  int64  `mapstructure:"row_group_size_bytes"`
-	PageSizeBytes      int64  `mapstructure:"page_size_bytes"`
-	CompressionCodec   string `mapstructure:"compression_codec"`
-	Schema             string `mapstructure:"schema"`
+	MaxFileSizeBytes   int64    `mapstructure:"max_file_size_bytes"`
+	NumberOfGoRoutines int64    `mapstructure:"number_of_go_routines"`
+	RowGroupSizeBytes  int64    `mapstructure:"row_group_size_bytes"`
+	PageSizeBytes      int64    `mapstructure:"page_size_bytes"`
+	CompressionCodec   string   `mapstructure:"compression_codec"`
+	Schema             string   `mapstructure:"schema"`
+	AttributesHotKeys  []string `mapstructure:"attributes_hot_keys"`
+	TagsHotKeys        []string `mapstructure:"tags_hot_keys"`
 }
 
 func CreateDefaultConfig() component.Config {
@@ -37,6 +44,30 @@ func CreateDefaultConfig() component.Config {
 		CompressionCodec:   defaultCompressionCodec,
 		Schema:             defaultSchema,
 	}
+}
+
+func cloneStringSlice(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	if len(values) == 0 {
+		return []string{}
+	}
+	return append([]string(nil), values...)
+}
+
+func (c *Config) snowflakeAttributesHotKeys() []string {
+	if c.AttributesHotKeys == nil {
+		return cloneStringSlice(defaultSnowflakeAttributesHotKeys)
+	}
+	return cloneStringSlice(c.AttributesHotKeys)
+}
+
+func (c *Config) snowflakeTagsHotKeys() []string {
+	if c.TagsHotKeys == nil {
+		return cloneStringSlice(defaultSnowflakeTagsHotKeys)
+	}
+	return cloneStringSlice(c.TagsHotKeys)
 }
 
 func (c *Config) Validate() error {

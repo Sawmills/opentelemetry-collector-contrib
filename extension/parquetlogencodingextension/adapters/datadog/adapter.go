@@ -357,7 +357,7 @@ func valueToAny(value pcommon.Value) any {
 }
 
 func tagsToMap(tags []string) map[string]any {
-	return adapters.TagsToMap(tags, false, func(value string) (any, bool) {
+	return adapters.TagsToMap(tags, true, func(value string) (any, bool) {
 		if !isNumeric(value) {
 			return nil, false
 		}

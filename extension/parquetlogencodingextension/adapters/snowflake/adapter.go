@@ -36,19 +36,21 @@ const (
 )
 
 var (
-	signalTypeSet = attribute.NewSet(attribute.String("signal", "logs"))
-
-	defaultAttributesHotKeys = []string{}
-	defaultTagsHotKeys       = []string{
-		"env",
-		"version",
-	}
+	signalTypeSet             = attribute.NewSet(attribute.String("signal", "logs"))
+	defaultAttributesHotKeys  = []string{}
+	defaultTagsHotKeys        = []string{"env", "version"}
 	excludedColdAttributeKeys = map[string]struct{}{
 		"k8s.node.uid": {},
 		"k8s.pod.ip":   {},
 		"k8s.pod.uid":  {},
 	}
 )
+
+type Config struct {
+	AttributesHotKeys []string
+	TagsHotKeys       []string
+	RecordDropFn      func(reason string, count int64)
+}
 
 type ParquetLog struct {
 	TS                 int64   `parquet:"name=ts, type=INT64, convertedtype=TIMESTAMP_MILLIS"`
@@ -70,6 +72,9 @@ type ParquetLog struct {
 type snowflakeParquetAdapter struct {
 	logger               *zap.Logger
 	attributesTranslator *attributes.Translator
+	attributesHotKeys    []string
+	tagsHotKeys          []string
+	recordDropFn         func(reason string, count int64)
 }
 
 type snowflakeArchiveItem struct {
@@ -88,15 +93,30 @@ type snowflakeArchiveItem struct {
 	TagsColdText       string
 }
 
-func NewSnowflakeParquetAdapter(params extension.Settings) (adapters.ParquetAdapter, error) {
+func NewSnowflakeParquetAdapter(
+	params extension.Settings,
+	cfg Config,
+) (adapters.ParquetAdapter, error) {
 	attributesTranslator, err := attributes.NewTranslator(params.TelemetrySettings)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create attributes translator: %w", err)
 	}
 
+	attributesHotKeys := cfg.AttributesHotKeys
+	if attributesHotKeys == nil {
+		attributesHotKeys = defaultAttributesHotKeys
+	}
+	tagsHotKeys := cfg.TagsHotKeys
+	if tagsHotKeys == nil {
+		tagsHotKeys = defaultTagsHotKeys
+	}
+
 	return &snowflakeParquetAdapter{
 		logger:               params.Logger,
 		attributesTranslator: attributesTranslator,
+		attributesHotKeys:    slices.Clone(attributesHotKeys),
+		tagsHotKeys:          slices.Clone(tagsHotKeys),
+		recordDropFn:         cfg.RecordDropFn,
 	}, nil
 }
 
@@ -117,6 +137,9 @@ func (a *snowflakeParquetAdapter) ConvertToParquet(ctx context.Context, ld plog.
 				record := logRecords.At(k)
 				if record.Timestamp() == 0 {
 					droppedZeroTimestamp++
+					if a.recordDropFn != nil {
+						a.recordDropFn("row_drop_invalid_ts", 1)
+					}
 					continue
 				}
 
@@ -240,9 +263,9 @@ func (a *snowflakeParquetAdapter) transform(
 	}
 
 	tags := extractTags(resource, record)
-	attributesHot, attributesCold := splitMap(attrs, defaultAttributesHotKeys)
+	attributesHot, attributesCold := splitMap(attrs, a.attributesHotKeys)
 	attributesCold = sanitizeArchivedMap(attributesCold, maxArchivedColdAttributes, excludedColdAttributeKeys)
-	tagsHot, tagsCold := splitMap(tags, defaultTagsHotKeys)
+	tagsHot, tagsCold := splitMap(tags, a.tagsHotKeys)
 	tagsCold = sanitizeArchivedMap(tagsCold, maxArchivedColdAttributes, excludedColdAttributeKeys)
 
 	item.AttributesHotText, err = canonicalJSONString(attributesHot)
@@ -268,9 +291,7 @@ func (a *snowflakeParquetAdapter) transform(
 func extractTags(resource pcommon.Resource, record plog.LogRecord) map[string]any {
 	tagMap := make(map[string]any)
 	resourceTags := attributes.TagsFromAttributes(resource.Attributes())
-	for key, value := range tagsToMap(resourceTags) {
-		tagMap[key] = value
-	}
+	maps.Copy(tagMap, tagsToMap(resourceTags))
 	if ddtags, ok := resource.Attributes().Get("ddtags"); ok && ddtags.Type() == pcommon.ValueTypeMap {
 		ddtags.Map().Range(func(key string, value pcommon.Value) bool {
 			tagMap[key] = valueToAny(value)
@@ -279,9 +300,7 @@ func extractTags(resource pcommon.Resource, record plog.LogRecord) map[string]an
 	}
 
 	if value, ok := record.Attributes().Get("ddtags"); ok && value.Type() == pcommon.ValueTypeStr {
-		for key, tagValue := range tagsToMap(strings.Split(value.AsString(), ",")) {
-			tagMap[key] = tagValue
-		}
+		maps.Copy(tagMap, tagsToMap(strings.Split(value.AsString(), ",")))
 	}
 	return tagMap
 }
@@ -349,7 +368,7 @@ func truncateUTF8(value string, maxBytes int) string {
 		return value
 	}
 	truncated := value[:maxBytes]
-	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+	for truncated != "" && !utf8.ValidString(truncated) {
 		truncated = truncated[:len(truncated)-1]
 	}
 	return truncated
@@ -501,7 +520,12 @@ func normalizeJSONValue(value any) (any, error) {
 		return normalized, nil
 	case json.Number:
 		return normalizeJSONNumber(v)
-	case string, bool, int64, float64:
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return strconv.FormatFloat(v, 'g', -1, 64), nil
+		}
+		return v, nil
+	case string, bool, int64:
 		return v, nil
 	case int:
 		return int64(v), nil
@@ -616,7 +640,11 @@ func valueToAny(value pcommon.Value) any {
 	case pcommon.ValueTypeInt:
 		return value.Int()
 	case pcommon.ValueTypeDouble:
-		return value.Double()
+		number := value.Double()
+		if math.IsNaN(number) || math.IsInf(number, 0) {
+			return strconv.FormatFloat(number, 'g', -1, 64)
+		}
+		return number
 	case pcommon.ValueTypeBytes:
 		return hex.EncodeToString(value.Bytes().AsRaw())
 	case pcommon.ValueTypeMap:
