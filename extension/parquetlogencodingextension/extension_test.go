@@ -314,14 +314,14 @@ func TestMarshalLogsQueuesRemainingRecordsAfterSizeFlush(t *testing.T) {
 	secondBuf, secondReason, _, err := ext.FlushLogsWithReasonAndMetadata(flushReasonManual)
 	require.NoError(t, err)
 	require.NotEmpty(t, secondBuf)
-	assert.Equal(t, flushReasonSize, secondReason)
+	assert.Equal(t, flushReasonManual, secondReason)
 	assert.Empty(t, ext.writer.Objs)
 	assert.Len(t, ext.pendingRecords, 1)
 
 	thirdBuf, thirdReason, _, err := ext.FlushLogsWithReasonAndMetadata(flushReasonManual)
 	require.NoError(t, err)
 	require.NotEmpty(t, thirdBuf)
-	assert.Equal(t, flushReasonSize, thirdReason)
+	assert.Equal(t, flushReasonManual, thirdReason)
 	assert.Empty(t, ext.writer.Objs)
 	assert.Empty(t, ext.pendingRecords)
 }
@@ -381,7 +381,7 @@ func TestSplitFlushFailurePreservesPendingTailForRetry(t *testing.T) {
 	retriedBuf, retriedReason, _, retriedErr := ext.FlushLogsWithReasonAndMetadata(flushReasonManual)
 	require.NoError(t, retriedErr)
 	require.NotEmpty(t, retriedBuf)
-	assert.Equal(t, flushReasonSize, retriedReason)
+	assert.Equal(t, flushReasonManual, retriedReason)
 	assert.Len(t, ext.pendingRecords, 1)
 }
 

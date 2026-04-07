@@ -269,6 +269,9 @@ func (e *parquetLogExtension) flushWithPendingLocked(
 			return nil, "", time.Time{}, err
 		}
 		if len(buf) > 0 {
+			if reason != "" {
+				flushReason = reason
+			}
 			return buf, flushReason, completedAt, nil
 		}
 	}
