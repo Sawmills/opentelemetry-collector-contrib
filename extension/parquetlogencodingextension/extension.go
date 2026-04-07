@@ -166,9 +166,9 @@ func (e *parquetLogExtension) Shutdown(context.Context) error {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	if err := e.flushPendingRecordsAtShutdownLocked(); err != nil {
+	if len(e.pendingRecords) > 0 {
 		e.telemetry.shutdown()
-		return err
+		return errors.New("pending parquet spill payloads remain at shutdown; flush before shutdown")
 	}
 	if e.writer != nil && len(e.writer.Objs) > 0 {
 		e.telemetry.shutdown()
@@ -214,35 +214,6 @@ func (e *parquetLogExtension) flushWithPendingLocked(
 	}
 
 	return e.checkAndFlushWithMetadata(true, reason)
-}
-
-func (e *parquetLogExtension) flushPendingRecordsAtShutdownLocked() error {
-	if len(e.pendingRecords) == 0 {
-		return nil
-	}
-
-	droppedChunks := 0
-	droppedBytes := 0
-	for len(e.pendingRecords) > 0 {
-		buf, _, _, err := e.flushWithPendingLocked(flushReasonShutdown)
-		if err != nil {
-			return fmt.Errorf("flush pending parquet records at shutdown: %w", err)
-		}
-		if len(buf) == 0 {
-			break
-		}
-		droppedChunks++
-		droppedBytes += len(buf)
-	}
-	if droppedChunks > 0 {
-		e.logger.Warn(
-			"dropping flushed parquet spill payloads during shutdown; flush before shutdown to avoid data loss",
-			zap.Int("chunks", droppedChunks),
-			zap.Int("bytes", droppedBytes),
-		)
-	}
-
-	return nil
 }
 
 func (e *parquetLogExtension) MarshalLogs(ld plog.Logs) ([]byte, error) {

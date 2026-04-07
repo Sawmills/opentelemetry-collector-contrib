@@ -111,6 +111,27 @@ func TestConvertToParquetMapBodyCanonicalizesBodyJSON(t *testing.T) {
 	require.Equal(t, "nested hello", row.MessageText)
 }
 
+func TestConvertToParquetRedactsSensitiveBodyFields(t *testing.T) {
+	adapter, err := NewSnowflakeParquetAdapter(
+		extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding")),
+		Config{},
+	)
+	require.NoError(t, err)
+
+	logs := newPlainStringLogs()
+	record := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0)
+	record.Body().SetStr(`{"message":"hello","password":"hunter2","nested":{"api_key":"abc123"},"items":[{"authorization":"Bearer secret"}]}`)
+
+	rows, err := adapter.ConvertToParquet(t.Context(), logs)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	row := rows[0].(ParquetLog)
+	require.NotNil(t, row.BodyJSONText)
+	require.JSONEq(t, `{"items":[{"authorization":"[REDACTED]"}],"message":"hello","nested":{"api_key":"[REDACTED]"},"password":"[REDACTED]"}`, *row.BodyJSONText)
+	require.Equal(t, "hello", row.MessageText)
+}
+
 func TestConvertToParquetWarnsOnceForZeroTimestampDrops(t *testing.T) {
 	core, observed := observer.New(zap.WarnLevel)
 	settings := extensiontest.NewNopSettings(component.MustNewType("parquet_log_encoding"))

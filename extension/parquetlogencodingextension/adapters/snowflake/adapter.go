@@ -33,6 +33,7 @@ const (
 	serviceNameKey             = "service.name"
 	maxArchivedColdAttributes  = 128
 	maxArchivedStringValueSize = 4096
+	redactedBodyValue          = "[REDACTED]"
 )
 
 var (
@@ -43,6 +44,20 @@ var (
 		"k8s.node.uid": {},
 		"k8s.pod.ip":   {},
 		"k8s.pod.uid":  {},
+	}
+	sensitiveBodyFieldMatchers = []string{
+		"access_token",
+		"api_key",
+		"apikey",
+		"authorization",
+		"auth_token",
+		"client_secret",
+		"password",
+		"private_key",
+		"refresh_token",
+		"secret",
+		"session_token",
+		"token",
 	}
 )
 
@@ -384,7 +399,7 @@ func deriveBodyJSONAndMessage(body pcommon.Value) (*string, string, error) {
 		return deriveFromStringBody(body.Str())
 	case pcommon.ValueTypeMap:
 		raw := valueToAny(body)
-		text, err := canonicalJSONString(raw)
+		text, err := canonicalJSONString(redactSensitiveBodyFields(raw))
 		if err != nil {
 			return nil, "", err
 		}
@@ -423,7 +438,7 @@ func deriveFromStringBody(raw string) (*string, string, error) {
 		return nil, raw, nil
 	}
 
-	text, err := canonicalJSONString(object)
+	text, err := canonicalJSONString(redactSensitiveBodyFields(object))
 	if err != nil {
 		return nil, "", err
 	}
@@ -465,6 +480,39 @@ func extractStringKey(payload any, key string) (string, bool) {
 	}
 	text, ok := value.(string)
 	return text, ok
+}
+
+func redactSensitiveBodyFields(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		redacted := make(map[string]any, len(v))
+		for key, child := range v {
+			if isSensitiveBodyField(key) {
+				redacted[key] = redactedBodyValue
+				continue
+			}
+			redacted[key] = redactSensitiveBodyFields(child)
+		}
+		return redacted
+	case []any:
+		redacted := make([]any, 0, len(v))
+		for _, child := range v {
+			redacted = append(redacted, redactSensitiveBodyFields(child))
+		}
+		return redacted
+	default:
+		return value
+	}
+}
+
+func isSensitiveBodyField(key string) bool {
+	normalized := strings.ToLower(key)
+	for _, matcher := range sensitiveBodyFieldMatchers {
+		if strings.Contains(normalized, matcher) {
+			return true
+		}
+	}
+	return false
 }
 
 func canonicalBodyString(body pcommon.Value) (string, error) {
