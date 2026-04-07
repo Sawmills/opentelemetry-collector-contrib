@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -155,7 +156,9 @@ func TestStartRefreshesBufferedRecordAgeWhileIdle(t *testing.T) {
 	ext.bufferStateInterval = 5 * time.Millisecond
 
 	current := time.Unix(100, 0)
-	ext.nowFn = func() time.Time { return current }
+	var currentUnix atomic.Int64
+	currentUnix.Store(current.UnixNano())
+	ext.nowFn = func() time.Time { return time.Unix(0, currentUnix.Load()) }
 	writeDatadogLogs(t, ext, 1)
 
 	recordAges := make(chan int64, 8)
@@ -169,6 +172,7 @@ func TestStartRefreshesBufferedRecordAgeWhileIdle(t *testing.T) {
 	defer ext.stopBufferStateLoop()
 
 	current = current.Add(7 * time.Second)
+	currentUnix.Store(current.UnixNano())
 	require.Eventually(t, func() bool {
 		select {
 		case age := <-recordAges:
