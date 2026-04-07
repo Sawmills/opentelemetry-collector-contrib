@@ -157,7 +157,6 @@ func TestMarshalLogsFlushesImmediatelyWhenSizeThresholdIsExceeded(t *testing.T) 
 	assert.Empty(t, ext.writer.Objs)
 	assert.Len(t, ext.pendingRecords, 1)
 	assert.True(t, ext.oldestBufferedRecord.IsZero())
-	assert.Zero(t, ext.bufferOldestRecordAgeSeconds())
 }
 
 func TestMarshalLogsQueuesRemainingRecordsAfterSizeFlush(t *testing.T) {
@@ -190,6 +189,33 @@ func TestMarshalLogsQueuesRemainingRecordsAfterSizeFlush(t *testing.T) {
 	require.NotEmpty(t, thirdBuf)
 	assert.Equal(t, flushReasonSize, thirdReason)
 	assert.Empty(t, ext.writer.Objs)
+	assert.Empty(t, ext.pendingRecords)
+}
+
+func TestFlushLogsDrainsPendingRecords(t *testing.T) {
+	ext := newTestParquetExtension(t)
+	ext.config.CompressionCodec = "uncompressed"
+	ext.maxFileSizeBytes = 1
+	largeMessage := strings.Repeat("x", 4096)
+
+	buf, reason, _, err := ext.addLogRecordWithFlushMetadata([]any{
+		datadog.ParquetLog{Message: largeMessage + "1"},
+		datadog.ParquetLog{Message: largeMessage + "2"},
+		datadog.ParquetLog{Message: largeMessage + "3"},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, buf)
+	assert.Equal(t, flushReasonSize, reason)
+	assert.Len(t, ext.pendingRecords, 2)
+
+	secondBuf, err := ext.FlushLogs()
+	require.NoError(t, err)
+	require.NotEmpty(t, secondBuf)
+	assert.Len(t, ext.pendingRecords, 1)
+
+	thirdBuf, err := ext.FlushLogs()
+	require.NoError(t, err)
+	require.NotEmpty(t, thirdBuf)
 	assert.Empty(t, ext.pendingRecords)
 }
 

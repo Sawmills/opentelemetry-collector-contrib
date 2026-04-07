@@ -3,7 +3,7 @@
 -- Replace database, schema, stage, and file format names for the target environment.
 
 create or replace external table RAW_PLATFORM.BP_S3__SAW_6662_TRACK_A__RAW (
-  ts timestamp_ntz as to_timestamp_ntz(value:ts::number / 1000),
+  ts timestamp_ntz as to_timestamp_ntz(value:ts::number, 3),
   service string as value:service::string,
   status string as value:status::string,
   message_text string as value:message_text::string,

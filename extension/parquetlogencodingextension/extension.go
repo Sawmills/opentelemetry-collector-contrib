@@ -186,7 +186,7 @@ func (e *parquetLogExtension) FlushLogsWithReason(reason string) ([]byte, error)
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	buf, _, _, err := e.checkAndFlushWithMetadata(true, reason)
+	buf, _, _, err := e.flushWithPendingLocked(reason)
 	return buf, err
 }
 
@@ -196,6 +196,12 @@ func (e *parquetLogExtension) FlushLogsWithReasonAndMetadata(
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
+	return e.flushWithPendingLocked(reason)
+}
+
+func (e *parquetLogExtension) flushWithPendingLocked(
+	reason string,
+) ([]byte, string, time.Time, error) {
 	if len(e.pendingRecords) > 0 {
 		buf, flushReason, completedAt, err := e.addRecordsWithFlushMetadataLocked(nil)
 		if err != nil {
@@ -467,17 +473,6 @@ func (e *parquetLogExtension) getCurrentCompressedSize() int64 {
 	}
 
 	return int64(float64(e.writer.ObjsSize) * compressionRatioEstimate(e.config.CompressionCodec))
-}
-
-func (e *parquetLogExtension) bufferOldestRecordAgeSeconds() int64 {
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
-
-	if e.writer == nil || len(e.writer.Objs) == 0 || e.oldestBufferedRecord.IsZero() {
-		return 0
-	}
-
-	return int64(time.Since(e.oldestBufferedRecord).Seconds())
 }
 
 func (e *parquetLogExtension) recordBufferStateLocked() {
