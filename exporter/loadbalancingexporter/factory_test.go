@@ -91,6 +91,7 @@ func TestDefaultMetricBatcherConfig(t *testing.T) {
 	assert.Equal(t, defaultMetricBatchMaxDataPoints, cfg.MetricBatcher.MaxDataPoints)
 	assert.Equal(t, defaultMetricBatchMaxBytes, cfg.MetricBatcher.MaxBytes)
 	assert.Equal(t, defaultMetricBatchFlushTimeout, cfg.MetricBatcher.FlushInterval)
+	assert.Equal(t, defaultMetricBatchRetryBufferMultiplier, cfg.MetricBatcher.MaxRetryBufferMultiplier)
 }
 
 func TestBuildExporterConfig(t *testing.T) {

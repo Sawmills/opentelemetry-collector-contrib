@@ -71,10 +71,11 @@ type LogBatcherConfig struct {
 }
 
 type MetricBatcherConfig struct {
-	Enabled       bool          `mapstructure:"enabled"`
-	MaxDataPoints int           `mapstructure:"max_datapoints"`
-	MaxBytes      int           `mapstructure:"max_bytes"`
-	FlushInterval time.Duration `mapstructure:"flush_interval"`
+	Enabled                  bool          `mapstructure:"enabled"`
+	MaxDataPoints            int           `mapstructure:"max_datapoints"`
+	MaxBytes                 int           `mapstructure:"max_bytes"`
+	FlushInterval            time.Duration `mapstructure:"flush_interval"`
+	MaxRetryBufferMultiplier int           `mapstructure:"max_retry_buffer_multiplier"`
 }
 
 func (q *QueueSettings) Unmarshal(conf *confmap.Conf) error {
@@ -203,6 +204,9 @@ func (c MetricBatcherConfig) Validate() error {
 	}
 	if c.FlushInterval <= 0 {
 		return errors.New("metric_batcher.flush_interval must be greater than 0 when metric_batcher.enabled=true")
+	}
+	if c.MaxRetryBufferMultiplier <= 0 {
+		return errors.New("metric_batcher.max_retry_buffer_multiplier must be greater than 0 when metric_batcher.enabled=true")
 	}
 	return nil
 }

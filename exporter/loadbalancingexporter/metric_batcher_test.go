@@ -310,16 +310,60 @@ func TestMetricBatcherRemoveReroutesOnResolverChangeFlushFailure(t *testing.T) {
 	}
 }
 
-func TestMetricBatcherCapsRepeatedFlushFailures(t *testing.T) {
+func TestMetricBatcherDropsPendingWhenRetryBufferCapExceeded(t *testing.T) {
 	ts, _ := getTelemetryAssets(t)
-	var sends atomic.Int64
+	var calls atomic.Int64
+	batcher, err := newMetricBatcher(
+		ts.Logger,
+		ts.TelemetrySettings,
+		metricBatcherSettings{maxDataPoints: 1, maxBytes: 1 << 20, flushInterval: time.Hour},
+		func(_ context.Context, _ *wrappedExporter, _ pmetric.Metrics, _ string) error {
+			calls.Add(1)
+			return errors.New("still failing")
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
+	for range defaultMetricBatchRetryBufferMultiplier + 1 {
+		requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
+	}
+
+	require.Eventually(t, func() bool {
+		return calls.Load() > 0
+	}, 2*time.Second, 20*time.Millisecond)
+
+	require.Eventually(t, func() bool {
+		for _, p := range batcher.snapshotPending() {
+			if p.endpoint == "endpoint-1:4317" {
+				return p.datapoints == 0
+			}
+		}
+		return true
+	}, 2*time.Second, 20*time.Millisecond)
+}
+
+func TestMetricBatcherDropsPendingWhenRetryAgeExceeded(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	var calls atomic.Int64
+
+	oldRetryAge := metricBatcherMaxRetryAge
+	metricBatcherMaxRetryAge = 30 * time.Millisecond
+	t.Cleanup(func() {
+		metricBatcherMaxRetryAge = oldRetryAge
+	})
+
 	batcher, err := newMetricBatcher(
 		ts.Logger,
 		ts.TelemetrySettings,
 		metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: 10 * time.Millisecond},
 		func(_ context.Context, _ *wrappedExporter, _ pmetric.Metrics, _ string) error {
-			sends.Add(1)
-			return errors.New("flush failed")
+			calls.Add(1)
+			return errors.New("still failing")
 		},
 		nil,
 	)
@@ -331,18 +375,18 @@ func TestMetricBatcherCapsRepeatedFlushFailures(t *testing.T) {
 	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
 	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
 
-	deadline := time.After(2 * time.Second)
-	for sends.Load() < maxMetricBatchRetryAttempts {
-		select {
-		case <-deadline:
-			t.Fatalf("expected %d send attempts, got %d", maxMetricBatchRetryAttempts, sends.Load())
-		default:
-			time.Sleep(10 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		return calls.Load() >= 2
+	}, 2*time.Second, 20*time.Millisecond)
+
+	require.Eventually(t, func() bool {
+		for _, p := range batcher.snapshotPending() {
+			if p.endpoint == "endpoint-1:4317" {
+				return p.datapoints == 0
+			}
 		}
-	}
-	count := sends.Load()
-	time.Sleep(100 * time.Millisecond)
-	require.Equal(t, count, sends.Load())
+		return true
+	}, 2*time.Second, 20*time.Millisecond)
 }
 
 func TestMetricBatcherShutdownReroutesOnShutdownFlushFailure(t *testing.T) {

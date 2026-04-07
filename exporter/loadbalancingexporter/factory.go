@@ -63,10 +63,11 @@ func createDefaultConfig() component.Config {
 			FlushInterval: defaultLogBatchFlushTimeout,
 		},
 		MetricBatcher: MetricBatcherConfig{
-			Enabled:       false,
-			MaxDataPoints: defaultMetricBatchMaxDataPoints,
-			MaxBytes:      defaultMetricBatchMaxBytes,
-			FlushInterval: defaultMetricBatchFlushTimeout,
+			Enabled:                  false,
+			MaxDataPoints:            defaultMetricBatchMaxDataPoints,
+			MaxBytes:                 defaultMetricBatchMaxBytes,
+			FlushInterval:            defaultMetricBatchFlushTimeout,
+			MaxRetryBufferMultiplier: defaultMetricBatchRetryBufferMultiplier,
 		},
 	}
 }

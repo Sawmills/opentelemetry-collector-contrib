@@ -6,6 +6,7 @@ package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,19 +28,22 @@ const (
 	metricFlushReasonShutdown       = "shutdown"
 	metricFlushReasonResolverChange = "resolver_change"
 
-	defaultMetricBatchMaxDataPoints = 8192
-	defaultMetricBatchMaxBytes      = 2 << 20
-	defaultMetricBatchFlushTimeout  = 200 * time.Millisecond
-	maxMetricBatchRetryAttempts     = 5
-	maxMetricBatchRetryBackoff      = 5 * time.Second
+	defaultMetricBatchMaxDataPoints         = 8192
+	defaultMetricBatchMaxBytes              = 2 << 20
+	defaultMetricBatchFlushTimeout          = 200 * time.Millisecond
+	defaultMetricBatchRetryBufferMultiplier = 10 // allow retries to grow up to 10x configured batch limits before forced drop
+	maxMetricBatchRetryBackoff              = 5 * time.Second
 )
+
+var metricBatcherMaxRetryAge = 2 * time.Minute
 
 var errMetricBatcherExporterStopping = errors.New("metric batcher exporter is stopping")
 
 type metricBatcherSettings struct {
-	maxDataPoints int
-	maxBytes      int
-	flushInterval time.Duration
+	maxDataPoints            int
+	maxBytes                 int
+	flushInterval            time.Duration
+	maxRetryBufferMultiplier int
 }
 
 type (
@@ -120,6 +124,10 @@ func newMetricBatcher(
 	send metricBatcherSendFunc,
 	drainErr metricBatcherDrainFailureFunc,
 ) (*metricBatcher, error) {
+	if cfg.maxRetryBufferMultiplier <= 0 {
+		cfg.maxRetryBufferMultiplier = defaultMetricBatchRetryBufferMultiplier
+	}
+
 	telemetry, err := newMetricBatcherTelemetry(settings)
 	if err != nil {
 		return nil, err
@@ -346,6 +354,7 @@ func (b *backendMetricBatcher) run() {
 		<-timer.C
 	}
 	var timerC <-chan time.Time
+	retryingSince := time.Time{}
 
 	pending := pmetric.NewMetrics()
 	pendingBytes := 0
@@ -357,7 +366,7 @@ func (b *backendMetricBatcher) run() {
 		if nextReq != nil {
 			req := *nextReq
 			nextReq = nil
-			if b.handleRequest(req, sizer, &pending, &pendingDataPoints, &pendingBytes, &nextReq, timer, &timerC) {
+			if b.handleRequest(req, sizer, &pending, &pendingDataPoints, &pendingBytes, &nextReq, timer, &timerC, &retryingSince) {
 				return
 			}
 			continue
@@ -365,11 +374,11 @@ func (b *backendMetricBatcher) run() {
 
 		select {
 		case req := <-b.requests:
-			if b.handleRequest(req, sizer, &pending, &pendingDataPoints, &pendingBytes, &nextReq, timer, &timerC) {
+			if b.handleRequest(req, sizer, &pending, &pendingDataPoints, &pendingBytes, &nextReq, timer, &timerC, &retryingSince) {
 				return
 			}
 		case <-timerC:
-			if err := b.flush(context.Background(), &pending, &pendingDataPoints, &pendingBytes, metricFlushReasonTimeout, timer, &timerC); err != nil {
+			if err := b.flush(context.Background(), &pending, &pendingDataPoints, &pendingBytes, metricFlushReasonTimeout, timer, &timerC, &retryingSince); err != nil {
 				b.logger.Warn("failed to flush metric batch", zap.String("reason", metricFlushReasonTimeout), zap.Error(err))
 			}
 		}
@@ -385,6 +394,7 @@ func (b *backendMetricBatcher) handleRequest(
 	nextReq **metricBatcherRequest,
 	timer *time.Timer,
 	timerC *<-chan time.Time,
+	retryingSince *time.Time,
 ) bool {
 	switch req.kind {
 	case metricBatcherRequestEnqueue:
@@ -399,12 +409,12 @@ func (b *backendMetricBatcher) handleRequest(
 		if *pendingDataPoints >= b.settings.maxDataPoints || *pendingBytes >= b.settings.maxBytes {
 			attrs := metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint)))
 			b.telemetry.overflowTotal.Add(context.Background(), 1, attrs)
-			if err := b.flush(context.Background(), pending, pendingDataPoints, pendingBytes, metricFlushReasonSize, timer, timerC); err != nil {
+			if err := b.flush(context.Background(), pending, pendingDataPoints, pendingBytes, metricFlushReasonSize, timer, timerC, retryingSince); err != nil {
 				b.logger.Warn("failed to flush metric batch", zap.String("reason", metricFlushReasonSize), zap.Error(err))
 			}
 		}
 	case metricBatcherRequestFlushAndStop:
-		err := b.flush(req.ctx, pending, pendingDataPoints, pendingBytes, req.reason, timer, timerC)
+		err := b.flush(req.ctx, pending, pendingDataPoints, pendingBytes, req.reason, timer, timerC, retryingSince)
 		req.done <- err
 		return true
 	}
@@ -444,6 +454,7 @@ func (b *backendMetricBatcher) flush(
 	reason string,
 	timer *time.Timer,
 	timerC *<-chan time.Time,
+	retryingSince *time.Time,
 ) error {
 	if !timer.Stop() && *timerC != nil {
 		select {
@@ -475,10 +486,19 @@ func (b *backendMetricBatcher) flush(
 	if err != nil {
 		b.telemetry.flushErrors.Add(ctx, 1, attrs)
 		if reason == metricFlushReasonSize || reason == metricFlushReasonTimeout {
+			now := time.Now()
+			if retryingSince.IsZero() {
+				*retryingSince = now
+			}
+
 			b.flushFailures++
-			if b.flushFailures >= maxMetricBatchRetryAttempts {
-				b.logger.Error("dropping metric batch after repeated flush failures", zap.String("endpoint", b.endpoint), zap.String("reason", reason), zap.Int("failures", b.flushFailures), zap.Error(err))
+			overCap := isBeyondRetryCap(datapoints, b.settings.maxDataPoints, b.settings.maxRetryBufferMultiplier) || isBeyondRetryCap(bytes, b.settings.maxBytes, b.settings.maxRetryBufferMultiplier)
+			overAge := now.Sub(*retryingSince) >= metricBatcherMaxRetryAge
+			if overCap || overAge {
+				b.logger.Error("dropping metric batch after retry limits exceeded", zap.String("endpoint", b.endpoint), zap.String("reason", reason), zap.Int("failures", b.flushFailures), zap.Int("datapoints", datapoints), zap.Int("bytes", bytes), zap.Bool("over_cap", overCap), zap.Bool("over_age", overAge), zap.Duration("retry_age", now.Sub(*retryingSince)), zap.Error(err))
 				b.telemetry.droppedDataPoints.Add(ctx, int64(datapoints), attrs)
+				*retryingSince = time.Time{}
+				b.flushFailures = 0
 				return err
 			}
 			*pending = drained
@@ -488,9 +508,7 @@ func (b *backendMetricBatcher) flush(
 			b.pendingBytes.Store(int64(bytes))
 			if *timerC == nil {
 				delay := b.settings.flushInterval * time.Duration(1<<min(b.flushFailures-1, 4))
-				if delay > maxMetricBatchRetryBackoff {
-					delay = maxMetricBatchRetryBackoff
-				}
+				delay = min(delay, maxMetricBatchRetryBackoff)
 				timer.Reset(delay)
 				*timerC = timer.C
 			}
@@ -512,9 +530,23 @@ func (b *backendMetricBatcher) flush(
 	}
 
 	if err == nil {
+		*retryingSince = time.Time{}
 		b.flushFailures = 0
 	}
 	return err
+}
+
+func isBeyondRetryCap(current, base, multiplier int) bool {
+	if current <= 0 || base <= 0 {
+		return false
+	}
+	if multiplier <= 0 {
+		return false
+	}
+	if base > math.MaxInt/multiplier {
+		return false
+	}
+	return current > base*multiplier
 }
 
 func newMetricBatcherTelemetry(settings component.TelemetrySettings) (*metricBatcherTelemetry, error) {
