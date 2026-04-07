@@ -107,6 +107,10 @@ func TestConfigValidateMetricBatcher(t *testing.T) {
 	require.ErrorContains(t, cfg.Validate(), "metric_batcher.flush_interval")
 
 	cfg.MetricBatcher.FlushInterval = time.Second
+	cfg.MetricBatcher.MaxRetryBufferMultiplier = 0
+	require.ErrorContains(t, cfg.Validate(), "metric_batcher.max_retry_buffer_multiplier")
+
+	cfg.MetricBatcher.MaxRetryBufferMultiplier = 5
 	require.NoError(t, cfg.Validate())
 }
 
@@ -191,10 +195,11 @@ func TestLoadConfigWithMetricBatcher(t *testing.T) {
 			},
 		},
 		"metric_batcher": map[string]any{
-			"enabled":        true,
-			"max_datapoints": 4096,
-			"max_bytes":      2097152,
-			"flush_interval": "300ms",
+			"enabled":                     true,
+			"max_datapoints":              4096,
+			"max_bytes":                   2097152,
+			"flush_interval":              "300ms",
+			"max_retry_buffer_multiplier": 12,
 		},
 	})
 
@@ -203,4 +208,5 @@ func TestLoadConfigWithMetricBatcher(t *testing.T) {
 	require.Equal(t, 4096, cfg.MetricBatcher.MaxDataPoints)
 	require.Equal(t, 2097152, cfg.MetricBatcher.MaxBytes)
 	require.Equal(t, 300*time.Millisecond, cfg.MetricBatcher.FlushInterval)
+	require.Equal(t, 12, cfg.MetricBatcher.MaxRetryBufferMultiplier)
 }

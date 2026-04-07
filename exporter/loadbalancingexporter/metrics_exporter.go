@@ -86,9 +86,10 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 			params.Logger,
 			params.TelemetrySettings,
 			metricBatcherSettings{
-				maxDataPoints: cfg.(*Config).MetricBatcher.MaxDataPoints,
-				maxBytes:      cfg.(*Config).MetricBatcher.MaxBytes,
-				flushInterval: cfg.(*Config).MetricBatcher.FlushInterval,
+				maxDataPoints:            cfg.(*Config).MetricBatcher.MaxDataPoints,
+				maxBytes:                 cfg.(*Config).MetricBatcher.MaxBytes,
+				flushInterval:            cfg.(*Config).MetricBatcher.FlushInterval,
+				maxRetryBufferMultiplier: cfg.(*Config).MetricBatcher.MaxRetryBufferMultiplier,
 			},
 			metricExporter.consumeBatch,
 			metricExporter.rerouteDrainBatch,
