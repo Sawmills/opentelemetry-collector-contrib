@@ -345,6 +345,9 @@ func (e *parquetLogExtension) addRecordsWithFlushMetadataLocked(
 
 		buf, reason, completedAt, err := e.checkAndFlushWithMetadata(false, flushReasonSize)
 		if err != nil {
+			if i+1 < len(records) {
+				e.pendingRecords = append(e.pendingRecords, records[i+1:]...)
+			}
 			return nil, "", time.Time{}, err
 		}
 		if len(buf) == 0 {

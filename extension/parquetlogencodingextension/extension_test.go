@@ -265,6 +265,38 @@ func TestFlushLogsDrainsPendingRecords(t *testing.T) {
 	assert.Empty(t, ext.pendingRecords)
 }
 
+func TestSplitFlushFailurePreservesPendingTailForRetry(t *testing.T) {
+	ext := newTestParquetExtension(t)
+	ext.config.CompressionCodec = "uncompressed"
+	ext.maxFileSizeBytes = 1
+	largeMessage := strings.Repeat("x", 4096)
+
+	originalWriteStop := ext.writeStopFn
+	ext.writeStopFn = func() error {
+		_ = originalWriteStop()
+		return errors.New("split flush failed")
+	}
+
+	buf, reason, completedAt, err := ext.addLogRecordWithFlushMetadata([]any{
+		datadog.ParquetLog{Message: largeMessage + "1"},
+		datadog.ParquetLog{Message: largeMessage + "2"},
+		datadog.ParquetLog{Message: largeMessage + "3"},
+	})
+	require.Error(t, err)
+	assert.Nil(t, buf)
+	assert.Empty(t, reason)
+	assert.True(t, completedAt.IsZero())
+	assert.Len(t, ext.writer.Objs, 1)
+	assert.Len(t, ext.pendingRecords, 2)
+
+	ext.writeStopFn = ext.defaultWriteStop
+	retriedBuf, retriedReason, _, retriedErr := ext.FlushLogsWithReasonAndMetadata(flushReasonManual)
+	require.NoError(t, retriedErr)
+	require.NotEmpty(t, retriedBuf)
+	assert.Equal(t, flushReasonSize, retriedReason)
+	assert.Len(t, ext.pendingRecords, 1)
+}
+
 func TestFlushReinitializeFailureReturnsPayloadAndRepairsOnNextWrite(t *testing.T) {
 	ext := newTestParquetExtension(t)
 	writeDatadogLogs(t, ext, 2)
