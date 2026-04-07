@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"go.opentelemetry.io/collector/component"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/parquetlogencodingextension/adapters/snowflake"
 )
 
 const (
@@ -17,11 +19,6 @@ const (
 	defaultPageSizeBytes      = 1 * 1024 * 1024
 	defaultCompressionCodec   = "snappy"
 	defaultSchema             = "datadog"
-)
-
-var (
-	defaultSnowflakeAttributesHotKeys = []string{}
-	defaultSnowflakeTagsHotKeys       = []string{"env", "version"}
 )
 
 type Config struct {
@@ -58,14 +55,14 @@ func cloneStringSlice(values []string) []string {
 
 func (c *Config) snowflakeAttributesHotKeys() []string {
 	if c.AttributesHotKeys == nil {
-		return cloneStringSlice(defaultSnowflakeAttributesHotKeys)
+		return cloneStringSlice(snowflake.DefaultAttributesHotKeys())
 	}
 	return cloneStringSlice(c.AttributesHotKeys)
 }
 
 func (c *Config) snowflakeTagsHotKeys() []string {
 	if c.TagsHotKeys == nil {
-		return cloneStringSlice(defaultSnowflakeTagsHotKeys)
+		return cloneStringSlice(snowflake.DefaultTagsHotKeys())
 	}
 	return cloneStringSlice(c.TagsHotKeys)
 }

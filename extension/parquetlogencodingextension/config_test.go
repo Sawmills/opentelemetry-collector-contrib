@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/parquetlogencodingextension/adapters/snowflake"
 )
 
 func TestConfigValidateCompressionCodec(t *testing.T) {
@@ -87,13 +89,13 @@ func TestCreateDefaultConfigSchema(t *testing.T) {
 func TestSnowflakeAttributesHotKeysDefaultsWhenOmitted(t *testing.T) {
 	cfg := CreateDefaultConfig().(*Config)
 
-	require.Equal(t, defaultSnowflakeAttributesHotKeys, cfg.snowflakeAttributesHotKeys())
+	require.Equal(t, snowflake.DefaultAttributesHotKeys(), cfg.snowflakeAttributesHotKeys())
 }
 
 func TestSnowflakeTagsHotKeysDefaultsWhenOmitted(t *testing.T) {
 	cfg := CreateDefaultConfig().(*Config)
 
-	require.Equal(t, defaultSnowflakeTagsHotKeys, cfg.snowflakeTagsHotKeys())
+	require.Equal(t, snowflake.DefaultTagsHotKeys(), cfg.snowflakeTagsHotKeys())
 }
 
 func TestSnowflakeHotKeyConfigAllowsEmptyLists(t *testing.T) {

@@ -37,8 +37,6 @@ const (
 
 var (
 	signalTypeSet             = attribute.NewSet(attribute.String("signal", "logs"))
-	defaultAttributesHotKeys  = []string{}
-	defaultTagsHotKeys        = []string{"env", "version"}
 	excludedColdAttributeKeys = map[string]struct{}{
 		"k8s.node.uid": {},
 		"k8s.pod.ip":   {},
@@ -49,6 +47,14 @@ var (
 		"transaction.id": {},
 	}
 )
+
+func DefaultAttributesHotKeys() []string {
+	return []string{}
+}
+
+func DefaultTagsHotKeys() []string {
+	return []string{"env", "version"}
+}
 
 type Config struct {
 	AttributesHotKeys []string
@@ -108,11 +114,11 @@ func NewSnowflakeParquetAdapter(
 
 	attributesHotKeys := cfg.AttributesHotKeys
 	if attributesHotKeys == nil {
-		attributesHotKeys = defaultAttributesHotKeys
+		attributesHotKeys = DefaultAttributesHotKeys()
 	}
 	tagsHotKeys := cfg.TagsHotKeys
 	if tagsHotKeys == nil {
-		tagsHotKeys = defaultTagsHotKeys
+		tagsHotKeys = DefaultTagsHotKeys()
 	}
 
 	return &snowflakeParquetAdapter{

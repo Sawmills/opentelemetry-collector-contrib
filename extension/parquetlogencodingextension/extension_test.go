@@ -183,6 +183,58 @@ func TestStartRefreshesBufferedRecordAgeWhileIdle(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestRecordBufferStateIncludesPendingRecords(t *testing.T) {
+	ext := newTestParquetExtension(t)
+	ext.config.CompressionCodec = "uncompressed"
+	ext.maxFileSizeBytes = 1
+	largeMessage := strings.Repeat("x", 4096)
+
+	var gotRecords int
+	var gotEstimatedBytes int64
+	ext.recordBufferStateFn = func(records int, estimatedBytes, oldestRecordAge int64) {
+		gotRecords = records
+		gotEstimatedBytes = estimatedBytes
+		_ = oldestRecordAge
+	}
+
+	_, _, _, err := ext.addLogRecordWithFlushMetadata([]any{
+		datadog.ParquetLog{Message: largeMessage + "1"},
+		datadog.ParquetLog{Message: largeMessage + "2"},
+		datadog.ParquetLog{Message: largeMessage + "3"},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, ext.pendingRecords, 2)
+	require.Equal(t, 2, gotRecords)
+	require.NotZero(t, gotEstimatedBytes)
+}
+
+func TestRecordBufferStateUsesPendingOldestRecordAge(t *testing.T) {
+	ext := newTestParquetExtension(t)
+	now := time.Unix(200, 0)
+	ext.nowFn = func() time.Time { return now }
+	ext.pendingRecords = []any{datadog.ParquetLog{Message: "queued"}}
+	ext.oldestPendingRecord = time.Unix(150, 0)
+	ext.pendingEstimatedBytes = 42
+
+	var gotRecords int
+	var gotEstimatedBytes int64
+	var gotOldestRecordAge int64
+	ext.recordBufferStateFn = func(records int, estimatedBytes, oldestRecordAge int64) {
+		gotRecords = records
+		gotEstimatedBytes = estimatedBytes
+		gotOldestRecordAge = oldestRecordAge
+	}
+
+	ext.mutex.Lock()
+	ext.recordBufferStateLocked()
+	ext.mutex.Unlock()
+
+	require.Equal(t, 1, gotRecords)
+	require.Equal(t, int64(42), gotEstimatedBytes)
+	require.Equal(t, int64(50), gotOldestRecordAge)
+}
+
 func TestMarshalLogsFlushesImmediatelyWhenSizeThresholdIsExceeded(t *testing.T) {
 	ext := newTestParquetExtension(t)
 	ext.maxFileSizeBytes = 1
