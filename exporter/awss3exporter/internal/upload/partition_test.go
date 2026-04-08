@@ -330,6 +330,73 @@ func TestPartitionKeyInputsFilename(t *testing.T) {
 	}
 }
 
+func TestParseLegacyTemplate_DatadogKeyTemplate(t *testing.T) {
+	t.Parallel()
+
+	// Regression test: the datadog marshaler config generator emits an
+	// s3_key_template using dateInZone, now, and randAlpha. The template
+	// parser must support these functions or the collector will crash on
+	// startup with "function dateInZone not defined".
+	const datadogTemplate = `dt={{ dateInZone "20060102" (now) "UTC" }}/hour={{ dateInZone "15" (now) "UTC" }}/archive_{{ dateInZone "150405.0000" (now) "UTC" }}.{{ randAlpha 22 }}.json.gz`
+
+	tmpl, err := parseLegacyTemplate(datadogTemplate)
+	assert.NoError(t, err, "parseLegacyTemplate must accept dateInZone/now/randAlpha")
+	assert.NotNil(t, tmpl)
+
+	// Execute with real data to verify the functions produce valid output.
+	key := buildLegacyTemplateKey("", tmpl, time.Date(2025, 9, 4, 18, 30, 45, 0, time.UTC))
+	assert.Regexp(t, `^dt=\d{8}/hour=\d{2}/archive_\d{6}\.\d{4}\.[a-zA-Z]{22}\.json\.gz$`, key)
+}
+
+func TestParseLegacyTemplate_SprigFunctionsAvailable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		template string
+		pattern  string
+	}{
+		{
+			name:     "dateInZone formats time in UTC",
+			template: `{{ dateInZone "2006-01-02" (now) "UTC" }}`,
+			pattern:  `^\d{4}-\d{2}-\d{2}$`,
+		},
+		{
+			name:     "randAlpha generates alphabetic string",
+			template: `{{ randAlpha 10 }}`,
+			pattern:  `^[a-zA-Z]{10}$`,
+		},
+		{
+			name:     "now returns current time",
+			template: `{{ dateInZone "15" (now) "UTC" }}`,
+			pattern:  `^\d{2}$`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpl, err := parseLegacyTemplate(tc.template)
+			assert.NoError(t, err)
+
+			key := buildLegacyTemplateKey("", tmpl, time.Now())
+			assert.Regexp(t, tc.pattern, key)
+		})
+	}
+}
+
+func TestValidateLegacyTemplate_DatadogKeyTemplate(t *testing.T) {
+	t.Parallel()
+
+	// Regression: config validation must not reject the datadog template.
+	const datadogTemplate = `dt={{ dateInZone "20060102" (now) "UTC" }}/hour={{ dateInZone "15" (now) "UTC" }}/archive_{{ dateInZone "150405.0000" (now) "UTC" }}.{{ randAlpha 22 }}.json.gz`
+
+	tmpl, err := ParseLegacyTemplateForValidation(datadogTemplate)
+	assert.NoError(t, err)
+	assert.NoError(t, ValidateLegacyTemplateForValidation(tmpl))
+}
+
 func TestPartitionKeyInputsUniqueKey(t *testing.T) {
 	t.Parallel()
 
