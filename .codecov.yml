@@ -401,6 +401,10 @@ component_management:
     name: extension_opamp
     paths:
     - extension/opampextension/**
+  - component_id: extension_parquetlogencoding
+    name: extension_parquetlogencoding
+    paths:
+    - extension/parquetlogencodingextension/**
   - component_id: extension_pprof
     name: extension_pprof
     paths:
