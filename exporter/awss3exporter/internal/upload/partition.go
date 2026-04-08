@@ -19,6 +19,27 @@ import (
 	"go.opentelemetry.io/collector/config/configcompression"
 )
 
+// legacyTemplateFuncs provides the Sprig-compatible template functions
+// used by generated configs (dateInZone, now, randAlpha).
+var legacyTemplateFuncs = template.FuncMap{
+	"now": func() time.Time { return time.Now() },
+	"dateInZone": func(layout string, t time.Time, zone string) string {
+		loc, err := time.LoadLocation(zone)
+		if err != nil {
+			loc = time.UTC
+		}
+		return t.In(loc).Format(layout)
+	},
+	"randAlpha": func(n int) string {
+		const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = letters[rand.IntN(len(letters))]
+		}
+		return string(b)
+	},
+}
+
 var compressionFileExtensions = map[configcompression.Type]string{
 	configcompression.TypeGzip: ".gz",
 	configcompression.TypeZstd: ".zst",
@@ -104,7 +125,7 @@ func buildLegacyTemplateKey(prefix string, tmpl *template.Template, ts time.Time
 }
 
 func parseLegacyTemplate(templateText string) (*template.Template, error) {
-	return template.New("legacy-s3-key").Option("missingkey=error").Parse(templateText)
+	return template.New("legacy-s3-key").Funcs(legacyTemplateFuncs).Option("missingkey=error").Parse(templateText)
 }
 
 func ParseLegacyTemplateForValidation(templateText string) (*template.Template, error) {
