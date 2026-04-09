@@ -4,6 +4,7 @@
 package awss3exporter
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
+	"go.opentelemetry.io/collector/extension"
 	"go.opentelemetry.io/collector/otelcol/otelcoltest"
 	"go.uber.org/multierr"
 
@@ -32,6 +34,7 @@ func loadConfig(t *testing.T, fixture string) *Config {
 
 	factory := NewFactory()
 	factories.Exporters[metadata.Type] = factory
+	factories.Extensions[component.MustNewType("parquet_log_encoding")] = newStubExtensionFactory("parquet_log_encoding")
 
 	cfg, err := otelcoltest.LoadConfigAndValidate(filepath.Join("testdata", fixture), factories)
 	require.NoError(t, err)
@@ -52,6 +55,7 @@ func loadConfigFromYAML(t *testing.T, yaml string) (*Config, error) {
 
 	factory := NewFactory()
 	factories.Exporters[metadata.Type] = factory
+	factories.Extensions[component.MustNewType("parquet_log_encoding")] = newStubExtensionFactory("parquet_log_encoding")
 
 	cfg, err := otelcoltest.LoadConfigAndValidate(fixture, factories)
 	if err != nil {
@@ -72,6 +76,25 @@ func TestLoadConfig_LegacyFields(t *testing.T) {
 	assert.Equal(t, "year=%Y/month=%m/day=%d/hour=%H/minute=%M", cfg.normalizedS3PartitionFormat())
 }
 
+func newStubExtensionFactory(typeName string) extension.Factory {
+	return extension.NewFactory(
+		component.MustNewType(typeName),
+		func() component.Config { return &stubParquetEncodingConfig{} },
+		func(
+			_ context.Context,
+			_ extension.Settings,
+			_ component.Config,
+		) (extension.Extension, error) {
+			return nil, nil
+		},
+		component.StabilityLevelAlpha,
+	)
+}
+
+type stubParquetEncodingConfig struct {
+	Schema string `mapstructure:"schema"`
+}
+
 func TestLoadConfig_LegacyDatadogTemplate(t *testing.T) {
 	cfg := loadConfig(t, "legacy-datadog-json.yaml")
 
@@ -86,6 +109,14 @@ func TestLoadConfig_LegacyParquetEncoding(t *testing.T) {
 	assert.Equal(t, "parquet", cfg.EncodingFileExtension)
 	require.NotNil(t, cfg.Encoding)
 	assert.Equal(t, "parquet_log_encoding/awss3/destination-parquet", cfg.Encoding.String())
+}
+
+func TestLoadConfig_SnowflakeParquetEncoding(t *testing.T) {
+	cfg := loadConfig(t, "snowflake-parquet.yaml")
+
+	assert.Equal(t, "parquet", cfg.EncodingFileExtension)
+	require.NotNil(t, cfg.Encoding)
+	assert.Equal(t, "parquet_log_encoding", cfg.Encoding.String())
 }
 
 func TestLoadConfig_LegacyPartitionValidation(t *testing.T) {

@@ -57,6 +57,7 @@ extensions:
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/encoding/skywalkingencodingextension v0.149.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/encoding/googlecloudlogentryencodingextension v0.149.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/encoding/azureencodingextension v0.149.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/parquetlogencodingextension v0.149.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/k8sleaderelector v0.149.0
   - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/cgroupruntimeextension v0.149.0
 

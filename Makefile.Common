@@ -78,6 +78,7 @@ GOJUNIT             = $(subst \,/,$(shell $(GO_TOOL) -n github.com/jstemmer/go-j
 BUILDER             = $(subst \,/,$(shell $(GO_TOOL) -n go.opentelemetry.io/collector/cmd/builder))
 GOFUMPT             = $(subst \,/,$(shell $(GO_TOOL) -n mvdan.cc/gofumpt))
 GOVULNCHECK         = $(subst \,/,$(shell $(GO_TOOL) -n golang.org/x/vuln/cmd/govulncheck))
+GOVULNCHECK_FILTER  = $(SRC_ROOT)/.github/workflows/scripts/filter-govulncheck.py
 GCI                 = $(subst \,/,$(shell $(GO_TOOL) -n github.com/daixiang0/gci))
 GOTESTSUM           = $(subst \,/,$(shell $(GO_TOOL) -n gotest.tools/gotestsum))
 CHECKAPI            = $(subst \,/,$(shell $(GO_TOOL) -n go.opentelemetry.io/build-tools/checkapi))
@@ -265,7 +266,7 @@ lint: checklicense misspell
 
 .PHONY: govulncheck
 govulncheck:
-	$(GOVULNCHECK) ./...
+	python3 $(GOVULNCHECK_FILTER) $(GOVULNCHECK) ./...
 
 .PHONY: modernize
 modernize:

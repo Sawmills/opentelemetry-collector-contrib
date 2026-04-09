@@ -125,7 +125,6 @@ internal/kafka
 pkg/batchpersignal
 pkg/kafka/topic
 exporter/kafkaexporter
-extension/storage/inmemorystorage
 exporter/loadbalancingexporter
 exporter/logicmonitorexporter
 exporter/logzioexporter
@@ -183,11 +182,13 @@ extension/observer/kafkatopicsobserver
 extension/oidcauthextension
 extension/opampcustommessages
 extension/opampextension
+extension/parquetlogencodingextension
 extension/pprofextension
 extension/remotetapextension
 extension/sigv4authextension
 extension/solarwindsapmsettingsextension
 extension/storage/dbstorage
+extension/storage/inmemorystorage
 extension/storage/redisstorageextension
 .
 internal/aws/containerinsight

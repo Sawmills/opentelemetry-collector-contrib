@@ -107,3 +107,19 @@ func TestConvertToParquetDdtagsResourceAttributesDoNotOverrideFlattenedRecordAtt
 	require.NoError(t, json.Unmarshal([]byte(row.Attributes), &attrs))
 	assert.Equal(t, "record-request", attrs["request.id"])
 }
+
+func TestTagsToMapPreservesWhitespaceForBackwardCompatibility(t *testing.T) {
+	got := tagsToMap([]string{" env : value "})
+
+	require.Len(t, got, 1)
+	assert.Equal(t, " value ", got[" env "])
+}
+
+func TestTagsToMapStringifiesNonFiniteNumbers(t *testing.T) {
+	got := tagsToMap([]string{"nan:NaN", "inf:+Inf", "value:1.5"})
+
+	require.Len(t, got, 3)
+	assert.Equal(t, "NaN", got["nan"])
+	assert.Equal(t, "+Inf", got["inf"])
+	assert.Equal(t, 1.5, got["value"])
+}
