@@ -79,6 +79,26 @@ Encoding overrides marshaler if present and sets to use an encoding extension de
 
 See https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/extension/encoding.
 
+For parquet-oriented log export, this exporter can be paired with `parquet_log_encoding`. Example:
+
+```yaml
+extensions:
+  parquet_log_encoding:
+    schema: snowflake
+
+exporters:
+  awss3/snowflake_logs:
+    s3uploader:
+      region: us-east-1
+      s3_bucket: databucket
+      s3_prefix: logs
+    encoding: parquet_log_encoding
+    encoding_file_extension: parquet
+    compression: none
+```
+
+This pairing keeps `awss3exporter` transport-oriented while the parquet extension owns the row schema. The `snowflake` schema currently supports logs only and is intended for downstream Snowflake external table / secure view querying.
+
 ### Compression
 - `none` (default): No compression will be applied
 - `gzip`: Files will be compressed with gzip.

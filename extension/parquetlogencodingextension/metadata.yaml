@@ -13,31 +13,36 @@ telemetry:
     parquet_log_encoding_buffer_estimated_bytes:
       enabled: true
       description: Estimated compressed bytes currently buffered in the parquet log encoder
+      stability: alpha
       unit: By
-      gauge:
-        value_type: int
-    parquet_log_encoding_buffer_records:
-      enabled: true
-      description: Number of log records currently buffered in the parquet log encoder
-      unit: "1"
       gauge:
         value_type: int
     parquet_log_encoding_buffer_oldest_record_age:
       enabled: true
       description: Age in seconds of the oldest buffered record in the parquet log encoder
+      stability: alpha
       unit: s
       gauge:
         value_type: int
-    parquet_log_encoding_flush_attempt_total:
+    parquet_log_encoding_buffer_records:
       enabled: true
-      description: Number of flush attempts made by the parquet log encoder
+      description: Number of log records currently buffered in the parquet log encoder
+      stability: alpha
+      unit: "1"
+      gauge:
+        value_type: int
+    parquet_log_encoding_dropped_records_total:
+      enabled: true
+      description: Number of records dropped by the parquet log encoder
+      stability: alpha
       unit: "1"
       sum:
         value_type: int
         monotonic: true
-    parquet_log_encoding_flush_total:
+    parquet_log_encoding_flush_attempt_total:
       enabled: true
-      description: Number of non-empty parquet buffer flushes
+      description: Number of flush attempts made by the parquet log encoder
+      stability: alpha
       unit: "1"
       sum:
         value_type: int
@@ -45,6 +50,7 @@ telemetry:
     parquet_log_encoding_flush_empty_total:
       enabled: true
       description: Number of flush attempts that found no buffered parquet records
+      stability: alpha
       unit: "1"
       sum:
         value_type: int
@@ -52,13 +58,15 @@ telemetry:
     parquet_log_encoding_flush_failed_total:
       enabled: true
       description: Number of parquet flush attempts that failed after records were buffered
+      stability: alpha
       unit: "1"
       sum:
         value_type: int
         monotonic: true
-    parquet_log_encoding_flushed_records:
+    parquet_log_encoding_flush_total:
       enabled: true
-      description: Number of buffered records emitted by non-empty parquet flushes
+      description: Number of non-empty parquet buffer flushes
+      stability: alpha
       unit: "1"
       sum:
         value_type: int
@@ -66,13 +74,23 @@ telemetry:
     parquet_log_encoding_flushed_bytes:
       enabled: true
       description: Bytes emitted by non-empty parquet flushes before S3-level compression
+      stability: alpha
       unit: By
+      sum:
+        value_type: int
+        monotonic: true
+    parquet_log_encoding_flushed_records:
+      enabled: true
+      description: Number of buffered records emitted by non-empty parquet flushes
+      stability: alpha
+      unit: "1"
       sum:
         value_type: int
         monotonic: true
     parquet_log_encoding_time_to_flush:
       enabled: true
       description: Time in milliseconds from first buffered parquet record to successful non-empty flush
+      stability: alpha
       unit: ms
       histogram:
         value_type: int

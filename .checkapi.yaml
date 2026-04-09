@@ -4,7 +4,9 @@ ignored_paths:
   - cmd/opampsupervisor
   - exporter/datadogexporter/integrationtest
   - extension/observer
+  - extension/parquetlogencodingextension # fork-specific parquet encoding helper surface
   - extension/encoding
+  - extension/storage # existing storage helper surface is not component API-shaped
   - extension/opampcustommessages
   - extension/storage/inmemorystorage
   - pkg/batchperresourceattr

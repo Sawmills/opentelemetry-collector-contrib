@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package parquetlogencodingextension
+package parquetlogencodingextension // import "github.com/open-telemetry/opentelemetry-collector-contrib/extension/parquetlogencodingextension"
 
 import (
 	"context"
@@ -23,6 +23,7 @@ import (
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/parquetlogencodingextension/adapters"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/parquetlogencodingextension/adapters/datadog"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/parquetlogencodingextension/adapters/snowflake"
 )
 
 const (
@@ -31,22 +32,30 @@ const (
 )
 
 type parquetLogExtension struct {
-	memFile              *MemFile
-	logger               *zap.Logger
-	ctx                  context.Context
-	config               *Config
-	mutex                sync.Mutex
-	writer               *writer.ParquetWriter
-	adapter              adapters.ParquetAdapter
-	telemetry            *parquetTelemetry
-	maxFileSizeBytes     int64
-	fileName             string
-	oldestBufferedRecord time.Time
-	writeStopFn          func() error
-	readWriterBytes      func() ([]byte, error)
-	reinitializeWriterFn func() error
-	nowFn                func() time.Time
-	recordFlushFn        func(string, int64, int64, time.Duration)
+	memFile               *MemFile
+	logger                *zap.Logger
+	ctx                   context.Context
+	config                *Config
+	mutex                 sync.Mutex
+	pendingRecords        []any
+	oldestPendingRecord   time.Time
+	pendingEstimatedBytes int64
+	writer                *writer.ParquetWriter
+	adapter               adapters.ParquetAdapter
+	telemetry             *parquetTelemetry
+	maxFileSizeBytes      int64
+	fileName              string
+	oldestBufferedRecord  time.Time
+	bufferStateTickerDone chan struct{}
+	bufferStateTickerStop chan struct{}
+	bufferStateInterval   time.Duration
+	writeStopFn           func() error
+	readWriterBytes       func() ([]byte, error)
+	reinitializeWriterFn  func() error
+	nowFn                 func() time.Time
+	recordBufferStateFn   func(int, int64, int64)
+	recordFlushFn         func(string, int64, int64, time.Duration)
+	writeRecordFn         func(any) error
 }
 
 type bufferedStateSnapshot struct {
@@ -64,40 +73,63 @@ func NewParquetLogExtension(
 		return nil, fmt.Errorf("unexpected parquet config type %T", baseCfg)
 	}
 
-	adapter, err := datadog.NewDatadogParquetAdapter(params)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create parquet adapter: %w", err)
-	}
-
 	telemetry, err := newParquetTelemetry(params)
 	if err != nil {
 		return nil, err
 	}
 
+	adapter, err := newParquetAdapter(cfg, params, telemetry)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create parquet adapter: %w", err)
+	}
+
 	ext := &parquetLogExtension{
-		logger:           params.Logger,
-		ctx:              context.WithoutCancel(ctx),
-		config:           cfg,
-		adapter:          adapter,
-		telemetry:        telemetry,
-		maxFileSizeBytes: cfg.MaxFileSizeBytes,
-		fileName:         fmt.Sprintf("parquet-log-%d.parquet", time.Now().UnixNano()),
-		nowFn:            time.Now,
+		logger:              params.Logger,
+		ctx:                 context.WithoutCancel(ctx),
+		config:              cfg,
+		adapter:             adapter,
+		telemetry:           telemetry,
+		maxFileSizeBytes:    cfg.MaxFileSizeBytes,
+		fileName:            fmt.Sprintf("parquet-log-%d.parquet", time.Now().UnixNano()),
+		bufferStateInterval: 5 * time.Second,
+		nowFn:               time.Now,
 	}
 	ext.writeStopFn = ext.defaultWriteStop
 	ext.readWriterBytes = ext.defaultReadWriterBytes
 	ext.reinitializeWriterFn = ext.initializeWriter
+	ext.recordBufferStateFn = ext.telemetry.recordBufferState
 	ext.recordFlushFn = ext.telemetry.recordFlush
+	ext.writeRecordFn = ext.Write
 
 	if err := ext.initializeWriter(); err != nil {
-		return nil, err
-	}
-	if err := telemetry.registerOldestRecordAgeCallback(ext.bufferOldestRecordAgeSeconds); err != nil {
 		return nil, err
 	}
 	ext.recordBufferStateLocked()
 
 	return ext, nil
+}
+
+func newParquetAdapter(
+	cfg *Config,
+	params extension.Settings,
+	telemetry *parquetTelemetry,
+) (adapters.ParquetAdapter, error) {
+	switch strings.ToLower(cfg.Schema) {
+	case "", defaultSchema:
+		return datadog.NewDatadogParquetAdapter(params)
+	case "snowflake":
+		var recordDropFn func(string, int64)
+		if telemetry != nil {
+			recordDropFn = telemetry.recordDroppedRecords
+		}
+		return snowflake.NewSnowflakeParquetAdapter(params, snowflake.Config{
+			AttributesHotKeys: cfg.snowflakeAttributesHotKeys(),
+			TagsHotKeys:       cfg.snowflakeTagsHotKeys(),
+			RecordDropFn:      recordDropFn,
+		})
+	default:
+		return nil, fmt.Errorf("unsupported parquet schema: %s", cfg.Schema)
+	}
 }
 
 func (e *parquetLogExtension) initializeWriter() error {
@@ -135,21 +167,84 @@ func (e *parquetLogExtension) initializeWriter() error {
 	return nil
 }
 
-func (*parquetLogExtension) Start(context.Context, component.Host) error {
+func (e *parquetLogExtension) Start(context.Context, component.Host) error {
+	e.startBufferStateLoop()
 	return nil
 }
 
 func (e *parquetLogExtension) Shutdown(context.Context) error {
 	e.mutex.Lock()
-	defer e.mutex.Unlock()
-
+	if len(e.pendingRecords) > 0 {
+		if err := e.movePendingRecordsIntoWriterLocked(); err != nil {
+			e.mutex.Unlock()
+			e.stopBufferStateLoop()
+			e.telemetry.shutdown()
+			return fmt.Errorf("move pending parquet spill payloads into buffer: %w", err)
+		}
+	}
 	if e.writer != nil && len(e.writer.Objs) > 0 {
+		e.mutex.Unlock()
+		e.stopBufferStateLoop()
 		e.telemetry.shutdown()
 		return errors.New("buffered parquet records remain at shutdown; flush before shutdown")
 	}
+	e.mutex.Unlock()
 
+	e.stopBufferStateLoop()
 	e.telemetry.shutdown()
 	return nil
+}
+
+func (e *parquetLogExtension) startBufferStateLoop() {
+	if e.bufferStateInterval <= 0 {
+		return
+	}
+
+	e.mutex.Lock()
+	if e.bufferStateTickerStop != nil {
+		e.mutex.Unlock()
+		return
+	}
+	stopCh := make(chan struct{})
+	doneCh := make(chan struct{})
+	e.bufferStateTickerStop = stopCh
+	e.bufferStateTickerDone = doneCh
+	interval := e.bufferStateInterval
+	e.mutex.Unlock()
+
+	go func() {
+		defer close(doneCh)
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				e.mutex.Lock()
+				e.recordBufferStateLocked()
+				e.mutex.Unlock()
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+}
+
+func (e *parquetLogExtension) stopBufferStateLoop() {
+	e.mutex.Lock()
+	stopCh := e.bufferStateTickerStop
+	doneCh := e.bufferStateTickerDone
+	e.bufferStateTickerStop = nil
+	e.bufferStateTickerDone = nil
+	e.mutex.Unlock()
+
+	if stopCh != nil {
+		close(stopCh)
+	}
+	if doneCh != nil {
+		<-doneCh
+	}
 }
 
 func (e *parquetLogExtension) FlushLogs() ([]byte, error) {
@@ -160,7 +255,7 @@ func (e *parquetLogExtension) FlushLogsWithReason(reason string) ([]byte, error)
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
-	buf, _, _, err := e.checkAndFlushWithMetadata(true, reason)
+	buf, _, _, err := e.flushWithPendingLocked(reason)
 	return buf, err
 }
 
@@ -169,6 +264,25 @@ func (e *parquetLogExtension) FlushLogsWithReasonAndMetadata(
 ) ([]byte, string, time.Time, error) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
+
+	return e.flushWithPendingLocked(reason)
+}
+
+func (e *parquetLogExtension) flushWithPendingLocked(
+	reason string,
+) ([]byte, string, time.Time, error) {
+	if len(e.pendingRecords) > 0 {
+		buf, flushReason, completedAt, err := e.addRecordsWithFlushMetadataLocked(nil)
+		if err != nil {
+			return nil, "", time.Time{}, err
+		}
+		if len(buf) > 0 {
+			if reason != "" {
+				flushReason = reason
+			}
+			return buf, flushReason, completedAt, nil
+		}
+	}
 
 	return e.checkAndFlushWithMetadata(true, reason)
 }
@@ -189,7 +303,14 @@ func (e *parquetLogExtension) MarshalLogsWithFlushMetadata(
 		return nil, "", time.Time{}, nil
 	}
 
-	return e.addLogRecordWithFlushMetadata(toParquet)
+	buf, reason, completedAt, err := e.addLogRecordWithFlushMetadata(toParquet)
+	if err != nil {
+		return nil, "", time.Time{}, err
+	}
+	if buf != nil {
+		return buf, reason, completedAt, nil
+	}
+	return nil, "", time.Time{}, nil
 }
 
 func (e *parquetLogExtension) addLogRecordWithFlushMetadata(
@@ -198,32 +319,72 @@ func (e *parquetLogExtension) addLogRecordWithFlushMetadata(
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
+	return e.addRecordsWithFlushMetadataLocked(records)
+}
+
+func (e *parquetLogExtension) addRecordsWithFlushMetadataLocked(
+	records []any,
+) ([]byte, string, time.Time, error) {
 	if err := e.ensureWriterLocked(); err != nil {
 		return nil, "", time.Time{}, err
 	}
 
+	pendingRecordCount := len(e.pendingRecords)
+	pendingOldestRecord := e.oldestPendingRecord
+	if len(e.pendingRecords) > 0 {
+		records = append(append(make([]any, 0, len(e.pendingRecords)+len(records)), e.pendingRecords...), records...)
+		e.clearPendingRecordsLocked()
+	}
+
 	if len(records) > 0 && len(e.writer.Objs) == 0 {
 		e.oldestBufferedRecord = e.nowFn()
+		if !pendingOldestRecord.IsZero() {
+			e.oldestBufferedRecord = pendingOldestRecord
+		}
 	}
 
 	var flushedBytes []byte
 	var flushReason string
 	var flushCompletedAt time.Time
 
-	for _, record := range records {
+	for i, record := range records {
 		if e.oldestBufferedRecord.IsZero() {
 			e.oldestBufferedRecord = e.nowFn()
 		}
-		if err := e.Write(record); err != nil {
+		if err := e.writeRecordLocked(record); err != nil {
+			e.appendPendingRecordsLocked(
+				records[i:],
+				tailOldestRecord(pendingRecordCount, pendingOldestRecord, i, e.nowFn()),
+				e.estimatePendingBytesFromBufferedState(
+					len(e.writer.Objs),
+					e.getCurrentCompressedSize(),
+					len(records[i:]),
+				),
+			)
+			e.recordBufferStateLocked()
 			return nil, "", time.Time{}, fmt.Errorf("failed to write record: %w", err)
 		}
 		e.recordBufferStateLocked()
-		if flushedBytes != nil || e.getCurrentCompressedSize() < e.maxFileSizeBytes {
+		if e.getCurrentCompressedSize() < e.maxFileSizeBytes {
 			continue
 		}
+		bufferedRecordCount := len(e.writer.Objs)
+		bufferedCompressedBytes := e.getCurrentCompressedSize()
 
 		buf, reason, completedAt, err := e.checkAndFlushWithMetadata(false, flushReasonSize)
 		if err != nil {
+			if i+1 < len(records) {
+				e.appendPendingRecordsLocked(
+					records[i+1:],
+					tailOldestRecord(pendingRecordCount, pendingOldestRecord, i+1, e.nowFn()),
+					e.estimatePendingBytesFromBufferedState(
+						bufferedRecordCount,
+						bufferedCompressedBytes,
+						len(records[i+1:]),
+					),
+				)
+			}
+			e.recordBufferStateLocked()
 			return nil, "", time.Time{}, err
 		}
 		if len(buf) == 0 {
@@ -232,6 +393,18 @@ func (e *parquetLogExtension) addLogRecordWithFlushMetadata(
 		flushedBytes = buf
 		flushReason = reason
 		flushCompletedAt = completedAt
+		if i+1 < len(records) {
+			e.appendPendingRecordsLocked(
+				records[i+1:],
+				tailOldestRecord(pendingRecordCount, pendingOldestRecord, i+1, flushCompletedAt),
+				e.estimatePendingBytesFromBufferedState(
+					bufferedRecordCount,
+					bufferedCompressedBytes,
+					len(records[i+1:]),
+				),
+			)
+		}
+		break
 	}
 	e.recordBufferStateLocked()
 
@@ -348,6 +521,49 @@ func (e *parquetLogExtension) restoreBufferedStateLocked(snapshot bufferedStateS
 	return nil
 }
 
+func (e *parquetLogExtension) movePendingRecordsIntoWriterLocked() error {
+	if len(e.pendingRecords) == 0 {
+		return nil
+	}
+	if err := e.ensureWriterLocked(); err != nil {
+		return err
+	}
+
+	pendingRecords := append([]any(nil), e.pendingRecords...)
+	pendingOldestRecord := e.oldestPendingRecord
+	e.clearPendingRecordsLocked()
+
+	if len(e.writer.Objs) == 0 {
+		e.oldestBufferedRecord = e.nowFn()
+		if !pendingOldestRecord.IsZero() {
+			e.oldestBufferedRecord = pendingOldestRecord
+		}
+	}
+
+	for i, record := range pendingRecords {
+		if e.oldestBufferedRecord.IsZero() {
+			e.oldestBufferedRecord = e.nowFn()
+		}
+		if err := e.writeRecordLocked(record); err != nil {
+			e.appendPendingRecordsLocked(
+				pendingRecords[i:],
+				tailOldestRecord(len(pendingRecords), pendingOldestRecord, i, e.nowFn()),
+				e.estimateCompressedBytesForRecords(len(pendingRecords[i:])),
+			)
+			return fmt.Errorf("write pending record: %w", err)
+		}
+	}
+	e.recordBufferStateLocked()
+	return nil
+}
+
+func (e *parquetLogExtension) writeRecordLocked(record any) error {
+	if e.writeRecordFn != nil {
+		return e.writeRecordFn(record)
+	}
+	return e.Write(record)
+}
+
 func (e *parquetLogExtension) ensureWriterLocked() error {
 	if e.writer != nil {
 		return nil
@@ -411,26 +627,83 @@ func (e *parquetLogExtension) getCurrentCompressedSize() int64 {
 	return int64(float64(e.writer.ObjsSize) * compressionRatioEstimate(e.config.CompressionCodec))
 }
 
-func (e *parquetLogExtension) bufferOldestRecordAgeSeconds() int64 {
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
-
-	if e.writer == nil || len(e.writer.Objs) == 0 || e.oldestBufferedRecord.IsZero() {
+func (e *parquetLogExtension) estimateCompressedBytesForRecords(count int) int64 {
+	if count <= 0 || e.writer == nil || e.writer.ObjSize <= 0 {
 		return 0
 	}
 
-	return int64(time.Since(e.oldestBufferedRecord).Seconds())
+	return int64(float64(int64(count)*e.writer.ObjSize) * compressionRatioEstimate(e.config.CompressionCodec))
+}
+
+func (e *parquetLogExtension) clearPendingRecordsLocked() {
+	e.pendingRecords = nil
+	e.oldestPendingRecord = time.Time{}
+	e.pendingEstimatedBytes = 0
+}
+
+func (e *parquetLogExtension) estimatePendingBytesFromBufferedState(
+	bufferedRecordCount int,
+	bufferedCompressedBytes int64,
+	pendingRecordCount int,
+) int64 {
+	if pendingRecordCount <= 0 {
+		return 0
+	}
+	if bufferedRecordCount > 0 && bufferedCompressedBytes > 0 {
+		bytesPerRecord := bufferedCompressedBytes / int64(bufferedRecordCount)
+		if bytesPerRecord == 0 {
+			bytesPerRecord = 1
+		}
+		return bytesPerRecord * int64(pendingRecordCount)
+	}
+	return e.estimateCompressedBytesForRecords(pendingRecordCount)
+}
+
+func (e *parquetLogExtension) appendPendingRecordsLocked(records []any, oldest time.Time, estimatedBytes int64) {
+	if len(records) == 0 {
+		return
+	}
+
+	e.pendingRecords = append(e.pendingRecords, append([]any(nil), records...)...)
+	if e.oldestPendingRecord.IsZero() || (!oldest.IsZero() && oldest.Before(e.oldestPendingRecord)) {
+		e.oldestPendingRecord = oldest
+	}
+	if estimatedBytes > 0 {
+		e.pendingEstimatedBytes += estimatedBytes
+		return
+	}
+	e.pendingEstimatedBytes += e.estimateCompressedBytesForRecords(len(records))
+}
+
+func tailOldestRecord(pendingCount int, pendingOldest time.Time, tailStart int, fallback time.Time) time.Time {
+	if pendingCount > tailStart && !pendingOldest.IsZero() {
+		return pendingOldest
+	}
+	return fallback
 }
 
 func (e *parquetLogExtension) recordBufferStateLocked() {
-	records := 0
-	estimatedBytes := int64(0)
+	records := len(e.pendingRecords)
+	estimatedBytes := e.pendingEstimatedBytes
+	var oldestRecord time.Time
 	if e.writer != nil {
-		records = len(e.writer.Objs)
-		estimatedBytes = e.getCurrentCompressedSize()
+		records += len(e.writer.Objs)
+		estimatedBytes += e.getCurrentCompressedSize()
+		if len(e.writer.Objs) > 0 && !e.oldestBufferedRecord.IsZero() {
+			oldestRecord = e.oldestBufferedRecord
+		}
+	}
+	if len(e.pendingRecords) > 0 && !e.oldestPendingRecord.IsZero() &&
+		(oldestRecord.IsZero() || e.oldestPendingRecord.Before(oldestRecord)) {
+		oldestRecord = e.oldestPendingRecord
 	}
 
-	e.telemetry.recordBufferState(records, estimatedBytes)
+	oldestRecordAge := int64(0)
+	if records > 0 && !oldestRecord.IsZero() {
+		oldestRecordAge = int64(e.nowFn().Sub(oldestRecord).Seconds())
+	}
+
+	e.recordBufferStateFn(records, estimatedBytes, oldestRecordAge)
 }
 
 func parquetCompressionCodec(codec string) (parquet.CompressionCodec, error) {

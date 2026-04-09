@@ -1,12 +1,13 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package datadog
+package datadog // import "github.com/open-telemetry/opentelemetry-collector-contrib/extension/parquetlogencodingextension/adapters/datadog"
 
 import (
 	"context"
 	"fmt"
 	"maps"
+	"math"
 	"strconv"
 	"strings"
 
@@ -181,7 +182,7 @@ func transformWithDdTags(
 		status = record.SeverityText()
 	}
 	if record.SeverityNumber() != 0 && status == "" {
-		status = statusFromSeverityNumber(record.SeverityNumber())
+		status = adapters.StatusFromSeverityNumber(record.SeverityNumber())
 	}
 
 	item.Attributes["status"] = status
@@ -258,7 +259,7 @@ func transformDefault(
 		status = record.SeverityText()
 	}
 	if record.SeverityNumber() != 0 && status == "" {
-		status = statusFromSeverityNumber(record.SeverityNumber())
+		status = adapters.StatusFromSeverityNumber(record.SeverityNumber())
 	}
 
 	item.Status = status
@@ -326,25 +327,6 @@ func flattenAttribute(key string, value pcommon.Value, depth int) map[string]str
 	return result
 }
 
-func statusFromSeverityNumber(severity plog.SeverityNumber) string {
-	switch {
-	case severity <= 4:
-		return "trace"
-	case severity <= 8:
-		return "debug"
-	case severity <= 12:
-		return "info"
-	case severity <= 16:
-		return "warn"
-	case severity <= 20:
-		return "error"
-	case severity <= 24:
-		return "fatal"
-	default:
-		return "error"
-	}
-}
-
 func valueToAny(value pcommon.Value) any {
 	switch value.Type() {
 	case pcommon.ValueTypeStr:
@@ -376,30 +358,16 @@ func valueToAny(value pcommon.Value) any {
 }
 
 func tagsToMap(tags []string) map[string]any {
-	tagMap := make(map[string]any, len(tags))
-	for _, tag := range tags {
-		parts := strings.SplitN(tag, ":", 2)
-		if len(parts) != 2 {
-			continue
+	return adapters.TagsToMap(tags, false, func(value string) (any, bool) {
+		if !isNumeric(value) {
+			return nil, false
 		}
-
-		value := parts[1]
-		switch {
-		case value == "true":
-			tagMap[parts[0]] = true
-		case value == "false":
-			tagMap[parts[0]] = false
-		case isNumeric(value):
-			number, _ := strconv.ParseFloat(value, 64)
-			tagMap[parts[0]] = number
-		default:
-			tagMap[parts[0]] = value
-		}
-	}
-	return tagMap
+		number, _ := strconv.ParseFloat(value, 64)
+		return number, true
+	})
 }
 
 func isNumeric(value string) bool {
-	_, err := strconv.ParseFloat(value, 64)
-	return err == nil
+	number, err := strconv.ParseFloat(value, 64)
+	return err == nil && !math.IsNaN(number) && !math.IsInf(number, 0)
 }

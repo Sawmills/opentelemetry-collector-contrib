@@ -1,0 +1,22 @@
+receivers:
+  nop:
+
+extensions:
+  parquet_log_encoding:
+    schema: snowflake
+
+exporters:
+  awss3:
+    encoding: parquet_log_encoding
+    encoding_file_extension: parquet
+    s3uploader:
+      region: us-east-1
+      s3_bucket: sawmills-test
+      s3_partition_format: "%Y/%m/%d/%H"
+
+service:
+  extensions: [parquet_log_encoding]
+  pipelines:
+    logs:
+      receivers: [nop]
+      exporters: [awss3]
