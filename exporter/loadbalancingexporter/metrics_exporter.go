@@ -106,7 +106,7 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 }
 
 func (*metricExporterImp) Capabilities() consumer.Capabilities {
-	return consumer.Capabilities{MutatesData: false}
+	return consumer.Capabilities{MutatesData: true}
 }
 
 func (e *metricExporterImp) Start(ctx context.Context, host component.Host) error {
