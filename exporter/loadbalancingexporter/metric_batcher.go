@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
-	expmetrics "github.com/open-telemetry/opentelemetry-collector-contrib/internal/exp/metrics"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/exp/metrics/identity"
 )
 
 const (
@@ -149,6 +149,8 @@ func newMetricBatcher(
 	return b, nil
 }
 
+// TryEnqueue transfers ownership of md to the backend batcher when it returns (true, nil).
+// Callers must treat md as immutable/invalid after successful enqueue.
 func (b *metricBatcher) TryEnqueue(endpoint string, exp *wrappedExporter, md pmetric.Metrics) (bool, error) {
 	backend, err := b.acquireBackend(endpoint, exp)
 	if err != nil {
@@ -356,7 +358,7 @@ func (b *backendMetricBatcher) run() {
 	var timerC <-chan time.Time
 	retryingSince := time.Time{}
 
-	pending := pmetric.NewMetrics()
+	pending := make([]pmetric.Metrics, 0, cap(b.requests))
 	pendingBytes := 0
 	pendingDataPoints := 0
 	sizer := &pmetric.ProtoMarshaler{}
@@ -378,7 +380,7 @@ func (b *backendMetricBatcher) run() {
 				return
 			}
 		case <-timerC:
-			if err := b.flush(context.Background(), &pending, &pendingDataPoints, &pendingBytes, metricFlushReasonTimeout, timer, &timerC, &retryingSince); err != nil {
+			if err := b.flush(context.Background(), sizer, &pending, &pendingDataPoints, &pendingBytes, metricFlushReasonTimeout, timer, &timerC, &retryingSince); err != nil {
 				b.logger.Warn("failed to flush metric batch", zap.String("reason", metricFlushReasonTimeout), zap.Error(err))
 			}
 		}
@@ -388,7 +390,7 @@ func (b *backendMetricBatcher) run() {
 func (b *backendMetricBatcher) handleRequest(
 	req metricBatcherRequest,
 	sizer *pmetric.ProtoMarshaler,
-	pending *pmetric.Metrics,
+	pending *[]pmetric.Metrics,
 	pendingDataPoints *int,
 	pendingBytes *int,
 	nextReq **metricBatcherRequest,
@@ -398,8 +400,9 @@ func (b *backendMetricBatcher) handleRequest(
 ) bool {
 	switch req.kind {
 	case metricBatcherRequestEnqueue:
-		*pendingDataPoints += b.mergeQueuedRequests(pending, req, nextReq)
-		*pendingBytes = sizer.MetricsSize(*pending)
+		dps, bytes := b.drainEnqueueRequestsIntoPending(sizer, pending, req, nextReq)
+		*pendingDataPoints += dps
+		*pendingBytes += bytes
 		b.pendingDataPoints.Store(int64(*pendingDataPoints))
 		b.pendingBytes.Store(int64(*pendingBytes))
 		if *pendingDataPoints > 0 && *timerC == nil {
@@ -409,46 +412,55 @@ func (b *backendMetricBatcher) handleRequest(
 		if *pendingDataPoints >= b.settings.maxDataPoints || *pendingBytes >= b.settings.maxBytes {
 			attrs := metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint)))
 			b.telemetry.overflowTotal.Add(context.Background(), 1, attrs)
-			if err := b.flush(context.Background(), pending, pendingDataPoints, pendingBytes, metricFlushReasonSize, timer, timerC, retryingSince); err != nil {
+			if err := b.flush(context.Background(), sizer, pending, pendingDataPoints, pendingBytes, metricFlushReasonSize, timer, timerC, retryingSince); err != nil {
 				b.logger.Warn("failed to flush metric batch", zap.String("reason", metricFlushReasonSize), zap.Error(err))
 			}
 		}
 	case metricBatcherRequestFlushAndStop:
-		err := b.flush(req.ctx, pending, pendingDataPoints, pendingBytes, req.reason, timer, timerC, retryingSince)
+		err := b.flush(req.ctx, sizer, pending, pendingDataPoints, pendingBytes, req.reason, timer, timerC, retryingSince)
 		req.done <- err
 		return true
 	}
 	return false
 }
 
-func (b *backendMetricBatcher) mergeQueuedRequests(
-	pending *pmetric.Metrics,
+// drainEnqueueRequestsIntoPending drains immediately available enqueue requests
+// into pending without merging payload trees.
+// Returns (dataPointsAdded, bytesAdded).
+func (b *backendMetricBatcher) drainEnqueueRequestsIntoPending(
+	sizer *pmetric.ProtoMarshaler,
+	pending *[]pmetric.Metrics,
 	first metricBatcherRequest,
 	nextReq **metricBatcherRequest,
-) int {
+) (int, int) {
 	dataPointCount := first.md.DataPointCount()
-	expmetrics.Merge(*pending, first.md)
+	bytes := sizer.MetricsSize(first.md)
+	*pending = append(*pending, first.md)
 
 	for i := 0; i < cap(b.requests); i++ {
 		select {
 		case req := <-b.requests:
 			if req.kind != metricBatcherRequestEnqueue {
+				// Channels don't support unread/put-back. Stash this control request
+				// so the run loop processes it next, in-order.
 				*nextReq = &req
-				return dataPointCount
+				return dataPointCount, bytes
 			}
 			dataPointCount += req.md.DataPointCount()
-			expmetrics.Merge(*pending, req.md)
+			bytes += sizer.MetricsSize(req.md)
+			*pending = append(*pending, req.md)
 		default:
-			return dataPointCount
+			return dataPointCount, bytes
 		}
 	}
 
-	return dataPointCount
+	return dataPointCount, bytes
 }
 
 func (b *backendMetricBatcher) flush(
 	ctx context.Context,
-	pending *pmetric.Metrics,
+	sizer *pmetric.ProtoMarshaler,
+	pending *[]pmetric.Metrics,
 	pendingDataPoints *int,
 	pendingBytes *int,
 	reason string,
@@ -464,14 +476,15 @@ func (b *backendMetricBatcher) flush(
 	}
 	*timerC = nil
 
-	if pending.DataPointCount() == 0 {
+	if *pendingDataPoints == 0 {
 		return nil
 	}
 
-	drained := *pending
+	drainedChunks := *pending
+	drained := mergePendingMetricChunks(drainedChunks)
 	datapoints := *pendingDataPoints
-	bytes := *pendingBytes
-	*pending = pmetric.NewMetrics()
+	bytes := sizer.MetricsSize(drained)
+	*pending = (*pending)[:0]
 	*pendingDataPoints = 0
 	*pendingBytes = 0
 	b.pendingDataPoints.Store(0)
@@ -501,7 +514,7 @@ func (b *backendMetricBatcher) flush(
 				b.flushFailures = 0
 				return err
 			}
-			*pending = drained
+			*pending = append((*pending)[:0], drained)
 			*pendingDataPoints = datapoints
 			*pendingBytes = bytes
 			b.pendingDataPoints.Store(int64(datapoints))
@@ -534,6 +547,118 @@ func (b *backendMetricBatcher) flush(
 		b.flushFailures = 0
 	}
 	return err
+}
+
+func mergePendingMetricChunks(chunks []pmetric.Metrics) pmetric.Metrics {
+	if len(chunks) == 0 {
+		return pmetric.NewMetrics()
+	}
+	if len(chunks) == 1 {
+		return chunks[0]
+	}
+	merged := chunks[0]
+	for i := 1; i < len(chunks); i++ {
+		mergeMetricChunksByMove(merged, chunks[i])
+	}
+	return merged
+}
+
+// mergeMetricChunksByMove assumes src is owned by the batcher and can be consumed.
+// It uses move semantics where possible to avoid deep-copy merge overhead.
+func mergeMetricChunksByMove(dst, src pmetric.Metrics) {
+	dstResourceMetrics := dst.ResourceMetrics()
+	srcResourceMetrics := src.ResourceMetrics()
+
+	resources := make(map[identity.Resource]pmetric.ResourceMetrics, dstResourceMetrics.Len())
+	for i := 0; i < dstResourceMetrics.Len(); i++ {
+		rm := dstResourceMetrics.At(i)
+		resources[identity.OfResource(rm.Resource())] = rm
+	}
+
+	for i := 0; i < srcResourceMetrics.Len(); i++ {
+		rm := srcResourceMetrics.At(i)
+		resourceID := identity.OfResource(rm.Resource())
+
+		dstRM, ok := resources[resourceID]
+		if !ok {
+			dstRM = dstResourceMetrics.AppendEmpty()
+			rm.MoveTo(dstRM)
+			resources[resourceID] = dstRM
+			continue
+		}
+
+		mergeResourceMetricsByMove(resourceID, dstRM, rm)
+	}
+}
+
+func mergeResourceMetricsByMove(resourceID identity.Resource, dst, src pmetric.ResourceMetrics) {
+	dstScopeMetrics := dst.ScopeMetrics()
+	srcScopeMetrics := src.ScopeMetrics()
+
+	scopes := make(map[identity.Scope]pmetric.ScopeMetrics, dstScopeMetrics.Len())
+	for i := 0; i < dstScopeMetrics.Len(); i++ {
+		sm := dstScopeMetrics.At(i)
+		scopes[identity.OfScope(resourceID, sm.Scope())] = sm
+	}
+
+	for i := 0; i < srcScopeMetrics.Len(); i++ {
+		sm := srcScopeMetrics.At(i)
+		scopeID := identity.OfScope(resourceID, sm.Scope())
+
+		dstSM, ok := scopes[scopeID]
+		if !ok {
+			dstSM = dstScopeMetrics.AppendEmpty()
+			sm.MoveTo(dstSM)
+			scopes[scopeID] = dstSM
+			continue
+		}
+
+		mergeScopeMetricsByMove(scopeID, dstSM, sm)
+	}
+}
+
+func mergeScopeMetricsByMove(scopeID identity.Scope, dst, src pmetric.ScopeMetrics) {
+	dstMetrics := dst.Metrics()
+	srcMetrics := src.Metrics()
+
+	metricsByIdentity := make(map[identity.Metric]pmetric.Metric, dstMetrics.Len())
+	for i := 0; i < dstMetrics.Len(); i++ {
+		m := dstMetrics.At(i)
+		metricsByIdentity[identity.OfMetric(scopeID, m)] = m
+	}
+
+	for i := 0; i < srcMetrics.Len(); i++ {
+		srcMetric := srcMetrics.At(i)
+		metricID := identity.OfMetric(scopeID, srcMetric)
+
+		dstMetric, ok := metricsByIdentity[metricID]
+		if !ok {
+			dstMetric = dstMetrics.AppendEmpty()
+			srcMetric.MoveTo(dstMetric)
+			metricsByIdentity[metricID] = dstMetric
+			continue
+		}
+
+		mergeMetricDataPointsByMove(dstMetric, srcMetric)
+	}
+}
+
+func mergeMetricDataPointsByMove(dst, src pmetric.Metric) {
+	switch dst.Type() {
+	case pmetric.MetricTypeGauge:
+		src.Gauge().DataPoints().MoveAndAppendTo(dst.Gauge().DataPoints())
+	case pmetric.MetricTypeSum:
+		src.Sum().DataPoints().MoveAndAppendTo(dst.Sum().DataPoints())
+	case pmetric.MetricTypeHistogram:
+		src.Histogram().DataPoints().MoveAndAppendTo(dst.Histogram().DataPoints())
+	case pmetric.MetricTypeExponentialHistogram:
+		src.ExponentialHistogram().DataPoints().MoveAndAppendTo(dst.ExponentialHistogram().DataPoints())
+	case pmetric.MetricTypeSummary:
+		src.Summary().DataPoints().MoveAndAppendTo(dst.Summary().DataPoints())
+	default:
+		newMetric := dst
+		src.MoveTo(newMetric)
+	}
 }
 
 func isBeyondRetryCap(current, base, multiplier int) bool {
