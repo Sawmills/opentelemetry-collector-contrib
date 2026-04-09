@@ -224,6 +224,8 @@ func (e *metricExporterImp) enqueueEndpointBatches(
 
 		for ep, batch := range pending {
 			// TryEnqueue is non-blocking; false,nil means queue is currently full.
+			// On enqueued=true, ownership of batch.metrics is transferred to the batcher.
+			// Do not read or mutate batch.metrics after successful enqueue.
 			enqueued, err := e.batcher.TryEnqueue(ep, batch.exp, batch.metrics)
 
 			if errors.Is(err, errMetricBatcherExporterStopping) && retryOnStopping {
