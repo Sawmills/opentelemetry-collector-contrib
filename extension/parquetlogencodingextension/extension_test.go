@@ -200,7 +200,7 @@ func TestAddLogRecordWriteFailureRefreshesBufferStateAfterRequeue(t *testing.T) 
 	assert.NotZero(t, gotEstimatedBytes)
 }
 
-func TestShutdownErrorLeavesBufferStateLoopRunning(t *testing.T) {
+func TestShutdownBufferedDataStopsBufferStateLoop(t *testing.T) {
 	ext := newTestParquetExtension(t)
 	ext.bufferStateInterval = 5 * time.Millisecond
 
@@ -218,22 +218,22 @@ func TestShutdownErrorLeavesBufferStateLoopRunning(t *testing.T) {
 	}
 
 	require.NoError(t, ext.Start(t.Context(), nil))
-	t.Cleanup(ext.stopBufferStateLoop)
 
 	err := ext.Shutdown(t.Context())
 	require.Error(t, err)
-	require.NotNil(t, ext.bufferStateTickerStop)
+	require.Nil(t, ext.bufferStateTickerStop)
+	require.Nil(t, ext.bufferStateTickerDone)
 
 	current = current.Add(7 * time.Second)
 	currentUnix.Store(current.UnixNano())
-	require.Eventually(t, func() bool {
+	assert.Never(t, func() bool {
 		select {
 		case age := <-recordAges:
 			return age >= 7
 		default:
 			return false
 		}
-	}, time.Second, 10*time.Millisecond)
+	}, 100*time.Millisecond, 10*time.Millisecond)
 }
 
 func TestFlushWriteStopFailurePreservesBufferedStateForRetry(t *testing.T) {
@@ -480,6 +480,14 @@ func TestSplitFlushFailurePreservesPendingTailForRetry(t *testing.T) {
 	ext.maxFileSizeBytes = 1
 	largeMessage := strings.Repeat("x", 4096)
 
+	var gotRecords int
+	var gotEstimatedBytes int64
+	ext.recordBufferStateFn = func(records int, estimatedBytes, oldestRecordAge int64) {
+		_ = oldestRecordAge
+		gotRecords = records
+		gotEstimatedBytes = estimatedBytes
+	}
+
 	originalWriteStop := ext.writeStopFn
 	ext.writeStopFn = func() error {
 		_ = originalWriteStop()
@@ -497,6 +505,8 @@ func TestSplitFlushFailurePreservesPendingTailForRetry(t *testing.T) {
 	assert.True(t, completedAt.IsZero())
 	assert.Len(t, ext.writer.Objs, 1)
 	assert.Len(t, ext.pendingRecords, 2)
+	assert.Equal(t, 3, gotRecords)
+	assert.NotZero(t, gotEstimatedBytes)
 
 	ext.writeStopFn = ext.defaultWriteStop
 	retriedBuf, retriedReason, _, retriedErr := ext.FlushLogsWithReasonAndMetadata(flushReasonManual)

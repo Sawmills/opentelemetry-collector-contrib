@@ -184,6 +184,8 @@ func (e *parquetLogExtension) Shutdown(context.Context) error {
 	}
 	if e.writer != nil && len(e.writer.Objs) > 0 {
 		e.mutex.Unlock()
+		e.stopBufferStateLoop()
+		e.telemetry.shutdown()
 		return errors.New("buffered parquet records remain at shutdown; flush before shutdown")
 	}
 	e.mutex.Unlock()
@@ -382,6 +384,7 @@ func (e *parquetLogExtension) addRecordsWithFlushMetadataLocked(
 					),
 				)
 			}
+			e.recordBufferStateLocked()
 			return nil, "", time.Time{}, err
 		}
 		if len(buf) == 0 {
