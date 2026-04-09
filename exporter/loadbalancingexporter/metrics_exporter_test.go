@@ -864,6 +864,50 @@ func TestEnqueueEndpointBatchesReroutesOnExporterStopping(t *testing.T) {
 	))
 }
 
+func TestEnqueueEndpointBatchesReturnsOriginalMetricsOnPartialRegroupError(t *testing.T) {
+	t.Parallel()
+
+	ring := newHashRing([]string{"endpoint-1", "endpoint-2"})
+	okRoute := findRoutingIDForEndpoint(t, ring, "endpoint-1")
+	missingRoute := findRoutingIDForEndpoint(t, ring, "endpoint-2")
+
+	stoppingExporter := newWrappedExporter(newNopMockMetricsExporter(), "stopped:4317")
+	stoppingExporter.markStopping()
+
+	p := &metricExporterImp{
+		routingKey: metricNameRouting,
+		loadBalancer: &loadBalancer{
+			ring: ring,
+			exporters: map[string]*wrappedExporter{
+				"endpoint-1:4317": newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317"),
+			},
+		},
+		batcher: &metricBatcher{backends: map[string]*backendMetricBatcher{}},
+	}
+
+	input := twoMetricRoutingInput(okRoute, missingRoute)
+	expected := pmetric.NewMetrics()
+	input.CopyTo(expected)
+
+	err := p.enqueueEndpointBatches(t.Context(), map[string]*endpointMetricsBatch{
+		"stopped:4317": {
+			metrics: input,
+			exp:     stoppingExporter,
+		},
+	}, true)
+	require.Error(t, err)
+
+	var mErr consumererror.Metrics
+	require.ErrorAs(t, err, &mErr)
+	require.NoError(t, pmetrictest.CompareMetrics(
+		expected, mErr.Data(),
+		pmetrictest.IgnoreResourceMetricsOrder(),
+		pmetrictest.IgnoreScopeMetricsOrder(),
+		pmetrictest.IgnoreMetricsOrder(),
+		pmetrictest.IgnoreMetricDataPointsOrder(),
+	))
+}
+
 func TestRerouteDrainBatchReturnsFailedSubsetOnPartialSuccess(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 
