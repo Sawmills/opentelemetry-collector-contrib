@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -30,6 +31,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"gopkg.in/yaml.v3"
 
+	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/exp/metrics"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/pmetrictest"
 )
@@ -304,6 +306,252 @@ func TestSplitMetrics(t *testing.T) {
 			compareMetricsMaps(t, expectedOutput, output)
 		})
 	}
+}
+
+func TestSplitMetricsByMetricNameMergesByResourceScopeAndName(t *testing.T) {
+	t.Parallel()
+
+	md1 := metricWithResourceScopeGauge("host-a", "scope-a", "m1", 1)
+	md2 := metricWithResourceScopeGauge("host-a", "scope-a", "m1", 2)
+	combined := pmetric.NewMetrics()
+	md1.CopyTo(combined)
+	mergeMetricChunksByMove(combined, md2)
+
+	output := splitMetricsByMetricName(combined)
+	require.Len(t, output, 1)
+
+	split := output["m1"]
+	require.Equal(t, 1, split.ResourceMetrics().Len())
+	rm := split.ResourceMetrics().At(0)
+	require.Equal(t, 1, rm.ScopeMetrics().Len())
+	sm := rm.ScopeMetrics().At(0)
+	require.Equal(t, 1, sm.Metrics().Len())
+	require.Equal(t, 2, sm.Metrics().At(0).Gauge().DataPoints().Len())
+}
+
+func TestSplitMetricsByMetricNameKeepsDistinctScopesSeparate(t *testing.T) {
+	t.Parallel()
+
+	md1 := metricWithResourceScopeGauge("host-a", "scope-a", "m1", 1)
+	md2 := metricWithResourceScopeGauge("host-a", "scope-b", "m1", 2)
+	combined := pmetric.NewMetrics()
+	md1.CopyTo(combined)
+	mergeMetricChunksByMove(combined, md2)
+
+	output := splitMetricsByMetricName(combined)
+	require.Len(t, output, 1)
+
+	split := output["m1"]
+	require.Equal(t, 1, split.ResourceMetrics().Len())
+	require.Equal(t, 2, split.ResourceMetrics().At(0).ScopeMetrics().Len())
+}
+
+func TestSplitMetricsByMetricNameMatchesOldImplementation(t *testing.T) {
+	t.Parallel()
+
+	base := multiTypeMetricNameFixture()
+	oldInput := pmetric.NewMetrics()
+	newInput := pmetric.NewMetrics()
+	base.CopyTo(oldInput)
+	base.CopyTo(newInput)
+
+	expected := splitMetricsByMetricNameOld(oldInput)
+	actual := splitMetricsByMetricName(newInput)
+
+	compareMetricsMaps(t, expected, actual)
+}
+
+func TestGroupRoutedMetricsByEndpointMergesRoutedMetricsForSameEndpoint(t *testing.T) {
+	t.Parallel()
+
+	p := &metricExporterImp{
+		loadBalancer: &loadBalancer{
+			ring: newHashRing([]string{"endpoint-1"}),
+			exporters: map[string]*wrappedExporter{
+				"endpoint-1:4317": newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317"),
+			},
+		},
+	}
+
+	batches := map[string]pmetric.Metrics{
+		"route-a": singleDataPointMetric("m1"),
+		"route-b": singleDataPointMetric("m2"),
+	}
+	grouped, err := p.groupRoutedMetricsByEndpoint(batches)
+	require.NoError(t, err)
+	require.Len(t, grouped, 1)
+
+	batch := grouped["endpoint-1:4317"]
+	require.NotNil(t, batch)
+	require.Equal(t, 2, batch.metrics.DataPointCount())
+	nameSplit := splitMetricsByMetricNameOld(batch.metrics)
+	require.Len(t, nameSplit, 2)
+	_, hasM1 := nameSplit["m1"]
+	_, hasM2 := nameSplit["m2"]
+	require.True(t, hasM1)
+	require.True(t, hasM2)
+}
+
+func TestGroupRoutedMetricsByEndpointReturnsPartialBatchesOnLookupError(t *testing.T) {
+	t.Parallel()
+
+	ring := newHashRing([]string{"endpoint-1", "endpoint-2"})
+	okRoute := findRoutingIDForEndpoint(t, ring, "endpoint-1")
+	missingRoute := findRoutingIDForEndpoint(t, ring, "endpoint-2")
+
+	p := &metricExporterImp{
+		loadBalancer: &loadBalancer{
+			ring: ring,
+			exporters: map[string]*wrappedExporter{
+				"endpoint-1:4317": newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317"),
+			},
+		},
+	}
+
+	batches := map[string]pmetric.Metrics{
+		okRoute:      singleDataPointMetric(okRoute),
+		missingRoute: singleDataPointMetric(missingRoute),
+	}
+	expectedFailed := pmetric.NewMetrics()
+	for _, md := range batches {
+		metrics.Merge(expectedFailed, md)
+	}
+
+	grouped, err := p.groupRoutedMetricsByEndpoint(batches)
+	require.Error(t, err)
+
+	failed := pmetric.NewMetrics()
+	for _, batch := range grouped {
+		metrics.Merge(failed, batch.metrics)
+	}
+	for _, md := range batches {
+		metrics.Merge(failed, md)
+	}
+	require.NoError(t, pmetrictest.CompareMetrics(
+		expectedFailed, failed,
+		pmetrictest.IgnoreResourceMetricsOrder(),
+		pmetrictest.IgnoreScopeMetricsOrder(),
+		pmetrictest.IgnoreMetricsOrder(),
+		pmetrictest.IgnoreMetricDataPointsOrder(),
+	))
+}
+
+func TestGroupRoutedMetricsByEndpointMatchesOldImplementation(t *testing.T) {
+	t.Parallel()
+
+	imp := &metricExporterImp{
+		loadBalancer: &loadBalancer{
+			ring: newHashRing([]string{"endpoint-1"}),
+			exporters: map[string]*wrappedExporter{
+				"endpoint-1:4317": newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317"),
+			},
+		},
+	}
+	base := map[string]pmetric.Metrics{
+		"route-a": metricWithResourceScopeGauge("host-a", "scope-a", "cpu", 1),
+		"route-b": metricWithResourceScopeGauge("host-a", "scope-a", "cpu", 2),
+		"route-c": metricWithResourceScopeGauge("host-b", "scope-b", "memory", 3),
+	}
+
+	expected, err := imp.groupRoutedMetricsByEndpointOld(cloneMetricsMap(base))
+	require.NoError(t, err)
+
+	actual, err := imp.groupRoutedMetricsByEndpoint(cloneMetricsMap(base))
+	require.NoError(t, err)
+
+	require.Len(t, actual, len(expected))
+	for endpoint, expectedBatch := range expected {
+		actualBatch, ok := actual[endpoint]
+		require.True(t, ok)
+		require.Same(t, expectedBatch.exp, actualBatch.exp)
+		require.Equal(t, gaugeDataPointValuesByMetricName(expectedBatch.metrics), gaugeDataPointValuesByMetricName(actualBatch.metrics))
+	}
+}
+
+func TestRerouteDrainBatchReturnsAllMetricsOnLookupErrorAfterMoveSplit(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+
+	lb := &loadBalancer{ring: newHashRing([]string{"endpoint-1", "endpoint-2"})}
+	okRoute := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1")
+	missingRoute := findRoutingIDForEndpoint(t, lb.ring, "endpoint-2")
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317"),
+	}
+
+	p := &metricExporterImp{
+		routingKey:   metricNameRouting,
+		loadBalancer: lb,
+		telemetry:    tb,
+		logger:       ts.Logger,
+	}
+
+	input := twoMetricRoutingInput(okRoute, missingRoute)
+	expectedFailed := pmetric.NewMetrics()
+	input.CopyTo(expectedFailed)
+
+	err := p.rerouteDrainBatch(t.Context(), input, metricFlushReasonResolverChange)
+	require.Error(t, err)
+
+	var mErr consumererror.Metrics
+	require.ErrorAs(t, err, &mErr)
+	require.NoError(t, pmetrictest.CompareMetrics(
+		expectedFailed, mErr.Data(),
+		pmetrictest.IgnoreResourceMetricsOrder(),
+		pmetrictest.IgnoreScopeMetricsOrder(),
+		pmetrictest.IgnoreMetricsOrder(),
+		pmetrictest.IgnoreMetricDataPointsOrder(),
+	))
+}
+
+func TestRerouteDrainBatchReturnsAllMetricsWhenExporterStoppingAfterMoveSplit(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+
+	endpointA := "endpoint-a:4317"
+	endpointB := "endpoint-b:4317"
+	lb := &loadBalancer{ring: newHashRing([]string{endpointA, endpointB})}
+
+	routingA := findRoutingIDForEndpoint(t, lb.ring, endpointA)
+	routingB := findRoutingIDForEndpoint(t, lb.ring, endpointB)
+
+	openEndpoint, openRouting := endpointA, routingA
+	stoppingEndpoint, stoppingRouting := endpointB, routingB
+	if routingA > routingB {
+		openEndpoint, openRouting = endpointB, routingB
+		stoppingEndpoint, stoppingRouting = endpointA, routingA
+	}
+
+	openExporter := newWrappedExporter(newNopMockMetricsExporter(), openEndpoint)
+	stoppingExporter := newWrappedExporter(newNopMockMetricsExporter(), stoppingEndpoint)
+	stoppingExporter.markStopping()
+
+	lb.exporters = map[string]*wrappedExporter{
+		openEndpoint:     openExporter,
+		stoppingEndpoint: stoppingExporter,
+	}
+
+	p := &metricExporterImp{
+		routingKey:   metricNameRouting,
+		loadBalancer: lb,
+		telemetry:    tb,
+		logger:       ts.Logger,
+	}
+
+	input := twoMetricRoutingInput(openRouting, stoppingRouting)
+	expectedFailed := pmetric.NewMetrics()
+	input.CopyTo(expectedFailed)
+
+	err := p.rerouteDrainBatch(t.Context(), input, metricFlushReasonResolverChange)
+	require.Error(t, err)
+
+	var mErr consumererror.Metrics
+	require.ErrorAs(t, err, &mErr)
+	require.NoError(t, pmetrictest.CompareMetrics(
+		expectedFailed, mErr.Data(),
+		pmetrictest.IgnoreResourceMetricsOrder(),
+		pmetrictest.IgnoreScopeMetricsOrder(),
+		pmetrictest.IgnoreMetricsOrder(),
+		pmetrictest.IgnoreMetricDataPointsOrder(),
+	))
 }
 
 func TestConsumeMetrics_SingleEndpoint(t *testing.T) {
@@ -675,6 +923,115 @@ func TestRerouteDrainBatchReturnsFailedSubsetOnPartialSuccess(t *testing.T) {
 		pmetrictest.IgnoreMetricsOrder(),
 		pmetrictest.IgnoreMetricDataPointsOrder(),
 	))
+}
+
+func twoMetricRoutingInput(firstName, secondName string) pmetric.Metrics {
+	input := pmetric.NewMetrics()
+	rm := input.ResourceMetrics().AppendEmpty()
+	sm := rm.ScopeMetrics().AppendEmpty()
+	m1 := sm.Metrics().AppendEmpty()
+	m1.SetName(firstName)
+	m1.SetEmptyGauge().DataPoints().AppendEmpty().SetIntValue(1)
+	m2 := sm.Metrics().AppendEmpty()
+	m2.SetName(secondName)
+	m2.SetEmptyGauge().DataPoints().AppendEmpty().SetIntValue(2)
+	return input
+}
+
+func multiTypeMetricNameFixture() pmetric.Metrics {
+	md := pmetric.NewMetrics()
+
+	rmA := md.ResourceMetrics().AppendEmpty()
+	rmA.Resource().Attributes().PutStr("host.name", "host-a")
+	smA1 := rmA.ScopeMetrics().AppendEmpty()
+	smA1.Scope().SetName("scope-a")
+
+	gaugeA1 := smA1.Metrics().AppendEmpty()
+	gaugeA1.SetName("cpu")
+	gaugeA1.SetDescription("cpu gauge")
+	gaugeA1.SetUnit("1")
+	gaugeA1.SetEmptyGauge().DataPoints().AppendEmpty().SetIntValue(1)
+
+	gaugeA2 := smA1.Metrics().AppendEmpty()
+	gaugeA2.SetName("cpu")
+	gaugeA2.SetDescription("cpu gauge")
+	gaugeA2.SetUnit("1")
+	gaugeA2.SetEmptyGauge().DataPoints().AppendEmpty().SetIntValue(2)
+
+	sumA := smA1.Metrics().AppendEmpty()
+	sumA.SetName("requests")
+	sumA.SetUnit("1")
+	sumA.SetDescription("request count")
+	sumData := sumA.SetEmptySum()
+	sumData.SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
+	sumData.SetIsMonotonic(true)
+	sumData.DataPoints().AppendEmpty().SetIntValue(3)
+
+	histA := smA1.Metrics().AppendEmpty()
+	histA.SetName("latency")
+	histA.SetUnit("ms")
+	histA.SetDescription("latency histogram")
+	histData := histA.SetEmptyHistogram()
+	histData.SetAggregationTemporality(pmetric.AggregationTemporalityDelta)
+	histDP := histData.DataPoints().AppendEmpty()
+	histDP.SetCount(2)
+	histDP.SetSum(9)
+	histDP.BucketCounts().FromRaw([]uint64{1, 1})
+	histDP.ExplicitBounds().FromRaw([]float64{5})
+
+	smA2 := rmA.ScopeMetrics().AppendEmpty()
+	smA2.Scope().SetName("scope-b")
+
+	expHist := smA2.Metrics().AppendEmpty()
+	expHist.SetName("exp-latency")
+	expHist.SetUnit("ms")
+	expHist.SetDescription("exp histogram")
+	expHistData := expHist.SetEmptyExponentialHistogram()
+	expHistData.SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
+	expHistDP := expHistData.DataPoints().AppendEmpty()
+	expHistDP.SetCount(1)
+	expHistDP.SetSum(4)
+	expHistDP.Positive().SetOffset(0)
+	expHistDP.Positive().BucketCounts().FromRaw([]uint64{1})
+
+	rmB := md.ResourceMetrics().AppendEmpty()
+	rmB.Resource().Attributes().PutStr("host.name", "host-b")
+	smB := rmB.ScopeMetrics().AppendEmpty()
+	smB.Scope().SetName("scope-a")
+
+	summary := smB.Metrics().AppendEmpty()
+	summary.SetName("summary")
+	summary.SetUnit("1")
+	summary.SetDescription("summary metric")
+	summaryDP := summary.SetEmptySummary().DataPoints().AppendEmpty()
+	summaryDP.SetCount(1)
+	summaryDP.SetSum(7)
+	summaryDP.QuantileValues().AppendEmpty().SetQuantile(0.5)
+	summaryDP.QuantileValues().At(0).SetValue(7)
+
+	return md
+}
+
+func gaugeDataPointValuesByMetricName(md pmetric.Metrics) map[string][]int64 {
+	valuesByMetric := make(map[string][]int64)
+	for i := 0; i < md.ResourceMetrics().Len(); i++ {
+		rm := md.ResourceMetrics().At(i)
+		for j := 0; j < rm.ScopeMetrics().Len(); j++ {
+			sm := rm.ScopeMetrics().At(j)
+			for k := 0; k < sm.Metrics().Len(); k++ {
+				metric := sm.Metrics().At(k)
+				values := valuesByMetric[metric.Name()]
+				for l := 0; l < metric.Gauge().DataPoints().Len(); l++ {
+					values = append(values, metric.Gauge().DataPoints().At(l).IntValue())
+				}
+				valuesByMetric[metric.Name()] = values
+			}
+		}
+	}
+	for name := range valuesByMetric {
+		slices.Sort(valuesByMetric[name])
+	}
+	return valuesByMetric
 }
 
 func TestRerouteDrainBatchReleasesStartedConsumesOnEarlyReturn(t *testing.T) {

@@ -189,7 +189,7 @@ func (e *metricExporterImp) groupRoutedMetricsByEndpoint(
 	for routingID, mds := range batches {
 		exp, endpoint, err := e.loadBalancer.exporterAndEndpoint([]byte(routingID))
 		if err != nil {
-			return nil, err
+			return endpointBatches, err
 		}
 
 		ep := endpointWithPort(endpoint)
@@ -199,7 +199,7 @@ func (e *metricExporterImp) groupRoutedMetricsByEndpoint(
 			endpointBatches[ep] = batch
 		}
 		batch.exp = exp
-		metrics.Merge(batch.metrics, mds)
+		mergeMetricChunksByMove(batch.metrics, mds)
 	}
 
 	return endpointBatches, nil
@@ -238,7 +238,12 @@ func (e *metricExporterImp) enqueueEndpointBatches(
 					reroutedBatches, groupErr := e.groupRoutedMetricsByEndpoint(rerouted)
 					errs = multierr.Append(errs, groupErr)
 					if groupErr != nil {
-						metrics.Merge(failed, batch.metrics)
+						for _, batch := range reroutedBatches {
+							metrics.Merge(failed, batch.metrics)
+						}
+						for _, mds := range rerouted {
+							metrics.Merge(failed, mds)
+						}
 					} else {
 						rerouteErr = e.enqueueEndpointBatches(ctx, reroutedBatches, false)
 						if rerouteErr != nil {
@@ -402,13 +407,13 @@ func (e *metricExporterImp) rerouteDrainBatch(ctx context.Context, md pmetric.Me
 		mds := batches[routingID]
 		exp, _, lookupErr := e.loadBalancer.exporterAndEndpoint([]byte(routingID))
 		if lookupErr != nil {
-			return consumererror.NewMetrics(lookupErr, md)
+			return consumererror.NewMetrics(lookupErr, mergeMetricsMapValues(batches))
 		}
 
 		expMetrics, ok := metricsByExporter[exp]
 		if !ok {
 			if !exp.tryStartConsume() {
-				return consumererror.NewMetrics(errExporterIsStopping, md)
+				return consumererror.NewMetrics(errExporterIsStopping, mergeMetricsMapValues(batches))
 			}
 			expMetrics = pmetric.NewMetrics()
 			metricsByExporter[exp] = expMetrics
@@ -504,6 +509,8 @@ func splitMetricsByResourceID(md pmetric.Metrics) map[string]pmetric.Metrics {
 	return results
 }
 
+// splitMetricsByMetricName moves metric payloads out of md into per-name results.
+// Callers must treat md as consumed after this returns.
 func splitMetricsByMetricName(md pmetric.Metrics) map[string]pmetric.Metrics {
 	results := map[string]pmetric.Metrics{}
 
@@ -515,14 +522,14 @@ func splitMetricsByMetricName(md pmetric.Metrics) map[string]pmetric.Metrics {
 
 			for k := 0; k < sm.Metrics().Len(); k++ {
 				m := sm.Metrics().At(k)
+				key := m.Name()
 
 				newMD, mClone := cloneMetricWithoutType(rm, sm, m)
-				m.CopyTo(mClone)
+				m.MoveTo(mClone)
 
-				key := m.Name()
 				existing, ok := results[key]
 				if ok {
-					metrics.Merge(existing, newMD)
+					mergeMetricChunksByMove(existing, newMD)
 				} else {
 					results[key] = newMD
 				}
@@ -678,4 +685,12 @@ func cloneMetricWithoutType(rm pmetric.ResourceMetrics, sm pmetric.ScopeMetrics,
 	mClone.SetUnit(m.Unit())
 
 	return md, mClone
+}
+
+func mergeMetricsMapValues(batches map[string]pmetric.Metrics) pmetric.Metrics {
+	merged := pmetric.NewMetrics()
+	for _, md := range batches {
+		metrics.Merge(merged, md)
+	}
+	return merged
 }
