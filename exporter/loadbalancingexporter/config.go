@@ -57,6 +57,29 @@ type Config struct {
 	RoutingAttributes []string `mapstructure:"routing_attributes"`
 }
 
+func (cfg *Config) Unmarshal(conf *confmap.Conf) error {
+	type rawConfig Config
+	if err := conf.Unmarshal((*rawConfig)(cfg)); err != nil {
+		return err
+	}
+
+	protocolRaw, ok := conf.ToStringMap()["protocol"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	otlpRaw, ok := protocolRaw["otlp"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	if rawQueue, ok := otlpRaw["sending_queue"]; ok && rawQueue == nil {
+		cfg.Protocol.OTLP.QueueConfig = configoptional.None[exporterhelper.QueueBatchConfig]()
+	}
+
+	return nil
+}
+
 type QueueSettings struct {
 	QueueConfig        configoptional.Optional[exporterhelper.QueueBatchConfig] `mapstructure:",squash"`
 	PayloadCompression QueuePayloadCompression                                  `mapstructure:"payload_compression"`
