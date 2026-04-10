@@ -212,10 +212,10 @@ func newExporterTelemetry(settings component.TelemetrySettings, logger *zap.Logg
 	tel := &exporterTelemetry{}
 	tel.flushStart = mustCounter(meter, flushStartMetricName, logger)
 	tel.flushComplete = mustCounter(meter, flushCompleteMetricName, logger)
-	tel.uploadAttempt = mustCounter(meter, uploadAttemptMetricName, logger)
+	tel.uploadAttempt = mustCounter(meter, uploadAttemptMetricName, logger, metric.WithUnit("1"))
 	tel.uploadStart = mustCounter(meter, uploadStartMetricName, logger)
 	tel.uploadComplete = mustCounter(meter, uploadCompleteMetricName, logger)
-	tel.uploadFailed = mustCounter(meter, uploadFailedMetricName, logger)
+	tel.uploadFailed = mustCounter(meter, uploadFailedMetricName, logger, metric.WithUnit("1"))
 	tel.uploadBytes = mustCounter(meter, uploadBytesMetricName, logger, metric.WithUnit("By"))
 	tel.flushDuration = mustHistogram(meter, flushDurationMetricName, logger, metric.WithUnit("ms"))
 	tel.uploadDuration = mustHistogram(meter, uploadDurationMetricName, logger, metric.WithUnit("ms"))
