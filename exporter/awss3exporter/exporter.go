@@ -217,10 +217,10 @@ func newExporterTelemetry(settings component.TelemetrySettings, logger *zap.Logg
 	tel.uploadComplete = mustCounter(meter, uploadCompleteMetricName, logger)
 	tel.uploadFailed = mustCounter(meter, uploadFailedMetricName, logger)
 	tel.uploadBytes = mustCounter(meter, uploadBytesMetricName, logger, metric.WithUnit("By"))
-	tel.flushDuration = mustHistogram(meter, flushDurationMetricName, logger)
-	tel.uploadDuration = mustHistogram(meter, uploadDurationMetricName, logger)
+	tel.flushDuration = mustHistogram(meter, flushDurationMetricName, logger, metric.WithUnit("ms"))
+	tel.uploadDuration = mustHistogram(meter, uploadDurationMetricName, logger, metric.WithUnit("ms"))
 	tel.uploadObjectSize = mustHistogram(meter, uploadObjectSizeMetricName, logger, metric.WithUnit("By"))
-	tel.flushToUploadDuration = mustHistogram(meter, flushToUploadDurationMetricName, logger)
+	tel.flushToUploadDuration = mustHistogram(meter, flushToUploadDurationMetricName, logger, metric.WithUnit("ms"))
 	tel.lastSuccessfulUpload = mustGauge(
 		meter,
 		lastSuccessfulUploadMetricName,
@@ -249,7 +249,6 @@ func mustHistogram(
 	logger *zap.Logger,
 	opts ...metric.Int64HistogramOption,
 ) metric.Int64Histogram {
-	opts = append([]metric.Int64HistogramOption{metric.WithUnit("ms")}, opts...)
 	histogram, err := meter.Int64Histogram(name, opts...)
 	if err != nil && logger != nil {
 		logger.Warn("failed to create awss3 exporter histogram", zap.String("name", name), zap.Error(err))
