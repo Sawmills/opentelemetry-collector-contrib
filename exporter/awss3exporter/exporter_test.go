@@ -175,7 +175,9 @@ func TestExporterRecordsEquivalentFlushAndUploadTelemetry(t *testing.T) {
 	uploader := &uploaderStub{delay: uploadDelay}
 	exporter.uploader = uploader
 
+	beforeConsume := time.Now()
 	require.NoError(t, exporter.ConsumeLogs(t.Context(), getTestLogs(t)))
+	afterConsume := time.Now()
 	require.Equal(t, 1, uploader.uploadCalls)
 
 	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_flush_start_total")
@@ -226,7 +228,8 @@ func TestExporterRecordsEquivalentFlushAndUploadTelemetry(t *testing.T) {
 	assert.Equal(t, int64(len([]byte("payload"))), uploadObjectSizePoint.Sum)
 	assert.GreaterOrEqual(t, flushToUploadPoint.Sum, handoffGap.Milliseconds())
 	assert.Less(t, flushToUploadPoint.Sum, uploadDurationPoint.Sum)
-	assert.Greater(t, lastSuccessfulUploadPoint.Value, int64(0))
+	assert.GreaterOrEqual(t, lastSuccessfulUploadPoint.Value, beforeConsume.Unix())
+	assert.LessOrEqual(t, lastSuccessfulUploadPoint.Value, afterConsume.Unix())
 }
 
 func TestExporterRecordsUploadFailureMetric(t *testing.T) {

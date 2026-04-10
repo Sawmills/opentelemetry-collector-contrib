@@ -59,7 +59,7 @@ func TestProviders(t *testing.T) {
 	if m, ok := tracer.(mockTracer); ok {
 		require.Equal(t, "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awss3exporter", m.name)
 	} else {
-		require.Fail(t, "returned Tracer not mockTracer")
+		require.Fail(t, "returned Meter not mockTracer")
 	}
 }
 
