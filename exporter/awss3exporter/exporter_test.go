@@ -258,6 +258,10 @@ func TestExporterRecordsUploadFailureMetric(t *testing.T) {
 	assertMetricAttribute(t, uploadFailedPoint.Attributes, "reason", "manual")
 	assertMetricAttribute(t, uploadFailedPoint.Attributes, "signal", "logs")
 	assertMetricAttribute(t, uploadFailedPoint.Attributes, "outcome", "failure")
+
+	assertMetricAbsentOrNoData(t, tel, "otelcol_exporter_awss3_upload_bytes")
+	assertMetricAbsentOrNoData(t, tel, "otelcol_exporter_awss3_upload_object_size")
+	assertMetricAbsentOrNoData(t, tel, "otelcol_exporter_awss3_last_successful_upload_timestamp")
 }
 
 func assertMetricDataPointCount(t *testing.T, tel *componenttest.Telemetry, name string) {
@@ -316,6 +320,26 @@ func requireGaugePoint(
 	require.True(t, ok, "metric %s is not a gauge", name)
 	require.Len(t, gauge.DataPoints, 1)
 	return gauge.DataPoints[0]
+}
+
+func assertMetricAbsentOrNoData(t *testing.T, tel *componenttest.Telemetry, name string) {
+	t.Helper()
+
+	metric, err := tel.GetMetric(name)
+	if err != nil {
+		return
+	}
+
+	switch data := metric.Data.(type) {
+	case metricdata.Sum[int64]:
+		require.Len(t, data.DataPoints, 0, "metric %s should not emit points", name)
+	case metricdata.Histogram[int64]:
+		require.Len(t, data.DataPoints, 0, "metric %s should not emit points", name)
+	case metricdata.Gauge[int64]:
+		require.Len(t, data.DataPoints, 0, "metric %s should not emit points", name)
+	default:
+		t.Fatalf("unexpected metric type %T for %s", metric.Data, name)
+	}
 }
 
 func assertMetricAttribute(t *testing.T, attrs attribute.Set, key, want string) {
