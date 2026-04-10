@@ -9,6 +9,47 @@ status:
   codeowners:
     active: [atoulme, pdelewski, Erog38]
 
+telemetry:
+  metrics:
+    awss3_upload_attempt_total:
+      enabled: true
+      description: Number of started S3 upload attempts that reached the uploader
+      stability: alpha
+      unit: "1"
+      sum:
+        value_type: int
+        monotonic: true
+    awss3_upload_failed_total:
+      enabled: true
+      description: Number of started S3 upload attempts that failed
+      stability: alpha
+      unit: "1"
+      sum:
+        value_type: int
+        monotonic: true
+    awss3_upload_bytes:
+      enabled: true
+      description: Final bytes uploaded to S3 after any exporter-level compression
+      stability: alpha
+      unit: By
+      sum:
+        value_type: int
+        monotonic: true
+    awss3_upload_object_size:
+      enabled: true
+      description: Final size in bytes of each successfully uploaded S3 object
+      stability: alpha
+      unit: By
+      histogram:
+        value_type: int
+    awss3_last_successful_upload_timestamp:
+      enabled: true
+      description: Unix timestamp in seconds of the last successful S3 upload
+      stability: alpha
+      unit: s
+      gauge:
+        value_type: int
+
 tests:
   expect_consumer_error: true
   goleak:

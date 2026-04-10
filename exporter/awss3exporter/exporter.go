@@ -36,21 +36,31 @@ type marshalerWithFlushMetadata interface {
 type exporterTelemetry struct {
 	flushStart            metric.Int64Counter
 	flushComplete         metric.Int64Counter
+	uploadAttempt         metric.Int64Counter
 	uploadStart           metric.Int64Counter
 	uploadComplete        metric.Int64Counter
+	uploadFailed          metric.Int64Counter
+	uploadBytes           metric.Int64Counter
 	flushDuration         metric.Int64Histogram
 	uploadDuration        metric.Int64Histogram
+	uploadObjectSize      metric.Int64Histogram
 	flushToUploadDuration metric.Int64Histogram
+	lastSuccessfulUpload  metric.Int64Gauge
 }
 
 const (
 	flushStartMetricName            = "otelcol_exporter_awss3_flush_start_total"
 	flushCompleteMetricName         = "otelcol_exporter_awss3_flush_complete_total"
+	uploadAttemptMetricName         = "otelcol_exporter_awss3_upload_attempt_total"
 	uploadStartMetricName           = "otelcol_exporter_awss3_upload_start_total"
 	uploadCompleteMetricName        = "otelcol_exporter_awss3_upload_complete_total"
+	uploadFailedMetricName          = "otelcol_exporter_awss3_upload_failed_total"
+	uploadBytesMetricName           = "otelcol_exporter_awss3_upload_bytes"
 	flushDurationMetricName         = "otelcol_exporter_awss3_flush_duration"
 	uploadDurationMetricName        = "otelcol_exporter_awss3_upload_duration"
+	uploadObjectSizeMetricName      = "otelcol_exporter_awss3_upload_object_size"
 	flushToUploadDurationMetricName = "otelcol_exporter_awss3_flush_to_upload_duration"
+	lastSuccessfulUploadMetricName  = "otelcol_exporter_awss3_last_successful_upload_timestamp"
 )
 
 type s3Exporter struct {
@@ -185,6 +195,7 @@ func (e *s3Exporter) uploadBuffer(
 		e.signalType,
 		uploadStartedAt,
 		time.Since(uploadStartedAt),
+		int64(len(buf)),
 		flushMeta,
 		err,
 	)
@@ -201,28 +212,62 @@ func newExporterTelemetry(settings component.TelemetrySettings, logger *zap.Logg
 	tel := &exporterTelemetry{}
 	tel.flushStart = mustCounter(meter, flushStartMetricName, logger)
 	tel.flushComplete = mustCounter(meter, flushCompleteMetricName, logger)
+	tel.uploadAttempt = mustCounter(meter, uploadAttemptMetricName, logger)
 	tel.uploadStart = mustCounter(meter, uploadStartMetricName, logger)
 	tel.uploadComplete = mustCounter(meter, uploadCompleteMetricName, logger)
+	tel.uploadFailed = mustCounter(meter, uploadFailedMetricName, logger)
+	tel.uploadBytes = mustCounter(meter, uploadBytesMetricName, logger, metric.WithUnit("By"))
 	tel.flushDuration = mustHistogram(meter, flushDurationMetricName, logger)
 	tel.uploadDuration = mustHistogram(meter, uploadDurationMetricName, logger)
+	tel.uploadObjectSize = mustHistogram(meter, uploadObjectSizeMetricName, logger, metric.WithUnit("By"))
 	tel.flushToUploadDuration = mustHistogram(meter, flushToUploadDurationMetricName, logger)
+	tel.lastSuccessfulUpload = mustGauge(
+		meter,
+		lastSuccessfulUploadMetricName,
+		logger,
+		metric.WithUnit("s"),
+	)
 	return tel
 }
 
-func mustCounter(meter metric.Meter, name string, logger *zap.Logger) metric.Int64Counter {
-	counter, err := meter.Int64Counter(name)
+func mustCounter(
+	meter metric.Meter,
+	name string,
+	logger *zap.Logger,
+	opts ...metric.Int64CounterOption,
+) metric.Int64Counter {
+	counter, err := meter.Int64Counter(name, opts...)
 	if err != nil && logger != nil {
 		logger.Warn("failed to create awss3 exporter counter", zap.String("name", name), zap.Error(err))
 	}
 	return counter
 }
 
-func mustHistogram(meter metric.Meter, name string, logger *zap.Logger) metric.Int64Histogram {
-	histogram, err := meter.Int64Histogram(name, metric.WithUnit("ms"))
+func mustHistogram(
+	meter metric.Meter,
+	name string,
+	logger *zap.Logger,
+	opts ...metric.Int64HistogramOption,
+) metric.Int64Histogram {
+	opts = append([]metric.Int64HistogramOption{metric.WithUnit("ms")}, opts...)
+	histogram, err := meter.Int64Histogram(name, opts...)
 	if err != nil && logger != nil {
 		logger.Warn("failed to create awss3 exporter histogram", zap.String("name", name), zap.Error(err))
 	}
 	return histogram
+}
+
+func mustGauge(
+	meter metric.Meter,
+	name string,
+	logger *zap.Logger,
+	opts ...metric.Int64GaugeOption,
+) metric.Int64Gauge {
+	gauge, err := meter.Int64Gauge(name, opts...)
+	if err != nil && logger != nil {
+		logger.Warn("failed to create awss3 exporter gauge", zap.String("name", name), zap.Error(err))
+	}
+	return gauge
 }
 
 func (t *exporterTelemetry) recordFlushStart(ctx context.Context, signalType string) {
@@ -253,10 +298,16 @@ func (t *exporterTelemetry) recordFlushComplete(
 }
 
 func (t *exporterTelemetry) recordUploadStart(ctx context.Context, signalType string) {
-	if t == nil || t.uploadStart == nil {
+	if t == nil {
 		return
 	}
-	t.uploadStart.Add(ctx, 1, metric.WithAttributes(attribute.String("signal", signalType)))
+	attrs := metric.WithAttributes(attribute.String("signal", signalType))
+	if t.uploadAttempt != nil {
+		t.uploadAttempt.Add(ctx, 1, attrs)
+	}
+	if t.uploadStart != nil {
+		t.uploadStart.Add(ctx, 1, attrs)
+	}
 }
 
 func (t *exporterTelemetry) recordUploadComplete(
@@ -264,6 +315,7 @@ func (t *exporterTelemetry) recordUploadComplete(
 	signalType string,
 	uploadStartedAt time.Time,
 	duration time.Duration,
+	uploadedBytes int64,
 	flushMeta flushMetadata,
 	err error,
 ) {
@@ -275,8 +327,30 @@ func (t *exporterTelemetry) recordUploadComplete(
 	if t.uploadComplete != nil {
 		t.uploadComplete.Add(ctx, 1, metric.WithAttributes(attrs...))
 	}
+	if err != nil && t.uploadFailed != nil {
+		t.uploadFailed.Add(ctx, 1, metric.WithAttributes(attrs...))
+	}
 	if t.uploadDuration != nil {
 		t.uploadDuration.Record(ctx, durationMillis(duration), metric.WithAttributes(attrs...))
+	}
+	if err == nil {
+		if t.uploadBytes != nil {
+			t.uploadBytes.Add(ctx, uploadedBytes, metric.WithAttributes(attrs...))
+		}
+		if t.uploadObjectSize != nil {
+			t.uploadObjectSize.Record(
+				ctx,
+				uploadedBytes,
+				metric.WithAttributes(attrs...),
+			)
+		}
+		if t.lastSuccessfulUpload != nil {
+			t.lastSuccessfulUpload.Record(
+				ctx,
+				uploadStartedAt.Add(duration).Unix(),
+				metric.WithAttributes(attrs...),
+			)
+		}
 	}
 	if t.flushToUploadDuration != nil && !flushMeta.flushCompletedAt.IsZero() {
 		t.flushToUploadDuration.Record(
