@@ -23,14 +23,14 @@ func Tracer(settings component.TelemetrySettings) trace.Tracer {
 // TelemetryBuilder provides an interface for components to report telemetry
 // as defined in metadata and user config.
 type TelemetryBuilder struct {
-	meter                              metric.Meter
-	mu                                 sync.Mutex
-	registrations                      []metric.Registration
-	Awss3LastSuccessfulUploadTimestamp metric.Int64Gauge
-	Awss3UploadAttemptTotal            metric.Int64Counter
-	Awss3UploadBytes                   metric.Int64Counter
-	Awss3UploadFailedTotal             metric.Int64Counter
-	Awss3UploadObjectSize              metric.Int64Histogram
+	meter                                      metric.Meter
+	mu                                         sync.Mutex
+	registrations                              []metric.Registration
+	ExporterAwss3LastSuccessfulUploadTimestamp metric.Int64Gauge
+	ExporterAwss3UploadAttemptTotal            metric.Int64Counter
+	ExporterAwss3UploadBytes                   metric.Int64Counter
+	ExporterAwss3UploadFailedTotal             metric.Int64Counter
+	ExporterAwss3UploadObjectSize              metric.Int64Histogram
 }
 
 // TelemetryBuilderOption applies changes to default builder.
@@ -62,32 +62,32 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 	}
 	builder.meter = Meter(settings)
 	var err, errs error
-	builder.Awss3LastSuccessfulUploadTimestamp, err = builder.meter.Int64Gauge(
-		"otelcol_awss3_last_successful_upload_timestamp",
+	builder.ExporterAwss3LastSuccessfulUploadTimestamp, err = builder.meter.Int64Gauge(
+		"otelcol_exporter_awss3_last_successful_upload_timestamp",
 		metric.WithDescription("Unix timestamp in seconds of the last successful S3 upload [Alpha]"),
 		metric.WithUnit("s"),
 	)
 	errs = errors.Join(errs, err)
-	builder.Awss3UploadAttemptTotal, err = builder.meter.Int64Counter(
-		"otelcol_awss3_upload_attempt_total",
+	builder.ExporterAwss3UploadAttemptTotal, err = builder.meter.Int64Counter(
+		"otelcol_exporter_awss3_upload_attempt_total",
 		metric.WithDescription("Number of started S3 upload attempts that reached the uploader [Alpha]"),
 		metric.WithUnit("1"),
 	)
 	errs = errors.Join(errs, err)
-	builder.Awss3UploadBytes, err = builder.meter.Int64Counter(
-		"otelcol_awss3_upload_bytes",
+	builder.ExporterAwss3UploadBytes, err = builder.meter.Int64Counter(
+		"otelcol_exporter_awss3_upload_bytes",
 		metric.WithDescription("Final bytes uploaded to S3 after any exporter-level compression [Alpha]"),
 		metric.WithUnit("By"),
 	)
 	errs = errors.Join(errs, err)
-	builder.Awss3UploadFailedTotal, err = builder.meter.Int64Counter(
-		"otelcol_awss3_upload_failed_total",
+	builder.ExporterAwss3UploadFailedTotal, err = builder.meter.Int64Counter(
+		"otelcol_exporter_awss3_upload_failed_total",
 		metric.WithDescription("Number of started S3 upload attempts that failed [Alpha]"),
 		metric.WithUnit("1"),
 	)
 	errs = errors.Join(errs, err)
-	builder.Awss3UploadObjectSize, err = builder.meter.Int64Histogram(
-		"otelcol_awss3_upload_object_size",
+	builder.ExporterAwss3UploadObjectSize, err = builder.meter.Int64Histogram(
+		"otelcol_exporter_awss3_upload_object_size",
 		metric.WithDescription("Final size in bytes of each successfully uploaded S3 object [Alpha]"),
 		metric.WithUnit("By"),
 	)

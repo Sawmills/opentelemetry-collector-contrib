@@ -19,24 +19,24 @@ func TestSetupTelemetry(t *testing.T) {
 	tb, err := metadata.NewTelemetryBuilder(testTel.NewTelemetrySettings())
 	require.NoError(t, err)
 	defer tb.Shutdown()
-	tb.Awss3LastSuccessfulUploadTimestamp.Record(context.Background(), 1)
-	tb.Awss3UploadAttemptTotal.Add(context.Background(), 1)
-	tb.Awss3UploadBytes.Add(context.Background(), 1)
-	tb.Awss3UploadFailedTotal.Add(context.Background(), 1)
-	tb.Awss3UploadObjectSize.Record(context.Background(), 1)
-	AssertEqualAwss3LastSuccessfulUploadTimestamp(t, testTel,
+	tb.ExporterAwss3LastSuccessfulUploadTimestamp.Record(context.Background(), 1)
+	tb.ExporterAwss3UploadAttemptTotal.Add(context.Background(), 1)
+	tb.ExporterAwss3UploadBytes.Add(context.Background(), 1)
+	tb.ExporterAwss3UploadFailedTotal.Add(context.Background(), 1)
+	tb.ExporterAwss3UploadObjectSize.Record(context.Background(), 1)
+	AssertEqualExporterAwss3LastSuccessfulUploadTimestamp(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
-	AssertEqualAwss3UploadAttemptTotal(t, testTel,
+	AssertEqualExporterAwss3UploadAttemptTotal(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
-	AssertEqualAwss3UploadBytes(t, testTel,
+	AssertEqualExporterAwss3UploadBytes(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
-	AssertEqualAwss3UploadFailedTotal(t, testTel,
+	AssertEqualExporterAwss3UploadFailedTotal(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
-	AssertEqualAwss3UploadObjectSize(t, testTel,
+	AssertEqualExporterAwss3UploadObjectSize(t, testTel,
 		[]metricdata.HistogramDataPoint[int64]{{}}, metricdatatest.IgnoreValue(),
 		metricdatatest.IgnoreTimestamp())
 

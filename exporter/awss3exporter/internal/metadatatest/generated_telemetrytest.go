@@ -21,23 +21,23 @@ func NewSettings(tt *componenttest.Telemetry) exporter.Settings {
 	return set
 }
 
-func AssertEqualAwss3LastSuccessfulUploadTimestamp(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+func AssertEqualExporterAwss3LastSuccessfulUploadTimestamp(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
-		Name:        "otelcol_awss3_last_successful_upload_timestamp",
+		Name:        "otelcol_exporter_awss3_last_successful_upload_timestamp",
 		Description: "Unix timestamp in seconds of the last successful S3 upload [Alpha]",
 		Unit:        "s",
 		Data: metricdata.Gauge[int64]{
 			DataPoints: dps,
 		},
 	}
-	got, err := tt.GetMetric("otelcol_awss3_last_successful_upload_timestamp")
+	got, err := tt.GetMetric("otelcol_exporter_awss3_last_successful_upload_timestamp")
 	require.NoError(t, err)
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }
 
-func AssertEqualAwss3UploadAttemptTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+func AssertEqualExporterAwss3UploadAttemptTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
-		Name:        "otelcol_awss3_upload_attempt_total",
+		Name:        "otelcol_exporter_awss3_upload_attempt_total",
 		Description: "Number of started S3 upload attempts that reached the uploader [Alpha]",
 		Unit:        "1",
 		Data: metricdata.Sum[int64]{
@@ -46,14 +46,14 @@ func AssertEqualAwss3UploadAttemptTotal(t *testing.T, tt *componenttest.Telemetr
 			DataPoints:  dps,
 		},
 	}
-	got, err := tt.GetMetric("otelcol_awss3_upload_attempt_total")
+	got, err := tt.GetMetric("otelcol_exporter_awss3_upload_attempt_total")
 	require.NoError(t, err)
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }
 
-func AssertEqualAwss3UploadBytes(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+func AssertEqualExporterAwss3UploadBytes(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
-		Name:        "otelcol_awss3_upload_bytes",
+		Name:        "otelcol_exporter_awss3_upload_bytes",
 		Description: "Final bytes uploaded to S3 after any exporter-level compression [Alpha]",
 		Unit:        "By",
 		Data: metricdata.Sum[int64]{
@@ -62,14 +62,14 @@ func AssertEqualAwss3UploadBytes(t *testing.T, tt *componenttest.Telemetry, dps 
 			DataPoints:  dps,
 		},
 	}
-	got, err := tt.GetMetric("otelcol_awss3_upload_bytes")
+	got, err := tt.GetMetric("otelcol_exporter_awss3_upload_bytes")
 	require.NoError(t, err)
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }
 
-func AssertEqualAwss3UploadFailedTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+func AssertEqualExporterAwss3UploadFailedTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
-		Name:        "otelcol_awss3_upload_failed_total",
+		Name:        "otelcol_exporter_awss3_upload_failed_total",
 		Description: "Number of started S3 upload attempts that failed [Alpha]",
 		Unit:        "1",
 		Data: metricdata.Sum[int64]{
@@ -78,14 +78,14 @@ func AssertEqualAwss3UploadFailedTotal(t *testing.T, tt *componenttest.Telemetry
 			DataPoints:  dps,
 		},
 	}
-	got, err := tt.GetMetric("otelcol_awss3_upload_failed_total")
+	got, err := tt.GetMetric("otelcol_exporter_awss3_upload_failed_total")
 	require.NoError(t, err)
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }
 
-func AssertEqualAwss3UploadObjectSize(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.HistogramDataPoint[int64], opts ...metricdatatest.Option) {
+func AssertEqualExporterAwss3UploadObjectSize(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.HistogramDataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
-		Name:        "otelcol_awss3_upload_object_size",
+		Name:        "otelcol_exporter_awss3_upload_object_size",
 		Description: "Final size in bytes of each successfully uploaded S3 object [Alpha]",
 		Unit:        "By",
 		Data: metricdata.Histogram[int64]{
@@ -93,7 +93,7 @@ func AssertEqualAwss3UploadObjectSize(t *testing.T, tt *componenttest.Telemetry,
 			DataPoints:  dps,
 		},
 	}
-	got, err := tt.GetMetric("otelcol_awss3_upload_object_size")
+	got, err := tt.GetMetric("otelcol_exporter_awss3_upload_object_size")
 	require.NoError(t, err)
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }

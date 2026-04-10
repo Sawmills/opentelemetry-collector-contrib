@@ -6,7 +6,7 @@
 
 The following telemetry is emitted by this component.
 
-### otelcol_awss3_last_successful_upload_timestamp
+### otelcol_exporter_awss3_last_successful_upload_timestamp
 
 Unix timestamp in seconds of the last successful S3 upload
 
@@ -14,7 +14,7 @@ Unix timestamp in seconds of the last successful S3 upload
 | ---- | ----------- | ---------- | --------- |
 | s | Gauge | Int | Alpha |
 
-### otelcol_awss3_upload_attempt_total
+### otelcol_exporter_awss3_upload_attempt_total
 
 Number of started S3 upload attempts that reached the uploader
 
@@ -22,7 +22,7 @@ Number of started S3 upload attempts that reached the uploader
 | ---- | ----------- | ---------- | --------- | --------- |
 | 1 | Sum | Int | true | Alpha |
 
-### otelcol_awss3_upload_bytes
+### otelcol_exporter_awss3_upload_bytes
 
 Final bytes uploaded to S3 after any exporter-level compression
 
@@ -30,7 +30,7 @@ Final bytes uploaded to S3 after any exporter-level compression
 | ---- | ----------- | ---------- | --------- | --------- |
 | By | Sum | Int | true | Alpha |
 
-### otelcol_awss3_upload_failed_total
+### otelcol_exporter_awss3_upload_failed_total
 
 Number of started S3 upload attempts that failed
 
@@ -38,7 +38,7 @@ Number of started S3 upload attempts that failed
 | ---- | ----------- | ---------- | --------- | --------- |
 | 1 | Sum | Int | true | Alpha |
 
-### otelcol_awss3_upload_object_size
+### otelcol_exporter_awss3_upload_object_size
 
 Final size in bytes of each successfully uploaded S3 object
 
