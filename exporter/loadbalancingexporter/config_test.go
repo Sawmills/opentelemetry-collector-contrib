@@ -305,3 +305,26 @@ func TestLoadConfigWithMetricBatcher(t *testing.T) {
 	require.Equal(t, 300*time.Millisecond, cfg.MetricBatcher.FlushInterval)
 	require.Equal(t, 12, cfg.MetricBatcher.MaxRetryBufferMultiplier)
 }
+
+func TestLoadConfigWithNullNestedOTLPQueueDisablesChildQueue(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	conf := confmap.NewFromStringMap(map[string]any{
+		"protocol": map[string]any{
+			"otlp": map[string]any{
+				"endpoint": "localhost:4317",
+				"tls": map[string]any{
+					"insecure": true,
+				},
+				"sending_queue": nil,
+			},
+		},
+		"resolver": map[string]any{
+			"static": map[string]any{
+				"hostnames": []string{"localhost:4317"},
+			},
+		},
+	})
+
+	require.NoError(t, conf.Unmarshal(cfg))
+	require.False(t, cfg.Protocol.OTLP.QueueConfig.HasValue())
+}
