@@ -22,7 +22,7 @@ import (
 // legacyTemplateFuncs provides the Sprig-compatible template functions
 // used by generated configs (dateInZone, now, randAlpha).
 var legacyTemplateFuncs = template.FuncMap{
-	"now": func() time.Time { return time.Now() },
+	"now": time.Now,
 	"dateInZone": func(layout string, t time.Time, zone string) string {
 		loc, err := time.LoadLocation(zone)
 		if err != nil {

@@ -20,7 +20,7 @@ import (
 )
 
 type Manager interface {
-	Upload(ctx context.Context, data []byte, opts *UploadOptions) error
+	Upload(ctx context.Context, data []byte, opts *UploadOptions) (int64, error)
 }
 
 type ManagerOpt func(Manager)
@@ -58,15 +58,16 @@ func NewS3Manager(logger *zap.Logger, bucket string, builder *PartitionKeyBuilde
 	return manager
 }
 
-func (sw *s3manager) Upload(ctx context.Context, data []byte, opts *UploadOptions) error {
+func (sw *s3manager) Upload(ctx context.Context, data []byte, opts *UploadOptions) (int64, error) {
 	if len(data) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	content, err := sw.contentBuffer(data)
 	if err != nil {
-		return err
+		return 0, err
 	}
+	uploadedBytes := int64(content.Len())
 
 	encoding := ""
 	// Only use ContentEncoding for non-archive formats
@@ -103,7 +104,7 @@ func (sw *s3manager) Upload(ctx context.Context, data []byte, opts *UploadOption
 
 	sw.logger.Debug("uploading object", zap.String("bucket", overrideBucket), zap.String("key", key))
 	_, err = sw.uploader.UploadObject(ctx, uploadInput)
-	return err
+	return uploadedBytes, err
 }
 
 func (sw *s3manager) contentBuffer(raw []byte) (*bytes.Buffer, error) {

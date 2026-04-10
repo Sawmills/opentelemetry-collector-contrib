@@ -38,10 +38,10 @@ type testWriter struct {
 	expectedOpts *upload.UploadOptions
 }
 
-func (testWriter *testWriter) Upload(_ context.Context, buf []byte, uploadOpts *upload.UploadOptions) error {
+func (testWriter *testWriter) Upload(_ context.Context, buf []byte, uploadOpts *upload.UploadOptions) (int64, error) {
 	assert.JSONEq(testWriter.t, testLogs, string(buf))
 	assert.Equal(testWriter.t, testWriter.expectedOpts, uploadOpts)
-	return nil
+	return int64(len(buf)), nil
 }
 
 func getTestLogs(tb testing.TB) plog.Logs {
@@ -140,12 +140,12 @@ type uploaderStub struct {
 	delay       time.Duration
 }
 
-func (u *uploaderStub) Upload(context.Context, []byte, *upload.UploadOptions) error {
+func (u *uploaderStub) Upload(_ context.Context, buf []byte, _ *upload.UploadOptions) (int64, error) {
 	u.uploadCalls++
 	if u.delay > 0 {
 		time.Sleep(u.delay)
 	}
-	return u.err
+	return int64(len(buf)), u.err
 }
 
 func TestExporterRecordsEquivalentFlushAndUploadTelemetry(t *testing.T) {
@@ -175,34 +175,96 @@ func TestExporterRecordsEquivalentFlushAndUploadTelemetry(t *testing.T) {
 	uploader := &uploaderStub{delay: uploadDelay}
 	exporter.uploader = uploader
 
+	beforeConsume := time.Now()
 	require.NoError(t, exporter.ConsumeLogs(t.Context(), getTestLogs(t)))
+	afterConsume := time.Now()
 	require.Equal(t, 1, uploader.uploadCalls)
 
 	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_flush_start_total")
 	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_flush_complete_total")
+	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_upload_attempt_total")
 	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_upload_start_total")
 	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_upload_complete_total")
+	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_upload_bytes")
 	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_flush_duration")
 	uploadDurationPoint := requireHistogramPoint(t, tel, "otelcol_exporter_awss3_upload_duration")
+	uploadObjectSizePoint := requireHistogramPoint(t, tel, "otelcol_exporter_awss3_upload_object_size")
 	flushToUploadPoint := requireHistogramPoint(t, tel, "otelcol_exporter_awss3_flush_to_upload_duration")
 	flushCompletePoint := requireSumPoint(t, tel, "otelcol_exporter_awss3_flush_complete_total")
+	uploadAttemptPoint := requireSumPoint(t, tel, "otelcol_exporter_awss3_upload_attempt_total")
 	uploadCompletePoint := requireSumPoint(t, tel, "otelcol_exporter_awss3_upload_complete_total")
+	uploadBytesPoint := requireSumPoint(t, tel, "otelcol_exporter_awss3_upload_bytes")
+	lastSuccessfulUploadPoint := requireGaugePoint(
+		t,
+		tel,
+		"otelcol_exporter_awss3_last_successful_upload_timestamp",
+	)
 
 	assert.Equal(t, int64(1), flushCompletePoint.Value)
+	assert.Equal(t, int64(1), uploadAttemptPoint.Value)
 	assert.Equal(t, int64(1), uploadCompletePoint.Value)
+	assert.Equal(t, int64(len([]byte("payload"))), uploadBytesPoint.Value)
 	assertMetricAttribute(t, flushCompletePoint.Attributes, "reason", expectedReason)
 	assertMetricAttribute(t, flushCompletePoint.Attributes, "signal", "logs")
 	assertMetricAttribute(t, flushCompletePoint.Attributes, "outcome", "success")
+	assertMetricAttribute(t, uploadAttemptPoint.Attributes, "signal", "logs")
 	assertMetricAttribute(t, uploadCompletePoint.Attributes, "reason", expectedReason)
 	assertMetricAttribute(t, uploadCompletePoint.Attributes, "signal", "logs")
 	assertMetricAttribute(t, uploadCompletePoint.Attributes, "outcome", "success")
+	assertMetricAttribute(t, uploadBytesPoint.Attributes, "reason", expectedReason)
+	assertMetricAttribute(t, uploadBytesPoint.Attributes, "signal", "logs")
+	assertMetricAttribute(t, uploadBytesPoint.Attributes, "outcome", "success")
 	assertMetricAttribute(t, flushToUploadPoint.Attributes, "reason", expectedReason)
 	assertMetricAttribute(t, flushToUploadPoint.Attributes, "signal", "logs")
 	assertMetricAttribute(t, flushToUploadPoint.Attributes, "outcome", "success")
+	assertMetricAttribute(t, uploadObjectSizePoint.Attributes, "reason", expectedReason)
+	assertMetricAttribute(t, uploadObjectSizePoint.Attributes, "signal", "logs")
+	assertMetricAttribute(t, uploadObjectSizePoint.Attributes, "outcome", "success")
+	assertMetricAttribute(t, lastSuccessfulUploadPoint.Attributes, "reason", expectedReason)
+	assertMetricAttribute(t, lastSuccessfulUploadPoint.Attributes, "signal", "logs")
+	assertMetricAttribute(t, lastSuccessfulUploadPoint.Attributes, "outcome", "success")
 
 	assert.GreaterOrEqual(t, uploadDurationPoint.Sum, uploadDelay.Milliseconds())
+	assert.Equal(t, int64(len([]byte("payload"))), uploadObjectSizePoint.Sum)
 	assert.GreaterOrEqual(t, flushToUploadPoint.Sum, handoffGap.Milliseconds())
 	assert.Less(t, flushToUploadPoint.Sum, uploadDurationPoint.Sum)
+	assert.GreaterOrEqual(t, lastSuccessfulUploadPoint.Value, beforeConsume.Unix())
+	assert.LessOrEqual(t, lastSuccessfulUploadPoint.Value, afterConsume.Unix())
+}
+
+func TestExporterRecordsUploadFailureMetric(t *testing.T) {
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+	tel := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, tel.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	settings := exportertest.NewNopSettings(component.MustNewType("awss3"))
+	settings.TelemetrySettings = tel.NewTelemetrySettings()
+
+	exporter := newS3Exporter(createDefaultConfig().(*Config), "logs", settings)
+	exporter.marshaler = &flushMetadataMarshaler{
+		buf: []byte("payload"),
+		flushMeta: flushMetadata{
+			reason:           "manual",
+			flushCompletedAt: time.Now().Add(-10 * time.Millisecond),
+		},
+	}
+	exporter.uploader = &uploaderStub{err: assert.AnError}
+
+	require.ErrorIs(t, exporter.ConsumeLogs(t.Context(), getTestLogs(t)), assert.AnError)
+
+	assertMetricDataPointCount(t, tel, "otelcol_exporter_awss3_upload_failed_total")
+	uploadFailedPoint := requireSumPoint(t, tel, "otelcol_exporter_awss3_upload_failed_total")
+	assert.Equal(t, int64(1), uploadFailedPoint.Value)
+	assertMetricAttribute(t, uploadFailedPoint.Attributes, "reason", "manual")
+	assertMetricAttribute(t, uploadFailedPoint.Attributes, "signal", "logs")
+	assertMetricAttribute(t, uploadFailedPoint.Attributes, "outcome", "failure")
+
+	assertMetricAbsentOrNoData(t, tel, "otelcol_exporter_awss3_upload_bytes")
+	assertMetricAbsentOrNoData(t, tel, "otelcol_exporter_awss3_upload_object_size")
+	assertMetricAbsentOrNoData(t, tel, "otelcol_exporter_awss3_last_successful_upload_timestamp")
 }
 
 func assertMetricDataPointCount(t *testing.T, tel *componenttest.Telemetry, name string) {
@@ -215,6 +277,8 @@ func assertMetricDataPointCount(t *testing.T, tel *componenttest.Telemetry, name
 	case metricdata.Sum[int64]:
 		require.Len(t, data.DataPoints, 1)
 	case metricdata.Histogram[int64]:
+		require.Len(t, data.DataPoints, 1)
+	case metricdata.Gauge[int64]:
 		require.Len(t, data.DataPoints, 1)
 	default:
 		t.Fatalf("unexpected metric type %T for %s", metric.Data, name)
@@ -243,6 +307,42 @@ func requireSumPoint(t *testing.T, tel *componenttest.Telemetry, name string) me
 	require.True(t, ok, "metric %s is not a sum", name)
 	require.Len(t, sum.DataPoints, 1)
 	return sum.DataPoints[0]
+}
+
+func requireGaugePoint(
+	t *testing.T,
+	tel *componenttest.Telemetry,
+	name string,
+) metricdata.DataPoint[int64] {
+	t.Helper()
+
+	metric, err := tel.GetMetric(name)
+	require.NoError(t, err)
+
+	gauge, ok := metric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok, "metric %s is not a gauge", name)
+	require.Len(t, gauge.DataPoints, 1)
+	return gauge.DataPoints[0]
+}
+
+func assertMetricAbsentOrNoData(t *testing.T, tel *componenttest.Telemetry, name string) {
+	t.Helper()
+
+	metric, err := tel.GetMetric(name)
+	if err != nil {
+		return
+	}
+
+	switch data := metric.Data.(type) {
+	case metricdata.Sum[int64]:
+		require.Empty(t, data.DataPoints, "metric %s should not emit points", name)
+	case metricdata.Histogram[int64]:
+		require.Empty(t, data.DataPoints, "metric %s should not emit points", name)
+	case metricdata.Gauge[int64]:
+		require.Empty(t, data.DataPoints, "metric %s should not emit points", name)
+	default:
+		t.Fatalf("unexpected metric type %T for %s", metric.Data, name)
+	}
 }
 
 func assertMetricAttribute(t *testing.T, attrs attribute.Set, key, want string) {
