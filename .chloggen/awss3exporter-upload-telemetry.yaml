@@ -1,0 +1,7 @@
+change_type: enhancement
+component: exporter/awss3
+note: "Add upload telemetry for the AWS S3 exporter to expose upload attempts, failures, bytes, object sizes, and last successful upload time."
+issues: [43]
+subtext: |-
+  This improves observability for parquet-backed export flows by making upload progress and failure modes visible without relying only on logs.
+change_logs: [user]
