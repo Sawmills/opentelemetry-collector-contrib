@@ -189,13 +189,13 @@ func (e *s3Exporter) uploadBuffer(
 
 	uploadStartedAt := time.Now()
 	e.telemetry.recordUploadStart(ctx, e.signalType)
-	err := e.uploader.Upload(ctx, buf, uploadOpts)
+	uploadedBytes, err := e.uploader.Upload(ctx, buf, uploadOpts)
 	e.telemetry.recordUploadComplete(
 		ctx,
 		e.signalType,
 		uploadStartedAt,
 		time.Since(uploadStartedAt),
-		int64(len(buf)),
+		uploadedBytes,
 		flushMeta,
 		err,
 	)

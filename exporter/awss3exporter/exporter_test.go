@@ -38,10 +38,10 @@ type testWriter struct {
 	expectedOpts *upload.UploadOptions
 }
 
-func (testWriter *testWriter) Upload(_ context.Context, buf []byte, uploadOpts *upload.UploadOptions) error {
+func (testWriter *testWriter) Upload(_ context.Context, buf []byte, uploadOpts *upload.UploadOptions) (int64, error) {
 	assert.JSONEq(testWriter.t, testLogs, string(buf))
 	assert.Equal(testWriter.t, testWriter.expectedOpts, uploadOpts)
-	return nil
+	return int64(len(buf)), nil
 }
 
 func getTestLogs(tb testing.TB) plog.Logs {
@@ -140,12 +140,12 @@ type uploaderStub struct {
 	delay       time.Duration
 }
 
-func (u *uploaderStub) Upload(context.Context, []byte, *upload.UploadOptions) error {
+func (u *uploaderStub) Upload(_ context.Context, buf []byte, _ *upload.UploadOptions) (int64, error) {
 	u.uploadCalls++
 	if u.delay > 0 {
 		time.Sleep(u.delay)
 	}
-	return u.err
+	return int64(len(buf)), u.err
 }
 
 func TestExporterRecordsEquivalentFlushAndUploadTelemetry(t *testing.T) {

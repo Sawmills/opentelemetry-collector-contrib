@@ -4,6 +4,7 @@
 package upload
 
 import (
+	"bytes"
 	"compress/gzip"
 	"io"
 	"net/http"
@@ -41,7 +42,7 @@ func TestS3ManagerUpload(t *testing.T) {
 
 	for _, tc := range []struct {
 		name         string
-		handler      func(t *testing.T) http.Handler
+		handler      func(t *testing.T, uploadedSize *int64) http.Handler
 		compression  configcompression.Type
 		data         []byte
 		errVal       string
@@ -50,9 +51,13 @@ func TestS3ManagerUpload(t *testing.T) {
 	}{
 		{
 			name: "successful upload",
-			handler: func(t *testing.T) http.Handler {
+			handler: func(t *testing.T, uploadedSize *int64) http.Handler {
 				return http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-					_, _ = io.Copy(io.Discard, r.Body)
+					body, err := io.ReadAll(r.Body)
+					if !assert.NoError(t, err) {
+						return
+					}
+					*uploadedSize = int64(len(body))
 					_ = r.Body.Close()
 
 					assert.Equal(
@@ -70,8 +75,15 @@ func TestS3ManagerUpload(t *testing.T) {
 		},
 		{
 			name: "successful compression upload gzip",
-			handler: func(t *testing.T) http.Handler {
+			handler: func(t *testing.T, uploadedSize *int64) http.Handler {
 				return http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+					body, err := io.ReadAll(r.Body)
+					if !assert.NoError(t, err) {
+						return
+					}
+					*uploadedSize = int64(len(body))
+					_ = r.Body.Close()
+
 					assert.Equal(
 						t,
 						"/my-bucket/telemetry/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics.gz",
@@ -79,7 +91,7 @@ func TestS3ManagerUpload(t *testing.T) {
 						"Must match the expected path",
 					)
 
-					gr, err := gzip.NewReader(r.Body)
+					gr, err := gzip.NewReader(bytes.NewReader(body))
 					if !assert.NoError(t, err, "Must not error creating gzip reader") {
 						return
 					}
@@ -89,7 +101,6 @@ func TestS3ManagerUpload(t *testing.T) {
 					assert.NoError(t, err, "Must not error reading data from reader")
 
 					_ = gr.Close()
-					_ = r.Body.Close()
 				})
 			},
 			compression: configcompression.TypeGzip,
@@ -99,8 +110,15 @@ func TestS3ManagerUpload(t *testing.T) {
 		},
 		{
 			name: "successful compression upload zstd",
-			handler: func(t *testing.T) http.Handler {
+			handler: func(t *testing.T, uploadedSize *int64) http.Handler {
 				return http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+					body, err := io.ReadAll(r.Body)
+					if !assert.NoError(t, err) {
+						return
+					}
+					*uploadedSize = int64(len(body))
+					_ = r.Body.Close()
+
 					assert.Equal(
 						t,
 						"/my-bucket/telemetry/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics.zst",
@@ -108,7 +126,7 @@ func TestS3ManagerUpload(t *testing.T) {
 						"Must match the expected path",
 					)
 
-					reader, err := zstd.NewReader(r.Body)
+					reader, err := zstd.NewReader(bytes.NewReader(body))
 					if !assert.NoError(t, err, "Must not error creating zstd reader") {
 						return
 					}
@@ -118,7 +136,6 @@ func TestS3ManagerUpload(t *testing.T) {
 					assert.NoError(t, err, "Must not error reading data from reader")
 
 					reader.Close()
-					_ = r.Body.Close()
 				})
 			},
 			compression: configcompression.TypeZstd,
@@ -128,7 +145,7 @@ func TestS3ManagerUpload(t *testing.T) {
 		},
 		{
 			name: "no data upload",
-			handler: func(t *testing.T) http.Handler {
+			handler: func(t *testing.T, _ *int64) http.Handler {
 				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					_, _ = io.Copy(io.Discard, r.Body)
 					_ = r.Body.Close()
@@ -143,7 +160,7 @@ func TestS3ManagerUpload(t *testing.T) {
 		},
 		{
 			name: "failed upload",
-			handler: func(_ *testing.T) http.Handler {
+			handler: func(_ *testing.T, _ *int64) http.Handler {
 				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					_, _ = io.Copy(io.Discard, r.Body)
 					_ = r.Body.Close()
@@ -157,8 +174,15 @@ func TestS3ManagerUpload(t *testing.T) {
 		},
 		{
 			name: "STANDARD_IA storage class",
-			handler: func(t *testing.T) http.Handler {
+			handler: func(t *testing.T, uploadedSize *int64) http.Handler {
 				return http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+					body, err := io.ReadAll(r.Body)
+					if !assert.NoError(t, err) {
+						return
+					}
+					*uploadedSize = int64(len(body))
+					_ = r.Body.Close()
+
 					// Example of validating that the S3 storage class header is set correctly
 					assert.Equal(t, "STANDARD_IA", r.Header.Get("x-amz-storage-class"))
 				})
@@ -170,9 +194,13 @@ func TestS3ManagerUpload(t *testing.T) {
 		},
 		{
 			name: "upload with s3 prefix from resource attrbuites",
-			handler: func(t *testing.T) http.Handler {
+			handler: func(t *testing.T, uploadedSize *int64) http.Handler {
 				return http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-					_, _ = io.Copy(io.Discard, r.Body)
+					body, err := io.ReadAll(r.Body)
+					if !assert.NoError(t, err) {
+						return
+					}
+					*uploadedSize = int64(len(body))
 					_ = r.Body.Close()
 
 					assert.Equal(
@@ -190,9 +218,13 @@ func TestS3ManagerUpload(t *testing.T) {
 		},
 		{
 			name: "upload with s3 prefix from resource attrbuites empty",
-			handler: func(t *testing.T) http.Handler {
+			handler: func(t *testing.T, uploadedSize *int64) http.Handler {
 				return http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-					_, _ = io.Copy(io.Discard, r.Body)
+					body, err := io.ReadAll(r.Body)
+					if !assert.NoError(t, err) {
+						return
+					}
+					*uploadedSize = int64(len(body))
 					_ = r.Body.Close()
 
 					assert.Equal(
@@ -210,9 +242,13 @@ func TestS3ManagerUpload(t *testing.T) {
 		},
 		{
 			name: "upload with s3 bucket from resource attributes",
-			handler: func(t *testing.T) http.Handler {
+			handler: func(t *testing.T, uploadedSize *int64) http.Handler {
 				return http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-					_, _ = io.Copy(io.Discard, r.Body)
+					body, err := io.ReadAll(r.Body)
+					if !assert.NoError(t, err) {
+						return
+					}
+					*uploadedSize = int64(len(body))
 					_ = r.Body.Close()
 
 					assert.Equal(
@@ -230,9 +266,13 @@ func TestS3ManagerUpload(t *testing.T) {
 		},
 		{
 			name: "upload with s3 bucket and prefix from resource attributes",
-			handler: func(t *testing.T) http.Handler {
+			handler: func(t *testing.T, uploadedSize *int64) http.Handler {
 				return http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-					_, _ = io.Copy(io.Discard, r.Body)
+					body, err := io.ReadAll(r.Body)
+					if !assert.NoError(t, err) {
+						return
+					}
+					*uploadedSize = int64(len(body))
 					_ = r.Body.Close()
 
 					assert.Equal(
@@ -250,9 +290,13 @@ func TestS3ManagerUpload(t *testing.T) {
 		},
 		{
 			name: "upload with s3 bucket override empty",
-			handler: func(t *testing.T) http.Handler {
+			handler: func(t *testing.T, uploadedSize *int64) http.Handler {
 				return http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-					_, _ = io.Copy(io.Discard, r.Body)
+					body, err := io.ReadAll(r.Body)
+					if !assert.NoError(t, err) {
+						return
+					}
+					*uploadedSize = int64(len(body))
 					_ = r.Body.Close()
 
 					assert.Equal(
@@ -270,9 +314,13 @@ func TestS3ManagerUpload(t *testing.T) {
 		},
 		{
 			name: "upload with s3 bucket override and custom storage class",
-			handler: func(t *testing.T) http.Handler {
+			handler: func(t *testing.T, uploadedSize *int64) http.Handler {
 				return http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-					_, _ = io.Copy(io.Discard, r.Body)
+					body, err := io.ReadAll(r.Body)
+					if !assert.NoError(t, err) {
+						return
+					}
+					*uploadedSize = int64(len(body))
 					_ = r.Body.Close()
 
 					assert.Equal(
@@ -294,7 +342,8 @@ func TestS3ManagerUpload(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			s := httptest.NewServer(tc.handler(t))
+			var uploadedSize int64
+			s := httptest.NewServer(tc.handler(t, &uploadedSize))
 			t.Cleanup(s.Close)
 
 			sm := NewS3Manager(
@@ -323,11 +372,12 @@ func TestS3ManagerUpload(t *testing.T) {
 			// to reduce the potential of flaky tests
 			mc := clock.NewMock(time.Date(2024, 0o1, 10, 10, 30, 40, 100, time.Local))
 
-			err := sm.Upload(clock.Context(t.Context(), mc), tc.data, tc.uploadOpts)
+			reportedUploadSize, err := sm.Upload(clock.Context(t.Context(), mc), tc.data, tc.uploadOpts)
 			if tc.errVal != "" {
 				assert.EqualError(t, err, tc.errVal, "Must match the expected error")
 			} else {
 				assert.NoError(t, err, "Must not have return an error")
+				assert.Equal(t, uploadedSize, reportedUploadSize, "Must report the actual uploaded object size")
 			}
 		})
 	}

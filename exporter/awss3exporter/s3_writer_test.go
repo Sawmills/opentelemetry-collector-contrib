@@ -67,7 +67,7 @@ func newTestClientFromConfig(t *testing.T, conf Config) testUploaderClient {
 		return captured
 	}
 
-	err = manager.Upload(t.Context(), []byte("payload"), nil)
+	_, err = manager.Upload(t.Context(), []byte("payload"), nil)
 	if !assert.NoError(t, err) {
 		return captured
 	}
@@ -182,7 +182,7 @@ func TestUploaderOptions_StaticCredsAndRoleArnUsesAssumeRole(t *testing.T) {
 		return
 	}
 
-	err = manager.Upload(t.Context(), []byte("payload"), nil)
+	_, err = manager.Upload(t.Context(), []byte("payload"), nil)
 	if !assert.NoError(t, err) {
 		return
 	}
