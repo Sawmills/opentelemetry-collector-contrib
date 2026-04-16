@@ -81,6 +81,7 @@ func (cfg *Config) Unmarshal(conf *confmap.Conf) error {
 }
 
 type QueueSettings struct {
+	Enabled            bool                                                     `mapstructure:"enabled"`
 	QueueConfig        configoptional.Optional[exporterhelper.QueueBatchConfig] `mapstructure:",squash"`
 	PayloadCompression QueuePayloadCompression                                  `mapstructure:"payload_compression"`
 	CompressInMemory   bool                                                     `mapstructure:"compress_in_memory"`
@@ -122,6 +123,7 @@ func (q *QueueSettings) Unmarshal(conf *confmap.Conf) error {
 		}
 		enabled = enabledVal
 	}
+	q.Enabled = enabled
 
 	if !enabled {
 		q.QueueConfig = configoptional.None[exporterhelper.QueueBatchConfig]()
