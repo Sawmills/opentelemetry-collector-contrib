@@ -115,6 +115,7 @@ components:
     - extension/opamp
     - extension/opampcustommessages
     - extension/otlp_encoding
+    - extension/parquet_log_encoding
     - extension/pprof
     - extension/redis_storage
     - extension/remotetap
@@ -356,6 +357,7 @@ components:
     - scraper/paging
     - scraper/process
     - scraper/processes
+    - scraper/system
     - scraper/system
     - scraper/zookeeper
     - testbed
