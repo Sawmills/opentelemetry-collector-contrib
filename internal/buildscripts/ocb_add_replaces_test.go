@@ -35,13 +35,21 @@ func TestOCBAddReplacesPreservesRelativePaths(t *testing.T) {
 		"",
 		"replace (",
 		"\tgithub.com/open-telemetry/opentelemetry-collector-contrib/internal/common => ../../internal/common",
+		"\tgithub.com/Sawmills/versioned-helper v1.2.3 => ../../sawmills-helper",
+		"\tgithub.com/example/thirdparty => ../../sawmills-helper",
+		"\tgithub.com/example/remote => github.com/Sawmills/remote",
 		"\tgithub.com/Sawmills/helper => ../../sawmills-helper",
 		")",
 		"",
 	}, "\n"))
 
-	cmd := exec.Command("bash", scriptPath, "demo")
+	cmd := exec.Command("/bin/bash", scriptPath, "demo")
 	cmd.Dir = tempRepo
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+		"LC_ALL=C.UTF-8",
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("script failed: %v\n%s", err, output)
@@ -56,6 +64,10 @@ func TestOCBAddReplacesPreservesRelativePaths(t *testing.T) {
 	assertContains(t, content, "github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen => ../telemetrygen")
 	assertContains(t, content, "github.com/open-telemetry/opentelemetry-collector-contrib/internal/common => ../../internal/common")
 	assertContains(t, content, "github.com/Sawmills/helper => ../../sawmills-helper")
+	assertContains(t, content, "github.com/Sawmills/versioned-helper => ../../sawmills-helper")
+	assertContains(t, content, "github.com/example/remote => github.com/Sawmills/remote")
+	assertNotContains(t, content, "github.com/example/thirdparty => ../../sawmills-helper")
+	assertNotContains(t, content, "github.com/Sawmills/versioned-helper v1.2.3 => ../../sawmills-helper")
 }
 
 func mustMkdirAll(t *testing.T, path string) {
@@ -79,5 +91,13 @@ func assertContains(t *testing.T, content, want string) {
 
 	if !strings.Contains(content, want) {
 		t.Fatalf("missing %q in output:\n%s", want, content)
+	}
+}
+
+func assertNotContains(t *testing.T, content, want string) {
+	t.Helper()
+
+	if strings.Contains(content, want) {
+		t.Fatalf("unexpected %q in output:\n%s", want, content)
 	}
 }

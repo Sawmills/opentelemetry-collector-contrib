@@ -31,7 +31,7 @@ def is_repo_local_module(lhs: str) -> bool:
 def iter_replace_lines(go_mod: Path):
     in_replace = False
 
-    for raw_line in go_mod.read_text().splitlines():
+    for raw_line in go_mod.read_text(encoding="utf-8").splitlines():
         line = raw_line.split("//", 1)[0].strip()
         if not line:
             continue
@@ -70,13 +70,14 @@ for go_mod in sorted(repo.rglob("go.mod")):
             continue
 
         lhs, rhs = [part.strip() for part in replace_line.split("=>", 1)]
-        if rhs.startswith(".") and is_repo_local_module(lhs):
+        lhs_module = lhs.split()[0]
+        if rhs.startswith(".") and is_repo_local_module(lhs_module):
             target = (go_mod.parent / rhs).resolve()
-            replaces.add(f"{lhs} => {os.path.relpath(target, start=builder_dir)}")
+            replaces.add(f"{lhs_module} => {os.path.relpath(target, start=builder_dir)}")
             continue
 
         if rhs.startswith("github.com/Sawmills/"):
-            replaces.add(f"{lhs} => {rhs}")
+            replaces.add(f"{lhs_module} => {rhs}")
 
 for replace in sorted(replaces):
     print(f"  - {replace}")
