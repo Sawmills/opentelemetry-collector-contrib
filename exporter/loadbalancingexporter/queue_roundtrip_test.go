@@ -29,7 +29,7 @@ func TestQueueSettingsRoundTripPreservesEnabled(t *testing.T) {
 				require.True(t, sendingQueue["enabled"].(bool))
 				require.EqualValues(t, 1000, sendingQueue["queue_size"])
 				require.EqualValues(t, 2, sendingQueue["num_consumers"])
-				require.Equal(t, QueuePayloadCompressionZstd, sendingQueue["payload_compression"])
+				require.EqualValues(t, QueuePayloadCompressionZstd, sendingQueue["payload_compression"])
 				require.True(t, sendingQueue["compress_in_memory"].(bool))
 			},
 		},
