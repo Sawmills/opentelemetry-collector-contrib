@@ -14,6 +14,29 @@ cp "$CONFIG_IN" "$CONFIG_OUT"
 tmp_replaces=$(mktemp)
 trap 'rm -f "$tmp_replaces"' EXIT
 
+relpath_from_builder() {
+    local mod_path="$1"
+    local rhs="$2"
+
+    local abs_rhs
+    abs_rhs=$(python3 - "$mod_path" "$rhs" <<'PY'
+import os
+import sys
+
+mod_path, rhs = sys.argv[1], sys.argv[2]
+print(os.path.realpath(os.path.join(mod_path, rhs)))
+PY
+)
+
+    python3 - "cmd/$DIR" "$abs_rhs" <<'PY'
+import os
+import sys
+
+base, target = sys.argv[1], sys.argv[2]
+print(os.path.relpath(target, start=base))
+PY
+}
+
 local_mods=$(find . -type f -name "go.mod" -exec dirname {} \; | sort)
 for mod_path in $local_mods; do
     mod=${mod_path#"."} # remove initial dot
@@ -35,8 +58,12 @@ for mod_path in $local_mods; do
             replace_line=$(echo "$replace_line" | xargs)
             [[ -z "$replace_line" ]] && continue
 
+            lhs=$(echo "${replace_line%%=>*}" | xargs)
             rhs=${replace_line#*=> }
             if [[ "$rhs" == .* || "$rhs" == ../* ]]; then
+                if [[ "$lhs" == github.com/Sawmills/* ]]; then
+                    echo "$lhs => $(relpath_from_builder "$mod_path" "$rhs")" >> "$tmp_replaces"
+                fi
                 continue
             fi
             if [[ "$rhs" != github.com/Sawmills/* ]]; then
