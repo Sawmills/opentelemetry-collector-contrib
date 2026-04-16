@@ -3,7 +3,7 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-set -e
+set -euo pipefail
 
 DIR="$1"
 CONFIG_IN="cmd/$DIR/builder-config.yaml"
@@ -14,66 +14,74 @@ cp "$CONFIG_IN" "$CONFIG_OUT"
 tmp_replaces=$(mktemp)
 trap 'rm -f "$tmp_replaces"' EXIT
 
-relpath_from_builder() {
-    local mod_path="$1"
-    local rhs="$2"
-
-    local abs_rhs
-    abs_rhs=$(python3 - "$mod_path" "$rhs" <<'PY'
+python3 - "$DIR" >"$tmp_replaces" <<'PY'
 import os
 import sys
+from pathlib import Path
 
-mod_path, rhs = sys.argv[1], sys.argv[2]
-print(os.path.realpath(os.path.join(mod_path, rhs)))
+
+def is_repo_local_module(lhs: str) -> bool:
+    return (
+        lhs.startswith("github.com/Sawmills/")
+        or lhs == "github.com/open-telemetry/opentelemetry-collector-contrib"
+        or lhs.startswith("github.com/open-telemetry/opentelemetry-collector-contrib/")
+    )
+
+
+def iter_replace_lines(go_mod: Path):
+    in_replace = False
+
+    for raw_line in go_mod.read_text().splitlines():
+        line = raw_line.split("//", 1)[0].strip()
+        if not line:
+            continue
+
+        if line.startswith("replace ("):
+            in_replace = True
+            continue
+
+        if in_replace and line == ")":
+            in_replace = False
+            continue
+
+        if line.startswith("replace ") and "(" not in line:
+            yield line[len("replace ") :].strip()
+            continue
+
+        if in_replace:
+            yield line
+
+
+dir_name = sys.argv[1]
+repo = Path(".").resolve()
+builder_dir = (repo / "cmd" / dir_name).resolve()
+replaces: set[str] = set()
+
+for go_mod in sorted(repo.rglob("go.mod")):
+    mod_path = go_mod.parent.resolve()
+    suffix = "" if mod_path == repo else "/" + mod_path.relative_to(repo).as_posix()
+    replaces.add(
+        "github.com/open-telemetry/opentelemetry-collector-contrib"
+        f"{suffix} => {os.path.relpath(mod_path, start=builder_dir)}"
+    )
+
+    for replace_line in iter_replace_lines(go_mod):
+        if "=>" not in replace_line:
+            continue
+
+        lhs, rhs = [part.strip() for part in replace_line.split("=>", 1)]
+        if rhs.startswith(".") and is_repo_local_module(lhs):
+            target = (go_mod.parent / rhs).resolve()
+            replaces.add(f"{lhs} => {os.path.relpath(target, start=builder_dir)}")
+            continue
+
+        if rhs.startswith("github.com/Sawmills/"):
+            replaces.add(f"{lhs} => {rhs}")
+
+for replace in sorted(replaces):
+    print(f"  - {replace}")
 PY
-)
 
-    python3 - "cmd/$DIR" "$abs_rhs" <<'PY'
-import os
-import sys
-
-base, target = sys.argv[1], sys.argv[2]
-print(os.path.relpath(target, start=base))
-PY
-}
-
-local_mods=$(find . -type f -name "go.mod" -exec dirname {} \; | sort)
-for mod_path in $local_mods; do
-    mod=${mod_path#"."} # remove initial dot
-    echo "github.com/open-telemetry/opentelemetry-collector-contrib$mod => ../..$mod" >> "$tmp_replaces"
-
-    awk '
-        /^replace[[:space:]]*\(/ { in_replace = 1; next }
-        in_replace && /^\)/ { in_replace = 0; next }
-        /^replace[[:space:]]+/ && !/\(/ {
-            line = $0
-            sub(/^replace[[:space:]]+/, "", line)
-            print line
-            next
-        }
-        in_replace { print }
-    ' "$mod_path/go.mod" |
-        sed -E 's/[[:space:]]*\/\/.*$//' |
-        while IFS= read -r replace_line; do
-            replace_line=$(echo "$replace_line" | xargs)
-            [[ -z "$replace_line" ]] && continue
-
-            lhs=$(echo "${replace_line%%=>*}" | xargs)
-            rhs=${replace_line#*=> }
-            if [[ "$rhs" == .* || "$rhs" == ../* ]]; then
-                if [[ "$lhs" == github.com/Sawmills/* ]]; then
-                    echo "$lhs => $(relpath_from_builder "$mod_path" "$rhs")" >> "$tmp_replaces"
-                fi
-                continue
-            fi
-            if [[ "$rhs" != github.com/Sawmills/* ]]; then
-                continue
-            fi
-
-            echo "$replace_line" >> "$tmp_replaces"
-        done
-done
-
-sort -u "$tmp_replaces" | sed 's/^/  - /' >> "$CONFIG_OUT"
+cat "$tmp_replaces" >> "$CONFIG_OUT"
 
 echo "Wrote replace statements to $CONFIG_OUT"
