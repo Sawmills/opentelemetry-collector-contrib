@@ -11,26 +11,81 @@ import (
 )
 
 func TestQueueSettingsRoundTripPreservesEnabled(t *testing.T) {
-	cfg := &Config{}
-	conf := confmap.NewFromStringMap(map[string]any{
-		"sending_queue": map[string]any{
-			"enabled":             true,
-			"queue_size":          1000,
-			"num_consumers":       2,
-			"payload_compression": "zstd",
-			"compress_in_memory":  true,
+	testCases := []struct {
+		name          string
+		sendingQueue  map[string]any
+		assertionFunc func(t *testing.T, sendingQueue map[string]any)
+	}{
+		{
+			name: "enabled true preserves queue fields",
+			sendingQueue: map[string]any{
+				"enabled":             true,
+				"queue_size":          1000,
+				"num_consumers":       2,
+				"payload_compression": "zstd",
+				"compress_in_memory":  true,
+			},
+			assertionFunc: func(t *testing.T, sendingQueue map[string]any) {
+				require.True(t, sendingQueue["enabled"].(bool))
+				require.EqualValues(t, 1000, sendingQueue["queue_size"])
+				require.EqualValues(t, 2, sendingQueue["num_consumers"])
+				require.Equal(t, QueuePayloadCompressionZstd, sendingQueue["payload_compression"])
+				require.True(t, sendingQueue["compress_in_memory"].(bool))
+			},
 		},
-	})
+		{
+			name: "enabled false clears queue fields",
+			sendingQueue: map[string]any{
+				"enabled":             false,
+				"queue_size":          1000,
+				"num_consumers":       2,
+				"payload_compression": "zstd",
+				"compress_in_memory":  true,
+			},
+			assertionFunc: func(t *testing.T, sendingQueue map[string]any) {
+				require.False(t, sendingQueue["enabled"].(bool))
+				require.Empty(t, sendingQueue["payload_compression"])
+				require.False(t, sendingQueue["compress_in_memory"].(bool))
+				require.NotContains(t, sendingQueue, "queue_size")
+				require.NotContains(t, sendingQueue, "num_consumers")
+			},
+		},
+		{
+			name: "missing enabled defaults to false",
+			sendingQueue: map[string]any{
+				"queue_size":          1000,
+				"num_consumers":       2,
+				"payload_compression": "zstd",
+				"compress_in_memory":  true,
+			},
+			assertionFunc: func(t *testing.T, sendingQueue map[string]any) {
+				require.False(t, sendingQueue["enabled"].(bool))
+				require.Empty(t, sendingQueue["payload_compression"])
+				require.False(t, sendingQueue["compress_in_memory"].(bool))
+				require.NotContains(t, sendingQueue, "queue_size")
+				require.NotContains(t, sendingQueue, "num_consumers")
+			},
+		},
+	}
 
-	require.NoError(t, conf.Unmarshal(cfg))
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{}
+			conf := confmap.NewFromStringMap(map[string]any{
+				"sending_queue": tt.sendingQueue,
+			})
 
-	roundTrip := confmap.New()
-	require.NoError(t, roundTrip.Marshal(cfg))
+			require.NoError(t, conf.Unmarshal(cfg))
 
-	raw := map[string]any{}
-	require.NoError(t, roundTrip.Unmarshal(&raw, confmap.WithIgnoreUnused()))
+			roundTrip := confmap.New()
+			require.NoError(t, roundTrip.Marshal(cfg))
 
-	sendingQueue, ok := raw["sending_queue"].(map[string]any)
-	require.True(t, ok, "sending_queue should be preserved")
-	require.Equal(t, true, sendingQueue["enabled"])
+			raw := map[string]any{}
+			require.NoError(t, roundTrip.Unmarshal(&raw, confmap.WithIgnoreUnused()))
+
+			sendingQueue, ok := raw["sending_queue"].(map[string]any)
+			require.True(t, ok, "sending_queue should be preserved")
+			tt.assertionFunc(t, sendingQueue)
+		})
+	}
 }
