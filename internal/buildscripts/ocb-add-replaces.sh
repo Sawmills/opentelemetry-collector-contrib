@@ -18,6 +18,7 @@ python3 - "$DIR" >"$tmp_replaces" <<'PY'
 import os
 import sys
 from pathlib import Path
+from typing import Set
 
 
 def is_repo_local_module(lhs: str) -> bool:
@@ -55,11 +56,15 @@ def iter_replace_lines(go_mod: Path):
 dir_name = sys.argv[1]
 repo = Path(".").resolve()
 builder_dir = (repo / "cmd" / dir_name).resolve()
-replaces: set[str] = set()
+replaces: Set[str] = set()
 
 for go_mod in sorted(repo.rglob("go.mod")):
     mod_path = go_mod.parent.resolve()
-    suffix = "" if mod_path == repo else "/" + mod_path.relative_to(repo).as_posix()
+    rel_mod_path = mod_path.relative_to(repo)
+    if "examples" in rel_mod_path.parts or "testdata" in rel_mod_path.parts:
+        continue
+
+    suffix = "" if mod_path == repo else "/" + rel_mod_path.as_posix()
     replaces.add(
         "github.com/open-telemetry/opentelemetry-collector-contrib"
         f"{suffix} => {os.path.relpath(mod_path, start=builder_dir)}"

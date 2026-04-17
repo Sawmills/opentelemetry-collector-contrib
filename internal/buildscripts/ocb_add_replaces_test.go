@@ -22,12 +22,16 @@ func TestOCBAddReplacesPreservesRelativePaths(t *testing.T) {
 	mustMkdirAll(t, filepath.Join(tempRepo, "cmd", "demo"))
 	mustMkdirAll(t, filepath.Join(tempRepo, "cmd", "telemetrygen"))
 	mustMkdirAll(t, filepath.Join(tempRepo, "exporter", "loadbalancingexporter"))
+	mustMkdirAll(t, filepath.Join(tempRepo, "receiver", "simpleprometheusreceiver", "examples", "federation", "prom-counter"))
 	mustMkdirAll(t, filepath.Join(tempRepo, "internal", "common"))
+	mustMkdirAll(t, filepath.Join(tempRepo, "internal", "aws", "xray", "testdata", "sampleapp"))
 	mustMkdirAll(t, filepath.Join(tempRepo, "sawmills-helper"))
 
 	mustWriteFile(t, filepath.Join(tempRepo, "cmd", "demo", "builder-config.yaml"), "dist:\n  name: demo\n")
 	mustWriteFile(t, filepath.Join(tempRepo, "go.mod"), "module github.com/open-telemetry/opentelemetry-collector-contrib\n\ngo 1.24.0\n")
 	mustWriteFile(t, filepath.Join(tempRepo, "cmd", "telemetrygen", "go.mod"), "module github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen\n\ngo 1.24.0\n")
+	mustWriteFile(t, filepath.Join(tempRepo, "receiver", "simpleprometheusreceiver", "examples", "federation", "prom-counter", "go.mod"), "module github.com/open-telemetry/opentelemetry-collector-contrib/receiver/simpleprometheusreceiver/examples/federation/prom-counter\n\ngo 1.24.0\n")
+	mustWriteFile(t, filepath.Join(tempRepo, "internal", "aws", "xray", "testdata", "sampleapp", "go.mod"), "module github.com/open-telemetry/opentelemetry-collector-contrib/internal/aws/xray/testdata/sampleapp\n\ngo 1.24.0\n")
 	mustWriteFile(t, filepath.Join(tempRepo, "exporter", "loadbalancingexporter", "go.mod"), strings.Join([]string{
 		"module github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter",
 		"",
@@ -69,6 +73,8 @@ func TestOCBAddReplacesPreservesRelativePaths(t *testing.T) {
 	assertContains(t, content, "github.com/example/remote => github.com/Sawmills/remote")
 	assertNotContains(t, content, "github.com/example/thirdparty => ../../sawmills-helper")
 	assertNotContains(t, content, "github.com/Sawmills/versioned-helper v1.2.3 => ../../sawmills-helper")
+	assertNotContains(t, content, "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/simpleprometheusreceiver/examples/federation/prom-counter => ../../receiver/simpleprometheusreceiver/examples/federation/prom-counter")
+	assertNotContains(t, content, "github.com/open-telemetry/opentelemetry-collector-contrib/internal/aws/xray/testdata/sampleapp => ../../internal/aws/xray/testdata/sampleapp")
 }
 
 func mustMkdirAll(t *testing.T, path string) {
