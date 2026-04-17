@@ -219,6 +219,69 @@ func compareMetricsMaps(t *testing.T, expected, actual map[string]pmetric.Metric
 	}
 }
 
+func cloneMetricsMap(src map[string]pmetric.Metrics) map[string]pmetric.Metrics {
+	cloned := make(map[string]pmetric.Metrics, len(src))
+	for key, md := range src {
+		mdClone := pmetric.NewMetrics()
+		md.CopyTo(mdClone)
+		cloned[key] = mdClone
+	}
+	return cloned
+}
+
+func splitMetricsByMetricNameOld(md pmetric.Metrics) map[string]pmetric.Metrics {
+	results := map[string]pmetric.Metrics{}
+
+	for i := 0; i < md.ResourceMetrics().Len(); i++ {
+		rm := md.ResourceMetrics().At(i)
+
+		for j := 0; j < rm.ScopeMetrics().Len(); j++ {
+			sm := rm.ScopeMetrics().At(j)
+
+			for k := 0; k < sm.Metrics().Len(); k++ {
+				m := sm.Metrics().At(k)
+
+				newMD, mClone := cloneMetricWithoutType(rm, sm, m)
+				m.CopyTo(mClone)
+
+				key := m.Name()
+				existing, ok := results[key]
+				if ok {
+					metrics.Merge(existing, newMD)
+				} else {
+					results[key] = newMD
+				}
+			}
+		}
+	}
+
+	return results
+}
+
+func (e *metricExporterImp) groupRoutedMetricsByEndpointOld(
+	batches map[string]pmetric.Metrics,
+) (map[string]*endpointMetricsBatch, error) {
+	endpointBatches := make(map[string]*endpointMetricsBatch)
+
+	for routingID, mds := range batches {
+		exp, endpoint, err := e.loadBalancer.exporterAndEndpoint([]byte(routingID))
+		if err != nil {
+			return nil, err
+		}
+
+		ep := endpointWithPort(endpoint)
+		batch, ok := endpointBatches[ep]
+		if !ok {
+			batch = &endpointMetricsBatch{metrics: pmetric.NewMetrics(), exp: exp}
+			endpointBatches[ep] = batch
+		}
+		batch.exp = exp
+		metrics.Merge(batch.metrics, mds)
+	}
+
+	return endpointBatches, nil
+}
+
 func TestSplitMetricsByResourceServiceName(t *testing.T) {
 	t.Parallel()
 
