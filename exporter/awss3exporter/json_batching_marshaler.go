@@ -15,6 +15,13 @@ import (
 )
 
 // jsonBatchingMarshaler handles JSON marshaling with proper batching.
+// It accumulates raw JSON bytes and flushes them at partition boundaries
+// (via runEvery in exporter.go). The marshaler does not track per-resource
+// upload options; resource-based S3 routing (resource_attrs_to_s3) is handled
+// by the batchperresourceattr wrapper in factory.go, which splits data by
+// resource attribute before it reaches the exporter. Each wrapped exporter
+// instance only sees data for a single resource prefix.
+// This matches the old sawmills-collector local fork behavior.
 type jsonBatchingMarshaler struct {
 	mutex sync.Mutex
 
