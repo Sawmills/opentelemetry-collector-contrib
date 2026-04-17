@@ -62,7 +62,7 @@ func TestS3ManagerUpload(t *testing.T) {
 
 					assert.Equal(
 						t,
-						"/my-bucket/telemetry/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics",
+						"/my-bucket/telemetry/noop/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics",
 						r.URL.Path,
 						"Must match the expected path",
 					)
@@ -86,7 +86,7 @@ func TestS3ManagerUpload(t *testing.T) {
 
 					assert.Equal(
 						t,
-						"/my-bucket/telemetry/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics.gz",
+						"/my-bucket/telemetry/noop/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics.gz",
 						r.URL.Path,
 						"Must match the expected path",
 					)
@@ -121,7 +121,7 @@ func TestS3ManagerUpload(t *testing.T) {
 
 					assert.Equal(
 						t,
-						"/my-bucket/telemetry/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics.zst",
+						"/my-bucket/telemetry/noop/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics.zst",
 						r.URL.Path,
 						"Must match the expected path",
 					)
@@ -205,7 +205,7 @@ func TestS3ManagerUpload(t *testing.T) {
 
 					assert.Equal(
 						t,
-						"/my-bucket/foo-prefix-resource/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics",
+						"/my-bucket/foo-prefix-resource/noop/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics",
 						r.URL.Path,
 						"Must match the expected path",
 					)
@@ -229,7 +229,7 @@ func TestS3ManagerUpload(t *testing.T) {
 
 					assert.Equal(
 						t,
-						"/my-bucket/telemetry/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics",
+						"/my-bucket/telemetry/noop/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics",
 						r.URL.Path,
 						"Must match the expected path",
 					)
@@ -253,7 +253,7 @@ func TestS3ManagerUpload(t *testing.T) {
 
 					assert.Equal(
 						t,
-						"/custom-bucket/telemetry/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics",
+						"/custom-bucket/telemetry/noop/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics",
 						r.URL.Path,
 						"Must match the expected path with custom bucket",
 					)
@@ -277,7 +277,7 @@ func TestS3ManagerUpload(t *testing.T) {
 
 					assert.Equal(
 						t,
-						"/custom-bucket/custom-prefix/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics",
+						"/custom-bucket/custom-prefix/noop/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics",
 						r.URL.Path,
 						"Must match the expected path with custom bucket and prefix",
 					)
@@ -301,7 +301,7 @@ func TestS3ManagerUpload(t *testing.T) {
 
 					assert.Equal(
 						t,
-						"/my-bucket/telemetry/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics",
+						"/my-bucket/telemetry/noop/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics",
 						r.URL.Path,
 						"Must match the expected path with default bucket when override is empty",
 					)
@@ -325,7 +325,7 @@ func TestS3ManagerUpload(t *testing.T) {
 
 					assert.Equal(
 						t,
-						"/custom-bucket/telemetry/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics",
+						"/custom-bucket/telemetry/noop/year=2024/month=01/day=10/hour=10/minute=30/signal-data-noop_random.metrics",
 						r.URL.Path,
 						"Must match the expected path with custom bucket",
 					)

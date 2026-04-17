@@ -51,6 +51,10 @@ telemetry:
         value_type: int
 
 tests:
+  config:
+    # Use non-batching marshaler so the lifecycle test doesn't attempt a real
+    # S3 upload during Shutdown (the batching marshaler defers upload to flush).
+    max_file_size_bytes: 0
   expect_consumer_error: true
   goleak:
     ignore:
