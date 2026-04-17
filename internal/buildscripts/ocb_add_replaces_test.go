@@ -65,7 +65,7 @@ func TestOCBAddReplacesPreservesRelativePaths(t *testing.T) {
 		t.Fatalf("read builder config: %v", err)
 	}
 
-	content := string(builderConfig)
+	content := strings.ReplaceAll(string(builderConfig), "\\", "/")
 	assertContains(t, content, "github.com/open-telemetry/opentelemetry-collector-contrib/cmd/telemetrygen => ../telemetrygen")
 	assertContains(t, content, "github.com/open-telemetry/opentelemetry-collector-contrib/internal/common => ../../internal/common")
 	assertContains(t, content, "github.com/Sawmills/helper => ../../sawmills-helper")
