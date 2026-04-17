@@ -43,13 +43,14 @@ func TestOCBAddReplacesPreservesRelativePaths(t *testing.T) {
 		"",
 	}, "\n"))
 
-	cmd := exec.Command("/bin/bash", scriptPath, "demo")
-	cmd.Dir = tempRepo
-	cmd.Env = []string{
-		"PATH=" + os.Getenv("PATH"),
-		"HOME=" + os.Getenv("HOME"),
-		"LC_ALL=C.UTF-8",
+	bashPath, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
 	}
+
+	cmd := exec.Command(bashPath, scriptPath, "demo")
+	cmd.Dir = tempRepo
+	cmd.Env = append(os.Environ(), "LC_ALL=C.UTF-8")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("script failed: %v\n%s", err, output)
