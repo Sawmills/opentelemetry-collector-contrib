@@ -1,4 +1,4 @@
-package buildscripts
+package buildscripts // import "github.com/open-telemetry/opentelemetry-collector-contrib/internal/buildscripts"
 
 import (
 	"bytes"
