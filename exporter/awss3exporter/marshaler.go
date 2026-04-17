@@ -26,6 +26,10 @@ type logFlusher interface {
 	FlushLogs() ([]byte, error)
 }
 
+type logFlusherWithReason interface {
+	FlushLogsWithReason(reason string) ([]byte, error)
+}
+
 type traceFlusher interface {
 	FlushTraces() ([]byte, error)
 }
@@ -44,6 +48,9 @@ func newMarshalerFromEncoding(encoding *component.ID, fileFormat string, host co
 	marshaler.tracesMarshaler, _ = e.(ptrace.Marshaler)
 	if flusher, ok := e.(logFlusher); ok {
 		marshaler.extLogFlusher = flusher
+	}
+	if flusher, ok := e.(logFlusherWithReason); ok {
+		marshaler.extLogFlusherWithReason = flusher
 	}
 	if flusher, ok := e.(traceFlusher); ok {
 		marshaler.extTraceFlusher = flusher

@@ -140,7 +140,9 @@ func (e *s3Exporter) start(ctx context.Context, host component.Host) error {
 	// Launch timer-based flushing when the marshaler supports flushing and a
 	// partition cadence is configured.
 	if e.config.S3Uploader.S3Partition != "" {
-		if _, ok := m.(logFlusher); ok {
+		_, hasFlush := m.(logFlusher)
+		_, hasFlushWithReason := m.(logFlusherWithReason)
+		if hasFlush || hasFlushWithReason {
 			var loc *time.Location
 			if tz := e.config.S3Uploader.S3PartitionTimezone; tz != "" {
 				loc, err = time.LoadLocation(tz)
@@ -202,14 +204,24 @@ func (e *s3Exporter) flushMarshaler(ctx context.Context, reason string) error {
 		return nil
 	}
 
-	if flusher, ok := e.marshaler.(logFlusher); ok {
-		buf, err := flusher.FlushLogs()
+	if flusher, ok := e.marshaler.(logFlusherWithReason); ok {
+		buf, err := flusher.FlushLogsWithReason(reason)
 		if err != nil {
 			return err
 		}
 		// nil uploadOpts is intentional: timer-based flushes use the default
 		// prefix because batching marshalers accumulate data without per-resource
 		// context.  Resource-based routing only applies to per-record uploads.
+		if len(buf) > 0 {
+			if err := e.uploadBuffer(ctx, buf, nil, flushMetadata{reason: reason}); err != nil {
+				return err
+			}
+		}
+	} else if flusher, ok := e.marshaler.(logFlusher); ok {
+		buf, err := flusher.FlushLogs()
+		if err != nil {
+			return err
+		}
 		if len(buf) > 0 {
 			if err := e.uploadBuffer(ctx, buf, nil, flushMetadata{reason: reason}); err != nil {
 				return err

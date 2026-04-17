@@ -17,14 +17,15 @@ type LogMarshalerWithFlushMetadata interface {
 }
 
 type s3Marshaler struct {
-	logsMarshaler    plog.Marshaler
-	tracesMarshaler  ptrace.Marshaler
-	metricsMarshaler pmetric.Marshaler
-	logger           *zap.Logger
-	fileFormat       string
-	IsCompressed     bool
-	extLogFlusher    logFlusher
-	extTraceFlusher  traceFlusher
+	logsMarshaler           plog.Marshaler
+	tracesMarshaler         ptrace.Marshaler
+	metricsMarshaler        pmetric.Marshaler
+	logger                  *zap.Logger
+	fileFormat              string
+	IsCompressed            bool
+	extLogFlusher           logFlusher
+	extLogFlusherWithReason logFlusherWithReason
+	extTraceFlusher         traceFlusher
 }
 
 func (marshaler *s3Marshaler) MarshalTraces(td ptrace.Traces) ([]byte, error) {
@@ -71,6 +72,13 @@ func (marshaler *s3Marshaler) FlushLogs() ([]byte, error) {
 		return marshaler.extLogFlusher.FlushLogs()
 	}
 	return nil, nil
+}
+
+func (marshaler *s3Marshaler) FlushLogsWithReason(reason string) ([]byte, error) {
+	if marshaler.extLogFlusherWithReason != nil {
+		return marshaler.extLogFlusherWithReason.FlushLogsWithReason(reason)
+	}
+	return marshaler.FlushLogs()
 }
 
 func (marshaler *s3Marshaler) FlushTraces() ([]byte, error) {

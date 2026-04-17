@@ -21,6 +21,10 @@ import (
 
 // legacyTemplateFuncs provides the Sprig-compatible template functions
 // used by generated configs (dateInZone, now, randAlpha).
+// NOTE: the old sawmills-collector fork used the full sprig.TxtFuncMap().
+// We only provide the three functions actually referenced by generated configs
+// to avoid pulling in the sprig dependency.  If future templates need
+// additional Sprig functions, consider adding github.com/Masterminds/sprig/v3.
 var legacyTemplateFuncs = template.FuncMap{
 	"now": time.Now,
 	"dateInZone": func(layout string, t time.Time, zone string) string {

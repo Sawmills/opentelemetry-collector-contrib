@@ -55,13 +55,14 @@ func createDefaultConfig() component.Config {
 		TimeoutSettings: timeoutCfg,
 		S3Uploader: S3UploaderConfig{
 			Region:            "us-east-1",
-			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H",
 			StorageClass:      "STANDARD",
 			RetryMode:         DefaultRetryMode,
 			RetryMaxAttempts:  DefaultRetryMaxAttempts,
 			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
-		MarshalerName: "otlp_json",
+		MarshalerName:    "otlp_json",
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
 	}
 }
 

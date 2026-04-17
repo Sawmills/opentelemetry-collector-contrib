@@ -21,6 +21,11 @@ const (
 	DefaultRetryMode        = "standard"
 	DefaultRetryMaxAttempts = 3
 	DefaultRetryMaxBackoff  = 20 * time.Second
+
+	// defaultMaxFileSizeBytes is the uncompressed size threshold at which the
+	// jsonBatchingMarshaler flushes its buffer to S3.  256 MiB targets
+	// fewer / larger S3 objects, matching the old sawmills-collector fork default.
+	defaultMaxFileSizeBytes = 256 * 1024 * 1024
 )
 
 // S3UploaderConfig contains aws s3 uploader related config to controls things
@@ -122,18 +127,28 @@ type Config struct {
 }
 
 func (c *Config) normalizedS3PartitionFormat() string {
-	if c.S3Uploader.S3PartitionFormat != "" {
+	defaultFormat := "year=%Y/month=%m/day=%d/hour=%H"
+
+	// When the user explicitly sets s3_partition_format (i.e. to something
+	// other than the factory default), it always wins — even when
+	// s3_partition is also set.
+	if c.S3Uploader.S3PartitionFormat != "" && c.S3Uploader.S3PartitionFormat != defaultFormat {
 		return c.S3Uploader.S3PartitionFormat
 	}
 
+	// Legacy s3_partition maps to a well-known format.
 	switch c.S3Uploader.S3Partition {
 	case "hour":
 		return "year=%Y/month=%m/day=%d/hour=%H"
 	case "minute":
 		return "year=%Y/month=%m/day=%d/hour=%H/minute=%M"
-	default:
+	}
+
+	if c.S3Uploader.S3PartitionFormat != "" {
 		return c.S3Uploader.S3PartitionFormat
 	}
+
+	return defaultFormat
 }
 
 func (c *Config) Validate() error {

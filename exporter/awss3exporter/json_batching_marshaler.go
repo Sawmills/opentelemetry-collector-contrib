@@ -121,18 +121,36 @@ func (m *jsonBatchingMarshaler) MarshalTraces(td ptrace.Traces) ([]byte, error) 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	data, err := m.tracesMarshaler.MarshalTraces(td)
+	buf, err := m.tracesMarshaler.MarshalTraces(td)
 	if err != nil {
 		return nil, err
 	}
 
-	// Store the full OTLP JSON document as a single batch entry.
-	// Each entry already contains the {"resourceSpans":[...]} envelope.
-	m.tracesBatchCount++
-	m.traceBatches = append(m.traceBatches, json.RawMessage(data))
-	m.uncompressedSize += len(data)
+	// Unwrap individual resourceSpans entries so each JSONL line represents
+	// a single resourceSpan.  This matches the old sawmills-collector fork
+	// format that downstream consumers expect.
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(buf, &parsed); err != nil {
+		return nil, err
+	}
 
-	if m.uncompressedSize >= m.maxBatchSize {
+	resourceSpans, ok := parsed["resourceSpans"]
+	if !ok {
+		return nil, nil
+	}
+
+	var spans []json.RawMessage
+	if err := json.Unmarshal(resourceSpans, &spans); err != nil {
+		return nil, err
+	}
+
+	for _, span := range spans {
+		m.traceBatches = append(m.traceBatches, span)
+		m.tracesBatchCount++
+		m.uncompressedSize += len(span)
+	}
+
+	if m.maxBatchSize > 0 && m.uncompressedSize >= m.maxBatchSize {
 		return m.flushTraceBatch()
 	}
 
@@ -144,7 +162,20 @@ func (m *jsonBatchingMarshaler) flushTraceBatch() ([]byte, error) {
 		return nil, nil
 	}
 
-	jsonlData := m.createJSONL(m.traceBatches)
+	// Wrap each individual resourceSpan back into a valid OTLP JSON envelope
+	// so every JSONL line is a standalone {"resourceSpans":[<entry>]} document.
+	wrapped := make([]json.RawMessage, 0, len(m.traceBatches))
+	for _, span := range m.traceBatches {
+		envelope, err := json.Marshal(map[string][]json.RawMessage{
+			"resourceSpans": {span},
+		})
+		if err != nil {
+			return nil, err
+		}
+		wrapped = append(wrapped, envelope)
+	}
+
+	jsonlData := m.createJSONL(wrapped)
 
 	if m.logger != nil {
 		m.logger.Debug("Flushed uncompressed JSONL trace batch",
