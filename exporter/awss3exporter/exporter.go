@@ -6,6 +6,7 @@ package awss3exporter // import "github.com/open-telemetry/opentelemetry-collect
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
@@ -71,6 +72,7 @@ type s3Exporter struct {
 	marshaler  marshaler
 	telemetry  *exporterTelemetry
 	done       chan struct{}
+	shutOnce   sync.Once
 }
 
 func newS3Exporter(
@@ -119,7 +121,7 @@ func (e *s3Exporter) start(ctx context.Context, host component.Host) error {
 		}
 	} else if e.config.MaxFileSizeBytes > 0 {
 		if m, err = newMarshalerWithConfig(e.config.MarshalerName, e.config.MaxFileSizeBytes, e.logger); err != nil {
-			return fmt.Errorf("unknown marshaler %q", e.config.MarshalerName)
+			return err
 		}
 	} else {
 		if m, err = newMarshaler(e.config.MarshalerName, e.logger); err != nil {
@@ -231,7 +233,7 @@ func (e *s3Exporter) flushMarshaler(ctx context.Context, reason string) error {
 }
 
 func (e *s3Exporter) shutdown(ctx context.Context) error {
-	close(e.done)
+	e.shutOnce.Do(func() { close(e.done) })
 	return e.flushMarshaler(ctx, "shutdown")
 }
 
