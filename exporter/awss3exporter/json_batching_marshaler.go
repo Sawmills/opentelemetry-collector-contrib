@@ -6,7 +6,6 @@ package awss3exporter // import "github.com/open-telemetry/opentelemetry-collect
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"sync"
 
 	"go.opentelemetry.io/collector/pdata/plog"
@@ -119,26 +118,11 @@ func (m *jsonBatchingMarshaler) MarshalTraces(td ptrace.Traces) ([]byte, error) 
 		return nil, err
 	}
 
-	var otlpData map[string]interface{}
-	if err := json.Unmarshal(data, &otlpData); err != nil {
-		return nil, fmt.Errorf("failed to parse OTLP JSON: %w", err)
-	}
-
-	resourceSpansArray, ok := otlpData["resourceSpans"].([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("invalid OTLP structure: resourceSpans not found or not an array")
-	}
-
-	for _, resourceSpan := range resourceSpansArray {
-		resourceSpanData, err := json.Marshal(resourceSpan)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal resourceSpan: %w", err)
-		}
-
-		m.tracesBatchCount++
-		m.traceBatches = append(m.traceBatches, json.RawMessage(resourceSpanData))
-		m.uncompressedSize += len(resourceSpanData)
-	}
+	// Store the full OTLP JSON document as a single batch entry.
+	// Each entry already contains the {"resourceSpans":[...]} envelope.
+	m.tracesBatchCount++
+	m.traceBatches = append(m.traceBatches, json.RawMessage(data))
+	m.uncompressedSize += len(data)
 
 	if m.uncompressedSize >= m.maxBatchSize {
 		return m.flushTraceBatch()

@@ -139,7 +139,16 @@ func (e *s3Exporter) start(ctx context.Context, host component.Host) error {
 	// partition cadence is configured.
 	if e.config.S3Uploader.S3Partition != "" {
 		if _, ok := m.(logFlusher); ok {
-			go e.runEvery(ctx, e.config.S3Uploader.S3Partition, func() {
+			var loc *time.Location
+			if tz := e.config.S3Uploader.S3PartitionTimezone; tz != "" {
+				loc, err = time.LoadLocation(tz)
+				if err != nil {
+					return fmt.Errorf("invalid S3 partition timezone: %w", err)
+				}
+			} else {
+				loc = time.UTC
+			}
+			go e.runEvery(ctx, e.config.S3Uploader.S3Partition, loc, func() {
 				if err := e.flushMarshaler(ctx, "timer"); err != nil {
 					e.logger.Error("Failed to flush S3 exporter", zap.Error(err))
 				}
@@ -149,13 +158,13 @@ func (e *s3Exporter) start(ctx context.Context, host component.Host) error {
 	return nil
 }
 
-func (e *s3Exporter) runEvery(ctx context.Context, s3Partition string, task func()) {
+func (e *s3Exporter) runEvery(ctx context.Context, s3Partition string, loc *time.Location, task func()) {
 	var getNextTick func(time.Time) time.Time
 	switch s3Partition {
 	case "minute":
-		getNextTick = func(t time.Time) time.Time { return t.Truncate(time.Minute).Add(time.Minute) }
+		getNextTick = func(t time.Time) time.Time { return t.In(loc).Truncate(time.Minute).Add(time.Minute) }
 	default:
-		getNextTick = func(t time.Time) time.Time { return t.Truncate(time.Hour).Add(time.Hour) }
+		getNextTick = func(t time.Time) time.Time { return t.In(loc).Truncate(time.Hour).Add(time.Hour) }
 	}
 
 	next := getNextTick(time.Now())
@@ -174,7 +183,13 @@ func (e *s3Exporter) runEvery(ctx context.Context, s3Partition string, task func
 			cancel()
 			return
 		}
-		next = getNextTick(time.Now())
+		// Advance from the previous deadline rather than time.Now() so that a
+		// slow flush doesn't cause boundary drift.  If we fell behind, skip
+		// forward to the next future boundary.
+		next = getNextTick(next)
+		if next.Before(time.Now()) {
+			next = getNextTick(time.Now())
+		}
 	}
 }
 
@@ -188,6 +203,9 @@ func (e *s3Exporter) flushMarshaler(ctx context.Context, reason string) error {
 		if err != nil {
 			return err
 		}
+		// nil uploadOpts is intentional: timer-based flushes use the default
+		// prefix because batching marshalers accumulate data without per-resource
+		// context.  Resource-based routing only applies to per-record uploads.
 		if len(buf) > 0 {
 			if err := e.uploadBuffer(ctx, buf, nil, flushMetadata{reason: reason}); err != nil {
 				return err
@@ -200,6 +218,7 @@ func (e *s3Exporter) flushMarshaler(ctx context.Context, reason string) error {
 		if err != nil {
 			return err
 		}
+		// nil uploadOpts — same rationale as log flush above.
 		if len(buf) > 0 {
 			if err := e.uploadBuffer(ctx, buf, nil, flushMetadata{reason: reason}); err != nil {
 				return err
