@@ -113,6 +113,12 @@ type Config struct {
 	Encoding              *component.ID     `mapstructure:"encoding"`
 	EncodingFileExtension string            `mapstructure:"encoding_file_extension"`
 	ResourceAttrsToS3     ResourceAttrsToS3 `mapstructure:"resource_attrs_to_s3"`
+
+	// MaxFileSizeBytes sets the uncompressed size threshold at which the
+	// jsonBatchingMarshaler flushes its buffer to S3. When > 0 and
+	// MarshalerName is OtlpJSON, the batching marshaler is used instead
+	// of the default pass-through marshaler.
+	MaxFileSizeBytes int `mapstructure:"max_file_size_bytes"`
 }
 
 func (c *Config) normalizedS3PartitionFormat() string {

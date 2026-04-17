@@ -23,6 +23,8 @@ type s3Marshaler struct {
 	logger           *zap.Logger
 	fileFormat       string
 	IsCompressed     bool
+	extLogFlusher    logFlusher
+	extTraceFlusher  traceFlusher
 }
 
 func (marshaler *s3Marshaler) MarshalTraces(td ptrace.Traces) ([]byte, error) {
@@ -62,4 +64,18 @@ func (marshaler *s3Marshaler) format() string {
 
 func (marshaler *s3Marshaler) compressed() bool {
 	return marshaler.IsCompressed
+}
+
+func (marshaler *s3Marshaler) FlushLogs() ([]byte, error) {
+	if marshaler.extLogFlusher != nil {
+		return marshaler.extLogFlusher.FlushLogs()
+	}
+	return nil, nil
+}
+
+func (marshaler *s3Marshaler) FlushTraces() ([]byte, error) {
+	if marshaler.extTraceFlusher != nil {
+		return marshaler.extTraceFlusher.FlushTraces()
+	}
+	return nil, nil
 }

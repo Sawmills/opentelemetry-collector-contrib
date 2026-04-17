@@ -70,6 +70,7 @@ type s3Exporter struct {
 	logger     *zap.Logger
 	marshaler  marshaler
 	telemetry  *exporterTelemetry
+	done       chan struct{}
 }
 
 func newS3Exporter(
@@ -84,6 +85,7 @@ func newS3Exporter(
 		signalType: signalType,
 		logger:     params.Logger,
 		telemetry:  telemetry,
+		done:       make(chan struct{}),
 	}
 	return s3Exporter
 }
@@ -115,6 +117,10 @@ func (e *s3Exporter) start(ctx context.Context, host component.Host) error {
 		if m, err = newMarshalerFromEncoding(e.config.Encoding, e.config.EncodingFileExtension, host, e.logger); err != nil {
 			return err
 		}
+	} else if e.config.MaxFileSizeBytes > 0 {
+		if m, err = newMarshalerWithConfig(e.config.MarshalerName, e.config.MaxFileSizeBytes, e.logger); err != nil {
+			return fmt.Errorf("unknown marshaler %q", e.config.MarshalerName)
+		}
 	} else {
 		if m, err = newMarshaler(e.config.MarshalerName, e.logger); err != nil {
 			return fmt.Errorf("unknown marshaler %q", e.config.MarshalerName)
@@ -128,7 +134,84 @@ func (e *s3Exporter) start(ctx context.Context, host component.Host) error {
 		return err
 	}
 	e.uploader = up
+
+	// Launch timer-based flushing when the marshaler supports flushing and a
+	// partition cadence is configured.
+	if e.config.S3Uploader.S3Partition != "" {
+		if _, ok := m.(logFlusher); ok {
+			go e.runEvery(ctx, e.config.S3Uploader.S3Partition, func() {
+				if err := e.flushMarshaler(ctx, "timer"); err != nil {
+					e.logger.Error("Failed to flush S3 exporter", zap.Error(err))
+				}
+			})
+		}
+	}
 	return nil
+}
+
+func (e *s3Exporter) runEvery(ctx context.Context, s3Partition string, task func()) {
+	var getNextTick func(time.Time) time.Time
+	switch s3Partition {
+	case "minute":
+		getNextTick = func(t time.Time) time.Time { return t.Truncate(time.Minute).Add(time.Minute) }
+	default:
+		getNextTick = func(t time.Time) time.Time { return t.Truncate(time.Hour).Add(time.Hour) }
+	}
+
+	next := getNextTick(time.Now())
+	for {
+		sleepCtx, cancel := context.WithTimeout(ctx, time.Until(next))
+		select {
+		case <-sleepCtx.Done():
+			if sleepCtx.Err() == context.DeadlineExceeded {
+				cancel()
+				task()
+			} else {
+				cancel()
+				return
+			}
+		case <-e.done:
+			cancel()
+			return
+		}
+		next = getNextTick(time.Now())
+	}
+}
+
+func (e *s3Exporter) flushMarshaler(ctx context.Context, reason string) error {
+	if e.marshaler == nil {
+		return nil
+	}
+
+	if flusher, ok := e.marshaler.(logFlusher); ok {
+		buf, err := flusher.FlushLogs()
+		if err != nil {
+			return err
+		}
+		if len(buf) > 0 {
+			if err := e.uploadBuffer(ctx, buf, nil, flushMetadata{reason: reason}); err != nil {
+				return err
+			}
+		}
+	}
+
+	if flusher, ok := e.marshaler.(traceFlusher); ok {
+		buf, err := flusher.FlushTraces()
+		if err != nil {
+			return err
+		}
+		if len(buf) > 0 {
+			if err := e.uploadBuffer(ctx, buf, nil, flushMetadata{reason: reason}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (e *s3Exporter) shutdown(ctx context.Context) error {
+	close(e.done)
+	return e.flushMarshaler(ctx, "shutdown")
 }
 
 func (*s3Exporter) Capabilities() consumer.Capabilities {
