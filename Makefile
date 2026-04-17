@@ -422,6 +422,7 @@ codeowners:
 .PHONY: generate-chloggen-components
 generate-chloggen-components:
 	$(GITHUBGEN) $(GITHUBGEN_ARGS) chloggen-components
+	go run ./internal/buildscripts/cmd/chloggen-dedupe .chloggen/config.yaml
 
 FILENAME?=$(shell git branch --show-current)
 .PHONY: chlog-new

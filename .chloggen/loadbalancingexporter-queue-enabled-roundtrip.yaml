@@ -1,0 +1,6 @@
+change_type: bug_fix
+component: exporter/loadbalancing
+note: Preserve `sending_queue.enabled` when loadbalancing exporter configs are unmarshaled and marshaled through `confmap`.
+issues: [45]
+subtext: |-
+  This keeps the queue enabled for generated configs that rely on config round-tripping before YAML output.

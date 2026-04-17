@@ -15,6 +15,9 @@ $defs:
     description: S3UploaderConfig contains aws s3 uploader related config to controls things like bucket, prefix, batching, connections, retries, etc.
     type: object
     properties:
+      access_key_id:
+        description: AccessKeyID is the legacy static AWS access key used by generated configs.
+        type: string
       acl:
         description: ACL is the canned ACL to use when uploading objects.
         type: string
@@ -54,6 +57,12 @@ $defs:
       s3_force_path_style:
         description: S3ForcePathStyle sets the value for force path style.
         type: boolean
+      s3_key_template:
+        description: S3KeyTemplate is the legacy key template used by datadog JSON configs.
+        type: string
+      s3_partition:
+        description: S3Partition is the legacy partition selector used by generated configs.
+        type: string
       s3_partition_format:
         description: S3PartitionFormat is used to provide the rollup on how data is written. Uses [strftime](https://www.man7.org/linux/man-pages/man3/strftime.3.html) formatting.
         type: string
@@ -62,6 +71,12 @@ $defs:
         type: string
       s3_prefix:
         description: S3Prefix is the key (directory) prefix to write to inside the bucket. Appended to S3BasePrefix if provided.
+        type: string
+      secret_access_key:
+        description: SecretAccessKey is the legacy static AWS secret used by generated configs.
+        type: string
+      server_side_encryption:
+        description: ServerSideEncryption is the legacy SSE setting used by generated configs.
         type: string
       storage_class:
         type: string
