@@ -309,7 +309,8 @@ func TestLoadConfig(t *testing.T) {
 			RetryMaxAttempts:  DefaultRetryMaxAttempts,
 			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
-		MarshalerName: "otlp_json",
+		MarshalerName:    "otlp_json",
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
 	}, e,
 	)
 }
@@ -354,7 +355,8 @@ func TestConfig(t *testing.T) {
 			RetryMaxAttempts:    DefaultRetryMaxAttempts,
 			RetryMaxBackoff:     DefaultRetryMaxBackoff,
 		},
-		MarshalerName: "otlp_json",
+		MarshalerName:    "otlp_json",
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
 	}, e,
 	)
 }
@@ -388,9 +390,10 @@ func TestConfigS3StorageClass(t *testing.T) {
 			RetryMaxAttempts:  DefaultRetryMaxAttempts,
 			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
-		QueueSettings:   queueCfg,
-		TimeoutSettings: timeoutCfg,
-		MarshalerName:   "otlp_json",
+		QueueSettings:    queueCfg,
+		TimeoutSettings:  timeoutCfg,
+		MarshalerName:    "otlp_json",
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
 	}, e,
 	)
 }
@@ -425,9 +428,10 @@ func TestConfigS3ACL(t *testing.T) {
 			RetryMaxAttempts:  DefaultRetryMaxAttempts,
 			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
-		QueueSettings:   queueCfg,
-		TimeoutSettings: timeoutCfg,
-		MarshalerName:   "otlp_json",
+		QueueSettings:    queueCfg,
+		TimeoutSettings:  timeoutCfg,
+		MarshalerName:    "otlp_json",
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
 	}, e,
 	)
 }
@@ -462,9 +466,10 @@ func TestConfigS3ACLDefined(t *testing.T) {
 			RetryMaxAttempts:  DefaultRetryMaxAttempts,
 			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
-		QueueSettings:   queueCfg,
-		TimeoutSettings: timeoutCfg,
-		MarshalerName:   "otlp_json",
+		QueueSettings:    queueCfg,
+		TimeoutSettings:  timeoutCfg,
+		MarshalerName:    "otlp_json",
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
 	}, e,
 	)
 }
@@ -502,7 +507,8 @@ func TestConfigForS3CompatibleSystems(t *testing.T) {
 			RetryMaxAttempts:  DefaultRetryMaxAttempts,
 			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
-		MarshalerName: "otlp_json",
+		MarshalerName:    "otlp_json",
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
 	}, e,
 	)
 }
@@ -611,13 +617,14 @@ func TestMarshallerName(t *testing.T) {
 		S3Uploader: S3UploaderConfig{
 			Region:            "us-east-1",
 			S3Bucket:          "foo",
-			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H",
 			StorageClass:      "STANDARD",
 			RetryMode:         DefaultRetryMode,
 			RetryMaxAttempts:  DefaultRetryMaxAttempts,
 			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
-		MarshalerName: "sumo_ic",
+		MarshalerName:    "sumo_ic",
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
 	}, e,
 	)
 
@@ -629,13 +636,14 @@ func TestMarshallerName(t *testing.T) {
 		S3Uploader: S3UploaderConfig{
 			Region:            "us-east-1",
 			S3Bucket:          "bar",
-			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H",
 			StorageClass:      "STANDARD",
 			RetryMode:         DefaultRetryMode,
 			RetryMaxAttempts:  DefaultRetryMaxAttempts,
 			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
-		MarshalerName: "otlp_proto",
+		MarshalerName:    "otlp_proto",
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
 	}, e,
 	)
 }
@@ -663,14 +671,15 @@ func TestCompressionName(t *testing.T) {
 		S3Uploader: S3UploaderConfig{
 			Region:            "us-east-1",
 			S3Bucket:          "foo",
-			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H",
 			Compression:       "gzip",
 			StorageClass:      "STANDARD",
 			RetryMode:         DefaultRetryMode,
 			RetryMaxAttempts:  DefaultRetryMaxAttempts,
 			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
-		MarshalerName: "otlp_json",
+		MarshalerName:    "otlp_json",
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
 	}, e,
 	)
 
@@ -682,14 +691,15 @@ func TestCompressionName(t *testing.T) {
 		S3Uploader: S3UploaderConfig{
 			Region:            "us-east-1",
 			S3Bucket:          "bar",
-			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H",
 			Compression:       "none",
 			StorageClass:      "STANDARD",
 			RetryMode:         DefaultRetryMode,
 			RetryMaxAttempts:  DefaultRetryMaxAttempts,
 			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
-		MarshalerName: "otlp_proto",
+		MarshalerName:    "otlp_proto",
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
 	}, e,
 	)
 
@@ -701,14 +711,15 @@ func TestCompressionName(t *testing.T) {
 		S3Uploader: S3UploaderConfig{
 			Region:            "us-east-1",
 			S3Bucket:          "bar",
-			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H/minute=%M",
+			S3PartitionFormat: "year=%Y/month=%m/day=%d/hour=%H",
 			Compression:       "zstd",
 			StorageClass:      "STANDARD",
 			RetryMode:         DefaultRetryMode,
 			RetryMaxAttempts:  DefaultRetryMaxAttempts,
 			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
-		MarshalerName: "otlp_json",
+		MarshalerName:    "otlp_json",
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
 	}, e,
 	)
 }
@@ -744,7 +755,8 @@ func TestResourceAttrsToS3(t *testing.T) {
 			RetryMaxAttempts:  DefaultRetryMaxAttempts,
 			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
-		MarshalerName: "otlp_json",
+		MarshalerName:    "otlp_json",
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
 		ResourceAttrsToS3: ResourceAttrsToS3{
 			S3Bucket: "com.awss3.bucket",
 			S3Prefix: "com.awss3.prefix",
@@ -784,7 +796,8 @@ func TestRetry(t *testing.T) {
 			RetryMaxAttempts:  5,
 			RetryMaxBackoff:   30 * time.Second,
 		},
-		MarshalerName: "otlp_json",
+		MarshalerName:    "otlp_json",
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
 	}, e,
 	)
 }
@@ -819,9 +832,10 @@ func TestConfigS3UniqueKeyFunc(t *testing.T) {
 			StorageClass:      "STANDARD",
 			UniqueKeyFuncName: "uuidv7",
 		},
-		QueueSettings:   queueCfg,
-		TimeoutSettings: timeoutCfg,
-		MarshalerName:   "otlp_json",
+		QueueSettings:    queueCfg,
+		TimeoutSettings:  timeoutCfg,
+		MarshalerName:    "otlp_json",
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
 	}, e,
 	)
 }
@@ -857,9 +871,10 @@ func TestConfigS3BasePrefix(t *testing.T) {
 			RetryMaxAttempts:  DefaultRetryMaxAttempts,
 			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
-		QueueSettings:   queueCfg,
-		TimeoutSettings: timeoutCfg,
-		MarshalerName:   "otlp_json",
+		QueueSettings:    queueCfg,
+		TimeoutSettings:  timeoutCfg,
+		MarshalerName:    "otlp_json",
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
 	}, e,
 	)
 }
@@ -895,9 +910,10 @@ func TestConfigS3BasePrefixWithResourceAttrs(t *testing.T) {
 			RetryMaxAttempts:  DefaultRetryMaxAttempts,
 			RetryMaxBackoff:   DefaultRetryMaxBackoff,
 		},
-		QueueSettings:   queueCfg,
-		TimeoutSettings: timeoutCfg,
-		MarshalerName:   "otlp_json",
+		QueueSettings:    queueCfg,
+		TimeoutSettings:  timeoutCfg,
+		MarshalerName:    "otlp_json",
+		MaxFileSizeBytes: defaultMaxFileSizeBytes,
 		ResourceAttrsToS3: ResourceAttrsToS3{
 			S3Prefix: "com.awss3.prefix",
 		},

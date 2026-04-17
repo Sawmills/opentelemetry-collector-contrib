@@ -93,7 +93,7 @@ func TestPartitionKeyInputsNewPartitionKey(t *testing.T) {
 					return "fixed"
 				},
 			},
-			expect:         "/telemetry/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics",
+			expect:         "/telemetry/service-01_pod2/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics",
 			overridePrefix: "",
 		},
 		{
@@ -109,7 +109,7 @@ func TestPartitionKeyInputsNewPartitionKey(t *testing.T) {
 					return "fixed"
 				},
 			},
-			expect:         "/telemetry/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics.gz",
+			expect:         "/telemetry/service-01_pod2/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics.gz",
 			overridePrefix: "",
 		},
 		{
@@ -125,7 +125,7 @@ func TestPartitionKeyInputsNewPartitionKey(t *testing.T) {
 					return "fixed"
 				},
 			},
-			expect:         "/foo-prefix1/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics.gz",
+			expect:         "/foo-prefix1/service-01_pod2/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics.gz",
 			overridePrefix: "/foo-prefix1",
 		},
 		{
@@ -140,7 +140,7 @@ func TestPartitionKeyInputsNewPartitionKey(t *testing.T) {
 					return "fixed"
 				},
 			},
-			expect:         "base/path/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics",
+			expect:         "base/path/service-01_pod2/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics",
 			overridePrefix: "",
 		},
 		{
@@ -156,7 +156,7 @@ func TestPartitionKeyInputsNewPartitionKey(t *testing.T) {
 					return "fixed"
 				},
 			},
-			expect:         "base/path/telemetry/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics",
+			expect:         "base/path/telemetry/service-01_pod2/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics",
 			overridePrefix: "",
 		},
 		{
@@ -172,7 +172,7 @@ func TestPartitionKeyInputsNewPartitionKey(t *testing.T) {
 					return "fixed"
 				},
 			},
-			expect:         "base/path/override/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics",
+			expect:         "base/path/override/service-01_pod2/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics",
 			overridePrefix: "override",
 		},
 		{
@@ -188,7 +188,7 @@ func TestPartitionKeyInputsNewPartitionKey(t *testing.T) {
 					return "fixed"
 				},
 			},
-			expect:         "base/path/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics",
+			expect:         "base/path/service-01_pod2/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics",
 			overridePrefix: "",
 		},
 	} {

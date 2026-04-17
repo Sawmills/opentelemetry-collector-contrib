@@ -22,6 +22,18 @@ type marshaler interface {
 	compressed() bool
 }
 
+type logFlusher interface {
+	FlushLogs() ([]byte, error)
+}
+
+type logFlusherWithReason interface {
+	FlushLogsWithReason(reason string) ([]byte, error)
+}
+
+type traceFlusher interface {
+	FlushTraces() ([]byte, error)
+}
+
 var ErrUnknownMarshaler = errors.New("unknown marshaler")
 
 func newMarshalerFromEncoding(encoding *component.ID, fileFormat string, host component.Host, logger *zap.Logger) (marshaler, error) {
@@ -34,9 +46,25 @@ func newMarshalerFromEncoding(encoding *component.ID, fileFormat string, host co
 	marshaler.logsMarshaler, _ = e.(plog.Marshaler)
 	marshaler.metricsMarshaler, _ = e.(pmetric.Marshaler)
 	marshaler.tracesMarshaler, _ = e.(ptrace.Marshaler)
+	if flusher, ok := e.(logFlusher); ok {
+		marshaler.extLogFlusher = flusher
+	}
+	if flusher, ok := e.(logFlusherWithReason); ok {
+		marshaler.extLogFlusherWithReason = flusher
+	}
+	if flusher, ok := e.(traceFlusher); ok {
+		marshaler.extTraceFlusher = flusher
+	}
 	marshaler.fileFormat = fileFormat
 	marshaler.IsCompressed = false
 	return marshaler, nil
+}
+
+func newMarshalerWithConfig(mType MarshalerType, maxBatchSize int, logger *zap.Logger) (marshaler, error) {
+	if mType == OtlpJSON && maxBatchSize > 0 {
+		return newJSONBatchingMarshaler(maxBatchSize, logger), nil
+	}
+	return newMarshaler(mType, logger)
 }
 
 func newMarshaler(mType MarshalerType, logger *zap.Logger) (marshaler, error) {
