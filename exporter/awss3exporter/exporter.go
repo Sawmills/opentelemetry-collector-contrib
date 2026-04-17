@@ -147,8 +147,8 @@ func (e *s3Exporter) start(ctx context.Context, host component.Host) error {
 				}
 			} else {
 				// Default to local time to match PartitionKeyBuilder which defaults
-			// PartitionTimeLocation to time.Local when unset.
-			loc = time.Local
+				// PartitionTimeLocation to time.Local when unset.
+				loc = time.Local
 			}
 			go e.runEvery(ctx, e.config.S3Uploader.S3Partition, loc, func() {
 				if err := e.flushMarshaler(ctx, "timer"); err != nil {
