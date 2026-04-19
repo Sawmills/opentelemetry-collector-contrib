@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 func TestMetricBatcherFlushesOnMaxDataPoints(t *testing.T) {
@@ -269,13 +272,57 @@ func TestMetricBatcherRestoresPendingBytesFromMergedPayloadOnFailure(t *testing.
 	expectedBytes := (&pmetric.ProtoMarshaler{}).MetricsSize(expected)
 
 	require.Eventually(t, func() bool {
-		for _, p := range batcher.snapshotPending() {
+		for _, p := range batcher.snapshotPending().pending {
 			if p.endpoint == "endpoint-1:4317" {
 				return p.datapoints == 2 && int(p.bytes) == expectedBytes
 			}
 		}
 		return false
 	}, time.Second, 20*time.Millisecond)
+}
+
+func TestMetricBatcherRecordsPendingOldestAgeAndFlushAge(t *testing.T) {
+	telemetry := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, telemetry.Shutdown(context.Background()))
+	})
+
+	batcher, err := newMetricBatcher(
+		componenttest.NewNopTelemetrySettings().Logger,
+		telemetry.NewTelemetrySettings(),
+		metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		func(_ context.Context, _ *wrappedExporter, _ pmetric.Metrics, _ string) error {
+			return nil
+		},
+		nil,
+	)
+	require.NoError(t, err)
+
+	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
+	time.Sleep(25 * time.Millisecond)
+
+	pendingMetric, err := telemetry.GetMetric("otelcol_loadbalancer_metric_batch_pending_oldest_datapoint_age")
+	require.NoError(t, err)
+	pendingGauge, ok := pendingMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok)
+	require.Greater(t, findGaugePointValue(t, pendingGauge.DataPoints, attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"))), int64(0))
+
+	maxMetric, err := telemetry.GetMetric("otelcol_loadbalancer_metric_batch_pending_oldest_datapoint_age_max")
+	require.NoError(t, err)
+	maxGauge, ok := maxMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok)
+	require.Greater(t, maxGauge.DataPoints[0].Value, int64(0))
+
+	require.NoError(t, batcher.Shutdown(t.Context()))
+
+	flushMetric, err := telemetry.GetMetric("otelcol_loadbalancer_metric_batch_flush_oldest_datapoint_age")
+	require.NoError(t, err)
+	flushHistogram, ok := flushMetric.Data.(metricdata.Histogram[int64])
+	require.True(t, ok)
+	require.Len(t, flushHistogram.DataPoints, 1)
+	require.Equal(t, uint64(1), flushHistogram.DataPoints[0].Count)
+	require.Greater(t, flushHistogram.DataPoints[0].Sum, int64(0))
 }
 
 func TestMetricBatcherTryEnqueueReturnsFalseWhenBackendQueueIsFull(t *testing.T) {
@@ -386,7 +433,7 @@ func TestMetricBatcherDropsPendingWhenRetryBufferCapExceeded(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond)
 
 	require.Eventually(t, func() bool {
-		for _, p := range batcher.snapshotPending() {
+		for _, p := range batcher.snapshotPending().pending {
 			if p.endpoint == "endpoint-1:4317" {
 				return p.datapoints == 0
 			}
@@ -428,7 +475,7 @@ func TestMetricBatcherDropsPendingWhenRetryAgeExceeded(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond)
 
 	require.Eventually(t, func() bool {
-		for _, p := range batcher.snapshotPending() {
+		for _, p := range batcher.snapshotPending().pending {
 			if p.endpoint == "endpoint-1:4317" {
 				return p.datapoints == 0
 			}

@@ -18,6 +18,8 @@ import (
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
 )
@@ -257,7 +259,64 @@ func TestLogBatcherEnqueueAfterShutdownReturnsStoppingError(t *testing.T) {
 		simpleLogs(),
 	)
 	require.ErrorIs(t, err, errLogBatcherExporterStopping)
-	assert.Empty(t, batcher.snapshotPending())
+	snapshot := batcher.snapshotPending()
+	assert.Empty(t, snapshot.pending)
+	assert.Zero(t, snapshot.maxOldestAgeMillis)
+}
+
+func TestLogBatcherRecordsPendingOldestAgeAndFlushAge(t *testing.T) {
+	telemetry := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, telemetry.Shutdown(context.Background()))
+	})
+
+	batcher, err := newLogBatcher(componenttest.NewNopTelemetrySettings().Logger, telemetry.NewTelemetrySettings(), logBatcherSettings{
+		maxRecords:    100,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, func(context.Context, *wrappedExporter, plog.Logs, string) error {
+		return nil
+	})
+	require.NoError(t, err)
+
+	exp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, simpleLogs()))
+	time.Sleep(25 * time.Millisecond)
+
+	pendingMetric, err := telemetry.GetMetric("otelcol_loadbalancer_log_batch_pending_oldest_record_age")
+	require.NoError(t, err)
+	pendingGauge, ok := pendingMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok)
+	require.Greater(t, findGaugePointValue(t, pendingGauge.DataPoints, attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"))), int64(0))
+
+	maxMetric, err := telemetry.GetMetric("otelcol_loadbalancer_log_batch_pending_oldest_record_age_max")
+	require.NoError(t, err)
+	maxGauge, ok := maxMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok)
+	require.Greater(t, maxGauge.DataPoints[0].Value, int64(0))
+
+	require.NoError(t, batcher.Shutdown(t.Context()))
+
+	flushMetric, err := telemetry.GetMetric("otelcol_loadbalancer_log_batch_flush_oldest_record_age")
+	require.NoError(t, err)
+	flushHistogram, ok := flushMetric.Data.(metricdata.Histogram[int64])
+	require.True(t, ok)
+	require.Len(t, flushHistogram.DataPoints, 1)
+	require.Equal(t, uint64(1), flushHistogram.DataPoints[0].Count)
+	require.Greater(t, flushHistogram.DataPoints[0].Sum, int64(0))
+}
+
+func findGaugePointValue(t *testing.T, dps []metricdata.DataPoint[int64], attrs attribute.Set) int64 {
+	t.Helper()
+
+	for _, dp := range dps {
+		if dp.Attributes.Equals(&attrs) {
+			return dp.Value
+		}
+	}
+
+	t.Fatalf("gauge datapoint with attrs %v not found", attrs)
+	return 0
 }
 
 func TestLogBatcherRemoveRespectsContextWhileWaitingForInflight(t *testing.T) {
