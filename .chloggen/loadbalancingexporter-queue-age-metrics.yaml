@@ -1,0 +1,6 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Add queue age metrics for the loadbalancing exporter sending queue and internal post-routing batchers.
+issues: [47]
+subtext: |-
+  This adds oldest-pending age gauges plus flush-age histograms so operators can distinguish deep queues from stale queues across both exporterhelper sending_queue backlog and the loadbalancing exporter's internal log and metric batchers.
