@@ -65,11 +65,12 @@ type metricBatcher struct {
 }
 
 type metricBatcherRequest struct {
-	kind   metricBatcherRequestKind
-	md     pmetric.Metrics
-	ctx    context.Context
-	reason string
-	done   chan error
+	kind               metricBatcherRequestKind
+	md                 pmetric.Metrics
+	ctx                context.Context
+	reason             string
+	done               chan error
+	enqueuedAtUnixNano int64
 }
 
 type metricBatcherRequestKind int
@@ -98,7 +99,6 @@ type backendMetricBatcher struct {
 	pendingDataPoints atomic.Int64
 	pendingBytes      atomic.Int64
 	oldestEnqueue     atomic.Int64
-	queuedOldest      atomic.Int64
 
 	flushFailures int
 }
@@ -169,11 +169,9 @@ func (b *metricBatcher) TryEnqueue(endpoint string, exp *wrappedExporter, md pme
 	default:
 	}
 
+	enqueuedAtUnixNano := time.Now().UnixNano()
 	select {
-	case backend.requests <- metricBatcherRequest{kind: metricBatcherRequestEnqueue, md: md}:
-		if len(backend.requests) > 0 {
-			backend.noteQueuedOldest(time.Now().UnixNano())
-		}
+	case backend.requests <- metricBatcherRequest{kind: metricBatcherRequestEnqueue, md: md, enqueuedAtUnixNano: enqueuedAtUnixNano}:
 		return true, nil
 	case <-backend.done:
 		return false, errMetricBatcherExporterStopping
@@ -258,14 +256,19 @@ func (b *metricBatcher) snapshotPending() metricBatcherSnapshot {
 	pending := make([]metricBatcherPending, 0, len(b.backends))
 	var maxOldestAgeMillis int64
 	for endpoint, backend := range b.backends {
-		oldestAgeMillis := ageMillisFromUnixNano(now, backend.oldestEnqueue.Load())
+		datapoints := backend.pendingDataPoints.Load()
+		bytes := backend.pendingBytes.Load()
+		var oldestAgeMillis int64
+		if datapoints > 0 {
+			oldestAgeMillis = ageMillisFromUnixNano(now, backend.oldestEnqueue.Load())
+		}
 		if oldestAgeMillis > maxOldestAgeMillis {
 			maxOldestAgeMillis = oldestAgeMillis
 		}
 		pending = append(pending, metricBatcherPending{
 			endpoint:        endpoint,
-			datapoints:      backend.pendingDataPoints.Load(),
-			bytes:           backend.pendingBytes.Load(),
+			datapoints:      datapoints,
+			bytes:           bytes,
 			oldestAgeMillis: oldestAgeMillis,
 		})
 	}
@@ -421,16 +424,12 @@ func (b *backendMetricBatcher) handleRequest(
 ) bool {
 	switch req.kind {
 	case metricBatcherRequestEnqueue:
-		queuedOldest := b.queuedOldest.Swap(0)
-		if *pendingDataPoints == 0 {
-			if queuedOldest == 0 {
-				queuedOldest = time.Now().UnixNano()
-			}
-			b.oldestEnqueue.Store(queuedOldest)
-		}
-		dps, bytes := b.drainEnqueueRequestsIntoPending(sizer, pending, req, nextReq)
+		dps, bytes, oldestEnqueue := b.drainEnqueueRequestsIntoPending(sizer, pending, req, nextReq)
 		*pendingDataPoints += dps
 		*pendingBytes += bytes
+		if *pendingDataPoints > 0 && b.oldestEnqueue.Load() == 0 {
+			b.oldestEnqueue.Store(oldestEnqueue)
+		}
 		b.pendingDataPoints.Store(int64(*pendingDataPoints))
 		b.pendingBytes.Store(int64(*pendingBytes))
 		if *pendingDataPoints > 0 && *timerC == nil {
@@ -452,25 +451,33 @@ func (b *backendMetricBatcher) handleRequest(
 	return false
 }
 
-func (b *backendMetricBatcher) noteQueuedOldest(unixNano int64) {
-	if unixNano == 0 {
-		return
-	}
-	b.queuedOldest.CompareAndSwap(0, unixNano)
-}
-
 // drainEnqueueRequestsIntoPending drains immediately available enqueue requests
 // into pending without merging payload trees.
-// Returns (dataPointsAdded, bytesAdded).
+// Returns (dataPointsAdded, bytesAdded, oldestEnqueueUnixNano).
 func (b *backendMetricBatcher) drainEnqueueRequestsIntoPending(
 	sizer *pmetric.ProtoMarshaler,
 	pending *[]pmetric.Metrics,
 	first metricBatcherRequest,
 	nextReq **metricBatcherRequest,
-) (int, int) {
-	dataPointCount := first.md.DataPointCount()
-	bytes := sizer.MetricsSize(first.md)
-	*pending = append(*pending, first.md)
+) (int, int, int64) {
+	dataPointCount := 0
+	bytes := 0
+	var oldestEnqueue int64
+
+	appendRequest := func(req metricBatcherRequest) {
+		count := req.md.DataPointCount()
+		if count == 0 {
+			return
+		}
+		dataPointCount += count
+		bytes += sizer.MetricsSize(req.md)
+		if oldestEnqueue == 0 || req.enqueuedAtUnixNano < oldestEnqueue {
+			oldestEnqueue = req.enqueuedAtUnixNano
+		}
+		*pending = append(*pending, req.md)
+	}
+
+	appendRequest(first)
 
 	for i := 0; i < cap(b.requests); i++ {
 		select {
@@ -479,17 +486,15 @@ func (b *backendMetricBatcher) drainEnqueueRequestsIntoPending(
 				// Channels don't support unread/put-back. Stash this control request
 				// so the run loop processes it next, in-order.
 				*nextReq = &req
-				return dataPointCount, bytes
+				return dataPointCount, bytes, oldestEnqueue
 			}
-			dataPointCount += req.md.DataPointCount()
-			bytes += sizer.MetricsSize(req.md)
-			*pending = append(*pending, req.md)
+			appendRequest(req)
 		default:
-			return dataPointCount, bytes
+			return dataPointCount, bytes, oldestEnqueue
 		}
 	}
 
-	return dataPointCount, bytes
+	return dataPointCount, bytes, oldestEnqueue
 }
 
 func (b *backendMetricBatcher) flush(

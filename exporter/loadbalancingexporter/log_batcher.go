@@ -54,11 +54,12 @@ type logBatcher struct {
 }
 
 type logBatcherRequest struct {
-	kind   logBatcherRequestKind
-	logs   plog.Logs
-	ctx    context.Context
-	reason string
-	done   chan error
+	kind               logBatcherRequestKind
+	logs               plog.Logs
+	ctx                context.Context
+	reason             string
+	done               chan error
+	enqueuedAtUnixNano int64
 }
 
 type logBatcherRequestKind int
@@ -86,7 +87,6 @@ type backendLogBatcher struct {
 	pendingRecords atomic.Int64
 	pendingBytes   atomic.Int64
 	oldestEnqueue  atomic.Int64
-	queuedOldest   atomic.Int64
 }
 
 type logBatcherTelemetry struct {
@@ -140,11 +140,9 @@ func (b *logBatcher) Enqueue(ctx context.Context, endpoint string, exp *wrappedE
 		return err
 	}
 	defer backend.inflight.Done()
+	enqueuedAtUnixNano := time.Now().UnixNano()
 	select {
-	case backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: logs}:
-		if len(backend.requests) > 0 {
-			backend.noteQueuedOldest(time.Now().UnixNano())
-		}
+	case backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: logs, enqueuedAtUnixNano: enqueuedAtUnixNano}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -222,14 +220,19 @@ func (b *logBatcher) snapshotPending() logBatcherSnapshot {
 	pending := make([]logBatcherPending, 0, len(b.backends))
 	var maxOldestAgeMillis int64
 	for endpoint, backend := range b.backends {
-		oldestAgeMillis := ageMillisFromUnixNano(now, backend.oldestEnqueue.Load())
+		records := backend.pendingRecords.Load()
+		bytes := backend.pendingBytes.Load()
+		var oldestAgeMillis int64
+		if records > 0 {
+			oldestAgeMillis = ageMillisFromUnixNano(now, backend.oldestEnqueue.Load())
+		}
 		if oldestAgeMillis > maxOldestAgeMillis {
 			maxOldestAgeMillis = oldestAgeMillis
 		}
 		pending = append(pending, logBatcherPending{
 			endpoint:        endpoint,
-			records:         backend.pendingRecords.Load(),
-			bytes:           backend.pendingBytes.Load(),
+			records:         records,
+			bytes:           bytes,
 			oldestAgeMillis: oldestAgeMillis,
 		})
 	}
@@ -401,14 +404,11 @@ func (b *backendLogBatcher) handleRequest(
 ) bool {
 	switch req.kind {
 	case logBatcherRequestEnqueue:
-		queuedOldest := b.queuedOldest.Swap(0)
-		if *pendingRecords == 0 {
-			if queuedOldest == 0 {
-				queuedOldest = time.Now().UnixNano()
-			}
-			b.oldestEnqueue.Store(queuedOldest)
+		recordsAdded, oldestEnqueue := b.mergeQueuedRequests(pending, req, nextReq)
+		*pendingRecords += recordsAdded
+		if *pendingRecords > 0 && b.oldestEnqueue.Load() == 0 {
+			b.oldestEnqueue.Store(oldestEnqueue)
 		}
-		*pendingRecords += b.mergeQueuedRequests(pending, req, nextReq)
 		// Track max_bytes using the actual serialized merged OTLP payload.
 		// Resource/scope dedup during merge means chunk sizes are not additive.
 		*pendingBytes = sizer.LogsSize(*pending)
@@ -432,32 +432,38 @@ func (b *backendLogBatcher) handleRequest(
 	return false
 }
 
-func (b *backendLogBatcher) noteQueuedOldest(unixNano int64) {
-	if unixNano == 0 {
-		return
-	}
-	b.queuedOldest.CompareAndSwap(0, unixNano)
-}
+func (b *backendLogBatcher) mergeQueuedRequests(pending *plog.Logs, first logBatcherRequest, nextReq **logBatcherRequest) (int, int64) {
+	recordCount := 0
+	var oldestEnqueue int64
 
-func (b *backendLogBatcher) mergeQueuedRequests(pending *plog.Logs, first logBatcherRequest, nextReq **logBatcherRequest) int {
-	recordCount := first.logs.LogRecordCount()
-	*pending = mergeLogs(*pending, first.logs)
+	mergeRequest := func(req logBatcherRequest) {
+		count := req.logs.LogRecordCount()
+		if count == 0 {
+			return
+		}
+		recordCount += count
+		if oldestEnqueue == 0 || req.enqueuedAtUnixNano < oldestEnqueue {
+			oldestEnqueue = req.enqueuedAtUnixNano
+		}
+		*pending = mergeLogs(*pending, req.logs)
+	}
+
+	mergeRequest(first)
 
 	for i := 0; i < cap(b.requests); i++ {
 		select {
 		case req := <-b.requests:
 			if req.kind != logBatcherRequestEnqueue {
 				*nextReq = &req
-				return recordCount
+				return recordCount, oldestEnqueue
 			}
-			recordCount += req.logs.LogRecordCount()
-			*pending = mergeLogs(*pending, req.logs)
+			mergeRequest(req)
 		default:
-			return recordCount
+			return recordCount, oldestEnqueue
 		}
 	}
 
-	return recordCount
+	return recordCount, oldestEnqueue
 }
 
 func (b *backendLogBatcher) flush(

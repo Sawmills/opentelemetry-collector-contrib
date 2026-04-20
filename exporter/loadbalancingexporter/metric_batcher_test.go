@@ -349,8 +349,9 @@ func TestMetricBatcherHandleRequestUsesAcceptanceTimeForOldestAge(t *testing.T) 
 	start := time.Now()
 	stopped := backend.handleRequest(
 		metricBatcherRequest{
-			kind: metricBatcherRequestEnqueue,
-			md:   singleDataPointMetric("m1"),
+			kind:               metricBatcherRequestEnqueue,
+			md:                 singleDataPointMetric("m1"),
+			enqueuedAtUnixNano: start.UnixNano(),
 		},
 		sizer,
 		&pending,
@@ -364,7 +365,56 @@ func TestMetricBatcherHandleRequestUsesAcceptanceTimeForOldestAge(t *testing.T) 
 	require.False(t, stopped)
 
 	stored := time.Unix(0, backend.oldestEnqueue.Load())
-	require.False(t, stored.Before(start), "oldest timestamp should reflect backend acceptance time, not sender-side time")
+	require.False(t, stored.Before(start), "oldest timestamp should reflect request enqueue time")
+}
+
+func TestMetricBatcherHandleRequestUsesOldestDrainedEnqueueTime(t *testing.T) {
+	backend := &backendMetricBatcher{
+		endpoint:  "endpoint-1:4317",
+		settings:  metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		requests:  make(chan metricBatcherRequest, 1),
+		done:      make(chan struct{}),
+		telemetry: &metricBatcherTelemetry{},
+	}
+
+	older := time.Now().Add(-80 * time.Millisecond).UnixNano()
+	newer := time.Now().Add(-20 * time.Millisecond).UnixNano()
+	backend.requests <- metricBatcherRequest{
+		kind:               metricBatcherRequestEnqueue,
+		md:                 singleDataPointMetric("queued"),
+		enqueuedAtUnixNano: older,
+	}
+
+	pending := make([]pmetric.Metrics, 0, 1)
+	pendingDataPoints := 0
+	pendingBytes := 0
+	sizer := &pmetric.ProtoMarshaler{}
+	var nextReq *metricBatcherRequest
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	var timerC <-chan time.Time
+	retryingSince := time.Time{}
+
+	stopped := backend.handleRequest(
+		metricBatcherRequest{
+			kind:               metricBatcherRequestEnqueue,
+			md:                 singleDataPointMetric("current"),
+			enqueuedAtUnixNano: newer,
+		},
+		sizer,
+		&pending,
+		&pendingDataPoints,
+		&pendingBytes,
+		&nextReq,
+		timer,
+		&timerC,
+		&retryingSince,
+	)
+	require.False(t, stopped)
+	require.Equal(t, 2, pendingDataPoints)
+	require.Equal(t, older, backend.oldestEnqueue.Load())
 }
 
 func TestMetricBatcherFlushAgeRecordedOnlyAfterTerminalFlush(t *testing.T) {
@@ -517,6 +567,31 @@ func TestMetricBatcherPendingAgeIncludesTimeBufferedBeforeWorkerDequeues(t *test
 	}, 2*time.Second, 20*time.Millisecond)
 
 	require.GreaterOrEqual(t, oldestAgeMillis, int64(40), "oldest age should include time spent buffered in backend.requests")
+}
+
+func TestMetricBatcherSnapshotPendingIgnoresOldestAgeWhenNoDatapointsPending(t *testing.T) {
+	batcher := &metricBatcher{
+		backends: map[string]*backendMetricBatcher{
+			"endpoint-1:4317": {
+				oldestEnqueue: func() atomic.Int64 {
+					var v atomic.Int64
+					v.Store(time.Now().Add(-time.Second).UnixNano())
+					return v
+				}(),
+				pendingBytes: func() atomic.Int64 {
+					var v atomic.Int64
+					v.Store(123)
+					return v
+				}(),
+			},
+		},
+	}
+
+	snapshot := batcher.snapshotPending()
+	require.Len(t, snapshot.pending, 1)
+	require.Zero(t, snapshot.pending[0].datapoints)
+	require.Zero(t, snapshot.pending[0].oldestAgeMillis)
+	require.Zero(t, snapshot.maxOldestAgeMillis)
 }
 
 func TestMetricBatcherRemoveReroutesOnResolverChangeFlushFailure(t *testing.T) {

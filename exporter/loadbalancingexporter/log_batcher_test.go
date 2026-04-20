@@ -329,8 +329,9 @@ func TestLogBatcherHandleRequestUsesAcceptanceTimeForOldestAge(t *testing.T) {
 	start := time.Now()
 	stopped := backend.handleRequest(
 		logBatcherRequest{
-			kind: logBatcherRequestEnqueue,
-			logs: simpleLogs(),
+			kind:               logBatcherRequestEnqueue,
+			logs:               simpleLogs(),
+			enqueuedAtUnixNano: start.UnixNano(),
 		},
 		sizer,
 		&pending,
@@ -343,7 +344,54 @@ func TestLogBatcherHandleRequestUsesAcceptanceTimeForOldestAge(t *testing.T) {
 	require.False(t, stopped)
 
 	stored := time.Unix(0, backend.oldestEnqueue.Load())
-	require.False(t, stored.Before(start), "oldest timestamp should reflect backend acceptance time, not sender-side time")
+	require.False(t, stored.Before(start), "oldest timestamp should reflect request enqueue time")
+}
+
+func TestLogBatcherHandleRequestUsesOldestDrainedEnqueueTime(t *testing.T) {
+	backend := &backendLogBatcher{
+		endpoint:  "endpoint-1:4317",
+		settings:  logBatcherSettings{maxRecords: 100, maxBytes: 1 << 20, flushInterval: time.Hour},
+		requests:  make(chan logBatcherRequest, 1),
+		done:      make(chan struct{}),
+		telemetry: &logBatcherTelemetry{},
+	}
+
+	older := time.Now().Add(-80 * time.Millisecond).UnixNano()
+	newer := time.Now().Add(-20 * time.Millisecond).UnixNano()
+	backend.requests <- logBatcherRequest{
+		kind:               logBatcherRequestEnqueue,
+		logs:               simpleLogs(),
+		enqueuedAtUnixNano: older,
+	}
+
+	pending := plog.NewLogs()
+	pendingRecords := 0
+	pendingBytes := 0
+	sizer := &plog.ProtoMarshaler{}
+	var nextReq *logBatcherRequest
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	var timerC <-chan time.Time
+
+	stopped := backend.handleRequest(
+		logBatcherRequest{
+			kind:               logBatcherRequestEnqueue,
+			logs:               simpleLogs(),
+			enqueuedAtUnixNano: newer,
+		},
+		sizer,
+		&pending,
+		&pendingRecords,
+		&pendingBytes,
+		&nextReq,
+		timer,
+		&timerC,
+	)
+	require.False(t, stopped)
+	require.Equal(t, 2, pendingRecords)
+	require.Equal(t, older, backend.oldestEnqueue.Load())
 }
 
 func TestLogBatcherPendingAgeIncludesTimeBufferedBeforeWorkerDequeues(t *testing.T) {
@@ -405,6 +453,31 @@ func TestLogBatcherPendingAgeIncludesTimeBufferedBeforeWorkerDequeues(t *testing
 	}, 2*time.Second, 20*time.Millisecond)
 
 	require.GreaterOrEqual(t, oldestAgeMillis, int64(40), "oldest age should include time spent buffered in backend.requests")
+}
+
+func TestLogBatcherSnapshotPendingIgnoresOldestAgeWhenNoRecordsPending(t *testing.T) {
+	batcher := &logBatcher{
+		backends: map[string]*backendLogBatcher{
+			"endpoint-1:4317": {
+				oldestEnqueue: func() atomic.Int64 {
+					var v atomic.Int64
+					v.Store(time.Now().Add(-time.Second).UnixNano())
+					return v
+				}(),
+				pendingBytes: func() atomic.Int64 {
+					var v atomic.Int64
+					v.Store(123)
+					return v
+				}(),
+			},
+		},
+	}
+
+	snapshot := batcher.snapshotPending()
+	require.Len(t, snapshot.pending, 1)
+	require.Zero(t, snapshot.pending[0].records)
+	require.Zero(t, snapshot.pending[0].oldestAgeMillis)
+	require.Zero(t, snapshot.maxOldestAgeMillis)
 }
 
 func findGaugePointValue(t *testing.T, dps []metricdata.DataPoint[int64], attrs attribute.Set) int64 {
