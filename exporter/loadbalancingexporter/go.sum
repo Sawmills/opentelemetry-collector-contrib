@@ -1,9 +1,9 @@
 github.com/Masterminds/semver/v3 v3.4.0 h1:Zog+i5UMtVoCU8oKka5P7i9q9HgrJeGzI9SA1Xbatp0=
 github.com/Masterminds/semver/v3 v3.4.0/go.mod h1:4V+yj/TJE1HU9XfppCwVMZq3I84lprf4nC11bSS5beM=
-github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.149.0-sawmills.1 h1:9SZhwUGER1B/naxD+gAxazKn2Sq/w/vxLe/jbrG8KWg=
-github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.149.0-sawmills.1/go.mod h1:vrebAHP8yYENZwHrOhfYqXDOlkqzB3pIOydIlbH/zoc=
-github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper/xexporterhelper v0.149.0-sawmills.1 h1:qaa2zAfOIKMpV4Z4OGBlQ0jVLh7LWphKZKWwYg6gzrM=
-github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper/xexporterhelper v0.149.0-sawmills.1/go.mod h1:rgd0kMwhRYZlCmQTau1zO/OI3tMcQqiFTYGooQ3RV5U=
+github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.149.0-sawmills.3 h1:iGUWw/TEMfOEgdbhYCtl+sjT52FvQSsRxDIgxcoKBxU=
+github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.149.0-sawmills.3/go.mod h1:mkCJzZNAUyO0PPXtOWyxRXOEIrsstwBaj0FHanzwXNU=
+github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper/xexporterhelper v0.149.0-sawmills.3 h1:5HG+EtaSZQy2qYqLKQzbFDyTVIGcAsL9pbHabBEGCgg=
+github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper/xexporterhelper v0.149.0-sawmills.3/go.mod h1:rgd0kMwhRYZlCmQTau1zO/OI3tMcQqiFTYGooQ3RV5U=
 github.com/aws/aws-sdk-go-v2 v1.41.3 h1:4kQ/fa22KjDt13QCy1+bYADvdgcxpfH18f0zP542kZA=
 github.com/aws/aws-sdk-go-v2 v1.41.3/go.mod h1:mwsPRE8ceUUpiTgF7QmQIJ7lgsKUPQOUl3o72QBrE1o=
 github.com/aws/aws-sdk-go-v2/config v1.32.11 h1:ftxI5sgz8jZkckuUHXfC/wMUc8u3fG1vQS0plr2F2Zs=
