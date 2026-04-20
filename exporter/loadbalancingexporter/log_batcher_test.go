@@ -267,7 +267,7 @@ func TestLogBatcherEnqueueAfterShutdownReturnsStoppingError(t *testing.T) {
 func TestLogBatcherRecordsPendingOldestAgeAndFlushAge(t *testing.T) {
 	telemetry := componenttest.NewTelemetry()
 	t.Cleanup(func() {
-		require.NoError(t, telemetry.Shutdown(context.Background()))
+		require.NoError(t, telemetry.Shutdown(context.WithoutCancel(t.Context())))
 	})
 
 	batcher, err := newLogBatcher(componenttest.NewNopTelemetrySettings().Logger, telemetry.NewTelemetrySettings(), logBatcherSettings{
@@ -287,13 +287,13 @@ func TestLogBatcherRecordsPendingOldestAgeAndFlushAge(t *testing.T) {
 	require.NoError(t, err)
 	pendingGauge, ok := pendingMetric.Data.(metricdata.Gauge[int64])
 	require.True(t, ok)
-	require.Greater(t, findGaugePointValue(t, pendingGauge.DataPoints, attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"))), int64(0))
+	require.Positive(t, findGaugePointValue(t, pendingGauge.DataPoints, attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"))))
 
 	maxMetric, err := telemetry.GetMetric("otelcol_loadbalancer_log_batch_pending_oldest_record_age_max")
 	require.NoError(t, err)
 	maxGauge, ok := maxMetric.Data.(metricdata.Gauge[int64])
 	require.True(t, ok)
-	require.Greater(t, maxGauge.DataPoints[0].Value, int64(0))
+	require.Positive(t, maxGauge.DataPoints[0].Value)
 
 	require.NoError(t, batcher.Shutdown(t.Context()))
 
@@ -303,7 +303,7 @@ func TestLogBatcherRecordsPendingOldestAgeAndFlushAge(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, flushHistogram.DataPoints, 1)
 	require.Equal(t, uint64(1), flushHistogram.DataPoints[0].Count)
-	require.Greater(t, flushHistogram.DataPoints[0].Sum, int64(0))
+	require.Positive(t, flushHistogram.DataPoints[0].Sum)
 }
 
 func TestLogBatcherHandleRequestUsesAcceptanceTimeForOldestAge(t *testing.T) {

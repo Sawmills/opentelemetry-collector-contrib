@@ -54,11 +54,11 @@ type logBatcher struct {
 }
 
 type logBatcherRequest struct {
-	kind       logBatcherRequestKind
-	logs       plog.Logs
-	ctx        context.Context
-	reason     string
-	done       chan error
+	kind   logBatcherRequestKind
+	logs   plog.Logs
+	ctx    context.Context
+	reason string
+	done   chan error
 }
 
 type logBatcherRequestKind int

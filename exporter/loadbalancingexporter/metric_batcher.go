@@ -65,11 +65,11 @@ type metricBatcher struct {
 }
 
 type metricBatcherRequest struct {
-	kind       metricBatcherRequestKind
-	md         pmetric.Metrics
-	ctx        context.Context
-	reason     string
-	done       chan error
+	kind   metricBatcherRequestKind
+	md     pmetric.Metrics
+	ctx    context.Context
+	reason string
+	done   chan error
 }
 
 type metricBatcherRequestKind int
