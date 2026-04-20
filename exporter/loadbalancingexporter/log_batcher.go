@@ -141,7 +141,7 @@ func (b *logBatcher) Enqueue(ctx context.Context, endpoint string, exp *wrappedE
 	}
 	defer backend.inflight.Done()
 	select {
-	case backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: logs, enqueuedAt: time.Now()}:
+	case backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: logs}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -398,8 +398,9 @@ func (b *backendLogBatcher) handleRequest(
 ) bool {
 	switch req.kind {
 	case logBatcherRequestEnqueue:
+		acceptedAt := time.Now()
 		if *pendingRecords == 0 {
-			b.oldestEnqueue.Store(req.enqueuedAt.UnixNano())
+			b.oldestEnqueue.Store(acceptedAt.UnixNano())
 		}
 		*pendingRecords += b.mergeQueuedRequests(pending, req, nextReq)
 		// Track max_bytes using the actual serialized merged OTLP payload.

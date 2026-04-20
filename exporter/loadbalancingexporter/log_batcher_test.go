@@ -306,6 +306,48 @@ func TestLogBatcherRecordsPendingOldestAgeAndFlushAge(t *testing.T) {
 	require.Greater(t, flushHistogram.DataPoints[0].Sum, int64(0))
 }
 
+func TestLogBatcherHandleRequestUsesAcceptanceTimeForOldestAge(t *testing.T) {
+	backend := &backendLogBatcher{
+		endpoint:  "endpoint-1:4317",
+		settings:  logBatcherSettings{maxRecords: 100, maxBytes: 1 << 20, flushInterval: time.Hour},
+		requests:  make(chan logBatcherRequest, 1),
+		done:      make(chan struct{}),
+		telemetry: &logBatcherTelemetry{},
+	}
+
+	pending := plog.NewLogs()
+	pendingRecords := 0
+	pendingBytes := 0
+	sizer := &plog.ProtoMarshaler{}
+	var nextReq *logBatcherRequest
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	var timerC <-chan time.Time
+
+	start := time.Now()
+	stale := start.Add(-time.Hour)
+	stopped := backend.handleRequest(
+		logBatcherRequest{
+			kind:       logBatcherRequestEnqueue,
+			logs:       simpleLogs(),
+			enqueuedAt: stale,
+		},
+		sizer,
+		&pending,
+		&pendingRecords,
+		&pendingBytes,
+		&nextReq,
+		timer,
+		&timerC,
+	)
+	require.False(t, stopped)
+
+	stored := time.Unix(0, backend.oldestEnqueue.Load())
+	require.False(t, stored.Before(start), "oldest timestamp should reflect backend acceptance time, not sender-side time")
+}
+
 func findGaugePointValue(t *testing.T, dps []metricdata.DataPoint[int64], attrs attribute.Set) int64 {
 	t.Helper()
 
