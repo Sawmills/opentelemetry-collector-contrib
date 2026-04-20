@@ -280,7 +280,7 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 
 		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodec(cfg.QueueSettings.PayloadCompression), newSettings()), 2)
 	})
-	t.Run("Should add in-memory encoding option when compression in memory is enabled", func(t *testing.T) {
+	t.Run("Should keep queue options count when compression in memory is enabled", func(t *testing.T) {
 		o := []exporterhelper.Option{}
 		cfg := createDefaultConfig().(*Config)
 		cfg.TimeoutSettings = exporterhelper.NewDefaultTimeoutConfig()
@@ -288,7 +288,7 @@ func TestBuildExporterResilienceOptions(t *testing.T) {
 		cfg.QueueSettings.PayloadCompression = QueuePayloadCompressionZstd
 		cfg.QueueSettings.CompressInMemory = true
 
-		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodec(cfg.QueueSettings.PayloadCompression), newSettings()), 3)
+		assert.Len(t, buildExporterResilienceOptions(o, cfg, newQueuePayloadCodec(cfg.QueueSettings.PayloadCompression), newSettings()), 2)
 	})
 	t.Run("Should have all resilience options if defined", func(t *testing.T) {
 		o := []exporterhelper.Option{}

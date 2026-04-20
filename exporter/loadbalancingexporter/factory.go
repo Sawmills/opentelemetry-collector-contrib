@@ -108,9 +108,6 @@ func buildExporterResilienceOptions(
 			}
 		}
 		options = append(options, xexporterhelper.WithQueueBatch(queueCfg, qbs))
-		if cfg.QueueSettings.CompressInMemory {
-			options = append(options, exporterhelper.WithQueueBatchInMemoryEncoding(true))
-		}
 	}
 	if cfg.Enabled {
 		options = append(options, exporterhelper.WithRetry(cfg.BackOffConfig))
