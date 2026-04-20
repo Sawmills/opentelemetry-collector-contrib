@@ -394,16 +394,22 @@ func TestMetricBatcherFlushAgeRecordedOnlyAfterTerminalFlush(t *testing.T) {
 	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
 	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
 
+	var flushHistogram metricdata.Histogram[int64]
 	require.Eventually(t, func() bool {
-		return calls.Load() >= 2
+		flushMetric, metricErr := telemetry.GetMetric("otelcol_loadbalancer_metric_batch_flush_oldest_datapoint_age")
+		if metricErr != nil {
+			return false
+		}
+		histogram, ok := flushMetric.Data.(metricdata.Histogram[int64])
+		if !ok || len(histogram.DataPoints) != 1 || histogram.DataPoints[0].Count == 0 {
+			return false
+		}
+		flushHistogram = histogram
+		return true
 	}, 2*time.Second, 20*time.Millisecond)
 
-	flushMetric, err := telemetry.GetMetric("otelcol_loadbalancer_metric_batch_flush_oldest_datapoint_age")
-	require.NoError(t, err)
-	flushHistogram, ok := flushMetric.Data.(metricdata.Histogram[int64])
-	require.True(t, ok)
-	require.Len(t, flushHistogram.DataPoints, 1)
 	require.Equal(t, uint64(1), flushHistogram.DataPoints[0].Count)
+	require.GreaterOrEqual(t, calls.Load(), int64(2))
 }
 
 func TestMetricBatcherTryEnqueueReturnsFalseWhenBackendQueueIsFull(t *testing.T) {
