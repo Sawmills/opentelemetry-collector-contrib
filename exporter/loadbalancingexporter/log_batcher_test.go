@@ -458,20 +458,11 @@ func TestLogBatcherPendingAgeIncludesTimeBufferedBeforeWorkerDequeues(t *testing
 func TestLogBatcherSnapshotPendingIgnoresOldestAgeWhenNoRecordsPending(t *testing.T) {
 	batcher := &logBatcher{
 		backends: map[string]*backendLogBatcher{
-			"endpoint-1:4317": {
-				oldestEnqueue: func() atomic.Int64 {
-					var v atomic.Int64
-					v.Store(time.Now().Add(-time.Second).UnixNano())
-					return v
-				}(),
-				pendingBytes: func() atomic.Int64 {
-					var v atomic.Int64
-					v.Store(123)
-					return v
-				}(),
-			},
+			"endpoint-1:4317": {},
 		},
 	}
+	batcher.backends["endpoint-1:4317"].oldestEnqueue.Store(time.Now().Add(-time.Second).UnixNano())
+	batcher.backends["endpoint-1:4317"].pendingBytes.Store(123)
 
 	snapshot := batcher.snapshotPending()
 	require.Len(t, snapshot.pending, 1)
