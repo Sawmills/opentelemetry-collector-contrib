@@ -327,12 +327,10 @@ func TestLogBatcherHandleRequestUsesAcceptanceTimeForOldestAge(t *testing.T) {
 	var timerC <-chan time.Time
 
 	start := time.Now()
-	stale := start.Add(-time.Hour)
 	stopped := backend.handleRequest(
 		logBatcherRequest{
-			kind:       logBatcherRequestEnqueue,
-			logs:       simpleLogs(),
-			enqueuedAt: stale,
+			kind: logBatcherRequestEnqueue,
+			logs: simpleLogs(),
 		},
 		sizer,
 		&pending,

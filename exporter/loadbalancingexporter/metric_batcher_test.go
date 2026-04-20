@@ -347,12 +347,10 @@ func TestMetricBatcherHandleRequestUsesAcceptanceTimeForOldestAge(t *testing.T) 
 	retryingSince := time.Time{}
 
 	start := time.Now()
-	stale := start.Add(-time.Hour)
 	stopped := backend.handleRequest(
 		metricBatcherRequest{
-			kind:       metricBatcherRequestEnqueue,
-			md:         singleDataPointMetric("m1"),
-			enqueuedAt: stale,
+			kind: metricBatcherRequestEnqueue,
+			md:   singleDataPointMetric("m1"),
 		},
 		sizer,
 		&pending,
