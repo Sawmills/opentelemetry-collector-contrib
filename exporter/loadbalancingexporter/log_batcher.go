@@ -59,7 +59,6 @@ type logBatcherRequest struct {
 	ctx        context.Context
 	reason     string
 	done       chan error
-	enqueuedAt time.Time
 }
 
 type logBatcherRequestKind int
