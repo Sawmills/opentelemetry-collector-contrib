@@ -465,9 +465,6 @@ The following metrics are recorded by this exporter:
 * `otelcol_loadbalancer_num_backend_updates` records how many of the resolutions resulted in a new list of backends. Use this information to understand how frequent your backend updates are and how often the ring is rebalanced. If the DNS hostname is always returning the same list of IP addresses but this metric keeps increasing, it might indicate a bug in the load balancer.
 * `otelcol_loadbalancer_backend_latency` measures the latency for each backend.
 * `otelcol_loadbalancer_backend_outcome` counts what the outcomes were for each endpoint, `success=true|false`.
-* When `sending_queue` is enabled with an exporterhelper build that includes queue-age instrumentation, standard queue age metrics are also available:
-  * `otelcol_exporter_queue_oldest_batch_age` reports the age of the oldest batch still waiting in the exporter queue.
-  * `otelcol_exporter_queue_batch_send_age` records how long a batch spent in the exporter queue before a consumer picked it up.
 * When the internal LB batchers are active, age metrics are also emitted for post-routing backlog:
   * `otelcol_loadbalancer_log_batch_pending_oldest_record_age` reports the age of the oldest log record currently pending for each backend endpoint.
   * `otelcol_loadbalancer_log_batch_pending_oldest_record_age_max` reports the maximum pending oldest-log age across all backend endpoints.
