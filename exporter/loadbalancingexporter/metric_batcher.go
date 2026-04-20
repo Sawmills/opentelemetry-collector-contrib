@@ -98,6 +98,7 @@ type backendMetricBatcher struct {
 	pendingDataPoints atomic.Int64
 	pendingBytes      atomic.Int64
 	oldestEnqueue     atomic.Int64
+	queuedOldest      atomic.Int64
 
 	flushFailures int
 }
@@ -170,6 +171,9 @@ func (b *metricBatcher) TryEnqueue(endpoint string, exp *wrappedExporter, md pme
 
 	select {
 	case backend.requests <- metricBatcherRequest{kind: metricBatcherRequestEnqueue, md: md}:
+		if len(backend.requests) > 0 {
+			backend.noteQueuedOldest(time.Now().UnixNano())
+		}
 		return true, nil
 	case <-backend.done:
 		return false, errMetricBatcherExporterStopping
@@ -417,9 +421,12 @@ func (b *backendMetricBatcher) handleRequest(
 ) bool {
 	switch req.kind {
 	case metricBatcherRequestEnqueue:
-		acceptedAt := time.Now()
+		queuedOldest := b.queuedOldest.Swap(0)
 		if *pendingDataPoints == 0 {
-			b.oldestEnqueue.Store(acceptedAt.UnixNano())
+			if queuedOldest == 0 {
+				queuedOldest = time.Now().UnixNano()
+			}
+			b.oldestEnqueue.Store(queuedOldest)
 		}
 		dps, bytes := b.drainEnqueueRequestsIntoPending(sizer, pending, req, nextReq)
 		*pendingDataPoints += dps
@@ -443,6 +450,13 @@ func (b *backendMetricBatcher) handleRequest(
 		return true
 	}
 	return false
+}
+
+func (b *backendMetricBatcher) noteQueuedOldest(unixNano int64) {
+	if unixNano == 0 {
+		return
+	}
+	b.queuedOldest.CompareAndSwap(0, unixNano)
 }
 
 // drainEnqueueRequestsIntoPending drains immediately available enqueue requests

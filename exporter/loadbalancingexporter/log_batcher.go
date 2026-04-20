@@ -86,6 +86,7 @@ type backendLogBatcher struct {
 	pendingRecords atomic.Int64
 	pendingBytes   atomic.Int64
 	oldestEnqueue  atomic.Int64
+	queuedOldest   atomic.Int64
 }
 
 type logBatcherTelemetry struct {
@@ -141,6 +142,9 @@ func (b *logBatcher) Enqueue(ctx context.Context, endpoint string, exp *wrappedE
 	defer backend.inflight.Done()
 	select {
 	case backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: logs}:
+		if len(backend.requests) > 0 {
+			backend.noteQueuedOldest(time.Now().UnixNano())
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -397,9 +401,12 @@ func (b *backendLogBatcher) handleRequest(
 ) bool {
 	switch req.kind {
 	case logBatcherRequestEnqueue:
-		acceptedAt := time.Now()
+		queuedOldest := b.queuedOldest.Swap(0)
 		if *pendingRecords == 0 {
-			b.oldestEnqueue.Store(acceptedAt.UnixNano())
+			if queuedOldest == 0 {
+				queuedOldest = time.Now().UnixNano()
+			}
+			b.oldestEnqueue.Store(queuedOldest)
 		}
 		*pendingRecords += b.mergeQueuedRequests(pending, req, nextReq)
 		// Track max_bytes using the actual serialized merged OTLP payload.
@@ -423,6 +430,13 @@ func (b *backendLogBatcher) handleRequest(
 		return true
 	}
 	return false
+}
+
+func (b *backendLogBatcher) noteQueuedOldest(unixNano int64) {
+	if unixNano == 0 {
+		return
+	}
+	b.queuedOldest.CompareAndSwap(0, unixNano)
 }
 
 func (b *backendLogBatcher) mergeQueuedRequests(pending *plog.Logs, first logBatcherRequest, nextReq **logBatcherRequest) int {

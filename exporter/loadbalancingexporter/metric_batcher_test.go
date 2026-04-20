@@ -457,6 +457,68 @@ func TestMetricBatcherTryEnqueueReturnsFalseWhenBackendQueueIsFull(t *testing.T)
 	require.False(t, enqueued)
 }
 
+func TestMetricBatcherPendingAgeIncludesTimeBufferedBeforeWorkerDequeues(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	sendStarted := make(chan struct{}, 1)
+	unblockSend := make(chan struct{})
+	sendReleased := false
+
+	batcher, err := newMetricBatcher(
+		ts.Logger,
+		ts.TelemetrySettings,
+		metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: 10 * time.Millisecond},
+		func(_ context.Context, _ *wrappedExporter, _ pmetric.Metrics, _ string) error {
+			select {
+			case sendStarted <- struct{}{}:
+			default:
+			}
+			<-unblockSend
+			return nil
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if !sendReleased {
+			close(unblockSend)
+		}
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
+
+	select {
+	case <-sendStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected backend send to start")
+	}
+
+	batcher.mu.RLock()
+	backend := batcher.backends["endpoint-1:4317"]
+	batcher.mu.RUnlock()
+	require.NotNil(t, backend)
+	backend.settings.flushInterval = time.Hour
+
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m2"))
+	time.Sleep(60 * time.Millisecond)
+	close(unblockSend)
+	sendReleased = true
+
+	var oldestAgeMillis int64
+	require.Eventually(t, func() bool {
+		for _, pending := range batcher.snapshotPending().pending {
+			if pending.endpoint == "endpoint-1:4317" && pending.datapoints == 1 {
+				oldestAgeMillis = pending.oldestAgeMillis
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 20*time.Millisecond)
+
+	require.GreaterOrEqual(t, oldestAgeMillis, int64(40), "oldest age should include time spent buffered in backend.requests")
+}
+
 func TestMetricBatcherRemoveReroutesOnResolverChangeFlushFailure(t *testing.T) {
 	ts, _ := getTelemetryAssets(t)
 	rerouted := make(chan int, 1)
