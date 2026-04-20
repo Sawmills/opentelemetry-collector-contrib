@@ -170,7 +170,7 @@ func (b *metricBatcher) TryEnqueue(endpoint string, exp *wrappedExporter, md pme
 	}
 
 	select {
-	case backend.requests <- metricBatcherRequest{kind: metricBatcherRequestEnqueue, md: md, enqueuedAt: time.Now()}:
+	case backend.requests <- metricBatcherRequest{kind: metricBatcherRequestEnqueue, md: md}:
 		return true, nil
 	case <-backend.done:
 		return false, errMetricBatcherExporterStopping
@@ -418,8 +418,9 @@ func (b *backendMetricBatcher) handleRequest(
 ) bool {
 	switch req.kind {
 	case metricBatcherRequestEnqueue:
+		acceptedAt := time.Now()
 		if *pendingDataPoints == 0 {
-			b.oldestEnqueue.Store(req.enqueuedAt.UnixNano())
+			b.oldestEnqueue.Store(acceptedAt.UnixNano())
 		}
 		dps, bytes := b.drainEnqueueRequestsIntoPending(sizer, pending, req, nextReq)
 		*pendingDataPoints += dps
@@ -515,10 +516,10 @@ func (b *backendMetricBatcher) flush(
 	b.oldestEnqueue.Store(0)
 
 	attrs := metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint)))
+	flushAttrs := metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint), attribute.String("reason", reason)))
 	b.telemetry.batchDataPoints.Record(ctx, int64(datapoints), attrs)
 	b.telemetry.batchBytes.Record(ctx, int64(bytes), attrs)
-	b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint), attribute.String("reason", reason))))
-	b.telemetry.flushTotal.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint), attribute.String("reason", reason))))
+	b.telemetry.flushTotal.Add(ctx, 1, flushAttrs)
 
 	err := b.send(ctx, b.exporter(), drained, reason)
 	if err != nil {
@@ -534,6 +535,7 @@ func (b *backendMetricBatcher) flush(
 			overAge := now.Sub(*retryingSince) >= metricBatcherMaxRetryAge
 			if overCap || overAge {
 				b.logger.Error("dropping metric batch after retry limits exceeded", zap.String("endpoint", b.endpoint), zap.String("reason", reason), zap.Int("failures", b.flushFailures), zap.Int("datapoints", datapoints), zap.Int("bytes", bytes), zap.Bool("over_cap", overCap), zap.Bool("over_age", overAge), zap.Duration("retry_age", now.Sub(*retryingSince)), zap.Error(err))
+				b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
 				b.telemetry.droppedDataPoints.Add(ctx, int64(datapoints), attrs)
 				*retryingSince = time.Time{}
 				b.flushFailures = 0
@@ -555,6 +557,7 @@ func (b *backendMetricBatcher) flush(
 			if b.drainErr != nil && (reason == metricFlushReasonResolverChange || reason == metricFlushReasonShutdown) {
 				rerouteErr := b.drainErr(ctx, drained, reason)
 				if rerouteErr == nil {
+					b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
 					return nil
 				}
 				var mErr consumererror.Metrics
@@ -564,11 +567,13 @@ func (b *backendMetricBatcher) flush(
 				}
 				err = errors.Join(err, rerouteErr)
 			}
+			b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
 			b.telemetry.droppedDataPoints.Add(ctx, int64(datapoints), attrs)
 		}
 	}
 
 	if err == nil {
+		b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
 		*retryingSince = time.Time{}
 		b.flushFailures = 0
 	}
