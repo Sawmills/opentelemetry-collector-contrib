@@ -65,11 +65,12 @@ type metricBatcher struct {
 }
 
 type metricBatcherRequest struct {
-	kind   metricBatcherRequestKind
-	md     pmetric.Metrics
-	ctx    context.Context
-	reason string
-	done   chan error
+	kind               metricBatcherRequestKind
+	md                 pmetric.Metrics
+	ctx                context.Context
+	reason             string
+	done               chan error
+	enqueuedAtUnixNano int64
 }
 
 type metricBatcherRequestKind int
@@ -97,21 +98,25 @@ type backendMetricBatcher struct {
 
 	pendingDataPoints atomic.Int64
 	pendingBytes      atomic.Int64
+	oldestEnqueue     atomic.Int64
 
 	flushFailures int
 }
 
 type metricBatcherTelemetry struct {
-	logger            *zap.Logger
-	meter             metric.Meter
-	batchDataPoints   metric.Int64Histogram
-	batchBytes        metric.Int64Histogram
-	flushTotal        metric.Int64Counter
-	flushErrors       metric.Int64Counter
-	droppedDataPoints metric.Int64Counter
-	overflowTotal     metric.Int64Counter
-	pendingDataPoints metric.Int64ObservableGauge
-	pendingBytes      metric.Int64ObservableGauge
+	logger                *zap.Logger
+	meter                 metric.Meter
+	batchDataPoints       metric.Int64Histogram
+	batchBytes            metric.Int64Histogram
+	flushTotal            metric.Int64Counter
+	flushErrors           metric.Int64Counter
+	flushOldestPointAge   metric.Int64Histogram
+	droppedDataPoints     metric.Int64Counter
+	overflowTotal         metric.Int64Counter
+	pendingDataPoints     metric.Int64ObservableGauge
+	pendingBytes          metric.Int64ObservableGauge
+	pendingOldestPointAge metric.Int64ObservableGauge
+	pendingOldestPointMax metric.Int64ObservableGauge
 
 	mu            sync.Mutex
 	registrations []metric.Registration
@@ -164,8 +169,9 @@ func (b *metricBatcher) TryEnqueue(endpoint string, exp *wrappedExporter, md pme
 	default:
 	}
 
+	enqueuedAtUnixNano := time.Now().UnixNano()
 	select {
-	case backend.requests <- metricBatcherRequest{kind: metricBatcherRequestEnqueue, md: md}:
+	case backend.requests <- metricBatcherRequest{kind: metricBatcherRequestEnqueue, md: md, enqueuedAtUnixNano: enqueuedAtUnixNano}:
 		return true, nil
 	case <-backend.done:
 		return false, errMetricBatcherExporterStopping
@@ -231,24 +237,42 @@ func (b *metricBatcher) scheduleBackendCleanup(backend *backendMetricBatcher, re
 }
 
 type metricBatcherPending struct {
-	endpoint   string
-	datapoints int64
-	bytes      int64
+	endpoint        string
+	datapoints      int64
+	bytes           int64
+	oldestAgeMillis int64
 }
 
-func (b *metricBatcher) snapshotPending() []metricBatcherPending {
+type metricBatcherSnapshot struct {
+	pending            []metricBatcherPending
+	maxOldestAgeMillis int64
+}
+
+func (b *metricBatcher) snapshotPending() metricBatcherSnapshot {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
+	now := time.Now()
 	pending := make([]metricBatcherPending, 0, len(b.backends))
+	var maxOldestAgeMillis int64
 	for endpoint, backend := range b.backends {
+		datapoints := backend.pendingDataPoints.Load()
+		bytes := backend.pendingBytes.Load()
+		var oldestAgeMillis int64
+		if datapoints > 0 {
+			oldestAgeMillis = ageMillisFromUnixNano(now, backend.oldestEnqueue.Load())
+		}
+		if oldestAgeMillis > maxOldestAgeMillis {
+			maxOldestAgeMillis = oldestAgeMillis
+		}
 		pending = append(pending, metricBatcherPending{
-			endpoint:   endpoint,
-			datapoints: backend.pendingDataPoints.Load(),
-			bytes:      backend.pendingBytes.Load(),
+			endpoint:        endpoint,
+			datapoints:      datapoints,
+			bytes:           bytes,
+			oldestAgeMillis: oldestAgeMillis,
 		})
 	}
-	return pending
+	return metricBatcherSnapshot{pending: pending, maxOldestAgeMillis: maxOldestAgeMillis}
 }
 
 func (b *metricBatcher) acquireBackend(endpoint string, exp *wrappedExporter) (*backendMetricBatcher, error) {
@@ -400,9 +424,12 @@ func (b *backendMetricBatcher) handleRequest(
 ) bool {
 	switch req.kind {
 	case metricBatcherRequestEnqueue:
-		dps, bytes := b.drainEnqueueRequestsIntoPending(sizer, pending, req, nextReq)
+		dps, bytes, oldestEnqueue := b.drainEnqueueRequestsIntoPending(sizer, pending, req, nextReq)
 		*pendingDataPoints += dps
 		*pendingBytes += bytes
+		if *pendingDataPoints > 0 && b.oldestEnqueue.Load() == 0 {
+			b.oldestEnqueue.Store(oldestEnqueue)
+		}
 		b.pendingDataPoints.Store(int64(*pendingDataPoints))
 		b.pendingBytes.Store(int64(*pendingBytes))
 		if *pendingDataPoints > 0 && *timerC == nil {
@@ -426,16 +453,31 @@ func (b *backendMetricBatcher) handleRequest(
 
 // drainEnqueueRequestsIntoPending drains immediately available enqueue requests
 // into pending without merging payload trees.
-// Returns (dataPointsAdded, bytesAdded).
+// Returns (dataPointsAdded, bytesAdded, oldestEnqueueUnixNano).
 func (b *backendMetricBatcher) drainEnqueueRequestsIntoPending(
 	sizer *pmetric.ProtoMarshaler,
 	pending *[]pmetric.Metrics,
 	first metricBatcherRequest,
 	nextReq **metricBatcherRequest,
-) (int, int) {
-	dataPointCount := first.md.DataPointCount()
-	bytes := sizer.MetricsSize(first.md)
-	*pending = append(*pending, first.md)
+) (int, int, int64) {
+	dataPointCount := 0
+	bytes := 0
+	var oldestEnqueue int64
+
+	appendRequest := func(req metricBatcherRequest) {
+		count := req.md.DataPointCount()
+		if count == 0 {
+			return
+		}
+		dataPointCount += count
+		bytes += sizer.MetricsSize(req.md)
+		if oldestEnqueue == 0 || req.enqueuedAtUnixNano < oldestEnqueue {
+			oldestEnqueue = req.enqueuedAtUnixNano
+		}
+		*pending = append(*pending, req.md)
+	}
+
+	appendRequest(first)
 
 	for i := 0; i < cap(b.requests); i++ {
 		select {
@@ -444,17 +486,15 @@ func (b *backendMetricBatcher) drainEnqueueRequestsIntoPending(
 				// Channels don't support unread/put-back. Stash this control request
 				// so the run loop processes it next, in-order.
 				*nextReq = &req
-				return dataPointCount, bytes
+				return dataPointCount, bytes, oldestEnqueue
 			}
-			dataPointCount += req.md.DataPointCount()
-			bytes += sizer.MetricsSize(req.md)
-			*pending = append(*pending, req.md)
+			appendRequest(req)
 		default:
-			return dataPointCount, bytes
+			return dataPointCount, bytes, oldestEnqueue
 		}
 	}
 
-	return dataPointCount, bytes
+	return dataPointCount, bytes, oldestEnqueue
 }
 
 func (b *backendMetricBatcher) flush(
@@ -484,16 +524,20 @@ func (b *backendMetricBatcher) flush(
 	drained := mergePendingMetricChunks(drainedChunks)
 	datapoints := *pendingDataPoints
 	bytes := sizer.MetricsSize(drained)
+	oldestUnixNano := b.oldestEnqueue.Load()
+	oldestAgeMillis := ageMillisFromUnixNano(time.Now(), oldestUnixNano)
 	*pending = (*pending)[:0]
 	*pendingDataPoints = 0
 	*pendingBytes = 0
 	b.pendingDataPoints.Store(0)
 	b.pendingBytes.Store(0)
+	b.oldestEnqueue.Store(0)
 
 	attrs := metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint)))
+	flushAttrs := metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint), attribute.String("reason", reason)))
 	b.telemetry.batchDataPoints.Record(ctx, int64(datapoints), attrs)
 	b.telemetry.batchBytes.Record(ctx, int64(bytes), attrs)
-	b.telemetry.flushTotal.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint), attribute.String("reason", reason))))
+	b.telemetry.flushTotal.Add(ctx, 1, flushAttrs)
 
 	err := b.send(ctx, b.exporter(), drained, reason)
 	if err != nil {
@@ -509,6 +553,7 @@ func (b *backendMetricBatcher) flush(
 			overAge := now.Sub(*retryingSince) >= metricBatcherMaxRetryAge
 			if overCap || overAge {
 				b.logger.Error("dropping metric batch after retry limits exceeded", zap.String("endpoint", b.endpoint), zap.String("reason", reason), zap.Int("failures", b.flushFailures), zap.Int("datapoints", datapoints), zap.Int("bytes", bytes), zap.Bool("over_cap", overCap), zap.Bool("over_age", overAge), zap.Duration("retry_age", now.Sub(*retryingSince)), zap.Error(err))
+				b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
 				b.telemetry.droppedDataPoints.Add(ctx, int64(datapoints), attrs)
 				*retryingSince = time.Time{}
 				b.flushFailures = 0
@@ -519,6 +564,7 @@ func (b *backendMetricBatcher) flush(
 			*pendingBytes = bytes
 			b.pendingDataPoints.Store(int64(datapoints))
 			b.pendingBytes.Store(int64(bytes))
+			b.oldestEnqueue.Store(oldestUnixNano)
 			if *timerC == nil {
 				delay := b.settings.flushInterval * time.Duration(1<<min(b.flushFailures-1, 4))
 				delay = min(delay, maxMetricBatchRetryBackoff)
@@ -529,6 +575,7 @@ func (b *backendMetricBatcher) flush(
 			if b.drainErr != nil && (reason == metricFlushReasonResolverChange || reason == metricFlushReasonShutdown) {
 				rerouteErr := b.drainErr(ctx, drained, reason)
 				if rerouteErr == nil {
+					b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
 					return nil
 				}
 				var mErr consumererror.Metrics
@@ -538,11 +585,13 @@ func (b *backendMetricBatcher) flush(
 				}
 				err = errors.Join(err, rerouteErr)
 			}
+			b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
 			b.telemetry.droppedDataPoints.Add(ctx, int64(datapoints), attrs)
 		}
 	}
 
 	if err == nil {
+		b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
 		*retryingSince = time.Time{}
 		b.flushFailures = 0
 	}
@@ -703,6 +752,12 @@ func newMetricBatcherTelemetry(settings component.TelemetrySettings) (*metricBat
 		metric.WithUnit("{errors}"),
 	)
 	errs = errors.Join(errs, err)
+	t.flushOldestPointAge, err = meter.Int64Histogram(
+		"otelcol_loadbalancer_metric_batch_flush_oldest_datapoint_age",
+		metric.WithDescription("Age in ms of the oldest metric datapoint in a flushed backend batch."),
+		metric.WithUnit("ms"),
+	)
+	errs = errors.Join(errs, err)
 	t.droppedDataPoints, err = meter.Int64Counter(
 		"otelcol_loadbalancer_metric_batch_dropped_datapoints",
 		metric.WithDescription("Number of dropped metric datapoints in the internal metric batcher."),
@@ -727,19 +782,34 @@ func newMetricBatcherTelemetry(settings component.TelemetrySettings) (*metricBat
 		metric.WithUnit("By"),
 	)
 	errs = errors.Join(errs, err)
+	t.pendingOldestPointAge, err = meter.Int64ObservableGauge(
+		"otelcol_loadbalancer_metric_batch_pending_oldest_datapoint_age",
+		metric.WithDescription("Age in ms of the oldest pending metric datapoint per backend batch."),
+		metric.WithUnit("ms"),
+	)
+	errs = errors.Join(errs, err)
+	t.pendingOldestPointMax, err = meter.Int64ObservableGauge(
+		"otelcol_loadbalancer_metric_batch_pending_oldest_datapoint_age_max",
+		metric.WithDescription("Maximum age in ms of the oldest pending metric datapoint across backend batches."),
+		metric.WithUnit("ms"),
+	)
+	errs = errors.Join(errs, err)
 
 	return t, errs
 }
 
-func (t *metricBatcherTelemetry) start(snapshot func() []metricBatcherPending) error {
+func (t *metricBatcherTelemetry) start(snapshot func() metricBatcherSnapshot) error {
 	reg, err := t.meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
-		for _, pending := range snapshot() {
+		state := snapshot()
+		for _, pending := range state.pending {
 			attrs := metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", pending.endpoint)))
 			observer.ObserveInt64(t.pendingDataPoints, pending.datapoints, attrs)
 			observer.ObserveInt64(t.pendingBytes, pending.bytes, attrs)
+			observer.ObserveInt64(t.pendingOldestPointAge, pending.oldestAgeMillis, attrs)
 		}
+		observer.ObserveInt64(t.pendingOldestPointMax, state.maxOldestAgeMillis)
 		return nil
-	}, t.pendingDataPoints, t.pendingBytes)
+	}, t.pendingDataPoints, t.pendingBytes, t.pendingOldestPointAge, t.pendingOldestPointMax)
 	if err != nil {
 		return err
 	}

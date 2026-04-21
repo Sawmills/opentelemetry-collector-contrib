@@ -18,6 +18,8 @@ import (
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
 )
@@ -257,7 +259,229 @@ func TestLogBatcherEnqueueAfterShutdownReturnsStoppingError(t *testing.T) {
 		simpleLogs(),
 	)
 	require.ErrorIs(t, err, errLogBatcherExporterStopping)
-	assert.Empty(t, batcher.snapshotPending())
+	snapshot := batcher.snapshotPending()
+	assert.Empty(t, snapshot.pending)
+	assert.Zero(t, snapshot.maxOldestAgeMillis)
+}
+
+func TestLogBatcherRecordsPendingOldestAgeAndFlushAge(t *testing.T) {
+	telemetry := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, telemetry.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	batcher, err := newLogBatcher(componenttest.NewNopTelemetrySettings().Logger, telemetry.NewTelemetrySettings(), logBatcherSettings{
+		maxRecords:    100,
+		maxBytes:      1 << 20,
+		flushInterval: time.Hour,
+	}, func(context.Context, *wrappedExporter, plog.Logs, string) error {
+		return nil
+	})
+	require.NoError(t, err)
+
+	exp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, simpleLogs()))
+	time.Sleep(25 * time.Millisecond)
+
+	pendingMetric, err := telemetry.GetMetric("otelcol_loadbalancer_log_batch_pending_oldest_record_age")
+	require.NoError(t, err)
+	pendingGauge, ok := pendingMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok)
+	require.Positive(t, findGaugePointValue(t, pendingGauge.DataPoints, attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"))))
+
+	maxMetric, err := telemetry.GetMetric("otelcol_loadbalancer_log_batch_pending_oldest_record_age_max")
+	require.NoError(t, err)
+	maxGauge, ok := maxMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok)
+	require.Positive(t, maxGauge.DataPoints[0].Value)
+
+	require.NoError(t, batcher.Shutdown(t.Context()))
+
+	flushMetric, err := telemetry.GetMetric("otelcol_loadbalancer_log_batch_flush_oldest_record_age")
+	require.NoError(t, err)
+	flushHistogram, ok := flushMetric.Data.(metricdata.Histogram[int64])
+	require.True(t, ok)
+	require.Len(t, flushHistogram.DataPoints, 1)
+	require.Equal(t, uint64(1), flushHistogram.DataPoints[0].Count)
+	require.Positive(t, flushHistogram.DataPoints[0].Sum)
+}
+
+func TestLogBatcherHandleRequestUsesAcceptanceTimeForOldestAge(t *testing.T) {
+	backend := &backendLogBatcher{
+		endpoint:  "endpoint-1:4317",
+		settings:  logBatcherSettings{maxRecords: 100, maxBytes: 1 << 20, flushInterval: time.Hour},
+		requests:  make(chan logBatcherRequest, 1),
+		done:      make(chan struct{}),
+		telemetry: &logBatcherTelemetry{},
+	}
+
+	pending := plog.NewLogs()
+	pendingRecords := 0
+	pendingBytes := 0
+	sizer := &plog.ProtoMarshaler{}
+	var nextReq *logBatcherRequest
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	var timerC <-chan time.Time
+
+	start := time.Now()
+	stopped := backend.handleRequest(
+		logBatcherRequest{
+			kind:               logBatcherRequestEnqueue,
+			logs:               simpleLogs(),
+			enqueuedAtUnixNano: start.UnixNano(),
+		},
+		sizer,
+		&pending,
+		&pendingRecords,
+		&pendingBytes,
+		&nextReq,
+		timer,
+		&timerC,
+	)
+	require.False(t, stopped)
+
+	stored := time.Unix(0, backend.oldestEnqueue.Load())
+	require.False(t, stored.Before(start), "oldest timestamp should reflect request enqueue time")
+}
+
+func TestLogBatcherHandleRequestUsesOldestDrainedEnqueueTime(t *testing.T) {
+	backend := &backendLogBatcher{
+		endpoint:  "endpoint-1:4317",
+		settings:  logBatcherSettings{maxRecords: 100, maxBytes: 1 << 20, flushInterval: time.Hour},
+		requests:  make(chan logBatcherRequest, 1),
+		done:      make(chan struct{}),
+		telemetry: &logBatcherTelemetry{},
+	}
+
+	older := time.Now().Add(-80 * time.Millisecond).UnixNano()
+	newer := time.Now().Add(-20 * time.Millisecond).UnixNano()
+	backend.requests <- logBatcherRequest{
+		kind:               logBatcherRequestEnqueue,
+		logs:               simpleLogs(),
+		enqueuedAtUnixNano: older,
+	}
+
+	pending := plog.NewLogs()
+	pendingRecords := 0
+	pendingBytes := 0
+	sizer := &plog.ProtoMarshaler{}
+	var nextReq *logBatcherRequest
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	var timerC <-chan time.Time
+
+	stopped := backend.handleRequest(
+		logBatcherRequest{
+			kind:               logBatcherRequestEnqueue,
+			logs:               simpleLogs(),
+			enqueuedAtUnixNano: newer,
+		},
+		sizer,
+		&pending,
+		&pendingRecords,
+		&pendingBytes,
+		&nextReq,
+		timer,
+		&timerC,
+	)
+	require.False(t, stopped)
+	require.Equal(t, 2, pendingRecords)
+	require.Equal(t, older, backend.oldestEnqueue.Load())
+}
+
+func TestLogBatcherPendingAgeIncludesTimeBufferedBeforeWorkerDequeues(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	sendStarted := make(chan struct{}, 1)
+	unblockSend := make(chan struct{})
+	sendReleased := false
+
+	batcher, err := newLogBatcher(
+		ts.Logger,
+		ts.TelemetrySettings,
+		logBatcherSettings{maxRecords: 1000, maxBytes: 1 << 20, flushInterval: 10 * time.Millisecond},
+		func(_ context.Context, _ *wrappedExporter, _ plog.Logs, _ string) error {
+			select {
+			case sendStarted <- struct{}{}:
+			default:
+			}
+			<-unblockSend
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if !sendReleased {
+			close(unblockSend)
+		}
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	exp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, simpleLogs()))
+
+	select {
+	case <-sendStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected backend send to start")
+	}
+
+	batcher.mu.RLock()
+	backend := batcher.backends["endpoint-1:4317"]
+	batcher.mu.RUnlock()
+	require.NotNil(t, backend)
+	backend.settings.flushInterval = time.Hour
+
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, simpleLogs()))
+	time.Sleep(60 * time.Millisecond)
+	close(unblockSend)
+	sendReleased = true
+
+	var oldestAgeMillis int64
+	require.Eventually(t, func() bool {
+		for _, pending := range batcher.snapshotPending().pending {
+			if pending.endpoint == "endpoint-1:4317" && pending.records == 1 {
+				oldestAgeMillis = pending.oldestAgeMillis
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 20*time.Millisecond)
+
+	require.GreaterOrEqual(t, oldestAgeMillis, int64(40), "oldest age should include time spent buffered in backend.requests")
+}
+
+func TestLogBatcherSnapshotPendingIgnoresOldestAgeWhenNoRecordsPending(t *testing.T) {
+	batcher := &logBatcher{
+		backends: map[string]*backendLogBatcher{
+			"endpoint-1:4317": {},
+		},
+	}
+	batcher.backends["endpoint-1:4317"].oldestEnqueue.Store(time.Now().Add(-time.Second).UnixNano())
+	batcher.backends["endpoint-1:4317"].pendingBytes.Store(123)
+
+	snapshot := batcher.snapshotPending()
+	require.Len(t, snapshot.pending, 1)
+	require.Zero(t, snapshot.pending[0].records)
+	require.Zero(t, snapshot.pending[0].oldestAgeMillis)
+	require.Zero(t, snapshot.maxOldestAgeMillis)
+}
+
+func findGaugePointValue(t *testing.T, dps []metricdata.DataPoint[int64], attrs attribute.Set) int64 {
+	t.Helper()
+
+	for _, dp := range dps {
+		if dp.Attributes.Equals(&attrs) {
+			return dp.Value
+		}
+	}
+
+	t.Fatalf("gauge datapoint with attrs %v not found", attrs)
+	return 0
 }
 
 func TestLogBatcherRemoveRespectsContextWhileWaitingForInflight(t *testing.T) {

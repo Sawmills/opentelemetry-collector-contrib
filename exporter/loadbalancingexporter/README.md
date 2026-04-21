@@ -257,7 +257,7 @@ exporters:
       payload_compression: zstd
 ```
 
-`sending_queue.compress_in_memory` is retained for compatibility. It requires `sending_queue` to be configured and a non-`none` `sending_queue.payload_compression` value. When enabled, the exporter uses an internal in-memory storage backend so the queue payload codec still applies.
+`sending_queue.compress_in_memory` is retained for compatibility. It requires `sending_queue` to be configured and a non-`none` `sending_queue.payload_compression` value. `sending_queue.payload_compression` remains the active queue payload codec setting.
 
 Kubernetes resolver example (For a more specific example: [example/k8s-resolver](./example/k8s-resolver/README.md))
 > [!IMPORTANT]
@@ -465,3 +465,10 @@ The following metrics are recorded by this exporter:
 * `otelcol_loadbalancer_num_backend_updates` records how many of the resolutions resulted in a new list of backends. Use this information to understand how frequent your backend updates are and how often the ring is rebalanced. If the DNS hostname is always returning the same list of IP addresses but this metric keeps increasing, it might indicate a bug in the load balancer.
 * `otelcol_loadbalancer_backend_latency` measures the latency for each backend.
 * `otelcol_loadbalancer_backend_outcome` counts what the outcomes were for each endpoint, `success=true|false`.
+* When the internal LB batchers are active, age metrics are also emitted for post-routing backlog:
+  * `otelcol_loadbalancer_log_batch_pending_oldest_record_age` reports the age of the oldest log record currently pending for each backend endpoint.
+  * `otelcol_loadbalancer_log_batch_pending_oldest_record_age_max` reports the maximum pending oldest-log age across all backend endpoints.
+  * `otelcol_loadbalancer_log_batch_flush_oldest_record_age` records the age of the oldest log record in each flushed batch.
+  * `otelcol_loadbalancer_metric_batch_pending_oldest_datapoint_age` reports the age of the oldest metric datapoint currently pending for each backend endpoint.
+  * `otelcol_loadbalancer_metric_batch_pending_oldest_datapoint_age_max` reports the maximum pending oldest-datapoint age across all backend endpoints.
+  * `otelcol_loadbalancer_metric_batch_flush_oldest_datapoint_age` records the age of the oldest metric datapoint in each flushed batch.

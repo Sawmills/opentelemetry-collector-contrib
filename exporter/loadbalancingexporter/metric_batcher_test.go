@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 func TestMetricBatcherFlushesOnMaxDataPoints(t *testing.T) {
@@ -269,13 +272,194 @@ func TestMetricBatcherRestoresPendingBytesFromMergedPayloadOnFailure(t *testing.
 	expectedBytes := (&pmetric.ProtoMarshaler{}).MetricsSize(expected)
 
 	require.Eventually(t, func() bool {
-		for _, p := range batcher.snapshotPending() {
+		for _, p := range batcher.snapshotPending().pending {
 			if p.endpoint == "endpoint-1:4317" {
 				return p.datapoints == 2 && int(p.bytes) == expectedBytes
 			}
 		}
 		return false
 	}, time.Second, 20*time.Millisecond)
+}
+
+func TestMetricBatcherRecordsPendingOldestAgeAndFlushAge(t *testing.T) {
+	telemetry := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, telemetry.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	batcher, err := newMetricBatcher(
+		componenttest.NewNopTelemetrySettings().Logger,
+		telemetry.NewTelemetrySettings(),
+		metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		func(_ context.Context, _ *wrappedExporter, _ pmetric.Metrics, _ string) error {
+			return nil
+		},
+		nil,
+	)
+	require.NoError(t, err)
+
+	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
+	time.Sleep(25 * time.Millisecond)
+
+	pendingMetric, err := telemetry.GetMetric("otelcol_loadbalancer_metric_batch_pending_oldest_datapoint_age")
+	require.NoError(t, err)
+	pendingGauge, ok := pendingMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok)
+	require.Positive(t, findGaugePointValue(t, pendingGauge.DataPoints, attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"))))
+
+	maxMetric, err := telemetry.GetMetric("otelcol_loadbalancer_metric_batch_pending_oldest_datapoint_age_max")
+	require.NoError(t, err)
+	maxGauge, ok := maxMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok)
+	require.Positive(t, maxGauge.DataPoints[0].Value)
+
+	require.NoError(t, batcher.Shutdown(t.Context()))
+
+	flushMetric, err := telemetry.GetMetric("otelcol_loadbalancer_metric_batch_flush_oldest_datapoint_age")
+	require.NoError(t, err)
+	flushHistogram, ok := flushMetric.Data.(metricdata.Histogram[int64])
+	require.True(t, ok)
+	require.Len(t, flushHistogram.DataPoints, 1)
+	require.Equal(t, uint64(1), flushHistogram.DataPoints[0].Count)
+	require.Positive(t, flushHistogram.DataPoints[0].Sum)
+}
+
+func TestMetricBatcherHandleRequestUsesAcceptanceTimeForOldestAge(t *testing.T) {
+	backend := &backendMetricBatcher{
+		endpoint:  "endpoint-1:4317",
+		settings:  metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		requests:  make(chan metricBatcherRequest, 1),
+		done:      make(chan struct{}),
+		telemetry: &metricBatcherTelemetry{},
+	}
+
+	pending := make([]pmetric.Metrics, 0, 1)
+	pendingDataPoints := 0
+	pendingBytes := 0
+	sizer := &pmetric.ProtoMarshaler{}
+	var nextReq *metricBatcherRequest
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	var timerC <-chan time.Time
+	retryingSince := time.Time{}
+
+	start := time.Now()
+	stopped := backend.handleRequest(
+		metricBatcherRequest{
+			kind:               metricBatcherRequestEnqueue,
+			md:                 singleDataPointMetric("m1"),
+			enqueuedAtUnixNano: start.UnixNano(),
+		},
+		sizer,
+		&pending,
+		&pendingDataPoints,
+		&pendingBytes,
+		&nextReq,
+		timer,
+		&timerC,
+		&retryingSince,
+	)
+	require.False(t, stopped)
+
+	stored := time.Unix(0, backend.oldestEnqueue.Load())
+	require.False(t, stored.Before(start), "oldest timestamp should reflect request enqueue time")
+}
+
+func TestMetricBatcherHandleRequestUsesOldestDrainedEnqueueTime(t *testing.T) {
+	backend := &backendMetricBatcher{
+		endpoint:  "endpoint-1:4317",
+		settings:  metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		requests:  make(chan metricBatcherRequest, 1),
+		done:      make(chan struct{}),
+		telemetry: &metricBatcherTelemetry{},
+	}
+
+	older := time.Now().Add(-80 * time.Millisecond).UnixNano()
+	newer := time.Now().Add(-20 * time.Millisecond).UnixNano()
+	backend.requests <- metricBatcherRequest{
+		kind:               metricBatcherRequestEnqueue,
+		md:                 singleDataPointMetric("queued"),
+		enqueuedAtUnixNano: older,
+	}
+
+	pending := make([]pmetric.Metrics, 0, 1)
+	pendingDataPoints := 0
+	pendingBytes := 0
+	sizer := &pmetric.ProtoMarshaler{}
+	var nextReq *metricBatcherRequest
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	var timerC <-chan time.Time
+	retryingSince := time.Time{}
+
+	stopped := backend.handleRequest(
+		metricBatcherRequest{
+			kind:               metricBatcherRequestEnqueue,
+			md:                 singleDataPointMetric("current"),
+			enqueuedAtUnixNano: newer,
+		},
+		sizer,
+		&pending,
+		&pendingDataPoints,
+		&pendingBytes,
+		&nextReq,
+		timer,
+		&timerC,
+		&retryingSince,
+	)
+	require.False(t, stopped)
+	require.Equal(t, 2, pendingDataPoints)
+	require.Equal(t, older, backend.oldestEnqueue.Load())
+}
+
+func TestMetricBatcherFlushAgeRecordedOnlyAfterTerminalFlush(t *testing.T) {
+	telemetry := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, telemetry.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	var calls atomic.Int64
+	batcher, err := newMetricBatcher(
+		componenttest.NewNopTelemetrySettings().Logger,
+		telemetry.NewTelemetrySettings(),
+		metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: 20 * time.Millisecond},
+		func(_ context.Context, _ *wrappedExporter, _ pmetric.Metrics, _ string) error {
+			if calls.Add(1) == 1 {
+				return errors.New("boom")
+			}
+			return nil
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
+
+	var flushHistogram metricdata.Histogram[int64]
+	require.Eventually(t, func() bool {
+		flushMetric, metricErr := telemetry.GetMetric("otelcol_loadbalancer_metric_batch_flush_oldest_datapoint_age")
+		if metricErr != nil {
+			return false
+		}
+		histogram, ok := flushMetric.Data.(metricdata.Histogram[int64])
+		if !ok || len(histogram.DataPoints) != 1 || histogram.DataPoints[0].Count == 0 {
+			return false
+		}
+		flushHistogram = histogram
+		return true
+	}, 2*time.Second, 20*time.Millisecond)
+
+	require.Equal(t, uint64(1), flushHistogram.DataPoints[0].Count)
+	require.GreaterOrEqual(t, calls.Load(), int64(2))
 }
 
 func TestMetricBatcherTryEnqueueReturnsFalseWhenBackendQueueIsFull(t *testing.T) {
@@ -321,6 +505,84 @@ func TestMetricBatcherTryEnqueueReturnsFalseWhenBackendQueueIsFull(t *testing.T)
 	enqueued, enqueueErr := batcher.TryEnqueue("endpoint-1:4317", exp, singleDataPointMetric("m1"))
 	require.NoError(t, enqueueErr)
 	require.False(t, enqueued)
+}
+
+func TestMetricBatcherPendingAgeIncludesTimeBufferedBeforeWorkerDequeues(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	sendStarted := make(chan struct{}, 1)
+	unblockSend := make(chan struct{})
+	sendReleased := false
+
+	batcher, err := newMetricBatcher(
+		ts.Logger,
+		ts.TelemetrySettings,
+		metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: 10 * time.Millisecond},
+		func(_ context.Context, _ *wrappedExporter, _ pmetric.Metrics, _ string) error {
+			select {
+			case sendStarted <- struct{}{}:
+			default:
+			}
+			<-unblockSend
+			return nil
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if !sendReleased {
+			close(unblockSend)
+		}
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
+
+	select {
+	case <-sendStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected backend send to start")
+	}
+
+	batcher.mu.RLock()
+	backend := batcher.backends["endpoint-1:4317"]
+	batcher.mu.RUnlock()
+	require.NotNil(t, backend)
+	backend.settings.flushInterval = time.Hour
+
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m2"))
+	time.Sleep(60 * time.Millisecond)
+	close(unblockSend)
+	sendReleased = true
+
+	var oldestAgeMillis int64
+	require.Eventually(t, func() bool {
+		for _, pending := range batcher.snapshotPending().pending {
+			if pending.endpoint == "endpoint-1:4317" && pending.datapoints == 1 {
+				oldestAgeMillis = pending.oldestAgeMillis
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 20*time.Millisecond)
+
+	require.GreaterOrEqual(t, oldestAgeMillis, int64(40), "oldest age should include time spent buffered in backend.requests")
+}
+
+func TestMetricBatcherSnapshotPendingIgnoresOldestAgeWhenNoDatapointsPending(t *testing.T) {
+	batcher := &metricBatcher{
+		backends: map[string]*backendMetricBatcher{
+			"endpoint-1:4317": {},
+		},
+	}
+	batcher.backends["endpoint-1:4317"].oldestEnqueue.Store(time.Now().Add(-time.Second).UnixNano())
+	batcher.backends["endpoint-1:4317"].pendingBytes.Store(123)
+
+	snapshot := batcher.snapshotPending()
+	require.Len(t, snapshot.pending, 1)
+	require.Zero(t, snapshot.pending[0].datapoints)
+	require.Zero(t, snapshot.pending[0].oldestAgeMillis)
+	require.Zero(t, snapshot.maxOldestAgeMillis)
 }
 
 func TestMetricBatcherRemoveReroutesOnResolverChangeFlushFailure(t *testing.T) {
@@ -386,7 +648,7 @@ func TestMetricBatcherDropsPendingWhenRetryBufferCapExceeded(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond)
 
 	require.Eventually(t, func() bool {
-		for _, p := range batcher.snapshotPending() {
+		for _, p := range batcher.snapshotPending().pending {
 			if p.endpoint == "endpoint-1:4317" {
 				return p.datapoints == 0
 			}
@@ -428,7 +690,7 @@ func TestMetricBatcherDropsPendingWhenRetryAgeExceeded(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond)
 
 	require.Eventually(t, func() bool {
-		for _, p := range batcher.snapshotPending() {
+		for _, p := range batcher.snapshotPending().pending {
 			if p.endpoint == "endpoint-1:4317" {
 				return p.datapoints == 0
 			}
