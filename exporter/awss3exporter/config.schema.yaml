@@ -95,6 +95,9 @@ properties:
     type: string
   marshaler:
     $ref: marshaler_type
+  max_file_size_bytes:
+    description: MaxFileSizeBytes sets the uncompressed size threshold at which the jsonBatchingMarshaler flushes its buffer to S3. When > 0 and MarshalerName is OtlpJSON, the batching marshaler is used instead of the default pass-through marshaler.
+    type: integer
   resource_attrs_to_s3:
     $ref: resource_attrs_to_s_3
   s3uploader:

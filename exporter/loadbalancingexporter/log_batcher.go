@@ -54,11 +54,12 @@ type logBatcher struct {
 }
 
 type logBatcherRequest struct {
-	kind   logBatcherRequestKind
-	logs   plog.Logs
-	ctx    context.Context
-	reason string
-	done   chan error
+	kind               logBatcherRequestKind
+	logs               plog.Logs
+	ctx                context.Context
+	reason             string
+	done               chan error
+	enqueuedAtUnixNano int64
 }
 
 type logBatcherRequestKind int
@@ -85,19 +86,23 @@ type backendLogBatcher struct {
 
 	pendingRecords atomic.Int64
 	pendingBytes   atomic.Int64
+	oldestEnqueue  atomic.Int64
 }
 
 type logBatcherTelemetry struct {
-	logger         *zap.Logger
-	meter          metric.Meter
-	batchSize      metric.Int64Histogram
-	batchBytes     metric.Int64Histogram
-	flushTotal     metric.Int64Counter
-	flushErrors    metric.Int64Counter
-	droppedRecords metric.Int64Counter
-	overflowTotal  metric.Int64Counter
-	pendingRecords metric.Int64ObservableGauge
-	pendingBytes   metric.Int64ObservableGauge
+	logger               *zap.Logger
+	meter                metric.Meter
+	batchSize            metric.Int64Histogram
+	batchBytes           metric.Int64Histogram
+	flushTotal           metric.Int64Counter
+	flushErrors          metric.Int64Counter
+	flushOldestRecordAge metric.Int64Histogram
+	droppedRecords       metric.Int64Counter
+	overflowTotal        metric.Int64Counter
+	pendingRecords       metric.Int64ObservableGauge
+	pendingBytes         metric.Int64ObservableGauge
+	pendingOldestAge     metric.Int64ObservableGauge
+	pendingOldestAgeMax  metric.Int64ObservableGauge
 
 	mu            sync.Mutex
 	registrations []metric.Registration
@@ -135,8 +140,9 @@ func (b *logBatcher) Enqueue(ctx context.Context, endpoint string, exp *wrappedE
 		return err
 	}
 	defer backend.inflight.Done()
+	enqueuedAtUnixNano := time.Now().UnixNano()
 	select {
-	case backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: logs}:
+	case backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: logs, enqueuedAtUnixNano: enqueuedAtUnixNano}:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -201,19 +207,36 @@ func (b *logBatcher) scheduleBackendCleanup(backend *backendLogBatcher, reason s
 	}()
 }
 
-func (b *logBatcher) snapshotPending() []logBatcherPending {
+type logBatcherSnapshot struct {
+	pending            []logBatcherPending
+	maxOldestAgeMillis int64
+}
+
+func (b *logBatcher) snapshotPending() logBatcherSnapshot {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
+	now := time.Now()
 	pending := make([]logBatcherPending, 0, len(b.backends))
+	var maxOldestAgeMillis int64
 	for endpoint, backend := range b.backends {
+		records := backend.pendingRecords.Load()
+		bytes := backend.pendingBytes.Load()
+		var oldestAgeMillis int64
+		if records > 0 {
+			oldestAgeMillis = ageMillisFromUnixNano(now, backend.oldestEnqueue.Load())
+		}
+		if oldestAgeMillis > maxOldestAgeMillis {
+			maxOldestAgeMillis = oldestAgeMillis
+		}
 		pending = append(pending, logBatcherPending{
-			endpoint: endpoint,
-			records:  backend.pendingRecords.Load(),
-			bytes:    backend.pendingBytes.Load(),
+			endpoint:        endpoint,
+			records:         records,
+			bytes:           bytes,
+			oldestAgeMillis: oldestAgeMillis,
 		})
 	}
-	return pending
+	return logBatcherSnapshot{pending: pending, maxOldestAgeMillis: maxOldestAgeMillis}
 }
 
 func (b *logBatcher) acquireBackend(endpoint string, exp *wrappedExporter) (*backendLogBatcher, error) {
@@ -381,7 +404,11 @@ func (b *backendLogBatcher) handleRequest(
 ) bool {
 	switch req.kind {
 	case logBatcherRequestEnqueue:
-		*pendingRecords += b.mergeQueuedRequests(pending, req, nextReq)
+		recordsAdded, oldestEnqueue := b.mergeQueuedRequests(pending, req, nextReq)
+		*pendingRecords += recordsAdded
+		if *pendingRecords > 0 && b.oldestEnqueue.Load() == 0 {
+			b.oldestEnqueue.Store(oldestEnqueue)
+		}
 		// Track max_bytes using the actual serialized merged OTLP payload.
 		// Resource/scope dedup during merge means chunk sizes are not additive.
 		*pendingBytes = sizer.LogsSize(*pending)
@@ -405,25 +432,38 @@ func (b *backendLogBatcher) handleRequest(
 	return false
 }
 
-func (b *backendLogBatcher) mergeQueuedRequests(pending *plog.Logs, first logBatcherRequest, nextReq **logBatcherRequest) int {
-	recordCount := first.logs.LogRecordCount()
-	*pending = mergeLogs(*pending, first.logs)
+func (b *backendLogBatcher) mergeQueuedRequests(pending *plog.Logs, first logBatcherRequest, nextReq **logBatcherRequest) (int, int64) {
+	recordCount := 0
+	var oldestEnqueue int64
+
+	mergeRequest := func(req logBatcherRequest) {
+		count := req.logs.LogRecordCount()
+		if count == 0 {
+			return
+		}
+		recordCount += count
+		if oldestEnqueue == 0 || req.enqueuedAtUnixNano < oldestEnqueue {
+			oldestEnqueue = req.enqueuedAtUnixNano
+		}
+		*pending = mergeLogs(*pending, req.logs)
+	}
+
+	mergeRequest(first)
 
 	for i := 0; i < cap(b.requests); i++ {
 		select {
 		case req := <-b.requests:
 			if req.kind != logBatcherRequestEnqueue {
 				*nextReq = &req
-				return recordCount
+				return recordCount, oldestEnqueue
 			}
-			recordCount += req.logs.LogRecordCount()
-			*pending = mergeLogs(*pending, req.logs)
+			mergeRequest(req)
 		default:
-			return recordCount
+			return recordCount, oldestEnqueue
 		}
 	}
 
-	return recordCount
+	return recordCount, oldestEnqueue
 }
 
 func (b *backendLogBatcher) flush(
@@ -450,14 +490,17 @@ func (b *backendLogBatcher) flush(
 	drained := *pending
 	records := *pendingRecords
 	bytes := *pendingBytes
+	oldestAgeMillis := ageMillisFromUnixNano(time.Now(), b.oldestEnqueue.Load())
 	*pending = plog.NewLogs()
 	*pendingRecords = 0
 	*pendingBytes = 0
 	b.pendingRecords.Store(0)
 	b.pendingBytes.Store(0)
+	b.oldestEnqueue.Store(0)
 
 	b.telemetry.batchSize.Record(ctx, int64(records), metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
 	b.telemetry.batchBytes.Record(ctx, int64(bytes), metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
+	b.telemetry.flushOldestRecordAge.Record(ctx, oldestAgeMillis, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint), attribute.String("reason", reason))))
 	b.telemetry.flushTotal.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint), attribute.String("reason", reason))))
 
 	err := b.send(ctx, b.exporter(), drained, reason)
@@ -469,9 +512,10 @@ func (b *backendLogBatcher) flush(
 }
 
 type logBatcherPending struct {
-	endpoint string
-	records  int64
-	bytes    int64
+	endpoint        string
+	records         int64
+	bytes           int64
+	oldestAgeMillis int64
 }
 
 func newLogBatcherTelemetry(settings component.TelemetrySettings) (*logBatcherTelemetry, error) {
@@ -503,6 +547,12 @@ func newLogBatcherTelemetry(settings component.TelemetrySettings) (*logBatcherTe
 		metric.WithUnit("{errors}"),
 	)
 	errs = errors.Join(errs, err)
+	t.flushOldestRecordAge, err = meter.Int64Histogram(
+		"otelcol_loadbalancer_log_batch_flush_oldest_record_age",
+		metric.WithDescription("Age in ms of the oldest log record in a flushed backend batch."),
+		metric.WithUnit("ms"),
+	)
+	errs = errors.Join(errs, err)
 	t.droppedRecords, err = meter.Int64Counter(
 		"otelcol_loadbalancer_log_batch_dropped_records",
 		metric.WithDescription("Number of dropped log records in the internal log batcher."),
@@ -527,19 +577,34 @@ func newLogBatcherTelemetry(settings component.TelemetrySettings) (*logBatcherTe
 		metric.WithUnit("By"),
 	)
 	errs = errors.Join(errs, err)
+	t.pendingOldestAge, err = meter.Int64ObservableGauge(
+		"otelcol_loadbalancer_log_batch_pending_oldest_record_age",
+		metric.WithDescription("Age in ms of the oldest pending log record per backend batch."),
+		metric.WithUnit("ms"),
+	)
+	errs = errors.Join(errs, err)
+	t.pendingOldestAgeMax, err = meter.Int64ObservableGauge(
+		"otelcol_loadbalancer_log_batch_pending_oldest_record_age_max",
+		metric.WithDescription("Maximum age in ms of the oldest pending log record across backend batches."),
+		metric.WithUnit("ms"),
+	)
+	errs = errors.Join(errs, err)
 
 	return t, errs
 }
 
-func (t *logBatcherTelemetry) start(snapshot func() []logBatcherPending) error {
+func (t *logBatcherTelemetry) start(snapshot func() logBatcherSnapshot) error {
 	reg, err := t.meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
-		for _, pending := range snapshot() {
+		state := snapshot()
+		for _, pending := range state.pending {
 			attrs := metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", pending.endpoint)))
 			observer.ObserveInt64(t.pendingRecords, pending.records, attrs)
 			observer.ObserveInt64(t.pendingBytes, pending.bytes, attrs)
+			observer.ObserveInt64(t.pendingOldestAge, pending.oldestAgeMillis, attrs)
 		}
+		observer.ObserveInt64(t.pendingOldestAgeMax, state.maxOldestAgeMillis)
 		return nil
-	}, t.pendingRecords, t.pendingBytes)
+	}, t.pendingRecords, t.pendingBytes, t.pendingOldestAge, t.pendingOldestAgeMax)
 	if err != nil {
 		return err
 	}
@@ -558,4 +623,16 @@ func (t *logBatcherTelemetry) shutdown() {
 		}
 	}
 	t.registrations = nil
+}
+
+func ageMillisFromUnixNano(now time.Time, unixNano int64) int64 {
+	if unixNano <= 0 {
+		return 0
+	}
+
+	age := now.Sub(time.Unix(0, unixNano)).Milliseconds()
+	if age < 0 {
+		return 0
+	}
+	return age
 }
