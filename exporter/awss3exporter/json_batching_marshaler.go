@@ -69,13 +69,13 @@ func (m *jsonBatchingMarshaler) MarshalLogs(ld plog.Logs) ([]byte, error) {
 	m.uncompressedSize += len(data)
 
 	if m.uncompressedSize >= m.maxBatchSize {
-		return m.flushLogBatch()
+		return m.flushLogBatch(), nil
 	}
 
 	return []byte{}, nil
 }
 
-func (m *jsonBatchingMarshaler) createJSONL(batches []json.RawMessage) []byte {
+func createJSONL(batches []json.RawMessage) []byte {
 	if len(batches) == 0 {
 		return []byte("")
 	}
@@ -91,12 +91,12 @@ func (m *jsonBatchingMarshaler) createJSONL(batches []json.RawMessage) []byte {
 	return result.Bytes()
 }
 
-func (m *jsonBatchingMarshaler) flushLogBatch() ([]byte, error) {
+func (m *jsonBatchingMarshaler) flushLogBatch() []byte {
 	if m.logsBatchCount == 0 {
-		return nil, nil
+		return nil
 	}
 
-	jsonlData := m.createJSONL(m.logBatches)
+	jsonlData := createJSONL(m.logBatches)
 
 	if m.logger != nil {
 		m.logger.Debug("Flushed uncompressed JSONL log batch",
@@ -108,13 +108,13 @@ func (m *jsonBatchingMarshaler) flushLogBatch() ([]byte, error) {
 	m.logsBatchCount = 0
 	m.uncompressedSize = 0
 
-	return jsonlData, nil
+	return jsonlData
 }
 
 func (m *jsonBatchingMarshaler) FlushLogs() ([]byte, error) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	return m.flushLogBatch()
+	return m.flushLogBatch(), nil
 }
 
 func (m *jsonBatchingMarshaler) MarshalTraces(td ptrace.Traces) ([]byte, error) {
@@ -175,7 +175,7 @@ func (m *jsonBatchingMarshaler) flushTraceBatch() ([]byte, error) {
 		wrapped = append(wrapped, envelope)
 	}
 
-	jsonlData := m.createJSONL(wrapped)
+	jsonlData := createJSONL(wrapped)
 
 	if m.logger != nil {
 		m.logger.Debug("Flushed uncompressed JSONL trace batch",
@@ -200,10 +200,10 @@ func (m *jsonBatchingMarshaler) MarshalMetrics(md pmetric.Metrics) ([]byte, erro
 	return m.metricsMarshaler.MarshalMetrics(md)
 }
 
-func (m *jsonBatchingMarshaler) format() string {
+func (*jsonBatchingMarshaler) format() string {
 	return "json"
 }
 
-func (m *jsonBatchingMarshaler) compressed() bool {
+func (*jsonBatchingMarshaler) compressed() bool {
 	return false
 }

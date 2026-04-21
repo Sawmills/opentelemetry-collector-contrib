@@ -115,15 +115,16 @@ func (e *s3Exporter) getUploadOpts(res pcommon.Resource) *upload.UploadOptions {
 func (e *s3Exporter) start(ctx context.Context, host component.Host) error {
 	var m marshaler
 	var err error
-	if e.config.Encoding != nil {
+	switch {
+	case e.config.Encoding != nil:
 		if m, err = newMarshalerFromEncoding(e.config.Encoding, e.config.EncodingFileExtension, host, e.logger); err != nil {
 			return err
 		}
-	} else if e.config.MaxFileSizeBytes > 0 {
+	case e.config.MaxFileSizeBytes > 0:
 		if m, err = newMarshalerWithConfig(e.config.MarshalerName, e.config.MaxFileSizeBytes, e.logger); err != nil {
 			return err
 		}
-	} else {
+	default:
 		if m, err = newMarshaler(e.config.MarshalerName, e.logger); err != nil {
 			return fmt.Errorf("unknown marshaler %q", e.config.MarshalerName)
 		}
@@ -204,7 +205,8 @@ func (e *s3Exporter) flushMarshaler(ctx context.Context, reason string) error {
 		return nil
 	}
 
-	if flusher, ok := e.marshaler.(logFlusherWithReason); ok {
+	switch flusher := e.marshaler.(type) {
+	case logFlusherWithReason:
 		buf, err := flusher.FlushLogsWithReason(reason)
 		if err != nil {
 			return err
@@ -217,7 +219,7 @@ func (e *s3Exporter) flushMarshaler(ctx context.Context, reason string) error {
 				return err
 			}
 		}
-	} else if flusher, ok := e.marshaler.(logFlusher); ok {
+	case logFlusher:
 		buf, err := flusher.FlushLogs()
 		if err != nil {
 			return err
