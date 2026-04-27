@@ -106,7 +106,7 @@ func (m *endpointHealthManager) rerouteOnFailure() bool {
 
 func (m *endpointHealthManager) reconcile(resolved []string) endpointHealthReconcileResult {
 	if !m.enabled() {
-		eligible := sortedUnique(resolved)
+		eligible := append([]string(nil), resolved...)
 		return endpointHealthReconcileResult{eligible: eligible}
 	}
 
@@ -131,6 +131,9 @@ func (m *endpointHealthManager) reconcile(resolved []string) endpointHealthRecon
 			continue
 		}
 		state.present = false
+		state.quarantinedUntil = time.Time{}
+		state.failureReason = ""
+		state.lastFailedAt = time.Time{}
 		state.lastStateChangeAt = now
 		removed = append(removed, endpoint)
 	}
@@ -182,7 +185,8 @@ func (m *endpointHealthManager) markSuccess(endpoint string) {
 	if !ok || !state.present {
 		return
 	}
-	if state.failureReason != "" {
+	if !state.quarantinedUntil.IsZero() || state.failureReason != "" {
+		state.quarantinedUntil = time.Time{}
 		state.failureReason = ""
 		state.lastStateChangeAt = m.settings.now()
 	}
@@ -311,21 +315,4 @@ func classifyEndpointFailure(err error) (endpointFailureReason, bool) {
 	default:
 		return "", false
 	}
-}
-
-func sortedUnique(endpoints []string) []string {
-	if len(endpoints) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(endpoints))
-	unique := make([]string, 0, len(endpoints))
-	for _, endpoint := range endpoints {
-		if _, ok := seen[endpoint]; ok {
-			continue
-		}
-		seen[endpoint] = struct{}{}
-		unique = append(unique, endpoint)
-	}
-	sort.Strings(unique)
-	return unique
 }

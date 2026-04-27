@@ -37,6 +37,19 @@ func TestEndpointHealthReconcileMarksStaleAndEligible(t *testing.T) {
 	require.True(t, manager.isPresent("endpoint-2"))
 }
 
+func TestEndpointHealthDisabledReconcilePreservesResolvedOrderAndDuplicates(t *testing.T) {
+	manager := newEndpointHealthManager(endpointHealthSettings{})
+	resolved := []string{"endpoint-2", "endpoint-1", "endpoint-2"}
+
+	result := manager.reconcile(resolved)
+	require.Equal(t, []string{"endpoint-2", "endpoint-1", "endpoint-2"}, result.eligible)
+	require.Empty(t, result.removed)
+	require.False(t, result.failOpen)
+
+	resolved[0] = "changed"
+	require.Equal(t, []string{"endpoint-2", "endpoint-1", "endpoint-2"}, result.eligible)
+}
+
 func TestEndpointHealthQuarantinesOnFirstEndpointLocalFailure(t *testing.T) {
 	now := time.Unix(100, 0)
 	manager := newEndpointHealthManager(endpointHealthSettings{
@@ -54,6 +67,31 @@ func TestEndpointHealthQuarantinesOnFirstEndpointLocalFailure(t *testing.T) {
 
 	now = now.Add(31 * time.Second)
 	require.Equal(t, []string{"endpoint-1", "endpoint-2"}, manager.eligibleEndpoints())
+}
+
+func TestEndpointHealthMarkSuccessClearsQuarantineAndFailOpen(t *testing.T) {
+	now := time.Unix(100, 0)
+	manager := newEndpointHealthManager(endpointHealthSettings{
+		enabled:            true,
+		quarantineDuration: 30 * time.Second,
+		now:                func() time.Time { return now },
+	})
+	manager.reconcile([]string{"endpoint-1", "endpoint-2"})
+	manager.markFailure("endpoint-1", status.Error(codes.Unavailable, "backend unavailable"))
+	decision := manager.markFailure("endpoint-2", context.DeadlineExceeded)
+	require.True(t, decision.failOpen)
+
+	manager.markSuccess("endpoint-1")
+	require.False(t, manager.failOpen())
+	require.Equal(t, []string{"endpoint-1"}, manager.eligibleEndpoints())
+
+	manager.mu.Lock()
+	state := manager.endpoints["endpoint-1"]
+	quarantinedUntil := state.quarantinedUntil
+	failureReason := state.failureReason
+	manager.mu.Unlock()
+	require.Zero(t, quarantinedUntil)
+	require.Empty(t, failureReason)
 }
 
 func TestEndpointHealthDoesNotQuarantinePermanentErrors(t *testing.T) {
@@ -85,6 +123,36 @@ func TestEndpointHealthFailOpenWhenAllPresentEndpointsQuarantined(t *testing.T) 
 	require.True(t, decision.failOpen)
 	require.Equal(t, []string{"endpoint-1", "endpoint-2"}, decision.eligible)
 	require.True(t, manager.failOpen())
+}
+
+func TestEndpointHealthReconcileClearsStateForRemovedEndpoint(t *testing.T) {
+	now := time.Unix(100, 0)
+	manager := newEndpointHealthManager(endpointHealthSettings{
+		enabled:            true,
+		quarantineDuration: 30 * time.Second,
+		now:                func() time.Time { return now },
+	})
+	manager.reconcile([]string{"endpoint-1", "endpoint-2"})
+	manager.markFailure("endpoint-1", status.Error(codes.Unavailable, "backend unavailable"))
+
+	result := manager.reconcile([]string{"endpoint-2"})
+	require.Equal(t, []string{"endpoint-1"}, result.removed)
+
+	manager.mu.Lock()
+	state := manager.endpoints["endpoint-1"]
+	present := state.present
+	quarantinedUntil := state.quarantinedUntil
+	failureReason := state.failureReason
+	lastFailedAt := state.lastFailedAt
+	manager.mu.Unlock()
+	require.False(t, present)
+	require.Zero(t, quarantinedUntil)
+	require.Empty(t, failureReason)
+	require.Zero(t, lastFailedAt)
+
+	result = manager.reconcile([]string{"endpoint-1", "endpoint-2"})
+	require.Equal(t, []string{"endpoint-1", "endpoint-2"}, result.eligible)
+	require.Empty(t, result.removed)
 }
 
 func TestEndpointFailureClassification(t *testing.T) {
