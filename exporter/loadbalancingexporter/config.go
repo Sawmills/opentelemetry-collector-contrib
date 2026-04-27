@@ -40,9 +40,10 @@ const (
 type Config struct {
 	TimeoutSettings           exporterhelper.TimeoutConfig `mapstructure:",squash"`
 	configretry.BackOffConfig `mapstructure:"retry_on_failure"`
-	QueueSettings             QueueSettings       `mapstructure:"sending_queue"`
-	LogBatcher                LogBatcherConfig    `mapstructure:"log_batcher"`
-	MetricBatcher             MetricBatcherConfig `mapstructure:"metric_batcher"`
+	QueueSettings             QueueSettings        `mapstructure:"sending_queue"`
+	LogBatcher                LogBatcherConfig     `mapstructure:"log_batcher"`
+	MetricBatcher             MetricBatcherConfig  `mapstructure:"metric_batcher"`
+	EndpointHealth            EndpointHealthConfig `mapstructure:"endpoint_health"`
 
 	Protocol Protocol         `mapstructure:"protocol"`
 	Resolver ResolverSettings `mapstructure:"resolver"`
@@ -100,6 +101,15 @@ type MetricBatcherConfig struct {
 	MaxBytes                 int           `mapstructure:"max_bytes"`
 	FlushInterval            time.Duration `mapstructure:"flush_interval"`
 	MaxRetryBufferMultiplier int           `mapstructure:"max_retry_buffer_multiplier"`
+}
+
+const defaultEndpointHealthQuarantineDuration = 30 * time.Second
+
+type EndpointHealthConfig struct {
+	Enabled            bool          `mapstructure:"enabled"`
+	QuarantineDuration time.Duration `mapstructure:"quarantine_duration"`
+	RerouteOnFailure   bool          `mapstructure:"reroute_on_failure"`
+	MaxRerouteAttempts int           `mapstructure:"max_reroute_attempts"`
 }
 
 func (q *QueueSettings) Unmarshal(conf *confmap.Conf) error {
@@ -197,7 +207,10 @@ func (cfg *Config) Validate() error {
 	if err := cfg.LogBatcher.Validate(); err != nil {
 		return err
 	}
-	return cfg.MetricBatcher.Validate()
+	if err := cfg.MetricBatcher.Validate(); err != nil {
+		return err
+	}
+	return cfg.EndpointHealth.Validate()
 }
 
 func (c LogBatcherConfig) Validate() error {
@@ -231,6 +244,19 @@ func (c MetricBatcherConfig) Validate() error {
 	}
 	if c.MaxRetryBufferMultiplier <= 0 {
 		return errors.New("metric_batcher.max_retry_buffer_multiplier must be greater than 0 when metric_batcher.enabled=true")
+	}
+	return nil
+}
+
+func (c EndpointHealthConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if c.QuarantineDuration <= 0 {
+		return errors.New("endpoint_health.quarantine_duration must be greater than 0 when endpoint_health.enabled=true")
+	}
+	if c.MaxRerouteAttempts < 0 {
+		return errors.New("endpoint_health.max_reroute_attempts must be greater than or equal to 0")
 	}
 	return nil
 }

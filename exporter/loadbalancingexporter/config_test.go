@@ -114,6 +114,29 @@ func TestConfigValidateMetricBatcher(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 }
 
+func TestConfigValidateEndpointHealth(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	require.False(t, cfg.EndpointHealth.Enabled)
+	require.Equal(t, defaultEndpointHealthQuarantineDuration, cfg.EndpointHealth.QuarantineDuration)
+	require.True(t, cfg.EndpointHealth.RerouteOnFailure)
+	require.Equal(t, 1, cfg.EndpointHealth.MaxRerouteAttempts)
+	require.NoError(t, cfg.Validate())
+
+	cfg.EndpointHealth.Enabled = true
+	require.NoError(t, cfg.Validate())
+
+	cfg.EndpointHealth.QuarantineDuration = 0
+	require.ErrorContains(t, cfg.Validate(), "endpoint_health.quarantine_duration")
+
+	cfg.EndpointHealth.QuarantineDuration = time.Second
+	cfg.EndpointHealth.MaxRerouteAttempts = -1
+	require.ErrorContains(t, cfg.Validate(), "endpoint_health.max_reroute_attempts")
+
+	cfg.EndpointHealth.MaxRerouteAttempts = 0
+	cfg.EndpointHealth.RerouteOnFailure = false
+	require.NoError(t, cfg.Validate())
+}
+
 func TestLoadConfigWithQueueCompression(t *testing.T) {
 	cfg := createDefaultConfig().(*Config)
 	conf := confmap.NewFromStringMap(map[string]any{
@@ -304,6 +327,38 @@ func TestLoadConfigWithMetricBatcher(t *testing.T) {
 	require.Equal(t, 2097152, cfg.MetricBatcher.MaxBytes)
 	require.Equal(t, 300*time.Millisecond, cfg.MetricBatcher.FlushInterval)
 	require.Equal(t, 12, cfg.MetricBatcher.MaxRetryBufferMultiplier)
+}
+
+func TestLoadConfigWithEndpointHealth(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	conf := confmap.NewFromStringMap(map[string]any{
+		"protocol": map[string]any{
+			"otlp": map[string]any{
+				"endpoint": "localhost:4317",
+				"tls":      map[string]any{"insecure": true},
+			},
+		},
+		"resolver": map[string]any{
+			"dns": map[string]any{
+				"hostname": "collector-backend-headless",
+				"interval": "1s",
+				"timeout":  "1s",
+			},
+		},
+		"endpoint_health": map[string]any{
+			"enabled":              true,
+			"quarantine_duration":  "10s",
+			"reroute_on_failure":   true,
+			"max_reroute_attempts": 1,
+		},
+	})
+
+	require.NoError(t, conf.Unmarshal(cfg))
+	require.True(t, cfg.EndpointHealth.Enabled)
+	require.Equal(t, 10*time.Second, cfg.EndpointHealth.QuarantineDuration)
+	require.True(t, cfg.EndpointHealth.RerouteOnFailure)
+	require.Equal(t, 1, cfg.EndpointHealth.MaxRerouteAttempts)
+	require.NoError(t, cfg.Validate())
 }
 
 func TestLoadConfigWithNullNestedOTLPQueueDisablesChildQueue(t *testing.T) {
