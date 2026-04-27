@@ -188,15 +188,17 @@ func (lb *loadBalancer) onBackendChangesWithEndpointHealth(resolved []string) {
 
 	// TODO: set a timeout?
 	ctx := context.Background()
+	created := lb.createMissingExporters(ctx, reconcile.eligible, nil)
 
 	lb.updateLock.Lock()
 	lb.ring = newRing
 	lb.resolvedEndpoints = resolved
 
-	lb.addMissingExporters(ctx, reconcile.eligible)
+	duplicates := lb.installCreatedExportersLocked(created)
 	removed := lb.removeExtraExportersLocked(resolved)
 	lb.updateLock.Unlock()
 
+	lb.shutdownCreatedExporters(ctx, duplicates)
 	lb.drainRemovedExporters(ctx, removed)
 }
 
@@ -236,6 +238,61 @@ func (lb *loadBalancer) addMissingExporters(ctx context.Context, endpoints []str
 			}
 			lb.exporters[endpoint] = we
 		}
+	}
+}
+
+type createdExporter struct {
+	endpoint string
+	exporter *wrappedExporter
+}
+
+func (lb *loadBalancer) createMissingExporters(ctx context.Context, endpoints []string, forceCreate map[string]struct{}) []createdExporter {
+	var created []createdExporter
+	for _, endpoint := range endpoints {
+		endpoint = endpointWithPort(endpoint)
+
+		if _, force := forceCreate[endpoint]; !force {
+			lb.updateLock.RLock()
+			_, exists := lb.exporters[endpoint]
+			lb.updateLock.RUnlock()
+			if exists {
+				continue
+			}
+		}
+
+		exp, err := lb.componentFactory(ctx, endpoint)
+		if err != nil {
+			lb.logger.Error("failed to create new exporter for endpoint", zap.String("endpoint", endpoint), zap.Error(err))
+			continue
+		}
+		we := newWrappedExporter(exp, endpoint)
+		if err = we.Start(ctx, lb.host); err != nil {
+			lb.logger.Error("failed to start new exporter for endpoint", zap.String("endpoint", endpoint), zap.Error(err))
+			continue
+		}
+		created = append(created, createdExporter{endpoint: endpoint, exporter: we})
+	}
+	return created
+}
+
+func (lb *loadBalancer) installCreatedExportersLocked(created []createdExporter) []createdExporter {
+	var duplicates []createdExporter
+	for _, createdExporter := range created {
+		if _, exists := lb.exporters[createdExporter.endpoint]; exists {
+			createdExporter.exporter.markStopping()
+			duplicates = append(duplicates, createdExporter)
+			continue
+		}
+		lb.exporters[createdExporter.endpoint] = createdExporter.exporter
+	}
+	return duplicates
+}
+
+func (*loadBalancer) shutdownCreatedExporters(ctx context.Context, created []createdExporter) {
+	for _, createdExporter := range created {
+		go func(exp *wrappedExporter) {
+			_ = exp.Shutdown(ctx)
+		}(createdExporter.exporter)
 	}
 }
 
@@ -293,6 +350,12 @@ func (lb *loadBalancer) handleBackendFailure(ctx context.Context, endpoint strin
 		return decision
 	}
 
+	forceCreate := map[string]struct{}{}
+	if slices.Contains(decision.eligible, endpoint) {
+		forceCreate[endpoint] = struct{}{}
+	}
+	created := lb.createMissingExporters(ctx, decision.eligible, forceCreate)
+
 	lb.updateLock.Lock()
 	lb.ring = newHashRing(decision.eligible)
 
@@ -302,9 +365,10 @@ func (lb *loadBalancer) handleBackendFailure(ctx context.Context, endpoint strin
 		delete(lb.exporters, endpoint)
 		removed = append(removed, removedExporter{endpoint: endpoint, exporter: exp})
 	}
-	lb.addMissingExporters(ctx, decision.eligible)
+	duplicates := lb.installCreatedExportersLocked(created)
 	lb.updateLock.Unlock()
 
+	lb.shutdownCreatedExporters(ctx, duplicates)
 	lb.drainRemovedExporters(ctx, removed)
 	return decision
 }
@@ -316,11 +380,15 @@ func (lb *loadBalancer) handleBackendSuccess(endpoint string) {
 
 	lb.endpointHealth.markSuccess(endpointWithPort(endpoint))
 	eligible := lb.endpointHealth.eligibleEndpoints()
+	ctx := context.Background()
+	created := lb.createMissingExporters(ctx, eligible, nil)
 
 	lb.updateLock.Lock()
 	lb.ring = newHashRing(eligible)
-	lb.addMissingExporters(context.Background(), eligible)
+	duplicates := lb.installCreatedExportersLocked(created)
 	lb.updateLock.Unlock()
+
+	lb.shutdownCreatedExporters(ctx, duplicates)
 }
 
 func (lb *loadBalancer) Shutdown(ctx context.Context) error {

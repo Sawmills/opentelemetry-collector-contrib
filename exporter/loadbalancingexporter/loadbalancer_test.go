@@ -450,6 +450,48 @@ func TestLoadBalancerEndpointHealthSuccessRecoversFailOpenRing(t *testing.T) {
 	}
 }
 
+func TestLoadBalancerEndpointHealthCreatesExportersOutsideUpdateLock(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+
+	var p *loadBalancer
+	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		if p != nil {
+			acquired := make(chan struct{})
+			go func() {
+				p.updateLock.RLock()
+				p.updateLock.RUnlock()
+				close(acquired)
+			}()
+
+			select {
+			case <-acquired:
+			case <-time.After(100 * time.Millisecond):
+				return nil, errors.New("componentFactory called while updateLock is held")
+			}
+		}
+		return mockComponent{}, nil
+	}
+
+	var err error
+	p, err = newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+
+	p.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	decision := p.handleBackendFailure(t.Context(), "endpoint-1:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, decision.quarantined)
+	decision = p.handleBackendFailure(t.Context(), "endpoint-2:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, decision.failOpen)
+
+	p.updateLock.Lock()
+	delete(p.exporters, "endpoint-1:4317")
+	p.updateLock.Unlock()
+
+	p.handleBackendSuccess("endpoint-1:4317")
+	require.Contains(t, p.exporters, "endpoint-1:4317")
+}
+
 func TestEndpointWithPort(t *testing.T) {
 	for _, tt := range []struct {
 		input, expected string
