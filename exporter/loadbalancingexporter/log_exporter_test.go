@@ -352,6 +352,34 @@ func TestConsumeLogsReroutesEndpointLocalFailure(t *testing.T) {
 	assert.NotContains(t, lb.exporters, "endpoint-1:4317")
 }
 
+func TestConsumeLogsBatcherFlushDoesNotQuarantineEndpoint(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+
+	lb, err := newLoadBalancer(ts.Logger, cfg, func(context.Context, string) (component.Component, error) {
+		return newNopMockLogsExporter(), nil
+	}, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	exp := newWrappedExporter(newMockLogsExporter(func(context.Context, plog.Logs) error {
+		return status.Error(codes.Unavailable, "backend unavailable")
+	}), "endpoint-1:4317")
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": exp,
+	}
+
+	p, err := newLogsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer = lb
+
+	err = p.consumeBatch(t.Context(), exp, simpleLogs(), logFlushReasonShutdown)
+	require.Error(t, err)
+	assert.Contains(t, lb.exporters, "endpoint-1:4317")
+	assert.ElementsMatch(t, []string{"endpoint-1:4317", "endpoint-2:4317"}, lb.endpointHealth.eligibleEndpoints())
+}
+
 func generateSingleLogRecord() plog.Logs {
 	logs := plog.NewLogs()
 	rl := logs.ResourceLogs().AppendEmpty()

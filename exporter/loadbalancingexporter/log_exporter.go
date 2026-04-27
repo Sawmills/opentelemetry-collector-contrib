@@ -215,7 +215,7 @@ func (e *logExporterImp) consumeLogDirect(ctx context.Context, ld plog.Logs, rer
 		return err
 	}
 
-	err, decision := e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect)
+	err, decision := e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect, true)
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, le.endpoint, decision, rerouteAttempt) {
 		return e.consumeLogDirect(ctx, ld, rerouteAttempt+1)
 	}
@@ -223,11 +223,11 @@ func (e *logExporterImp) consumeLogDirect(ctx context.Context, ld plog.Logs, rer
 }
 
 func (e *logExporterImp) consumeBatch(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string) error {
-	err, _ := e.consumeBatchWithDecision(ctx, le, ld, reason)
+	err, _ := e.consumeBatchWithDecision(ctx, le, ld, reason, false)
 	return err
 }
 
-func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string) (error, endpointHealthFailureDecision) {
+func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string, updateEndpointHealth bool) (error, endpointHealthFailureDecision) {
 	if reason == logFlushReasonDirect || reason == logFlushReasonResolverChange || reason == logFlushReasonShutdown {
 		le.forceStartConsume()
 	} else if !le.tryStartConsume() {
@@ -241,12 +241,17 @@ func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrapp
 	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(le.endpointAttr))
 	if err == nil {
 		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.successAttr))
-		e.loadBalancer.handleBackendSuccess(le.endpoint)
+		if updateEndpointHealth {
+			e.loadBalancer.handleBackendSuccess(le.endpoint)
+		}
 		return nil, endpointHealthFailureDecision{}
 	}
 
 	e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.failureAttr))
 	e.logger.Debug("failed to export log", zap.Error(err))
+	if !updateEndpointHealth {
+		return err, endpointHealthFailureDecision{}
+	}
 	return err, e.loadBalancer.handleBackendFailure(ctx, le.endpoint, err)
 }
 

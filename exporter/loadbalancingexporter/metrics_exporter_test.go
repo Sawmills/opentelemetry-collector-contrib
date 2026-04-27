@@ -29,6 +29,8 @@ import (
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/exp/metrics"
@@ -750,6 +752,75 @@ func TestConsumeMetricsReroutesEndpointLocalFailure(t *testing.T) {
 	assert.Equal(t, 1, calls["endpoint-1:4317"])
 	assert.Equal(t, 1, calls["endpoint-2:4317"])
 	assert.NotContains(t, lb.exporters, "endpoint-1:4317")
+}
+
+func TestConsumeMetricsRerouteFailureReturnsConsumerErrorMetrics(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := endpoint2Config()
+	enableEndpointHealth(cfg)
+
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockMetricsExporter(func(context.Context, pmetric.Metrics) error {
+			if endpoint == "endpoint-1:4317" {
+				return status.Error(codes.Unavailable, "backend unavailable")
+			}
+			return errors.New("reroute failed")
+		}), nil
+	}
+	lb, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1:4317", "endpoint-2:4317"})
+
+	p, err := newMetricsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.started.Store(true)
+
+	serviceForEndpoint1 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1:4317")
+	input := metricsWithServiceNames(serviceForEndpoint1)
+	err = p.ConsumeMetrics(t.Context(), input)
+	require.Error(t, err)
+
+	var metricsErr consumererror.Metrics
+	require.ErrorAs(t, err, &metricsErr)
+	require.NoError(t, pmetrictest.CompareMetrics(
+		metricsWithServiceNames(serviceForEndpoint1),
+		metricsErr.Data(),
+		pmetrictest.IgnoreResourceMetricsOrder(),
+		pmetrictest.IgnoreScopeMetricsOrder(),
+		pmetrictest.IgnoreMetricsOrder(),
+		pmetrictest.IgnoreMetricDataPointsOrder(),
+	))
+}
+
+func TestConsumeMetricsBatcherFlushDoesNotQuarantineEndpoint(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := endpoint2Config()
+	enableEndpointHealth(cfg)
+
+	lb, err := newLoadBalancer(ts.Logger, cfg, func(context.Context, string) (component.Component, error) {
+		return newNopMockMetricsExporter(), nil
+	}, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	exp := newWrappedExporter(newMockMetricsExporter(func(context.Context, pmetric.Metrics) error {
+		return status.Error(codes.Unavailable, "backend unavailable")
+	}), "endpoint-1:4317")
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": exp,
+	}
+
+	p, err := newMetricsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer = lb
+
+	err = p.consumeBatch(t.Context(), exp, simpleMetricsWithServiceName(), metricFlushReasonShutdown)
+	require.Error(t, err)
+	assert.Contains(t, lb.exporters, "endpoint-1:4317")
+	assert.ElementsMatch(t, []string{"endpoint-1:4317", "endpoint-2:4317"}, lb.endpointHealth.eligibleEndpoints())
 }
 
 func TestConsumeMetrics_SingleEndpointWithMetricBatcher(t *testing.T) {
