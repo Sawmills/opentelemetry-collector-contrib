@@ -7,7 +7,10 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,6 +20,8 @@ import (
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exportertest"
 	"go.opentelemetry.io/collector/exporter/otlpexporter"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
@@ -339,6 +344,112 @@ func TestFailedToAddMissingExporters(t *testing.T) {
 	assert.Contains(t, p.exporters, "endpoint-1:4317")
 }
 
+func TestLoadBalancerEndpointHealthExcludesQuarantinedEndpoint(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		return mockComponent{}, nil
+	}
+
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+
+	p.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	require.Contains(t, p.exporters, "endpoint-1:4317")
+	require.Contains(t, p.exporters, "endpoint-2:4317")
+
+	decision := p.handleBackendFailure(t.Context(), "endpoint-1:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, decision.endpointLocal)
+	require.True(t, decision.quarantined)
+	require.NotContains(t, p.exporters, "endpoint-1:4317")
+	require.Contains(t, p.exporters, "endpoint-2:4317")
+
+	for i := range 100 {
+		_, endpoint, err := p.exporterAndEndpoint([]byte{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)})
+		require.NoError(t, err)
+		assert.NotEqual(t, "endpoint-1:4317", endpoint)
+	}
+}
+
+func TestLoadBalancerEndpointHealthRemovesDNSStaleEndpoint(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	var shutdowns sync.Map
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return &countingComponent{endpoint: endpoint, shutdowns: &shutdowns}, nil
+	}
+
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+
+	p.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	p.onBackendChanges([]string{"endpoint-2"})
+
+	require.NotContains(t, p.exporters, "endpoint-1:4317")
+	require.Contains(t, p.exporters, "endpoint-2:4317")
+	require.Eventually(t, func() bool {
+		count, ok := shutdowns.Load("endpoint-1:4317")
+		return ok && count.(*atomic.Int64).Load() > 0
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestLoadBalancerEndpointHealthFailOpenRefreshesFailedExporter(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		return mockComponent{}, nil
+	}
+
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+
+	p.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	endpoint1Original := p.exporters["endpoint-1:4317"]
+	endpoint2Original := p.exporters["endpoint-2:4317"]
+
+	decision := p.handleBackendFailure(t.Context(), "endpoint-1:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, decision.quarantined)
+	require.False(t, decision.failOpen)
+
+	decision = p.handleBackendFailure(t.Context(), "endpoint-2:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, decision.quarantined)
+	require.True(t, decision.failOpen)
+	require.Contains(t, decision.eligible, "endpoint-1:4317")
+	require.Contains(t, decision.eligible, "endpoint-2:4317")
+	require.NotSame(t, endpoint1Original, p.exporters["endpoint-1:4317"])
+	require.NotSame(t, endpoint2Original, p.exporters["endpoint-2:4317"])
+}
+
+func TestLoadBalancerEndpointHealthSuccessRecoversFailOpenRing(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		return mockComponent{}, nil
+	}
+
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+
+	p.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	decision := p.handleBackendFailure(t.Context(), "endpoint-1:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, decision.quarantined)
+	decision = p.handleBackendFailure(t.Context(), "endpoint-2:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, decision.failOpen)
+
+	p.handleBackendSuccess("endpoint-1:4317")
+
+	require.False(t, p.endpointHealth.failOpen())
+	for i := range 100 {
+		_, endpoint, err := p.exporterAndEndpoint([]byte{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)})
+		require.NoError(t, err)
+		assert.Equal(t, "endpoint-1:4317", endpoint)
+	}
+}
+
 func TestEndpointWithPort(t *testing.T) {
 	for _, tt := range []struct {
 		input, expected string
@@ -442,4 +553,26 @@ func TestNewLoadBalancerInvalidServiceAwsResolver(t *testing.T) {
 
 func newNopMockExporter() *wrappedExporter {
 	return newWrappedExporter(mockComponent{}, "mock")
+}
+
+func enableEndpointHealth(cfg *Config) {
+	cfg.EndpointHealth.Enabled = true
+	cfg.EndpointHealth.QuarantineDuration = time.Minute
+	cfg.EndpointHealth.RerouteOnFailure = true
+	cfg.EndpointHealth.MaxRerouteAttempts = 1
+}
+
+type countingComponent struct {
+	endpoint  string
+	shutdowns *sync.Map
+}
+
+func (*countingComponent) Start(context.Context, component.Host) error {
+	return nil
+}
+
+func (c *countingComponent) Shutdown(context.Context) error {
+	count, _ := c.shutdowns.LoadOrStore(c.endpoint, &atomic.Int64{})
+	count.(*atomic.Int64).Add(1)
+	return nil
 }

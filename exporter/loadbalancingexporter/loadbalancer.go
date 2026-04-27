@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 
@@ -35,9 +36,11 @@ type loadBalancer struct {
 	res  resolver
 	ring *hashRing
 
-	componentFactory componentFactory
-	exporters        map[string]*wrappedExporter
-	onExporterRemove func(context.Context, string, *wrappedExporter) error
+	componentFactory  componentFactory
+	exporters         map[string]*wrappedExporter
+	onExporterRemove  func(context.Context, string, *wrappedExporter) error
+	endpointHealth    *endpointHealthManager
+	resolvedEndpoints []string
 
 	stopped    bool
 	updateLock sync.RWMutex
@@ -142,6 +145,7 @@ func newLoadBalancer(logger *zap.Logger, cfg component.Config, factory component
 		res:              res,
 		componentFactory: factory,
 		exporters:        map[string]*wrappedExporter{},
+		endpointHealth:   newEndpointHealthManager(endpointHealthSettingsFromConfig(oCfg.EndpointHealth)),
 	}, nil
 }
 
@@ -152,6 +156,11 @@ func (lb *loadBalancer) Start(ctx context.Context, host component.Host) error {
 }
 
 func (lb *loadBalancer) onBackendChanges(resolved []string) {
+	if lb.endpointHealth.enabled() {
+		lb.onBackendChangesWithEndpointHealth(resolved)
+		return
+	}
+
 	newRing := newHashRing(resolved)
 
 	if newRing.equal(lb.ring) {
@@ -166,6 +175,25 @@ func (lb *loadBalancer) onBackendChanges(resolved []string) {
 
 	// add the missing exporters first
 	lb.addMissingExporters(ctx, resolved)
+	removed := lb.removeExtraExportersLocked(resolved)
+	lb.updateLock.Unlock()
+
+	lb.drainRemovedExporters(ctx, removed)
+}
+
+func (lb *loadBalancer) onBackendChangesWithEndpointHealth(resolved []string) {
+	resolved = normalizeEndpoints(resolved)
+	reconcile := lb.endpointHealth.reconcile(resolved)
+	newRing := newHashRing(reconcile.eligible)
+
+	// TODO: set a timeout?
+	ctx := context.Background()
+
+	lb.updateLock.Lock()
+	lb.ring = newRing
+	lb.resolvedEndpoints = resolved
+
+	lb.addMissingExporters(ctx, reconcile.eligible)
 	removed := lb.removeExtraExportersLocked(resolved)
 	lb.updateLock.Unlock()
 
@@ -212,10 +240,31 @@ func (lb *loadBalancer) addMissingExporters(ctx context.Context, endpoints []str
 }
 
 func endpointWithPort(endpoint string) string {
+	if endpoint == "" {
+		return ""
+	}
 	if !strings.Contains(endpoint, ":") {
 		endpoint = fmt.Sprintf("%s:%s", endpoint, defaultPort)
 	}
 	return endpoint
+}
+
+func normalizeEndpoints(endpoints []string) []string {
+	normalized := make([]string, 0, len(endpoints))
+	seen := make(map[string]struct{}, len(endpoints))
+	for _, endpoint := range endpoints {
+		endpoint = endpointWithPort(endpoint)
+		if endpoint == "" {
+			continue
+		}
+		if _, ok := seen[endpoint]; ok {
+			continue
+		}
+		seen[endpoint] = struct{}{}
+		normalized = append(normalized, endpoint)
+	}
+	sort.Strings(normalized)
+	return normalized
 }
 
 func (lb *loadBalancer) removeExtraExportersLocked(endpoints []string) []removedExporter {
@@ -235,6 +284,43 @@ func (lb *loadBalancer) removeExtraExportersLocked(endpoints []string) []removed
 	}
 
 	return removed
+}
+
+func (lb *loadBalancer) handleBackendFailure(ctx context.Context, endpoint string, err error) endpointHealthFailureDecision {
+	endpoint = endpointWithPort(endpoint)
+	decision := lb.endpointHealth.markFailure(endpoint, err)
+	if !decision.quarantined {
+		return decision
+	}
+
+	lb.updateLock.Lock()
+	lb.ring = newHashRing(decision.eligible)
+
+	var removed []removedExporter
+	if exp, ok := lb.exporters[endpoint]; ok {
+		exp.markStopping()
+		delete(lb.exporters, endpoint)
+		removed = append(removed, removedExporter{endpoint: endpoint, exporter: exp})
+	}
+	lb.addMissingExporters(ctx, decision.eligible)
+	lb.updateLock.Unlock()
+
+	lb.drainRemovedExporters(ctx, removed)
+	return decision
+}
+
+func (lb *loadBalancer) handleBackendSuccess(endpoint string) {
+	if !lb.endpointHealth.enabled() {
+		return
+	}
+
+	lb.endpointHealth.markSuccess(endpointWithPort(endpoint))
+	eligible := lb.endpointHealth.eligibleEndpoints()
+
+	lb.updateLock.Lock()
+	lb.ring = newHashRing(eligible)
+	lb.addMissingExporters(context.Background(), eligible)
+	lb.updateLock.Unlock()
 }
 
 func (lb *loadBalancer) Shutdown(ctx context.Context) error {
@@ -259,5 +345,5 @@ func (lb *loadBalancer) exporterAndEndpoint(identifier []byte) (*wrappedExporter
 		return nil, "", fmt.Errorf("couldn't find the exporter for the endpoint %q", endpoint)
 	}
 
-	return exp, endpoint, nil
+	return exp, endpointWithPort(endpoint), nil
 }
