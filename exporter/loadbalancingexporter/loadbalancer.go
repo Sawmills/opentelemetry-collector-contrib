@@ -184,17 +184,18 @@ func (lb *loadBalancer) onBackendChanges(resolved []string) {
 func (lb *loadBalancer) onBackendChangesWithEndpointHealth(resolved []string) {
 	resolved = normalizeEndpoints(resolved)
 	reconcile := lb.endpointHealth.reconcile(resolved)
-	newRing := newHashRing(reconcile.eligible)
 
 	// TODO: set a timeout?
 	ctx := context.Background()
 	created := lb.createMissingExporters(ctx, reconcile.eligible, nil)
+	eligible := lb.endpointHealth.eligibleEndpoints()
+	newRing := newHashRing(eligible)
 
 	lb.updateLock.Lock()
 	lb.ring = newRing
 	lb.resolvedEndpoints = resolved
 
-	duplicates := lb.installCreatedExportersLocked(created)
+	duplicates := lb.installCreatedExportersLocked(created, eligible)
 	removed := lb.removeExtraExportersLocked(resolved)
 	lb.updateLock.Unlock()
 
@@ -275,9 +276,18 @@ func (lb *loadBalancer) createMissingExporters(ctx context.Context, endpoints []
 	return created
 }
 
-func (lb *loadBalancer) installCreatedExportersLocked(created []createdExporter) []createdExporter {
+func (lb *loadBalancer) installCreatedExportersLocked(created []createdExporter, endpoints []string) []createdExporter {
 	var duplicates []createdExporter
+	eligible := make(map[string]struct{}, len(endpoints))
+	for _, endpoint := range endpoints {
+		eligible[endpointWithPort(endpoint)] = struct{}{}
+	}
 	for _, createdExporter := range created {
+		if _, ok := eligible[createdExporter.endpoint]; !ok {
+			createdExporter.exporter.markStopping()
+			duplicates = append(duplicates, createdExporter)
+			continue
+		}
 		if _, exists := lb.exporters[createdExporter.endpoint]; exists {
 			createdExporter.exporter.markStopping()
 			duplicates = append(duplicates, createdExporter)
@@ -365,7 +375,7 @@ func (lb *loadBalancer) handleBackendFailure(ctx context.Context, endpoint strin
 		delete(lb.exporters, endpoint)
 		removed = append(removed, removedExporter{endpoint: endpoint, exporter: exp})
 	}
-	duplicates := lb.installCreatedExportersLocked(created)
+	duplicates := lb.installCreatedExportersLocked(created, decision.eligible)
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)
@@ -385,7 +395,7 @@ func (lb *loadBalancer) handleBackendSuccess(endpoint string) {
 
 	lb.updateLock.Lock()
 	lb.ring = newHashRing(eligible)
-	duplicates := lb.installCreatedExportersLocked(created)
+	duplicates := lb.installCreatedExportersLocked(created, eligible)
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)

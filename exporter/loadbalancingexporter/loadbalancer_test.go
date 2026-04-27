@@ -492,6 +492,79 @@ func TestLoadBalancerEndpointHealthCreatesExportersOutsideUpdateLock(t *testing.
 	require.Contains(t, p.exporters, "endpoint-1:4317")
 }
 
+func TestLoadBalancerEndpointHealthResolverRecomputesEligibilityBeforeRingInstall(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+
+	var shutdowns sync.Map
+	var blockedEndpoint1 atomic.Bool
+	endpoint1CreateBlocked := make(chan struct{})
+	releaseEndpoint1Create := make(chan struct{})
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		if endpoint == "endpoint-1:4317" && blockedEndpoint1.CompareAndSwap(false, true) {
+			close(endpoint1CreateBlocked)
+			select {
+			case <-releaseEndpoint1Create:
+			case <-time.After(5 * time.Second):
+				return nil, errors.New("timed out waiting to release endpoint-1 creation")
+			}
+		}
+		return &countingComponent{endpoint: endpoint, shutdowns: &shutdowns}, nil
+	}
+
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+
+	resolverDone := make(chan struct{})
+	go func() {
+		p.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+		close(resolverDone)
+	}()
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-endpoint1CreateBlocked:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	decision := p.handleBackendFailure(t.Context(), "endpoint-1:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, decision.quarantined)
+	require.Equal(t, []string{"endpoint-2:4317"}, decision.eligible)
+
+	close(releaseEndpoint1Create)
+	require.Eventually(t, func() bool {
+		select {
+		case <-resolverDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	p.updateLock.RLock()
+	for _, item := range p.ring.items {
+		require.NotEqual(t, "endpoint-1:4317", item.endpoint)
+	}
+	p.updateLock.RUnlock()
+
+	require.NotContains(t, p.exporters, "endpoint-1:4317")
+	require.Contains(t, p.exporters, "endpoint-2:4317")
+	require.Eventually(t, func() bool {
+		count, ok := shutdowns.Load("endpoint-1:4317")
+		return ok && count.(*atomic.Int64).Load() > 0
+	}, time.Second, 10*time.Millisecond)
+
+	for i := range 100 {
+		_, endpoint, err := p.exporterAndEndpoint([]byte{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)})
+		require.NoError(t, err)
+		assert.Equal(t, "endpoint-2:4317", endpoint)
+	}
+}
+
 func TestEndpointWithPort(t *testing.T) {
 	for _, tt := range []struct {
 		input, expected string
