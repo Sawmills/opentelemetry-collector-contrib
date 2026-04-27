@@ -565,6 +565,54 @@ func TestLoadBalancerEndpointHealthResolverRecomputesEligibilityBeforeRingInstal
 	}
 }
 
+func TestLoadBalancerEndpointHealthResolverCommitUsesLockedEligibility(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	var shutdowns sync.Map
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return &countingComponent{endpoint: endpoint, shutdowns: &shutdowns}, nil
+	}
+
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+
+	resolved := normalizeEndpoints([]string{"endpoint-1", "endpoint-2"})
+	reconcile := p.endpointHealth.reconcile(resolved)
+	require.Equal(t, []string{"endpoint-1:4317", "endpoint-2:4317"}, reconcile.eligible)
+
+	staleEndpoint1 := newWrappedExporter(&countingComponent{endpoint: "endpoint-1:4317", shutdowns: &shutdowns}, "endpoint-1:4317")
+	endpoint2 := newWrappedExporter(&countingComponent{endpoint: "endpoint-2:4317", shutdowns: &shutdowns}, "endpoint-2:4317")
+	created := []createdExporter{
+		{endpoint: "endpoint-1:4317", exporter: staleEndpoint1},
+		{endpoint: "endpoint-2:4317", exporter: endpoint2},
+	}
+
+	decision := p.endpointHealth.markFailure("endpoint-1:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, decision.quarantined)
+	require.Equal(t, []string{"endpoint-2:4317"}, decision.eligible)
+
+	p.updateLock.Lock()
+	duplicates, removed := p.commitEndpointHealthResolverUpdateLocked(resolved, created)
+	p.updateLock.Unlock()
+	p.shutdownCreatedExporters(t.Context(), duplicates)
+	p.drainRemovedExporters(t.Context(), removed)
+
+	require.Contains(t, p.exporters, "endpoint-2:4317")
+	require.Same(t, endpoint2, p.exporters["endpoint-2:4317"])
+	require.NotContains(t, p.exporters, "endpoint-1:4317")
+	require.Eventually(t, func() bool {
+		count, ok := shutdowns.Load("endpoint-1:4317")
+		return ok && count.(*atomic.Int64).Load() > 0
+	}, time.Second, 10*time.Millisecond)
+
+	for i := range 100 {
+		_, endpoint, err := p.exporterAndEndpoint([]byte{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)})
+		require.NoError(t, err)
+		assert.Equal(t, "endpoint-2:4317", endpoint)
+	}
+}
+
 func TestEndpointWithPort(t *testing.T) {
 	for _, tt := range []struct {
 		input, expected string

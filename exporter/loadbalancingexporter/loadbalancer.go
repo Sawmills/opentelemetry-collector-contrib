@@ -188,19 +188,23 @@ func (lb *loadBalancer) onBackendChangesWithEndpointHealth(resolved []string) {
 	// TODO: set a timeout?
 	ctx := context.Background()
 	created := lb.createMissingExporters(ctx, reconcile.eligible, nil)
-	eligible := lb.endpointHealth.eligibleEndpoints()
-	newRing := newHashRing(eligible)
 
 	lb.updateLock.Lock()
-	lb.ring = newRing
-	lb.resolvedEndpoints = resolved
-
-	duplicates := lb.installCreatedExportersLocked(created, eligible)
-	removed := lb.removeExtraExportersLocked(resolved)
+	duplicates, removed := lb.commitEndpointHealthResolverUpdateLocked(resolved, created)
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)
 	lb.drainRemovedExporters(ctx, removed)
+}
+
+func (lb *loadBalancer) commitEndpointHealthResolverUpdateLocked(resolved []string, created []createdExporter) ([]createdExporter, []removedExporter) {
+	eligible := lb.endpointHealth.eligibleEndpoints()
+	lb.ring = newHashRing(eligible)
+	lb.resolvedEndpoints = resolved
+
+	duplicates := lb.installCreatedExportersLocked(created, eligible)
+	removed := lb.removeExtraExportersLocked(resolved)
+	return duplicates, removed
 }
 
 type removedExporter struct {
