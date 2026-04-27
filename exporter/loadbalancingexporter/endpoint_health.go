@@ -173,9 +173,9 @@ func (m *endpointHealthManager) markFailure(endpoint string, err error) endpoint
 	return decision
 }
 
-func (m *endpointHealthManager) markSuccess(endpoint string) {
+func (m *endpointHealthManager) markSuccess(endpoint string) bool {
 	if !m.enabled() {
-		return
+		return false
 	}
 
 	m.mu.Lock()
@@ -183,13 +183,15 @@ func (m *endpointHealthManager) markSuccess(endpoint string) {
 
 	state, ok := m.endpoints[endpoint]
 	if !ok || !state.present {
-		return
+		return false
 	}
 	if !state.quarantinedUntil.IsZero() || state.failureReason != "" {
 		state.quarantinedUntil = time.Time{}
 		state.failureReason = ""
 		state.lastStateChangeAt = m.settings.now()
+		return true
 	}
+	return false
 }
 
 func (m *endpointHealthManager) isPresent(endpoint string) bool {

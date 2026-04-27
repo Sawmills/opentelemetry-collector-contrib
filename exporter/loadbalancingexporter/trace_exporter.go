@@ -147,13 +147,18 @@ func (e *traceExporterImp) consumeTraces(ctx context.Context, td ptrace.Traces, 
 	var errs error
 
 	for exp, td := range exporterSegregatedTraces {
+		var retryTraces ptrace.Traces
+		if directRerouteAttemptAllowed(e.loadBalancer, rerouteAttempt) {
+			retryTraces = ptrace.NewTraces()
+			td.CopyTo(retryTraces)
+		}
 		start := time.Now()
 		err := exp.ConsumeTraces(ctx, td)
 		exp.doneConsume()
 		duration := time.Since(start)
 		decision := e.recordBackendResult(ctx, exp, duration, err)
 		if err != nil && shouldRerouteDirectFailure(e.loadBalancer, exp.endpoint, decision, rerouteAttempt) {
-			err = e.consumeTraces(ctx, td, rerouteAttempt+1)
+			err = e.consumeTraces(ctx, retryTraces, rerouteAttempt+1)
 		}
 		errs = multierr.Append(errs, err)
 	}
@@ -175,16 +180,20 @@ func (e *traceExporterImp) recordBackendResult(ctx context.Context, exp *wrapped
 }
 
 func shouldRerouteDirectFailure(lb *loadBalancer, endpoint string, decision endpointHealthFailureDecision, attempt int) bool {
-	if lb == nil || lb.endpointHealth == nil || !lb.endpointHealth.rerouteOnFailure() {
+	if !directRerouteAttemptAllowed(lb, attempt) {
 		return false
 	}
-	if attempt >= lb.endpointHealth.settings.maxRerouteAttempts {
-		return false
-	}
-	if !decision.endpointLocal || !decision.quarantined || decision.failOpen {
+	if !decision.endpointLocal || decision.failOpen {
 		return false
 	}
 	return !slices.Contains(decision.eligible, endpointWithPort(endpoint))
+}
+
+func directRerouteAttemptAllowed(lb *loadBalancer, attempt int) bool {
+	if lb == nil || lb.endpointHealth == nil || !lb.endpointHealth.rerouteOnFailure() {
+		return false
+	}
+	return attempt < lb.endpointHealth.settings.maxRerouteAttempts
 }
 
 // routingIdentifiersFromTraces reads the traces and determines an identifier that can be used to define a position on the

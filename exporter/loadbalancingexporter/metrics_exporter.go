@@ -354,6 +354,14 @@ func (e *metricExporterImp) consumeMetricsByExporterAttempt(
 	needsCleanup = false
 	var errs error
 	for exp, mds := range metricsByExporter {
+		var retryMetrics pmetric.Metrics
+		var failedMetrics pmetric.Metrics
+		if directRerouteAttemptAllowed(e.loadBalancer, rerouteAttempt) {
+			retryMetrics = pmetric.NewMetrics()
+			mds.CopyTo(retryMetrics)
+			failedMetrics = pmetric.NewMetrics()
+			mds.CopyTo(failedMetrics)
+		}
 		start := time.Now()
 		err := exp.ConsumeMetrics(ctx, mds)
 		duration := time.Since(start)
@@ -361,13 +369,11 @@ func (e *metricExporterImp) consumeMetricsByExporterAttempt(
 		exp.doneConsume()
 		decision := e.recordBackendResult(ctx, exp, duration, err, true)
 		if err != nil && shouldRerouteDirectFailure(e.loadBalancer, exp.endpoint, decision, rerouteAttempt) {
-			failed := pmetric.NewMetrics()
-			mds.CopyTo(failed)
-			rerouted, splitErr := e.splitMetricsByRouting(mds)
+			rerouted, splitErr := e.splitMetricsByRouting(retryMetrics)
 			if splitErr != nil {
-				err = consumererror.NewMetrics(splitErr, failed)
+				err = consumererror.NewMetrics(splitErr, failedMetrics)
 			} else {
-				err = wrapDirectMetricsRerouteError(e.consumeMetricsByExporterAttempt(ctx, rerouted, rerouteAttempt+1), failed)
+				err = wrapDirectMetricsRerouteError(e.consumeMetricsByExporterAttempt(ctx, rerouted, rerouteAttempt+1), failedMetrics)
 			}
 		}
 		errs = multierr.Append(errs, err)

@@ -392,7 +392,9 @@ func (lb *loadBalancer) handleBackendSuccess(endpoint string) {
 		return
 	}
 
-	lb.endpointHealth.markSuccess(endpointWithPort(endpoint))
+	if !lb.endpointHealth.markSuccess(endpointWithPort(endpoint)) {
+		return
+	}
 	eligible := lb.endpointHealth.eligibleEndpoints()
 	ctx := context.Background()
 	created := lb.createMissingExporters(ctx, eligible, nil)

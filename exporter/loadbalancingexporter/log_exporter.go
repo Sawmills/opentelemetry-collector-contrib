@@ -215,9 +215,14 @@ func (e *logExporterImp) consumeLogDirect(ctx context.Context, ld plog.Logs, rer
 		return err
 	}
 
+	var retryLogs plog.Logs
+	if directRerouteAttemptAllowed(e.loadBalancer, rerouteAttempt) {
+		retryLogs = plog.NewLogs()
+		ld.CopyTo(retryLogs)
+	}
 	err, decision := e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect, true)
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, le.endpoint, decision, rerouteAttempt) {
-		return e.consumeLogDirect(ctx, ld, rerouteAttempt+1)
+		return e.consumeLogDirect(ctx, retryLogs, rerouteAttempt+1)
 	}
 	return err
 }

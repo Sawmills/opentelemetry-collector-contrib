@@ -754,6 +754,49 @@ func TestConsumeMetricsReroutesEndpointLocalFailure(t *testing.T) {
 	assert.NotContains(t, lb.exporters, "endpoint-1:4317")
 }
 
+func TestConsumeMetricsReroutePreservesPayloadAfterExporterMutation(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := endpoint2Config()
+	enableEndpointHealth(cfg)
+
+	var rerouted pmetric.Metrics
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockMetricsExporter(func(_ context.Context, md pmetric.Metrics) error {
+			if endpoint == "endpoint-1:4317" {
+				md.ResourceMetrics().At(0).ScopeMetrics().At(0).Metrics().At(0).SetName("mutated")
+				return status.Error(codes.Unavailable, "backend unavailable")
+			}
+			rerouted = pmetric.NewMetrics()
+			md.CopyTo(rerouted)
+			return nil
+		}), nil
+	}
+	lb, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1:4317", "endpoint-2:4317"})
+
+	p, err := newMetricsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.started.Store(true)
+
+	serviceForEndpoint1 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1:4317")
+	input := metricsWithServiceNames(serviceForEndpoint1)
+	expected := metricsWithServiceNames(serviceForEndpoint1)
+	require.NoError(t, p.ConsumeMetrics(t.Context(), input))
+
+	require.NoError(t, pmetrictest.CompareMetrics(
+		expected,
+		rerouted,
+		pmetrictest.IgnoreResourceMetricsOrder(),
+		pmetrictest.IgnoreScopeMetricsOrder(),
+		pmetrictest.IgnoreMetricsOrder(),
+		pmetrictest.IgnoreMetricDataPointsOrder(),
+	))
+}
+
 func TestConsumeMetricsRerouteFailureReturnsConsumerErrorMetrics(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	cfg := endpoint2Config()
@@ -787,6 +830,49 @@ func TestConsumeMetricsRerouteFailureReturnsConsumerErrorMetrics(t *testing.T) {
 	require.ErrorAs(t, err, &metricsErr)
 	require.NoError(t, pmetrictest.CompareMetrics(
 		metricsWithServiceNames(serviceForEndpoint1),
+		metricsErr.Data(),
+		pmetrictest.IgnoreResourceMetricsOrder(),
+		pmetrictest.IgnoreScopeMetricsOrder(),
+		pmetrictest.IgnoreMetricsOrder(),
+		pmetrictest.IgnoreMetricDataPointsOrder(),
+	))
+}
+
+func TestConsumeMetricsRerouteFailurePreservesConsumerErrorMetricsAfterExporterMutation(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := endpoint2Config()
+	enableEndpointHealth(cfg)
+
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockMetricsExporter(func(_ context.Context, md pmetric.Metrics) error {
+			md.ResourceMetrics().At(0).ScopeMetrics().At(0).Metrics().At(0).SetName("mutated")
+			if endpoint == "endpoint-1:4317" {
+				return status.Error(codes.Unavailable, "backend unavailable")
+			}
+			return errors.New("reroute failed")
+		}), nil
+	}
+	lb, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1:4317", "endpoint-2:4317"})
+
+	p, err := newMetricsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.started.Store(true)
+
+	serviceForEndpoint1 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1:4317")
+	input := metricsWithServiceNames(serviceForEndpoint1)
+	expected := metricsWithServiceNames(serviceForEndpoint1)
+	err = p.ConsumeMetrics(t.Context(), input)
+	require.Error(t, err)
+
+	var metricsErr consumererror.Metrics
+	require.ErrorAs(t, err, &metricsErr)
+	require.NoError(t, pmetrictest.CompareMetrics(
+		expected,
 		metricsErr.Data(),
 		pmetrictest.IgnoreResourceMetricsOrder(),
 		pmetrictest.IgnoreScopeMetricsOrder(),

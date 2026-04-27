@@ -69,6 +69,29 @@ func TestEndpointHealthQuarantinesOnFirstEndpointLocalFailure(t *testing.T) {
 	require.Equal(t, []string{"endpoint-1", "endpoint-2"}, manager.eligibleEndpoints())
 }
 
+func TestShouldRerouteDirectFailureAllowsAlreadyQuarantinedEndpoint(t *testing.T) {
+	now := time.Unix(100, 0)
+	manager := newEndpointHealthManager(endpointHealthSettings{
+		enabled:            true,
+		quarantineDuration: 30 * time.Second,
+		rerouteOnFailure:   true,
+		maxRerouteAttempts: 1,
+		now:                func() time.Time { return now },
+	})
+	manager.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	firstDecision := manager.markFailure("endpoint-1:4317", status.Error(codes.Unavailable, "backend unavailable"))
+	require.True(t, firstDecision.quarantined)
+
+	secondDecision := manager.markFailure("endpoint-1:4317", status.Error(codes.Unavailable, "backend unavailable"))
+	require.True(t, secondDecision.endpointLocal)
+	require.False(t, secondDecision.quarantined)
+	require.False(t, secondDecision.failOpen)
+	require.Equal(t, []string{"endpoint-2:4317"}, secondDecision.eligible)
+
+	lb := &loadBalancer{endpointHealth: manager}
+	require.True(t, shouldRerouteDirectFailure(lb, "endpoint-1:4317", secondDecision, 0))
+}
+
 func TestEndpointHealthMarkSuccessClearsQuarantineAndFailOpen(t *testing.T) {
 	now := time.Unix(100, 0)
 	manager := newEndpointHealthManager(endpointHealthSettings{

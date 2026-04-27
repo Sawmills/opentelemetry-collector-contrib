@@ -450,6 +450,30 @@ func TestLoadBalancerEndpointHealthSuccessRecoversFailOpenRing(t *testing.T) {
 	}
 }
 
+func TestLoadBalancerEndpointHealthHealthySuccessDoesNotRebuildRing(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	var created atomic.Int64
+	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		created.Add(1)
+		return mockComponent{}, nil
+	}
+
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+
+	p.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	require.Equal(t, int64(2), created.Load())
+	created.Store(0)
+	originalRing := p.ring
+
+	p.handleBackendSuccess("endpoint-1:4317")
+
+	require.Zero(t, created.Load())
+	require.Same(t, originalRing, p.ring)
+}
+
 func TestLoadBalancerEndpointHealthCreatesExportersOutsideUpdateLock(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	cfg := simpleConfig()
