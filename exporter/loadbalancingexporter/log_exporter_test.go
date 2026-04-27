@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -32,6 +33,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
 )
@@ -312,6 +315,41 @@ func TestConsumeLogsWithQueueCompressionAndInMemoryQueue(t *testing.T) {
 		return len(sink.AllLogs()) == 1
 	}, time.Second, 10*time.Millisecond)
 	assert.Equal(t, 1, sink.AllLogs()[0].LogRecordCount())
+}
+
+func TestConsumeLogsReroutesEndpointLocalFailure(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+
+	calls := map[string]int{}
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockLogsExporter(func(context.Context, plog.Logs) error {
+			calls[endpoint]++
+			if endpoint == "endpoint-1:4317" {
+				return status.Error(codes.Unavailable, "backend unavailable")
+			}
+			return nil
+		}), nil
+	}
+	lb, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1:4317", "endpoint-2:4317"})
+
+	p, err := newLogsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.started.Store(true)
+
+	traceIDForEndpoint1 := findTraceIDForEndpoint(t, lb.ring, "endpoint-1:4317")
+	err = p.ConsumeLogs(t.Context(), simpleLogWithID(traceIDForEndpoint1))
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, calls["endpoint-1:4317"])
+	assert.Equal(t, 1, calls["endpoint-2:4317"])
+	assert.NotContains(t, lb.exporters, "endpoint-1:4317")
 }
 
 func generateSingleLogRecord() plog.Logs {
@@ -833,6 +871,21 @@ func simpleLogWithID(id pcommon.TraceID) plog.Logs {
 	sl.LogRecords().AppendEmpty().SetTraceID(id)
 
 	return logs
+}
+
+func findTraceIDForEndpoint(t *testing.T, ring *hashRing, endpoint string) pcommon.TraceID {
+	t.Helper()
+
+	for i := range 4096 {
+		var traceID pcommon.TraceID
+		copy(traceID[:], []byte(strconv.Itoa(i)))
+		if ring.endpointFor(traceID[:]) == endpoint {
+			return traceID
+		}
+	}
+
+	require.FailNow(t, "failed to find trace id for endpoint", "endpoint=%s", endpoint)
+	return pcommon.TraceID{}
 }
 
 func sharedResourceScopeLog(body string) plog.Logs {

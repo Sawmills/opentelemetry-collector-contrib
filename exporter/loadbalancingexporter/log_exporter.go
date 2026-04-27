@@ -200,6 +200,10 @@ func (e *logExporterImp) enqueueEndpointBatches(ctx context.Context, batches map
 }
 
 func (e *logExporterImp) consumeLog(ctx context.Context, ld plog.Logs) error {
+	return e.consumeLogDirect(ctx, ld, 0)
+}
+
+func (e *logExporterImp) consumeLogDirect(ctx context.Context, ld plog.Logs, rerouteAttempt int) error {
 	traceID := traceIDFromLogs(ld)
 	balancingKey := traceID
 	if traceID == pcommon.NewTraceIDEmpty() {
@@ -211,14 +215,23 @@ func (e *logExporterImp) consumeLog(ctx context.Context, ld plog.Logs) error {
 		return err
 	}
 
-	return e.consumeBatch(ctx, le, ld, logFlushReasonDirect)
+	err, decision := e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect)
+	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, le.endpoint, decision, rerouteAttempt) {
+		return e.consumeLogDirect(ctx, ld, rerouteAttempt+1)
+	}
+	return err
 }
 
 func (e *logExporterImp) consumeBatch(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string) error {
+	err, _ := e.consumeBatchWithDecision(ctx, le, ld, reason)
+	return err
+}
+
+func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string) (error, endpointHealthFailureDecision) {
 	if reason == logFlushReasonDirect || reason == logFlushReasonResolverChange || reason == logFlushReasonShutdown {
 		le.forceStartConsume()
 	} else if !le.tryStartConsume() {
-		return errLogBatcherExporterStopping
+		return errLogBatcherExporterStopping, endpointHealthFailureDecision{}
 	}
 	defer le.doneConsume()
 
@@ -228,12 +241,13 @@ func (e *logExporterImp) consumeBatch(ctx context.Context, le *wrappedExporter, 
 	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(le.endpointAttr))
 	if err == nil {
 		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.successAttr))
-	} else {
-		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.failureAttr))
-		e.logger.Debug("failed to export log", zap.Error(err))
+		e.loadBalancer.handleBackendSuccess(le.endpoint)
+		return nil, endpointHealthFailureDecision{}
 	}
 
-	return err
+	e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.failureAttr))
+	e.logger.Debug("failed to export log", zap.Error(err))
+	return err, e.loadBalancer.handleBackendFailure(ctx, le.endpoint, err)
 }
 
 // insertLogRecord adds a log record into the destination plog.Logs, reusing

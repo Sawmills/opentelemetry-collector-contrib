@@ -20,11 +20,14 @@ import (
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/consumer"
+	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exportertest"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
 )
@@ -245,6 +248,76 @@ func TestConsumeTracesServiceBased(t *testing.T) {
 
 	// verify
 	assert.NoError(t, res)
+}
+
+func TestConsumeTracesReroutesEndpointLocalFailure(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := serviceBasedRoutingConfig()
+	enableEndpointHealth(cfg)
+
+	calls := map[string]int{}
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockTracesExporter(func(context.Context, ptrace.Traces) error {
+			calls[endpoint]++
+			if endpoint == "endpoint-1:4317" {
+				return status.Error(codes.Unavailable, "backend unavailable")
+			}
+			return nil
+		}), nil
+	}
+	lb, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1:4317", "endpoint-2:4317"})
+
+	p, err := newTracesExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer = lb
+
+	serviceForEndpoint1 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1:4317")
+	err = p.ConsumeTraces(t.Context(), tracesWithServiceNames(serviceForEndpoint1))
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, calls["endpoint-1:4317"])
+	assert.Equal(t, 1, calls["endpoint-2:4317"])
+	assert.NotContains(t, lb.exporters, "endpoint-1:4317")
+}
+
+func TestConsumeTracesPermanentErrorDoesNotReroute(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := serviceBasedRoutingConfig()
+	enableEndpointHealth(cfg)
+
+	calls := map[string]int{}
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockTracesExporter(func(context.Context, ptrace.Traces) error {
+			calls[endpoint]++
+			if endpoint == "endpoint-1:4317" {
+				return consumererror.NewPermanent(errors.New("bad trace payload"))
+			}
+			return nil
+		}), nil
+	}
+	lb, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1:4317", "endpoint-2:4317"})
+
+	p, err := newTracesExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer = lb
+
+	serviceForEndpoint1 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1:4317")
+	err = p.ConsumeTraces(t.Context(), tracesWithServiceNames(serviceForEndpoint1))
+	require.Error(t, err)
+	require.True(t, consumererror.IsPermanent(err))
+
+	assert.Equal(t, 1, calls["endpoint-1:4317"])
+	assert.Zero(t, calls["endpoint-2:4317"])
+	assert.Contains(t, lb.exporters, "endpoint-1:4317")
+	assert.ElementsMatch(t, []string{"endpoint-1:4317", "endpoint-2:4317"}, lb.endpointHealth.eligibleEndpoints())
 }
 
 func TestAttributeBasedRouting(t *testing.T) {

@@ -717,6 +717,41 @@ func TestConsumeMetrics_SingleEndpoint(t *testing.T) {
 	}
 }
 
+func TestConsumeMetricsReroutesEndpointLocalFailure(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := endpoint2Config()
+	enableEndpointHealth(cfg)
+
+	calls := map[string]int{}
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockMetricsExporter(func(context.Context, pmetric.Metrics) error {
+			calls[endpoint]++
+			if endpoint == "endpoint-1:4317" {
+				return context.DeadlineExceeded
+			}
+			return nil
+		}), nil
+	}
+	lb, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1:4317", "endpoint-2:4317"})
+
+	p, err := newMetricsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.started.Store(true)
+
+	serviceForEndpoint1 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1:4317")
+	err = p.ConsumeMetrics(t.Context(), metricsWithServiceNames(serviceForEndpoint1))
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, calls["endpoint-1:4317"])
+	assert.Equal(t, 1, calls["endpoint-2:4317"])
+	assert.NotContains(t, lb.exporters, "endpoint-1:4317")
+}
+
 func TestConsumeMetrics_SingleEndpointWithMetricBatcher(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 
