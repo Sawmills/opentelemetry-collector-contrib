@@ -200,6 +200,46 @@ func TestCompressedLogBatcherFlushPreservesLogsAndSplitsByMaxRecords(t *testing.
 	require.ElementsMatch(t, []string{"one", "two", "three", "four"}, bodies)
 }
 
+func TestCompressedLogBatcherMaxBytesUsesMergedPayloadSize(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	var calls atomic.Int64
+
+	first := sharedResourceScopeLog("first")
+	second := sharedResourceScopeLog("second")
+	sizer := &plog.ProtoMarshaler{}
+	separateBytes := sizer.LogsSize(first) + sizer.LogsSize(second)
+	mergedBytes := sizer.LogsSize(mergeLogs(sharedResourceScopeLog("first"), sharedResourceScopeLog("second")))
+	require.Greater(t, separateBytes, mergedBytes)
+
+	batcher, err := newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:         100,
+		maxBytes:           mergedBytes + 1,
+		flushInterval:      time.Hour,
+		payloadCompression: QueuePayloadCompressionZstd,
+	}, func(context.Context, *wrappedExporter, plog.Logs, string) error {
+		calls.Add(1)
+		return nil
+	})
+	require.NoError(t, err)
+	shutdown := false
+	t.Cleanup(func() {
+		if !shutdown {
+			require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
+		}
+	})
+
+	exp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, sharedResourceScopeLog("first")))
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, sharedResourceScopeLog("second")))
+	require.Never(t, func() bool {
+		return calls.Load() > 0
+	}, 50*time.Millisecond, 5*time.Millisecond)
+
+	require.NoError(t, batcher.Shutdown(t.Context()))
+	shutdown = true
+	require.Equal(t, int64(1), calls.Load())
+}
+
 func TestCompressedLogBatcherEnqueueStoresCompressedRequests(t *testing.T) {
 	ts, _ := getTelemetryAssets(t)
 	sendStarted := make(chan struct{}, 1)

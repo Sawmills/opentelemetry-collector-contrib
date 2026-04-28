@@ -6,6 +6,7 @@ package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry
 import (
 	"context"
 	"errors"
+	"math/bits"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -511,6 +512,35 @@ type compressedLogBatcherChunk struct {
 	uncompressedBytes     int
 	compressedBytes       int
 	oldestEnqueueUnixNano int64
+	sizingResources       []compressedLogBatcherResourceSizing
+	sizingMetadata        plog.Logs
+}
+
+type compressedLogBatcherResourceSizing struct {
+	resource plog.ResourceLogs
+	scopes   []compressedLogBatcherScopeSizing
+}
+
+type compressedLogBatcherScopeSizing struct {
+	scope             plog.ScopeLogs
+	recordsDeltaBytes int
+}
+
+type compressedLogBatcherSizeState struct {
+	metadata  plog.Logs
+	resources []compressedLogBatcherResourceSizeState
+	bytes     int
+}
+
+type compressedLogBatcherResourceSizeState struct {
+	resource plog.ResourceLogs
+	size     int
+	scopes   []compressedLogBatcherScopeSizeState
+}
+
+type compressedLogBatcherScopeSizeState struct {
+	scope plog.ScopeLogs
+	size  int
 }
 
 func (b *backendLogBatcher) runCompressed() {
@@ -526,13 +556,14 @@ func (b *backendLogBatcher) runCompressed() {
 	pendingRecords := 0
 	marshaler := &plog.ProtoMarshaler{}
 	unmarshaler := &plog.ProtoUnmarshaler{}
+	sizeState := newCompressedLogBatcherSizeState()
 	var nextReq *logBatcherRequest
 
 	for {
 		if nextReq != nil {
 			req := *nextReq
 			nextReq = nil
-			if b.handleCompressedRequest(req, marshaler, unmarshaler, &pending, &pendingRecords, &pendingBytes, &pendingCompressedBytes, &nextReq, timer, &timerC) {
+			if b.handleCompressedRequest(req, marshaler, unmarshaler, sizeState, &pending, &pendingRecords, &pendingBytes, &pendingCompressedBytes, &nextReq, timer, &timerC) {
 				return
 			}
 			continue
@@ -540,11 +571,11 @@ func (b *backendLogBatcher) runCompressed() {
 
 		select {
 		case req := <-b.requests:
-			if b.handleCompressedRequest(req, marshaler, unmarshaler, &pending, &pendingRecords, &pendingBytes, &pendingCompressedBytes, &nextReq, timer, &timerC) {
+			if b.handleCompressedRequest(req, marshaler, unmarshaler, sizeState, &pending, &pendingRecords, &pendingBytes, &pendingCompressedBytes, &nextReq, timer, &timerC) {
 				return
 			}
 		case <-timerC:
-			if err := b.flushCompressed(context.Background(), marshaler, unmarshaler, &pending, &pendingRecords, &pendingBytes, &pendingCompressedBytes, logFlushReasonTimeout, timer, &timerC); err != nil {
+			if err := b.flushCompressed(context.Background(), marshaler, unmarshaler, sizeState, &pending, &pendingRecords, &pendingBytes, &pendingCompressedBytes, logFlushReasonTimeout, timer, &timerC); err != nil {
 				b.logger.Warn("failed to flush compressed log batch", zap.String("reason", logFlushReasonTimeout), zap.Error(err))
 			}
 		}
@@ -555,6 +586,7 @@ func (b *backendLogBatcher) handleCompressedRequest(
 	req logBatcherRequest,
 	marshaler *plog.ProtoMarshaler,
 	unmarshaler *plog.ProtoUnmarshaler,
+	sizeState *compressedLogBatcherSizeState,
 	pending *[]compressedLogBatcherChunk,
 	pendingRecords *int,
 	pendingBytes *int,
@@ -565,7 +597,7 @@ func (b *backendLogBatcher) handleCompressedRequest(
 ) bool {
 	switch req.kind {
 	case logBatcherRequestEnqueue:
-		recordsAdded, bytesAdded, compressedBytesAdded, oldestEnqueue := b.drainEnqueueRequestsIntoCompressedChunks(pending, req, nextReq)
+		recordsAdded, bytesAdded, compressedBytesAdded, oldestEnqueue := b.drainEnqueueRequestsIntoCompressedChunks(marshaler, sizeState, pending, req, nextReq)
 		*pendingRecords += recordsAdded
 		*pendingBytes += bytesAdded
 		*pendingCompressedBytes += compressedBytesAdded
@@ -581,12 +613,12 @@ func (b *backendLogBatcher) handleCompressedRequest(
 		}
 		if *pendingRecords >= b.settings.maxRecords || *pendingBytes >= b.settings.maxBytes {
 			b.telemetry.overflowTotal.Add(context.Background(), 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
-			if err := b.flushCompressed(context.Background(), marshaler, unmarshaler, pending, pendingRecords, pendingBytes, pendingCompressedBytes, logFlushReasonSize, timer, timerC); err != nil {
+			if err := b.flushCompressed(context.Background(), marshaler, unmarshaler, sizeState, pending, pendingRecords, pendingBytes, pendingCompressedBytes, logFlushReasonSize, timer, timerC); err != nil {
 				b.logger.Warn("failed to flush compressed log batch", zap.String("reason", logFlushReasonSize), zap.Error(err))
 			}
 		}
 	case logBatcherRequestFlushAndStop:
-		err := b.flushCompressed(req.ctx, marshaler, unmarshaler, pending, pendingRecords, pendingBytes, pendingCompressedBytes, req.reason, timer, timerC)
+		err := b.flushCompressed(req.ctx, marshaler, unmarshaler, sizeState, pending, pendingRecords, pendingBytes, pendingCompressedBytes, req.reason, timer, timerC)
 		req.done <- err
 		return true
 	}
@@ -594,6 +626,8 @@ func (b *backendLogBatcher) handleCompressedRequest(
 }
 
 func (b *backendLogBatcher) drainEnqueueRequestsIntoCompressedChunks(
+	marshaler *plog.ProtoMarshaler,
+	sizeState *compressedLogBatcherSizeState,
 	pending *[]compressedLogBatcherChunk,
 	first logBatcherRequest,
 	nextReq **logBatcherRequest,
@@ -609,7 +643,7 @@ func (b *backendLogBatcher) drainEnqueueRequestsIntoCompressedChunks(
 			return
 		}
 		recordCount += count
-		bytes += req.compressedChunk.uncompressedBytes
+		bytes += sizeState.addChunk(req.compressedChunk, marshaler)
 		compressedBytes += req.compressedChunk.compressedBytes
 		if oldestEnqueue == 0 || req.enqueuedAtUnixNano < oldestEnqueue {
 			oldestEnqueue = req.enqueuedAtUnixNano
@@ -646,13 +680,143 @@ func newCompressedLogBatcherChunk(marshaler *plog.ProtoMarshaler, codec *queuePa
 	}
 	encoded = append([]byte(nil), encoded...)
 	encoded = encoded[:len(encoded):len(encoded)]
+	sizingMetadata, sizingResources := newCompressedLogBatcherSizing(req.logs, marshaler)
 	return compressedLogBatcherChunk{
 		payload:               encoded,
 		records:               req.logs.LogRecordCount(),
 		uncompressedBytes:     len(payload),
 		compressedBytes:       len(encoded),
 		oldestEnqueueUnixNano: req.enqueuedAtUnixNano,
+		sizingResources:       sizingResources,
+		sizingMetadata:        sizingMetadata,
 	}, nil
+}
+
+func newCompressedLogBatcherSizing(logs plog.Logs, marshaler *plog.ProtoMarshaler) (plog.Logs, []compressedLogBatcherResourceSizing) {
+	metadata := plog.NewLogs()
+	resources := make([]compressedLogBatcherResourceSizing, 0, logs.ResourceLogs().Len())
+	for i := 0; i < logs.ResourceLogs().Len(); i++ {
+		srcRL := logs.ResourceLogs().At(i)
+		dstRL := metadata.ResourceLogs().AppendEmpty()
+		srcRL.Resource().CopyTo(dstRL.Resource())
+		dstRL.SetSchemaUrl(srcRL.SchemaUrl())
+
+		resource := compressedLogBatcherResourceSizing{resource: dstRL}
+		for j := 0; j < srcRL.ScopeLogs().Len(); j++ {
+			srcSL := srcRL.ScopeLogs().At(j)
+			recordsDeltaBytes := 0
+			for k := 0; k < srcSL.LogRecords().Len(); k++ {
+				recordsDeltaBytes += logProtoDeltaSize(marshaler.LogRecordSize(srcSL.LogRecords().At(k)))
+			}
+			if recordsDeltaBytes == 0 {
+				continue
+			}
+
+			dstSL := dstRL.ScopeLogs().AppendEmpty()
+			srcSL.Scope().CopyTo(dstSL.Scope())
+			dstSL.SetSchemaUrl(srcSL.SchemaUrl())
+			resource.scopes = append(resource.scopes, compressedLogBatcherScopeSizing{
+				scope:             dstSL,
+				recordsDeltaBytes: recordsDeltaBytes,
+			})
+		}
+		resources = append(resources, resource)
+	}
+	return metadata, resources
+}
+
+func newCompressedLogBatcherSizeState() *compressedLogBatcherSizeState {
+	return &compressedLogBatcherSizeState{metadata: plog.NewLogs()}
+}
+
+func (s *compressedLogBatcherSizeState) reset() {
+	s.metadata = plog.NewLogs()
+	s.resources = nil
+	s.bytes = 0
+}
+
+func (s *compressedLogBatcherSizeState) addChunk(chunk compressedLogBatcherChunk, marshaler *plog.ProtoMarshaler) int {
+	before := s.bytes
+	for _, resource := range chunk.sizingResources {
+		s.addResource(resource, marshaler)
+	}
+	return s.bytes - before
+}
+
+func (s *compressedLogBatcherSizeState) addResource(resource compressedLogBatcherResourceSizing, marshaler *plog.ProtoMarshaler) {
+	if len(resource.scopes) == 0 {
+		return
+	}
+
+	resourceIndex := s.findResource(resource.resource)
+	resourceIsNew := resourceIndex == -1
+	if resourceIsNew {
+		dstRL := s.metadata.ResourceLogs().AppendEmpty()
+		resource.resource.Resource().CopyTo(dstRL.Resource())
+		dstRL.SetSchemaUrl(resource.resource.SchemaUrl())
+		s.resources = append(s.resources, compressedLogBatcherResourceSizeState{
+			resource: dstRL,
+			size:     marshaler.ResourceLogsSize(dstRL),
+		})
+		resourceIndex = len(s.resources) - 1
+	}
+
+	oldResourceSize := s.resources[resourceIndex].size
+	for _, scope := range resource.scopes {
+		s.addScope(resourceIndex, scope, marshaler)
+	}
+	if resourceIsNew {
+		s.bytes += logProtoDeltaSize(s.resources[resourceIndex].size)
+		return
+	}
+	s.bytes += logProtoDeltaSize(s.resources[resourceIndex].size) - logProtoDeltaSize(oldResourceSize)
+}
+
+func (s *compressedLogBatcherSizeState) addScope(resourceIndex int, scope compressedLogBatcherScopeSizing, marshaler *plog.ProtoMarshaler) {
+	scopeIndex := s.findScope(resourceIndex, scope.scope)
+	if scopeIndex == -1 {
+		dstSL := s.resources[resourceIndex].resource.ScopeLogs().AppendEmpty()
+		scope.scope.Scope().CopyTo(dstSL.Scope())
+		dstSL.SetSchemaUrl(scope.scope.SchemaUrl())
+		scopeSize := marshaler.ScopeLogsSize(dstSL) + scope.recordsDeltaBytes
+		s.resources[resourceIndex].scopes = append(s.resources[resourceIndex].scopes, compressedLogBatcherScopeSizeState{
+			scope: dstSL,
+			size:  scopeSize,
+		})
+		s.resources[resourceIndex].size += logProtoDeltaSize(scopeSize)
+		return
+	}
+
+	oldScopeSize := s.resources[resourceIndex].scopes[scopeIndex].size
+	s.resources[resourceIndex].scopes[scopeIndex].size += scope.recordsDeltaBytes
+	newScopeSize := s.resources[resourceIndex].scopes[scopeIndex].size
+	s.resources[resourceIndex].size += logProtoDeltaSize(newScopeSize) - logProtoDeltaSize(oldScopeSize)
+}
+
+func (s *compressedLogBatcherSizeState) findResource(resource plog.ResourceLogs) int {
+	for i, existing := range s.resources {
+		if resourceLogsMatches(existing.resource, resource) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (s *compressedLogBatcherSizeState) findScope(resourceIndex int, scope plog.ScopeLogs) int {
+	for i, existing := range s.resources[resourceIndex].scopes {
+		if scopeLogsMatches(existing.scope, scope) {
+			return i
+		}
+	}
+	return -1
+}
+
+func logProtoDeltaSize(newItemSize int) int {
+	return 1 + newItemSize + protoSov(uint64(newItemSize))
+}
+
+func protoSov(x uint64) int {
+	return (bits.Len64(x|1) + 6) / 7
 }
 
 func (b *backendLogBatcher) newCompressedLogBatcherChunk(logs plog.Logs, enqueuedAtUnixNano int64) (compressedLogBatcherChunk, error) {
@@ -721,6 +885,7 @@ func (b *backendLogBatcher) flushCompressed(
 	ctx context.Context,
 	sizer *plog.ProtoMarshaler,
 	unmarshaler *plog.ProtoUnmarshaler,
+	sizeState *compressedLogBatcherSizeState,
 	pending *[]compressedLogBatcherChunk,
 	pendingRecords *int,
 	pendingBytes *int,
@@ -746,6 +911,7 @@ func (b *backendLogBatcher) flushCompressed(
 	*pendingRecords = 0
 	*pendingBytes = 0
 	*pendingCompressedBytes = 0
+	sizeState.reset()
 	b.pendingRecords.Store(0)
 	b.pendingBytes.Store(0)
 	b.pendingCompressedBytes.Store(0)
@@ -757,7 +923,7 @@ func (b *backendLogBatcher) flushCompressed(
 		var window []compressedLogBatcherChunk
 		var records int
 		var oldestUnixNano int64
-		window, drainedChunks, records, oldestUnixNano = nextCompressedLogBatcherWindow(drainedChunks, b.settings.maxRecords, b.settings.maxBytes)
+		window, drainedChunks, records, oldestUnixNano = nextCompressedLogBatcherWindow(drainedChunks, b.settings.maxRecords, b.settings.maxBytes, sizer)
 
 		b.payloadCodecMu.Lock()
 		drained, err := mergeCompressedLogBatcherChunks(unmarshaler, b.payloadCodec, window)
@@ -789,23 +955,23 @@ func (b *backendLogBatcher) flushCompressed(
 	return errs
 }
 
-func nextCompressedLogBatcherWindow(chunks []compressedLogBatcherChunk, maxRecords, maxBytes int) ([]compressedLogBatcherChunk, []compressedLogBatcherChunk, int, int64) {
+func nextCompressedLogBatcherWindow(chunks []compressedLogBatcherChunk, maxRecords, maxBytes int, sizer *plog.ProtoMarshaler) ([]compressedLogBatcherChunk, []compressedLogBatcherChunk, int, int64) {
 	records := 0
-	bytes := 0
 	var oldestUnixNano int64
+	sizeState := newCompressedLogBatcherSizeState()
 	end := 0
 	for end < len(chunks) {
 		chunk := chunks[end]
-		if end > 0 && (records+chunk.records > maxRecords || bytes+chunk.uncompressedBytes > maxBytes) {
+		sizeState.addChunk(chunk, sizer)
+		if end > 0 && (records+chunk.records > maxRecords || sizeState.bytes > maxBytes) {
 			break
 		}
 		records += chunk.records
-		bytes += chunk.uncompressedBytes
 		if oldestUnixNano == 0 || chunk.oldestEnqueueUnixNano < oldestUnixNano {
 			oldestUnixNano = chunk.oldestEnqueueUnixNano
 		}
 		end++
-		if records >= maxRecords || bytes >= maxBytes {
+		if records >= maxRecords || sizeState.bytes >= maxBytes {
 			break
 		}
 	}
