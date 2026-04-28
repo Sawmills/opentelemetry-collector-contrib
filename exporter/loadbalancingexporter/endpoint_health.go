@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -39,10 +40,11 @@ type endpointHealthSettings struct {
 }
 
 type endpointHealthManager struct {
-	mu             sync.RWMutex
-	settings       endpointHealthSettings
-	endpoints      map[string]*endpointHealthState
-	failOpenActive bool
+	mu                 sync.RWMutex
+	settings           endpointHealthSettings
+	endpoints          map[string]*endpointHealthState
+	failOpenActive     bool
+	nextExpiryUnixNano atomic.Int64
 }
 
 type endpointHealthState struct {
@@ -283,16 +285,28 @@ func (m *endpointHealthManager) refreshExpiredQuarantines() endpointHealthRefres
 		state.failureReason = ""
 		state.lastStateChangeAt = now
 	}
-	if len(recovered) == 0 {
+
+	eligible, _, failOpenStarted := m.eligibleEndpointsLocked(now)
+	if len(recovered) == 0 && !failOpenStarted {
 		return endpointHealthRefreshResult{}
 	}
 
-	eligible, _, failOpenStarted := m.eligibleEndpointsLocked(now)
 	return endpointHealthRefreshResult{
 		eligible:        eligible,
 		recovered:       recovered,
 		failOpenStarted: failOpenStarted,
 	}
+}
+
+func (m *endpointHealthManager) quarantineRefreshDue() bool {
+	if !m.enabled() {
+		return false
+	}
+	nextExpiryUnixNano := m.nextExpiryUnixNano.Load()
+	if nextExpiryUnixNano == 0 {
+		return false
+	}
+	return !m.settings.now().Before(time.Unix(0, nextExpiryUnixNano))
 }
 
 func (m *endpointHealthManager) stateLocked(endpoint string) *endpointHealthState {
@@ -307,6 +321,7 @@ func (m *endpointHealthManager) stateLocked(endpoint string) *endpointHealthStat
 func (m *endpointHealthManager) eligibleEndpointsLocked(now time.Time) ([]string, bool, bool) {
 	var eligible []string
 	var present []string
+	var nextExpiry time.Time
 	for _, state := range m.endpoints {
 		if !state.present {
 			continue
@@ -316,10 +331,17 @@ func (m *endpointHealthManager) eligibleEndpointsLocked(now time.Time) ([]string
 			state.quarantinedUntil = time.Time{}
 			state.failureReason = ""
 			state.lastStateChangeAt = now
+		} else if !state.quarantinedUntil.IsZero() && (nextExpiry.IsZero() || state.quarantinedUntil.Before(nextExpiry)) {
+			nextExpiry = state.quarantinedUntil
 		}
 		if state.quarantinedUntil.IsZero() {
 			eligible = append(eligible, state.endpoint)
 		}
+	}
+	if nextExpiry.IsZero() {
+		m.nextExpiryUnixNano.Store(0)
+	} else {
+		m.nextExpiryUnixNano.Store(nextExpiry.UnixNano())
 	}
 
 	sort.Strings(present)

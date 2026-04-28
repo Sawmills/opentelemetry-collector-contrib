@@ -530,7 +530,7 @@ func (lb *loadBalancer) handleBackendSuccess(endpoint string) {
 }
 
 func (lb *loadBalancer) refreshExpiredEndpointHealth(ctx context.Context) {
-	if !lb.endpointHealth.enabled() {
+	if !lb.endpointHealth.quarantineRefreshDue() {
 		return
 	}
 

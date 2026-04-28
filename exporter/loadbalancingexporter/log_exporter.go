@@ -222,7 +222,7 @@ func (e *logExporterImp) consumeLogDirect(ctx context.Context, ld plog.Logs, rer
 		retryLogs = plog.NewLogs()
 		ld.CopyTo(retryLogs)
 	}
-	err, decision := e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect, true, true, false)
+	decision, err := e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect, true, true, false)
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, le.endpoint, decision, rerouteAttempt) {
 		rerouteErr := e.consumeLogDirect(ctx, retryLogs, rerouteAttempt+1)
 		e.loadBalancer.recordBackendReroute(ctx, "logs", decision.reason, rerouteErr)
@@ -232,12 +232,12 @@ func (e *logExporterImp) consumeLogDirect(ctx context.Context, ld plog.Logs, rer
 }
 
 func (e *logExporterImp) consumeBatch(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string) error {
-	err, _ := e.consumeBatchWithDecision(ctx, le, ld, reason, false, true, false)
+	_, err := e.consumeBatchWithDecision(ctx, le, ld, reason, false, true, false)
 	return err
 }
 
 func (e *logExporterImp) consumeBatcherFlush(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string) error {
-	err, decision := e.consumeBatchWithDecision(ctx, le, ld, reason, reason != logFlushReasonShutdown, false, true)
+	decision, err := e.consumeBatchWithDecision(ctx, le, ld, reason, reason != logFlushReasonShutdown, false, true)
 	if errors.Is(err, errLogBatcherExporterStopping) && reason != logFlushReasonShutdown && directRerouteAttemptAllowed(e.loadBalancer, 0) {
 		return logBatcherRerouteableError{err: err}
 	}
@@ -278,7 +278,7 @@ func (e *logExporterImp) rerouteDrainBatch(ctx context.Context, ld plog.Logs, re
 	}
 	batches, errs := e.groupLogsByEndpoint(ld)
 	for _, batch := range batches {
-		err, decision := e.consumeBatchWithDecision(ctx, batch.exp, batch.logs, reason, true, false, true)
+		decision, err := e.consumeBatchWithDecision(ctx, batch.exp, batch.logs, reason, true, false, true)
 		if err != nil && decision.endpointLocal && !decision.failOpen && !slices.Contains(decision.eligible, endpointWithPort(batch.exp.endpoint)) {
 			e.loadBalancer.cleanupBackendWithoutDrain(ctx, batch.exp.endpoint)
 		}
@@ -287,11 +287,11 @@ func (e *logExporterImp) rerouteDrainBatch(ctx context.Context, ld plog.Logs, re
 	return errs
 }
 
-func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string, updateEndpointHealth bool, drainRemoved bool, healthOnly bool) (error, endpointHealthFailureDecision) {
+func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string, updateEndpointHealth bool, drainRemoved bool, healthOnly bool) (endpointHealthFailureDecision, error) {
 	if reason == logFlushReasonDirect || reason == logFlushReasonResolverChange || reason == logFlushReasonShutdown {
 		le.forceStartConsume()
 	} else if !le.tryStartConsume() {
-		return errLogBatcherExporterStopping, endpointHealthFailureDecision{}
+		return endpointHealthFailureDecision{}, errLogBatcherExporterStopping
 	}
 	defer le.doneConsume()
 
@@ -304,21 +304,21 @@ func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrapp
 		if updateEndpointHealth {
 			e.loadBalancer.handleBackendSuccess(le.endpoint)
 		}
-		return nil, endpointHealthFailureDecision{}
+		return endpointHealthFailureDecision{}, nil
 	}
 
 	e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.failureAttr))
 	e.logger.Debug("failed to export log", zap.Error(err))
 	if !updateEndpointHealth {
-		return err, endpointHealthFailureDecision{}
+		return endpointHealthFailureDecision{}, err
 	}
 	if healthOnly {
-		return err, e.loadBalancer.handleBackendFailureHealthOnly(ctx, le.endpoint, err)
+		return e.loadBalancer.handleBackendFailureHealthOnly(ctx, le.endpoint, err), err
 	}
 	if drainRemoved {
-		return err, e.loadBalancer.handleBackendFailure(ctx, le.endpoint, err)
+		return e.loadBalancer.handleBackendFailure(ctx, le.endpoint, err), err
 	}
-	return err, e.loadBalancer.handleBackendFailureWithoutDrain(ctx, le.endpoint, err)
+	return e.loadBalancer.handleBackendFailureWithoutDrain(ctx, le.endpoint, err), err
 }
 
 // insertLogRecord adds a log record into the destination plog.Logs, reusing

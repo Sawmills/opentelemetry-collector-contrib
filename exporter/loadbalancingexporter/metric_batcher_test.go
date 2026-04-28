@@ -251,7 +251,7 @@ func TestMetricBatcherEndpointHealthDisabledDoesNotRerouteOrPoisonBackend(t *tes
 	p.started.Store(true)
 	defer func() { _ = p.Shutdown(context.WithoutCancel(t.Context())) }()
 
-	service := findRoutingIDForEndpoint(t, p.loadBalancer.ring, "endpoint-1")
+	service := findRoutingIDForEndpoint(t, p.loadBalancer.ring, "endpoint-1:4317")
 	md := singleDataPointMetric("batcher-health-disabled")
 	md.ResourceMetrics().At(0).Resource().Attributes().PutStr(serviceNameKey, service)
 	require.NoError(t, p.ConsumeMetrics(t.Context(), md))
