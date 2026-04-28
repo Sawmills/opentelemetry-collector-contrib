@@ -197,7 +197,7 @@ func findTraceIDForEndpointsBeforeAndAfterReroute(t *testing.T, ring *hashRing, 
 	rerouteRing := newHashRing(rerouteEndpoints)
 	for i := range 4096 {
 		var traceID pcommon.TraceID
-		copy(traceID[:], []byte(strconv.Itoa(i)))
+		copy(traceID[:], strconv.Itoa(i))
 		if ring.endpointFor(traceID[:]) == firstEndpoint && rerouteRing.endpointFor(traceID[:]) == rerouteEndpoint {
 			return traceID
 		}

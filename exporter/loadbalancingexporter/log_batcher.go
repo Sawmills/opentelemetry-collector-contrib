@@ -39,8 +39,10 @@ type logBatcherSettings struct {
 	flushInterval time.Duration
 }
 
-type logBatcherSendFunc func(context.Context, *wrappedExporter, plog.Logs, string) error
-type logBatcherDrainFailureFunc func(context.Context, plog.Logs, string) error
+type (
+	logBatcherSendFunc         func(context.Context, *wrappedExporter, plog.Logs, string) error
+	logBatcherDrainFailureFunc func(context.Context, plog.Logs, string) error
+)
 
 type logBatcher struct {
 	logger   *zap.Logger

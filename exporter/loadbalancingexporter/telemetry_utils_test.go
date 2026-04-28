@@ -27,7 +27,7 @@ func getTelemetryAssetsWithReader(t *testing.T) (exporter.Settings, *metadata.Te
 
 	telemetry := componenttest.NewTelemetry()
 	t.Cleanup(func() {
-		require.NoError(t, telemetry.Shutdown(context.Background()))
+		require.NoError(t, telemetry.Shutdown(context.WithoutCancel(t.Context())))
 	})
 
 	s := exportertest.NewNopSettings(metadata.Type)

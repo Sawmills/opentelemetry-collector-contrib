@@ -325,9 +325,7 @@ func TestLoadBalancerShutdownWaitsForAsyncRemovedExporterCleanup(t *testing.T) {
 		shutdownDone <- err
 	}()
 
-	assert.Never(t, func() bool {
-		return shutdownReturned.Load()
-	}, 50*time.Millisecond, 10*time.Millisecond)
+	assert.Never(t, shutdownReturned.Load, 50*time.Millisecond, 10*time.Millisecond)
 
 	releaseCleanupOnce.Do(func() { close(releaseCleanup) })
 	require.Eventually(t, func() bool {
@@ -338,9 +336,7 @@ func TestLoadBalancerShutdownWaitsForAsyncRemovedExporterCleanup(t *testing.T) {
 			return false
 		}
 	}, time.Second, 10*time.Millisecond)
-	assert.Never(t, func() bool {
-		return shutdownReturned.Load()
-	}, 50*time.Millisecond, 10*time.Millisecond)
+	assert.Never(t, shutdownReturned.Load, 50*time.Millisecond, 10*time.Millisecond)
 
 	releaseExporterShutdownOnce.Do(func() { close(releaseExporterShutdown) })
 	require.NoError(t, <-shutdownDone)
@@ -770,7 +766,7 @@ func TestLoadBalancerEndpointHealthCreatesExportersOutsideUpdateLock(t *testing.
 			acquired := make(chan struct{})
 			go func() {
 				p.updateLock.RLock()
-				p.updateLock.RUnlock()
+				defer p.updateLock.RUnlock()
 				close(acquired)
 			}()
 

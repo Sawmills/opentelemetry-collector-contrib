@@ -957,7 +957,7 @@ func findTraceIDForEndpoint(t *testing.T, ring *hashRing, endpoint string) pcomm
 
 	for i := range 4096 {
 		var traceID pcommon.TraceID
-		copy(traceID[:], []byte(strconv.Itoa(i)))
+		copy(traceID[:], strconv.Itoa(i))
 		if ring.endpointFor(traceID[:]) == endpoint {
 			return traceID
 		}
