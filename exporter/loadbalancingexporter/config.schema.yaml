@@ -32,6 +32,20 @@ $defs:
       timeout:
         type: string
         format: duration
+  endpoint_health_config:
+    type: object
+    properties:
+      enabled:
+        type: boolean
+      max_reroute_attempts:
+        type: integer
+        minimum: 0
+      quarantine_duration:
+        type: string
+        format: duration
+        description: Must be greater than 0 when endpoint_health.enabled is true.
+      reroute_on_failure:
+        type: boolean
   k_8_s_svc_resolver:
     description: K8sSvcResolver defines the configuration for the DNS resolver
     type: object
@@ -81,6 +95,8 @@ $defs:
 description: Config defines configuration for the exporter.
 type: object
 properties:
+  endpoint_health:
+    $ref: endpoint_health_config
   protocol:
     $ref: protocol
   resolver:

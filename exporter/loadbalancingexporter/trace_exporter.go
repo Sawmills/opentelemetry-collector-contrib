@@ -100,6 +100,10 @@ func (e *traceExporterImp) Shutdown(ctx context.Context) error {
 }
 
 func (e *traceExporterImp) ConsumeTraces(ctx context.Context, td ptrace.Traces) error {
+	return e.consumeTraces(ctx, td, 0)
+}
+
+func (e *traceExporterImp) consumeTraces(ctx context.Context, td ptrace.Traces, rerouteAttempt int) error {
 	batches := batchpersignal.SplitTraces(td)
 
 	exporterSegregatedTraces := make(exporterTraces)
@@ -142,21 +146,59 @@ func (e *traceExporterImp) ConsumeTraces(ctx context.Context, td ptrace.Traces) 
 	var errs error
 
 	for exp, td := range exporterSegregatedTraces {
+		var retryTraces ptrace.Traces
+		if directRerouteAttemptAllowed(e.loadBalancer, rerouteAttempt) {
+			retryTraces = ptrace.NewTraces()
+			td.CopyTo(retryTraces)
+		}
 		start := time.Now()
 		err := exp.ConsumeTraces(ctx, td)
 		exp.doneConsume()
-		errs = multierr.Append(errs, err)
 		duration := time.Since(start)
-		e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(exp.endpointAttr))
-		if err == nil {
-			e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(exp.successAttr))
-		} else {
-			e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(exp.failureAttr))
-			e.logger.Debug("failed to export traces", zap.Error(err))
+		decision := e.recordBackendResult(ctx, exp, duration, err)
+		if err != nil && shouldRerouteDirectFailure(e.loadBalancer, exp.endpoint, decision, rerouteAttempt) {
+			rerouteErr := e.consumeTraces(ctx, retryTraces, rerouteAttempt+1)
+			e.loadBalancer.recordBackendReroute(ctx, "traces", decision.reason, rerouteErr)
+			if rerouteErr == nil {
+				err = nil
+			} else {
+				err = errors.Join(err, rerouteErr)
+			}
 		}
+		errs = multierr.Append(errs, err)
 	}
 
 	return errs
+}
+
+func (e *traceExporterImp) recordBackendResult(ctx context.Context, exp *wrappedExporter, duration time.Duration, err error) endpointHealthFailureDecision {
+	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(exp.endpointAttr))
+	if err == nil {
+		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(exp.successAttr))
+		e.loadBalancer.handleBackendSuccess(exp.endpoint)
+		return endpointHealthFailureDecision{}
+	}
+
+	e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(exp.failureAttr))
+	e.logger.Debug("failed to export traces", zap.Error(err))
+	return e.loadBalancer.handleBackendFailure(ctx, exp.endpoint, err)
+}
+
+func shouldRerouteDirectFailure(lb *loadBalancer, endpoint string, decision endpointHealthFailureDecision, attempt int) bool {
+	if !directRerouteAttemptAllowed(lb, attempt) {
+		return false
+	}
+	if !decision.endpointLocal || decision.failOpen {
+		return false
+	}
+	return !endpointListContains(decision.eligible, endpoint)
+}
+
+func directRerouteAttemptAllowed(lb *loadBalancer, attempt int) bool {
+	if lb == nil || lb.endpointHealth == nil || !lb.endpointHealth.rerouteOnFailure() {
+		return false
+	}
+	return attempt < lb.endpointHealth.settings.maxRerouteAttempts
 }
 
 // routingIdentifiersFromTraces reads the traces and determines an identifier that can be used to define a position on the

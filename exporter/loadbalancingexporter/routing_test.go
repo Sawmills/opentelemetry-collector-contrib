@@ -15,7 +15,8 @@ func findRoutingIDForEndpoint(t *testing.T, ring *hashRing, endpoint string) str
 
 	for i := range 4096 {
 		routingID := fmt.Sprintf("routing-id-%d", i)
-		if ring.endpointFor([]byte(routingID)) == endpoint {
+		ringEndpoint := ring.endpointFor([]byte(routingID))
+		if ringEndpoint == endpoint || endpointWithPort(ringEndpoint) == endpointWithPort(endpoint) {
 			return routingID
 		}
 	}

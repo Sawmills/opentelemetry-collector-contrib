@@ -47,3 +47,17 @@ loadbalancing/5:
     otlp:
       sending_queue:
         enabled: false
+loadbalancing/6:
+  endpoint_health:
+    enabled: true
+    quarantine_duration: 30s
+    reroute_on_failure: true
+    max_reroute_attempts: 1
+  protocol:
+    otlp:
+      timeout: 3s
+  resolver:
+    dns:
+      hostname: service-1
+      interval: 1s
+      timeout: 1s

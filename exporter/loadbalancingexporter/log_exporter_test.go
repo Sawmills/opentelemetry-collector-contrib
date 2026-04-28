@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -30,10 +31,15 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata/metricdatatest"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadatatest"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/plogtest"
 )
 
 func TestNewLogsExporter(t *testing.T) {
@@ -304,7 +310,7 @@ func TestConsumeLogsWithQueueCompressionAndInMemoryQueue(t *testing.T) {
 
 	require.NoError(t, wrapped.Start(t.Context(), componenttest.NewNopHost()))
 	t.Cleanup(func() {
-		require.NoError(t, wrapped.Shutdown(t.Context()))
+		require.NoError(t, wrapped.Shutdown(context.WithoutCancel(t.Context())))
 	})
 
 	require.NoError(t, wrapped.ConsumeLogs(t.Context(), simpleLogs()))
@@ -312,6 +318,117 @@ func TestConsumeLogsWithQueueCompressionAndInMemoryQueue(t *testing.T) {
 		return len(sink.AllLogs()) == 1
 	}, time.Second, 10*time.Millisecond)
 	assert.Equal(t, 1, sink.AllLogs()[0].LogRecordCount())
+}
+
+func TestConsumeLogsReroutesEndpointLocalFailure(t *testing.T) {
+	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+
+	calls := map[string]int{}
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockLogsExporter(func(context.Context, plog.Logs) error {
+			calls[endpoint]++
+			if endpoint == "endpoint-1:4317" {
+				return status.Error(codes.Unavailable, "backend unavailable")
+			}
+			return nil
+		}), nil
+	}
+	lb, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1:4317", "endpoint-2:4317"})
+
+	p, err := newLogsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.started.Store(true)
+
+	traceIDForEndpoint1 := findTraceIDForEndpoint(t, lb.ring, "endpoint-1:4317")
+	err = p.ConsumeLogs(t.Context(), simpleLogWithID(traceIDForEndpoint1))
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, calls["endpoint-1:4317"])
+	assert.Equal(t, 1, calls["endpoint-2:4317"])
+	assert.NotContains(t, lb.exporters, "endpoint-1:4317")
+	metadatatest.AssertEqualLoadbalancerBackendQuarantineTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("reason", "unavailable")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+	metadatatest.AssertEqualLoadbalancerBackendRerouteTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("signal", "logs"), attribute.String("result", "success"), attribute.String("reason", "unavailable")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+}
+
+func TestConsumeLogsReroutePreservesPayloadAfterExporterMutation(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+
+	var rerouted plog.Logs
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+			if endpoint == "endpoint-1:4317" {
+				ld.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Body().SetStr("mutated")
+				return status.Error(codes.Unavailable, "backend unavailable")
+			}
+			rerouted = plog.NewLogs()
+			ld.CopyTo(rerouted)
+			return nil
+		}), nil
+	}
+	lb, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1:4317", "endpoint-2:4317"})
+
+	p, err := newLogsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer = lb
+	p.started.Store(true)
+
+	traceIDForEndpoint1 := findTraceIDForEndpoint(t, lb.ring, "endpoint-1:4317")
+	input := simpleLogWithID(traceIDForEndpoint1)
+	expected := simpleLogWithID(traceIDForEndpoint1)
+	require.NoError(t, p.ConsumeLogs(t.Context(), input))
+
+	require.NoError(t, plogtest.CompareLogs(expected, rerouted))
+}
+
+func TestConsumeLogsBatcherFlushDoesNotQuarantineEndpoint(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+
+	lb, err := newLoadBalancer(ts.Logger, cfg, func(context.Context, string) (component.Component, error) {
+		return newNopMockLogsExporter(), nil
+	}, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	exp := newWrappedExporter(newMockLogsExporter(func(context.Context, plog.Logs) error {
+		return status.Error(codes.Unavailable, "backend unavailable")
+	}), "endpoint-1:4317")
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": exp,
+	}
+
+	p, err := newLogsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer = lb
+
+	err = p.consumeBatcherFlush(t.Context(), exp, simpleLogs(), logFlushReasonShutdown)
+	require.Error(t, err)
+	assert.Contains(t, lb.exporters, "endpoint-1:4317")
+	assert.ElementsMatch(t, []string{"endpoint-1:4317", "endpoint-2:4317"}, lb.endpointHealth.eligibleEndpoints())
 }
 
 func generateSingleLogRecord() plog.Logs {
@@ -833,6 +950,21 @@ func simpleLogWithID(id pcommon.TraceID) plog.Logs {
 	sl.LogRecords().AppendEmpty().SetTraceID(id)
 
 	return logs
+}
+
+func findTraceIDForEndpoint(t *testing.T, ring *hashRing, endpoint string) pcommon.TraceID {
+	t.Helper()
+
+	for i := range 4096 {
+		var traceID pcommon.TraceID
+		copy(traceID[:], strconv.Itoa(i))
+		if ring.endpointFor(traceID[:]) == endpoint {
+			return traceID
+		}
+	}
+
+	require.FailNow(t, "failed to find trace id for endpoint", "endpoint=%s", endpoint)
+	return pcommon.TraceID{}
 }
 
 func sharedResourceScopeLog(body string) plog.Logs {

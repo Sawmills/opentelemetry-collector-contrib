@@ -39,12 +39,16 @@ type logBatcherSettings struct {
 	flushInterval time.Duration
 }
 
-type logBatcherSendFunc func(context.Context, *wrappedExporter, plog.Logs, string) error
+type (
+	logBatcherSendFunc         func(context.Context, *wrappedExporter, plog.Logs, string) error
+	logBatcherDrainFailureFunc func(context.Context, plog.Logs, string) error
+)
 
 type logBatcher struct {
 	logger   *zap.Logger
 	settings logBatcherSettings
 	send     logBatcherSendFunc
+	drainErr logBatcherDrainFailureFunc
 
 	telemetry *logBatcherTelemetry
 
@@ -74,6 +78,7 @@ type backendLogBatcher struct {
 	logger   *zap.Logger
 	settings logBatcherSettings
 	send     logBatcherSendFunc
+	drainErr logBatcherDrainFailureFunc
 
 	telemetry *logBatcherTelemetry
 
@@ -113,16 +118,22 @@ func newLogBatcher(
 	settings component.TelemetrySettings,
 	cfg logBatcherSettings,
 	send logBatcherSendFunc,
+	drainErr ...logBatcherDrainFailureFunc,
 ) (*logBatcher, error) {
 	telemetry, err := newLogBatcherTelemetry(settings)
 	if err != nil {
 		return nil, err
+	}
+	var drainFailure logBatcherDrainFailureFunc
+	if len(drainErr) > 0 {
+		drainFailure = drainErr[0]
 	}
 
 	lb := &logBatcher{
 		logger:    logger,
 		settings:  cfg,
 		send:      send,
+		drainErr:  drainFailure,
 		telemetry: telemetry,
 		backends:  make(map[string]*backendLogBatcher),
 	}
@@ -276,7 +287,7 @@ func (b *logBatcher) acquireBackend(endpoint string, exp *wrappedExporter) (*bac
 		return nil, errLogBatcherExporterStopping
 	}
 
-	backend = newBackendLogBatcher(endpoint, exp, b.logger, b.settings, b.telemetry, b.send)
+	backend = newBackendLogBatcher(endpoint, exp, b.logger, b.settings, b.telemetry, b.send, b.drainErr)
 	backend.inflight.Add(1)
 	b.backends[endpoint] = backend
 	return backend, nil
@@ -289,6 +300,7 @@ func newBackendLogBatcher(
 	settings logBatcherSettings,
 	telemetry *logBatcherTelemetry,
 	send logBatcherSendFunc,
+	drainErr logBatcherDrainFailureFunc,
 ) *backendLogBatcher {
 	backend := &backendLogBatcher{
 		endpoint:  endpoint,
@@ -296,6 +308,7 @@ func newBackendLogBatcher(
 		logger:    logger.With(zap.String("endpoint", endpoint)),
 		settings:  settings,
 		send:      send,
+		drainErr:  drainErr,
 		telemetry: telemetry,
 		requests:  make(chan logBatcherRequest, 16),
 		done:      make(chan struct{}),
@@ -349,8 +362,19 @@ func waitForInflight(ctx context.Context, wg *sync.WaitGroup) error {
 	select {
 	case <-done:
 		return nil
+	default:
+	}
+
+	select {
+	case <-done:
+		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		select {
+		case <-done:
+			return nil
+		default:
+			return ctx.Err()
+		}
 	}
 }
 
@@ -503,9 +527,35 @@ func (b *backendLogBatcher) flush(
 	b.telemetry.flushOldestRecordAge.Record(ctx, oldestAgeMillis, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint), attribute.String("reason", reason))))
 	b.telemetry.flushTotal.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint), attribute.String("reason", reason))))
 
-	err := b.send(ctx, b.exporter(), drained, reason)
+	var rerouteLogs plog.Logs
+	if b.drainErr != nil && reason != logFlushReasonShutdown {
+		rerouteLogs = plog.NewLogs()
+		drained.CopyTo(rerouteLogs)
+	}
+	exp := b.exporter()
+	if exp != nil && exp.isStopping() && b.drainErr != nil && reason != logFlushReasonShutdown {
+		rerouteErr := b.drainErr(ctx, rerouteLogs, reason)
+		if rerouteErr == nil {
+			return nil
+		}
+		b.telemetry.flushErrors.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
+		b.telemetry.droppedRecords.Add(ctx, int64(records), metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
+		return rerouteErr
+	}
+	err := b.send(ctx, exp, drained, reason)
 	if err != nil {
 		b.telemetry.flushErrors.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
+		if b.drainErr != nil && reason != logFlushReasonShutdown {
+			var rerouteable logBatcherRerouteableError
+			if errors.As(err, &rerouteable) {
+				rerouteErr := b.drainErr(ctx, rerouteLogs, reason)
+				rerouteable.RecordReroute(ctx, rerouteErr)
+				if rerouteErr == nil {
+					return nil
+				}
+				err = errors.Join(err, rerouteErr)
+			}
+		}
 		b.telemetry.droppedRecords.Add(ctx, int64(records), metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
 	}
 	return err
