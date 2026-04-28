@@ -1,0 +1,7 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Add optional in-memory compression for loadbalancing exporter log batcher chunks.
+issues: [7312]
+subtext: |-
+  Set `log_batcher.payload_compression` to `zstd` or `snappy` to keep queued and pending post-routing log batches compressed until they are flushed.
+change_logs: [user]

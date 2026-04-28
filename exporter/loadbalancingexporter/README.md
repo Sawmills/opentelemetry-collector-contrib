@@ -136,6 +136,7 @@ Refer to [config.yaml](./testdata/config.yaml) for detailed examples on using th
   * `max_records` flushes a backend batch when it reaches this many log records. Default: `512`.
   * `max_bytes` flushes a backend batch when its serialized OTLP payload size before compression reaches this many bytes. Default: `1048576` (`1 MiB`).
   * `flush_interval` flushes a backend batch after this interval even if size limits are not reached. Default: `100ms`.
+  * `payload_compression` compresses log batcher chunks while they are pending in memory. Supported values: `none`, `snappy`, `zstd`. Default: `none`.
 
 Simple example
 
@@ -160,6 +161,7 @@ exporters:
       max_records: 512
       max_bytes: 1048576
       flush_interval: 100ms
+      payload_compression: zstd
     routing_key: "service"
     protocol:
       otlp:

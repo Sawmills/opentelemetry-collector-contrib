@@ -89,10 +89,11 @@ type QueueSettings struct {
 }
 
 type LogBatcherConfig struct {
-	Enabled       bool          `mapstructure:"enabled"`
-	MaxRecords    int           `mapstructure:"max_records"`
-	MaxBytes      int           `mapstructure:"max_bytes"`
-	FlushInterval time.Duration `mapstructure:"flush_interval"`
+	Enabled            bool                    `mapstructure:"enabled"`
+	MaxRecords         int                     `mapstructure:"max_records"`
+	MaxBytes           int                     `mapstructure:"max_bytes"`
+	FlushInterval      time.Duration           `mapstructure:"flush_interval"`
+	PayloadCompression QueuePayloadCompression `mapstructure:"payload_compression"`
 }
 
 type MetricBatcherConfig struct {
@@ -225,6 +226,12 @@ func (c LogBatcherConfig) Validate() error {
 	}
 	if c.FlushInterval <= 0 {
 		return errors.New("log_batcher.flush_interval must be greater than 0 when log_batcher.enabled=true")
+	}
+	switch c.PayloadCompression {
+	case "", QueuePayloadCompressionNone, QueuePayloadCompressionSnappy, QueuePayloadCompressionZstd:
+		// Valid payload compression value.
+	default:
+		return fmt.Errorf("log_batcher.payload_compression must be one of [none, snappy, zstd], found %q", c.PayloadCompression)
 	}
 	return nil
 }

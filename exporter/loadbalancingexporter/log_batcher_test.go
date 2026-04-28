@@ -7,6 +7,7 @@ import (
 	"context"
 	"slices"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -75,6 +76,57 @@ func TestLogBatcherReroutesEndpointLocalFlushFailure(t *testing.T) {
 	}, metricdatatest.IgnoreTimestamp())
 }
 
+func TestCompressedLogBatcherReroutesEndpointLocalFlushFailure(t *testing.T) {
+	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	cfg.LogBatcher = LogBatcherConfig{
+		Enabled:            true,
+		MaxRecords:         1,
+		MaxBytes:           1 << 20,
+		FlushInterval:      time.Hour,
+		PayloadCompression: QueuePayloadCompressionZstd,
+	}
+	cfg.Resolver.Static = configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2"}})
+
+	var endpoint1Calls atomic.Int64
+	var endpoint2Calls atomic.Int64
+	p, err := newLogsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer, err = newLoadBalancer(ts.Logger, cfg, func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockLogsExporter(func(_ context.Context, _ plog.Logs) error {
+			switch endpoint {
+			case "endpoint-1:4317":
+				endpoint1Calls.Add(1)
+				return status.Error(codes.Unavailable, "backend down")
+			case "endpoint-2:4317":
+				endpoint2Calls.Add(1)
+			}
+			return nil
+		}), nil
+	}, tb)
+	require.NoError(t, err)
+	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+		return p.batcher.Remove(ctx, endpoint, exp)
+	}
+	p.loadBalancer.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	p.started.Store(true)
+	defer func() { _ = p.Shutdown(context.WithoutCancel(t.Context())) }()
+
+	route := findTraceIDForEndpointsBeforeAndAfterReroute(t, p.loadBalancer.ring, "endpoint-1:4317", "endpoint-2:4317")
+	require.NoError(t, p.ConsumeLogs(t.Context(), simpleLogWithID(route)))
+
+	require.Eventually(t, func() bool {
+		return endpoint1Calls.Load() == 1 && endpoint2Calls.Load() == 1
+	}, 2*time.Second, 20*time.Millisecond)
+	metadatatest.AssertEqualLoadbalancerBackendRerouteTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("signal", "logs"), attribute.String("result", "success"), attribute.String("reason", "unavailable")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+}
+
 func TestLogBatcherFlushExporterStoppingIsRerouteable(t *testing.T) {
 	ts, _, telemetry := getTelemetryAssetsWithReader(t)
 	cfg := simpleConfig()
@@ -96,6 +148,33 @@ func TestLogBatcherFlushExporterStoppingIsRerouteable(t *testing.T) {
 			Value:      1,
 		},
 	}, metricdatatest.IgnoreTimestamp())
+}
+
+func TestCompressedLogBatcherFlushReroutesStoppingExporter(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	var reroutedRecords atomic.Int64
+	batcher, err := newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:         100,
+		maxBytes:           1 << 20,
+		flushInterval:      time.Hour,
+		payloadCompression: QueuePayloadCompressionZstd,
+	}, func(context.Context, *wrappedExporter, plog.Logs, string) error {
+		t.Fatal("send should not be called when compressed flush can reroute a stopping exporter")
+		return nil
+	}, func(_ context.Context, ld plog.Logs, reason string) error {
+		require.Equal(t, logFlushReasonResolverChange, reason)
+		reroutedRecords.Add(int64(ld.LogRecordCount()))
+		return nil
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context()))) }()
+
+	exp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, simpleLogs()))
+	exp.markStopping()
+	require.NoError(t, batcher.Remove(t.Context(), "endpoint-1:4317", exp))
+
+	require.Equal(t, int64(1), reroutedRecords.Load())
 }
 
 func TestLogBatcherRerouteTargetEndpointLocalFailureMarksTargetUnhealthy(t *testing.T) {
@@ -314,6 +393,309 @@ func TestLogBatcherMaxBytesUsesMergedPayloadSize(t *testing.T) {
 	require.NoError(t, p.Shutdown(t.Context()))
 	require.Len(t, sink.AllLogs(), 1)
 	assert.Equal(t, 2, sink.AllLogs()[0].LogRecordCount())
+}
+
+func TestCompressedLogBatcherChunkDoesNotRetainUncompressedPayload(t *testing.T) {
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+
+	logs := compressibleLogs(16000, 2048)
+	chunk, err := newCompressedLogBatcherChunk(&plog.ProtoMarshaler{}, codec, logBatcherRequest{
+		logs:               logs,
+		enqueuedAtUnixNano: time.Now().UnixNano(),
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, logs.LogRecordCount(), chunk.records)
+	require.Greater(t, chunk.uncompressedBytes, chunk.compressedBytes*100)
+	require.Len(t, chunk.payload, chunk.compressedBytes)
+	require.Equal(t, len(chunk.payload), cap(chunk.payload), "compressed payload must not retain the uncompressed marshal buffer")
+
+	decoded, err := decodeCompressedLogBatcherChunk(&plog.ProtoUnmarshaler{}, codec, chunk)
+	require.NoError(t, err)
+	require.Equal(t, logs.LogRecordCount(), decoded.LogRecordCount())
+}
+
+func TestCompressedLogBatcherFlushPreservesLogsAndSplitsByMaxRecords(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	var mu sync.Mutex
+	var batchSizes []int
+	var bodies []string
+
+	batcher, err := newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:         3,
+		maxBytes:           1 << 20,
+		flushInterval:      time.Hour,
+		payloadCompression: QueuePayloadCompressionZstd,
+	}, func(_ context.Context, _ *wrappedExporter, ld plog.Logs, _ string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		batchSizes = append(batchSizes, ld.LogRecordCount())
+		for i := 0; i < ld.ResourceLogs().Len(); i++ {
+			rl := ld.ResourceLogs().At(i)
+			for j := 0; j < rl.ScopeLogs().Len(); j++ {
+				records := rl.ScopeLogs().At(j).LogRecords()
+				for k := 0; k < records.Len(); k++ {
+					bodies = append(bodies, records.At(k).Body().Str())
+				}
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+
+	exp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, sharedScopeLogsWithoutTraceIDs("one", "two")))
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, sharedScopeLogsWithoutTraceIDs("three", "four")))
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(batchSizes) == 2
+	}, time.Second, 10*time.Millisecond)
+	require.NoError(t, batcher.Shutdown(t.Context()))
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []int{2, 2}, batchSizes)
+	require.ElementsMatch(t, []string{"one", "two", "three", "four"}, bodies)
+}
+
+func TestCompressedLogBatcherMaxBytesUsesMergedPayloadSize(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	var calls atomic.Int64
+
+	first := sharedResourceScopeLog("first")
+	second := sharedResourceScopeLog("second")
+	sizer := &plog.ProtoMarshaler{}
+	separateBytes := sizer.LogsSize(first) + sizer.LogsSize(second)
+	mergedBytes := sizer.LogsSize(mergeLogs(sharedResourceScopeLog("first"), sharedResourceScopeLog("second")))
+	require.Greater(t, separateBytes, mergedBytes)
+
+	batcher, err := newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:         100,
+		maxBytes:           mergedBytes + 1,
+		flushInterval:      time.Hour,
+		payloadCompression: QueuePayloadCompressionZstd,
+	}, func(context.Context, *wrappedExporter, plog.Logs, string) error {
+		calls.Add(1)
+		return nil
+	})
+	require.NoError(t, err)
+	shutdown := false
+	t.Cleanup(func() {
+		if !shutdown {
+			require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
+		}
+	})
+
+	exp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, sharedResourceScopeLog("first")))
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, sharedResourceScopeLog("second")))
+	require.Never(t, func() bool {
+		return calls.Load() > 0
+	}, 50*time.Millisecond, 5*time.Millisecond)
+
+	require.NoError(t, batcher.Shutdown(t.Context()))
+	shutdown = true
+	require.Equal(t, int64(1), calls.Load())
+}
+
+func TestCompressedLogBatcherFlushSplitsOnMaxBytes(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	var mu sync.Mutex
+	var batchSizes []int
+	var bodies []string
+
+	sizer := &plog.ProtoMarshaler{}
+	firstTwo := mergeLogs(sharedResourceScopeLog("one"), sharedResourceScopeLog("two"))
+	allThree := mergeLogs(mergeLogs(sharedResourceScopeLog("one"), sharedResourceScopeLog("two")), sharedResourceScopeLog("three"))
+	maxBytes := sizer.LogsSize(firstTwo) + 1
+	require.Greater(t, sizer.LogsSize(allThree), maxBytes)
+
+	batcher, err := newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:         100,
+		maxBytes:           maxBytes,
+		flushInterval:      time.Hour,
+		payloadCompression: QueuePayloadCompressionZstd,
+	}, func(_ context.Context, _ *wrappedExporter, ld plog.Logs, _ string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		batchSizes = append(batchSizes, ld.LogRecordCount())
+		for i := 0; i < ld.ResourceLogs().Len(); i++ {
+			rl := ld.ResourceLogs().At(i)
+			for j := 0; j < rl.ScopeLogs().Len(); j++ {
+				records := rl.ScopeLogs().At(j).LogRecords()
+				for k := 0; k < records.Len(); k++ {
+					bodies = append(bodies, records.At(k).Body().Str())
+				}
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	exp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, sharedResourceScopeLog("one")))
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, sharedResourceScopeLog("two")))
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, sharedResourceScopeLog("three")))
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(batchSizes) == 2
+	}, time.Second, 10*time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []int{2, 1}, batchSizes)
+	require.ElementsMatch(t, []string{"one", "two", "three"}, bodies)
+}
+
+func TestCompressedLogBatcherFlushRecordsDecodeErrors(t *testing.T) {
+	telemetry := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, telemetry.Shutdown(context.WithoutCancel(t.Context())))
+	})
+	telemetrySettings := telemetry.NewTelemetrySettings()
+	batcherTelemetry, err := newLogBatcherTelemetry(telemetrySettings)
+	require.NoError(t, err)
+	t.Cleanup(batcherTelemetry.shutdown)
+
+	backend := &backendLogBatcher{
+		endpoint:     "endpoint-1:4317",
+		logger:       telemetrySettings.Logger,
+		settings:     logBatcherSettings{maxRecords: 100, maxBytes: 1 << 20, flushInterval: time.Hour},
+		telemetry:    batcherTelemetry,
+		payloadCodec: newQueuePayloadCodec(QueuePayloadCompressionZstd),
+		send: func(context.Context, *wrappedExporter, plog.Logs, string) error {
+			t.Fatal("send should not be called when a compressed chunk cannot be decoded")
+			return nil
+		},
+	}
+	t.Cleanup(func() { require.NoError(t, backend.payloadCodec.Close()) })
+
+	pending := []compressedLogBatcherChunk{{
+		payload:               []byte("not-a-valid-compressed-payload"),
+		records:               2,
+		uncompressedBytes:     100,
+		compressedBytes:       30,
+		oldestEnqueueUnixNano: time.Now().UnixNano(),
+	}}
+	pendingRecords := 2
+	pendingBytes := 100
+	pendingCompressedBytes := 30
+	timer := time.NewTimer(time.Hour)
+	require.True(t, timer.Stop())
+	var timerC <-chan time.Time
+
+	err = backend.flushCompressed(
+		t.Context(),
+		&plog.ProtoMarshaler{},
+		&plog.ProtoUnmarshaler{},
+		newCompressedLogBatcherSizeState(),
+		&pending,
+		&pendingRecords,
+		&pendingBytes,
+		&pendingCompressedBytes,
+		logFlushReasonSize,
+		timer,
+		&timerC,
+	)
+	require.Error(t, err)
+	require.Zero(t, pendingRecords)
+	require.Zero(t, pendingBytes)
+	require.Zero(t, pendingCompressedBytes)
+
+	require.Eventually(t, func() bool {
+		flushErrors, flushErr := telemetry.GetMetric("otelcol_loadbalancer_log_batch_flush_errors")
+		droppedRecords, droppedErr := telemetry.GetMetric("otelcol_loadbalancer_log_batch_dropped_records")
+		if flushErr != nil || droppedErr != nil {
+			return false
+		}
+		flushTotal, flushOK := sumInt64Metric(flushErrors)
+		droppedTotal, droppedOK := sumInt64Metric(droppedRecords)
+		return flushOK && droppedOK && flushTotal == 1 && droppedTotal == 2
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestCompressedLogBatcherEnqueueStoresCompressedRequests(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	sendStarted := make(chan struct{}, 1)
+	unblockSend := make(chan struct{})
+
+	batcher, err := newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:         1,
+		maxBytes:           1 << 20,
+		flushInterval:      time.Hour,
+		payloadCompression: QueuePayloadCompressionZstd,
+	}, func(context.Context, *wrappedExporter, plog.Logs, string) error {
+		select {
+		case sendStarted <- struct{}{}:
+		default:
+		}
+		<-unblockSend
+		return nil
+	})
+	require.NoError(t, err)
+	defer func() {
+		close(unblockSend)
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
+	}()
+
+	exp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, simpleLogs()))
+	select {
+	case <-sendStarted:
+	case <-time.After(time.Second):
+		t.Fatal("expected first batch to block in send")
+	}
+
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, compressibleLogs(16, 1024)))
+
+	batcher.mu.RLock()
+	backend := batcher.backends["endpoint-1:4317"]
+	batcher.mu.RUnlock()
+	require.NotNil(t, backend)
+
+	select {
+	case req := <-backend.requests:
+		require.Zero(t, req.logs.LogRecordCount())
+		require.Equal(t, 16, req.compressedChunk.records)
+		require.Positive(t, req.compressedChunk.compressedBytes)
+		require.Less(t, req.compressedChunk.compressedBytes, req.compressedChunk.uncompressedBytes)
+	case <-time.After(time.Second):
+		t.Fatal("expected queued request to stay in compressed form while backend send is blocked")
+	}
+}
+
+func TestCompressedLogBatcherSnapshotTracksCompressedPendingBytes(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	batcher, err := newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:         20000,
+		maxBytes:           64 << 20,
+		flushInterval:      time.Hour,
+		payloadCompression: QueuePayloadCompressionZstd,
+	}, func(context.Context, *wrappedExporter, plog.Logs, string) error {
+		return nil
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context()))) }()
+
+	exp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, compressibleLogs(256, 1024)))
+
+	require.Eventually(t, func() bool {
+		for _, pending := range batcher.snapshotPending().pending {
+			if pending.endpoint == "endpoint-1:4317" && pending.records == 256 {
+				return pending.compressedBytes > 0 && pending.bytes > pending.compressedBytes
+			}
+		}
+		return false
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestLogBatcherDoesNotBlockOtherBackends(t *testing.T) {
@@ -667,6 +1049,18 @@ func findGaugePointValue(t *testing.T, dps []metricdata.DataPoint[int64], attrs 
 	return 0
 }
 
+func sumInt64Metric(metric metricdata.Metrics) (int64, bool) {
+	sum, ok := metric.Data.(metricdata.Sum[int64])
+	if !ok {
+		return 0, false
+	}
+	var total int64
+	for _, dp := range sum.DataPoints {
+		total += dp.Value
+	}
+	return total, true
+}
+
 func TestLogBatcherRemoveRespectsContextWhileWaitingForInflight(t *testing.T) {
 	ts, _ := getTelemetryAssets(t)
 	batcher, err := newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
@@ -791,5 +1185,20 @@ func logsWithTraceIDs(ids ...pcommon.TraceID) plog.Logs {
 func sizedLogWithID(id pcommon.TraceID, size int) plog.Logs {
 	logs := simpleLogWithID(id)
 	logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Body().SetStr(string(make([]byte, size)))
+	return logs
+}
+
+func compressibleLogs(records, bodySize int) plog.Logs {
+	logs := plog.NewLogs()
+	rl := logs.ResourceLogs().AppendEmpty()
+	rl.Resource().Attributes().PutStr("resource", "shared")
+	sl := rl.ScopeLogs().AppendEmpty()
+	sl.Scope().SetName("shared-scope")
+	body := string(make([]byte, bodySize))
+	for i := range records {
+		rec := sl.LogRecords().AppendEmpty()
+		rec.Body().SetStr(body)
+		rec.SetTraceID(pcommon.TraceID([16]byte{byte(i >> 8), byte(i)}))
+	}
 	return logs
 }
