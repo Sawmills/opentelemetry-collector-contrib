@@ -42,7 +42,10 @@ type loadBalancer struct {
 	endpointHealth    *endpointHealthManager
 	resolvedEndpoints []string
 
-	stopped    bool
+	stopped   bool
+	cleanupMu sync.Mutex
+	cleanupWG sync.WaitGroup
+
 	updateLock sync.RWMutex
 }
 
@@ -178,7 +181,11 @@ func (lb *loadBalancer) onBackendChanges(resolved []string) {
 	removed := lb.removeExtraExportersLocked(resolved)
 	lb.updateLock.Unlock()
 
-	lb.drainRemovedExporters(ctx, removed)
+	if len(removed) > 0 {
+		lb.runCleanup(func() {
+			lb.drainRemovedExporters(ctx, removed)
+		})
+	}
 }
 
 func (lb *loadBalancer) onBackendChangesWithEndpointHealth(resolved []string) {
@@ -194,7 +201,11 @@ func (lb *loadBalancer) onBackendChangesWithEndpointHealth(resolved []string) {
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)
-	lb.drainRemovedExporters(ctx, removed)
+	if len(removed) > 0 {
+		lb.runCleanup(func() {
+			lb.drainRemovedExporters(ctx, removed)
+		})
+	}
 }
 
 func (lb *loadBalancer) commitEndpointHealthResolverUpdateLocked(resolved []string, created []createdExporter) ([]createdExporter, []removedExporter) {
@@ -219,11 +230,47 @@ func (lb *loadBalancer) drainRemovedExporters(ctx context.Context, removed []rem
 				lb.logger.Error("failed to drain exporter before removal", zap.String("endpoint", removedExporter.endpoint), zap.Error(err))
 			}
 		}
+		exp := removedExporter.exporter
 		// Shutdown the exporter asynchronously to avoid blocking the resolver.
-		go func(exp *wrappedExporter) {
+		lb.runCleanupAsync(func() {
 			_ = exp.Shutdown(ctx)
-		}(removedExporter.exporter)
+		})
 	}
+}
+
+func (lb *loadBalancer) beginCleanup() (func(), bool) {
+	lb.cleanupMu.Lock()
+	if lb.stopped {
+		lb.cleanupMu.Unlock()
+		return func() {}, false
+	}
+	lb.cleanupWG.Add(1)
+	lb.cleanupMu.Unlock()
+
+	return lb.cleanupWG.Done, true
+}
+
+func (lb *loadBalancer) runCleanup(fn func()) {
+	done, _ := lb.beginCleanup()
+	defer done()
+	fn()
+}
+
+func (lb *loadBalancer) runCleanupAsync(fn func()) {
+	done, async := lb.beginCleanup()
+	if !async {
+		fn()
+		return
+	}
+
+	go func() {
+		defer done()
+		fn()
+	}()
+}
+
+func (lb *loadBalancer) waitForAsyncCleanup(ctx context.Context) error {
+	return waitForInflight(ctx, &lb.cleanupWG)
 }
 
 func (lb *loadBalancer) addMissingExporters(ctx context.Context, endpoints []string) {
@@ -302,11 +349,12 @@ func (lb *loadBalancer) installCreatedExportersLocked(created []createdExporter,
 	return duplicates
 }
 
-func (*loadBalancer) shutdownCreatedExporters(ctx context.Context, created []createdExporter) {
+func (lb *loadBalancer) shutdownCreatedExporters(ctx context.Context, created []createdExporter) {
 	for _, createdExporter := range created {
-		go func(exp *wrappedExporter) {
+		exp := createdExporter.exporter
+		lb.runCleanupAsync(func() {
 			_ = exp.Shutdown(ctx)
-		}(createdExporter.exporter)
+		})
 	}
 }
 
@@ -398,7 +446,9 @@ func (lb *loadBalancer) cleanupBackendWithoutDrain(ctx context.Context, endpoint
 	}
 	lb.updateLock.Unlock()
 	if len(removed) > 0 {
-		go lb.drainRemovedExporters(context.WithoutCancel(ctx), removed)
+		lb.runCleanupAsync(func() {
+			lb.drainRemovedExporters(context.WithoutCancel(ctx), removed)
+		})
 	}
 }
 
@@ -429,9 +479,15 @@ func (lb *loadBalancer) handleBackendFailureWithDrain(ctx context.Context, endpo
 
 	lb.shutdownCreatedExporters(ctx, duplicates)
 	if drainRemoved {
-		lb.drainRemovedExporters(ctx, removed)
-	} else {
-		go lb.drainRemovedExporters(context.WithoutCancel(ctx), removed)
+		if len(removed) > 0 {
+			lb.runCleanup(func() {
+				lb.drainRemovedExporters(ctx, removed)
+			})
+		}
+	} else if len(removed) > 0 {
+		lb.runCleanupAsync(func() {
+			lb.drainRemovedExporters(context.WithoutCancel(ctx), removed)
+		})
 	}
 	return decision
 }
@@ -465,7 +521,12 @@ func (lb *loadBalancer) handleBackendSuccess(endpoint string) {
 
 func (lb *loadBalancer) Shutdown(ctx context.Context) error {
 	err := lb.res.shutdown(ctx)
+
+	lb.cleanupMu.Lock()
 	lb.stopped = true
+	lb.cleanupMu.Unlock()
+
+	err = errors.Join(err, lb.waitForAsyncCleanup(ctx))
 
 	for _, e := range lb.exporters {
 		err = errors.Join(err, e.Shutdown(ctx))

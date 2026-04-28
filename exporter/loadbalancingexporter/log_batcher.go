@@ -360,8 +360,19 @@ func waitForInflight(ctx context.Context, wg *sync.WaitGroup) error {
 	select {
 	case <-done:
 		return nil
+	default:
+	}
+
+	select {
+	case <-done:
+		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		select {
+		case <-done:
+			return nil
+		default:
+			return ctx.Err()
+		}
 	}
 }
 

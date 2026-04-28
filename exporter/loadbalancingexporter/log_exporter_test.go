@@ -308,7 +308,7 @@ func TestConsumeLogsWithQueueCompressionAndInMemoryQueue(t *testing.T) {
 
 	require.NoError(t, wrapped.Start(t.Context(), componenttest.NewNopHost()))
 	t.Cleanup(func() {
-		require.NoError(t, wrapped.Shutdown(t.Context()))
+		require.NoError(t, wrapped.Shutdown(context.WithoutCancel(t.Context())))
 	})
 
 	require.NoError(t, wrapped.ConsumeLogs(t.Context(), simpleLogs()))

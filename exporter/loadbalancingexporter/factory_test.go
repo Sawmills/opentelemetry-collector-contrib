@@ -86,7 +86,7 @@ func TestLogExporterWithCompressedInMemoryQueueStartsWithoutStorageExtension(t *
 
 	require.NoError(t, exp.Start(t.Context(), componenttest.NewNopHost()))
 	t.Cleanup(func() {
-		require.NoError(t, exp.Shutdown(t.Context()))
+		require.NoError(t, exp.Shutdown(context.WithoutCancel(t.Context())))
 	})
 }
 

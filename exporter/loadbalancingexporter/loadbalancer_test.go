@@ -275,6 +275,73 @@ func TestRemoveExtraExporters(t *testing.T) {
 	assert.NotContains(t, p.exporters, endpointWithPort("endpoint-2"))
 }
 
+func TestLoadBalancerShutdownWaitsForAsyncRemovedExporterCleanup(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		return newNopMockExporter(), nil
+	}
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+
+	cleanupStarted := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	exporterShutdownStarted := make(chan struct{})
+	releaseExporterShutdown := make(chan struct{})
+	var releaseCleanupOnce sync.Once
+	var releaseExporterShutdownOnce sync.Once
+	defer releaseCleanupOnce.Do(func() { close(releaseCleanup) })
+	defer releaseExporterShutdownOnce.Do(func() { close(releaseExporterShutdown) })
+
+	p.onExporterRemove = func(context.Context, string, *wrappedExporter) error {
+		close(cleanupStarted)
+		<-releaseCleanup
+		return nil
+	}
+	p.exporters["endpoint-1:4317"] = newWrappedExporter(&blockingShutdownComponent{
+		started: exporterShutdownStarted,
+		release: releaseExporterShutdown,
+	}, "endpoint-1:4317")
+
+	p.cleanupBackendWithoutDrain(t.Context(), "endpoint-1:4317")
+	require.Eventually(t, func() bool {
+		select {
+		case <-cleanupStarted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	shutdownDone := make(chan error, 1)
+	var shutdownReturned atomic.Bool
+	go func() {
+		err := p.Shutdown(t.Context())
+		shutdownReturned.Store(true)
+		shutdownDone <- err
+	}()
+
+	assert.Never(t, func() bool {
+		return shutdownReturned.Load()
+	}, 50*time.Millisecond, 10*time.Millisecond)
+
+	releaseCleanupOnce.Do(func() { close(releaseCleanup) })
+	require.Eventually(t, func() bool {
+		select {
+		case <-exporterShutdownStarted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	assert.Never(t, func() bool {
+		return shutdownReturned.Load()
+	}, 50*time.Millisecond, 10*time.Millisecond)
+
+	releaseExporterShutdownOnce.Do(func() { close(releaseExporterShutdown) })
+	require.NoError(t, <-shutdownDone)
+}
+
 func TestAddMissingExporters(t *testing.T) {
 	// prepare
 	ts, tb := getTelemetryAssets(t)
@@ -821,4 +888,24 @@ func (c *countingComponent) Shutdown(context.Context) error {
 	count, _ := c.shutdowns.LoadOrStore(c.endpoint, &atomic.Int64{})
 	count.(*atomic.Int64).Add(1)
 	return nil
+}
+
+type blockingShutdownComponent struct {
+	started     chan struct{}
+	release     chan struct{}
+	startedOnce sync.Once
+}
+
+func (*blockingShutdownComponent) Start(context.Context, component.Host) error {
+	return nil
+}
+
+func (c *blockingShutdownComponent) Shutdown(ctx context.Context) error {
+	c.startedOnce.Do(func() { close(c.started) })
+	select {
+	case <-c.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
