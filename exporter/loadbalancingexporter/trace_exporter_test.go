@@ -301,6 +301,37 @@ func TestConsumeTracesReroutesEndpointLocalFailure(t *testing.T) {
 	}, metricdatatest.IgnoreTimestamp())
 }
 
+func TestConsumeTracesRerouteFailurePreservesOriginalError(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := serviceBasedRoutingConfig()
+	enableEndpointHealth(cfg)
+
+	originalErr := status.Error(codes.Unavailable, "backend unavailable")
+	rerouteErr := errors.New("reroute failed")
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockTracesExporter(func(context.Context, ptrace.Traces) error {
+			if endpoint == "endpoint-1:4317" {
+				return originalErr
+			}
+			return rerouteErr
+		}), nil
+	}
+	lb, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1:4317", "endpoint-2:4317"})
+
+	p, err := newTracesExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer = lb
+
+	serviceForEndpoint1 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1:4317")
+	err = p.ConsumeTraces(t.Context(), tracesWithServiceNames(serviceForEndpoint1))
+	require.ErrorIs(t, err, originalErr)
+	require.ErrorIs(t, err, rerouteErr)
+}
+
 func TestConsumeTracesReroutePreservesPayloadAfterExporterMutation(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	cfg := serviceBasedRoutingConfig()
