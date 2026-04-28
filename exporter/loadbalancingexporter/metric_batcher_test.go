@@ -11,12 +11,57 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+func TestMetricBatcherReroutesEndpointLocalFlushFailure(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := endpoint2Config()
+	enableEndpointHealth(cfg)
+	cfg.MetricBatcher = MetricBatcherConfig{Enabled: true, MaxDataPoints: 1, MaxBytes: 1 << 20, FlushInterval: time.Hour}
+	cfg.Resolver.Static = configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2"}})
+
+	var endpoint1Calls atomic.Int64
+	var endpoint2Calls atomic.Int64
+	p, err := newMetricsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer, err = newLoadBalancer(ts.Logger, cfg, func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockMetricsExporter(func(_ context.Context, _ pmetric.Metrics) error {
+			switch endpoint {
+			case "endpoint-1:4317":
+				endpoint1Calls.Add(1)
+				return status.Error(codes.Unavailable, "backend down")
+			case "endpoint-2:4317":
+				endpoint2Calls.Add(1)
+			}
+			return nil
+		}), nil
+	}, tb)
+	require.NoError(t, err)
+	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+		return p.batcher.Remove(ctx, endpoint, exp)
+	}
+	p.loadBalancer.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	p.started.Store(true)
+	defer func() { require.NoError(t, p.Shutdown(context.WithoutCancel(t.Context()))) }()
+
+	service := findRoutingIDForEndpoint(t, p.loadBalancer.ring, "endpoint-1:4317")
+	md := singleDataPointMetric("batcher-reroute")
+	md.ResourceMetrics().At(0).Resource().Attributes().PutStr(serviceNameKey, service)
+	require.NoError(t, p.ConsumeMetrics(t.Context(), md))
+
+	require.Eventuallyf(t, func() bool {
+		return endpoint1Calls.Load() == 1 && endpoint2Calls.Load() == 1
+	}, 2*time.Second, 20*time.Millisecond, "endpoint-1 calls=%d endpoint-2 calls=%d", endpoint1Calls.Load(), endpoint2Calls.Load())
+}
 
 func TestMetricBatcherFlushesOnMaxDataPoints(t *testing.T) {
 	ts, _ := getTelemetryAssets(t)

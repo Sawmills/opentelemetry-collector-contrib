@@ -390,10 +390,18 @@ func (e *metricExporterImp) consumeBatch(ctx context.Context, we *wrappedExporte
 	}
 	defer we.doneConsume()
 
+	var retryMetrics pmetric.Metrics
+	if reason != metricFlushReasonShutdown && directRerouteAttemptAllowed(e.loadBalancer, 0) {
+		retryMetrics = pmetric.NewMetrics()
+		md.CopyTo(retryMetrics)
+	}
 	start := time.Now()
 	err := we.ConsumeMetrics(ctx, md)
 	duration := time.Since(start)
-	e.recordBackendResult(ctx, we, duration, err, false)
+	decision := e.recordBatcherBackendResult(ctx, we, duration, err, reason != metricFlushReasonShutdown)
+	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, we.endpoint, decision, 0) {
+		return consumererror.NewMetrics(err, retryMetrics)
+	}
 
 	return err
 }
@@ -466,6 +474,14 @@ func (e *metricExporterImp) rerouteDrainBatch(ctx context.Context, md pmetric.Me
 }
 
 func (e *metricExporterImp) recordBackendResult(ctx context.Context, we *wrappedExporter, duration time.Duration, err error, updateEndpointHealth bool) endpointHealthFailureDecision {
+	return e.recordBackendResultWithDrain(ctx, we, duration, err, updateEndpointHealth, true)
+}
+
+func (e *metricExporterImp) recordBatcherBackendResult(ctx context.Context, we *wrappedExporter, duration time.Duration, err error, updateEndpointHealth bool) endpointHealthFailureDecision {
+	return e.recordBackendResultWithDrain(ctx, we, duration, err, updateEndpointHealth, false)
+}
+
+func (e *metricExporterImp) recordBackendResultWithDrain(ctx context.Context, we *wrappedExporter, duration time.Duration, err error, updateEndpointHealth bool, drainRemoved bool) endpointHealthFailureDecision {
 	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(we.endpointAttr))
 	if err == nil {
 		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(we.successAttr))
@@ -480,7 +496,10 @@ func (e *metricExporterImp) recordBackendResult(ctx context.Context, we *wrapped
 	if !updateEndpointHealth {
 		return endpointHealthFailureDecision{}
 	}
-	return e.loadBalancer.handleBackendFailure(ctx, we.endpoint, err)
+	if drainRemoved {
+		return e.loadBalancer.handleBackendFailure(ctx, we.endpoint, err)
+	}
+	return e.loadBalancer.handleBackendFailureWithoutDrain(ctx, we.endpoint, err)
 }
 
 func wrapDirectMetricsRerouteError(err error, md pmetric.Metrics) error {

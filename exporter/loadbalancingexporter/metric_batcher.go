@@ -539,9 +539,35 @@ func (b *backendMetricBatcher) flush(
 	b.telemetry.batchBytes.Record(ctx, int64(bytes), attrs)
 	b.telemetry.flushTotal.Add(ctx, 1, flushAttrs)
 
+	var rerouteMetrics pmetric.Metrics
+	if b.drainErr != nil && reason != metricFlushReasonShutdown {
+		rerouteMetrics = pmetric.NewMetrics()
+		drained.CopyTo(rerouteMetrics)
+	}
 	err := b.send(ctx, b.exporter(), drained, reason)
 	if err != nil {
 		b.telemetry.flushErrors.Add(ctx, 1, attrs)
+		rerouteAttempted := false
+		var sendMetricsErr consumererror.Metrics
+		if b.drainErr != nil && reason != metricFlushReasonShutdown && errors.As(err, &sendMetricsErr) {
+			rerouteAttempted = true
+			rerouteErr := b.drainErr(ctx, sendMetricsErr.Data(), reason)
+			if rerouteErr == nil {
+				b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
+				*retryingSince = time.Time{}
+				b.flushFailures = 0
+				return nil
+			}
+			var rerouteMetricsErr consumererror.Metrics
+			if errors.As(rerouteErr, &rerouteMetricsErr) {
+				drained = rerouteMetricsErr.Data()
+			} else {
+				drained = rerouteMetrics
+			}
+			datapoints = drained.DataPointCount()
+			bytes = sizer.MetricsSize(drained)
+			err = errors.Join(err, rerouteErr)
+		}
 		if reason == metricFlushReasonSize || reason == metricFlushReasonTimeout {
 			now := time.Now()
 			if retryingSince.IsZero() {
@@ -572,7 +598,7 @@ func (b *backendMetricBatcher) flush(
 				*timerC = timer.C
 			}
 		} else {
-			if b.drainErr != nil && (reason == metricFlushReasonResolverChange || reason == metricFlushReasonShutdown) {
+			if !rerouteAttempted && b.drainErr != nil && (reason == metricFlushReasonResolverChange || reason == metricFlushReasonShutdown) {
 				rerouteErr := b.drainErr(ctx, drained, reason)
 				if rerouteErr == nil {
 					b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)

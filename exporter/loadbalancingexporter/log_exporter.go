@@ -68,7 +68,8 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 				maxBytes:      cfg.(*Config).LogBatcher.MaxBytes,
 				flushInterval: cfg.(*Config).LogBatcher.FlushInterval,
 			},
-			logExporter.consumeBatch,
+			logExporter.consumeBatcherFlush,
+			logExporter.rerouteDrainBatch,
 		)
 		if err != nil {
 			return nil, err
@@ -220,7 +221,7 @@ func (e *logExporterImp) consumeLogDirect(ctx context.Context, ld plog.Logs, rer
 		retryLogs = plog.NewLogs()
 		ld.CopyTo(retryLogs)
 	}
-	err, decision := e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect, true)
+	err, decision := e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect, true, true)
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, le.endpoint, decision, rerouteAttempt) {
 		return e.consumeLogDirect(ctx, retryLogs, rerouteAttempt+1)
 	}
@@ -228,11 +229,43 @@ func (e *logExporterImp) consumeLogDirect(ctx context.Context, ld plog.Logs, rer
 }
 
 func (e *logExporterImp) consumeBatch(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string) error {
-	err, _ := e.consumeBatchWithDecision(ctx, le, ld, reason, false)
+	err, _ := e.consumeBatchWithDecision(ctx, le, ld, reason, false, true)
 	return err
 }
 
-func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string, updateEndpointHealth bool) (error, endpointHealthFailureDecision) {
+func (e *logExporterImp) consumeBatcherFlush(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string) error {
+	err, decision := e.consumeBatchWithDecision(ctx, le, ld, reason, reason != logFlushReasonShutdown, false)
+	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, le.endpoint, decision, 0) {
+		return logBatcherRerouteableError{err: err}
+	}
+	return err
+}
+
+type logBatcherRerouteableError struct {
+	err error
+}
+
+func (e logBatcherRerouteableError) Error() string {
+	return e.err.Error()
+}
+
+func (e logBatcherRerouteableError) Unwrap() error {
+	return e.err
+}
+
+func (e *logExporterImp) rerouteDrainBatch(ctx context.Context, ld plog.Logs, reason string) error {
+	if reason == logFlushReasonShutdown || !directRerouteAttemptAllowed(e.loadBalancer, 0) {
+		return errLogBatcherExporterStopping
+	}
+	batches, errs := e.groupLogsByEndpoint(ld)
+	for _, batch := range batches {
+		err, _ := e.consumeBatchWithDecision(ctx, batch.exp, batch.logs, reason, false, true)
+		errs = multierr.Append(errs, err)
+	}
+	return errs
+}
+
+func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string, updateEndpointHealth bool, drainRemoved bool) (error, endpointHealthFailureDecision) {
 	if reason == logFlushReasonDirect || reason == logFlushReasonResolverChange || reason == logFlushReasonShutdown {
 		le.forceStartConsume()
 	} else if !le.tryStartConsume() {
@@ -257,7 +290,10 @@ func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrapp
 	if !updateEndpointHealth {
 		return err, endpointHealthFailureDecision{}
 	}
-	return err, e.loadBalancer.handleBackendFailure(ctx, le.endpoint, err)
+	if drainRemoved {
+		return err, e.loadBalancer.handleBackendFailure(ctx, le.endpoint, err)
+	}
+	return err, e.loadBalancer.handleBackendFailureWithoutDrain(ctx, le.endpoint, err)
 }
 
 // insertLogRecord adds a log record into the destination plog.Logs, reusing

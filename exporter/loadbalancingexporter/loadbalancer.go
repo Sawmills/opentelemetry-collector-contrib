@@ -358,6 +358,14 @@ func (lb *loadBalancer) removeExtraExportersLocked(endpoints []string) []removed
 }
 
 func (lb *loadBalancer) handleBackendFailure(ctx context.Context, endpoint string, err error) endpointHealthFailureDecision {
+	return lb.handleBackendFailureWithDrain(ctx, endpoint, err, true)
+}
+
+func (lb *loadBalancer) handleBackendFailureWithoutDrain(ctx context.Context, endpoint string, err error) endpointHealthFailureDecision {
+	return lb.handleBackendFailureWithDrain(ctx, endpoint, err, false)
+}
+
+func (lb *loadBalancer) handleBackendFailureWithDrain(ctx context.Context, endpoint string, err error, drainRemoved bool) endpointHealthFailureDecision {
 	endpoint = endpointWithPort(endpoint)
 	decision := lb.endpointHealth.markFailure(endpoint, err)
 	if !shouldCommitEndpointHealthFailure(endpoint, decision) {
@@ -383,8 +391,20 @@ func (lb *loadBalancer) handleBackendFailure(ctx context.Context, endpoint strin
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)
-	lb.drainRemovedExporters(ctx, removed)
+	if drainRemoved {
+		lb.drainRemovedExporters(ctx, removed)
+	} else {
+		lb.shutdownRemovedExporters(ctx, removed)
+	}
 	return decision
+}
+
+func (lb *loadBalancer) shutdownRemovedExporters(ctx context.Context, removed []removedExporter) {
+	for _, removedExporter := range removed {
+		go func(exp *wrappedExporter) {
+			_ = exp.Shutdown(ctx)
+		}(removedExporter.exporter)
+	}
 }
 
 func shouldCommitEndpointHealthFailure(endpoint string, decision endpointHealthFailureDecision) bool {

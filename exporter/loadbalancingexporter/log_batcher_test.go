@@ -20,9 +20,50 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
 )
+
+func TestLogBatcherReroutesEndpointLocalFlushFailure(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	cfg.LogBatcher = LogBatcherConfig{Enabled: true, MaxRecords: 1, MaxBytes: 1 << 20, FlushInterval: time.Hour}
+	cfg.Resolver.Static = configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2"}})
+
+	var endpoint1Calls atomic.Int64
+	var endpoint2Calls atomic.Int64
+	p, err := newLogsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer, err = newLoadBalancer(ts.Logger, cfg, func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockLogsExporter(func(_ context.Context, _ plog.Logs) error {
+			switch endpoint {
+			case "endpoint-1:4317":
+				endpoint1Calls.Add(1)
+				return status.Error(codes.Unavailable, "backend down")
+			case "endpoint-2:4317":
+				endpoint2Calls.Add(1)
+			}
+			return nil
+		}), nil
+	}, tb)
+	require.NoError(t, err)
+	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+		return p.batcher.Remove(ctx, endpoint, exp)
+	}
+	p.loadBalancer.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	p.started.Store(true)
+	defer func() { require.NoError(t, p.Shutdown(context.WithoutCancel(t.Context()))) }()
+
+	route := findTraceIDForEndpoint(t, p.loadBalancer.ring, "endpoint-1:4317")
+	require.NoError(t, p.ConsumeLogs(t.Context(), simpleLogWithID(route)))
+
+	require.Eventually(t, func() bool {
+		return endpoint1Calls.Load() == 1 && endpoint2Calls.Load() == 1
+	}, 2*time.Second, 20*time.Millisecond)
+}
 
 func TestLogBatcherMergesSameBackendOnShutdown(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
