@@ -936,6 +936,48 @@ func TestLoadBalancerEndpointHealthResolverCommitUsesLockedEligibility(t *testin
 	}
 }
 
+func TestLoadBalancerEndpointHealthResolverCommitDoesNotReadmitExpiredEndpointWithoutExporter(t *testing.T) {
+	now := time.Unix(100, 0)
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		return mockComponent{}, nil
+	}
+
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	p.endpointHealth.settings.now = func() time.Time { return now }
+
+	resolved := normalizeEndpoints([]string{"endpoint-1", "endpoint-2"})
+	p.endpointHealth.reconcile(resolved)
+	p.exporters["endpoint-2:4317"] = newWrappedExporter(mockComponent{}, "endpoint-2:4317")
+
+	decision := p.endpointHealth.markFailure("endpoint-1:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, decision.quarantined)
+	require.Equal(t, []string{"endpoint-2:4317"}, decision.eligible)
+
+	now = now.Add(time.Minute)
+	p.updateLock.Lock()
+	duplicates, removed := p.commitEndpointHealthResolverUpdateLocked(resolved, nil)
+	p.updateLock.Unlock()
+	p.shutdownCreatedExporters(t.Context(), duplicates)
+	p.drainRemovedExporters(t.Context(), removed)
+
+	require.Contains(t, p.exporters, "endpoint-2:4317")
+	require.NotContains(t, p.exporters, "endpoint-1:4317")
+	p.updateLock.RLock()
+	for _, item := range p.ring.items {
+		require.NotEqual(t, "endpoint-1:4317", item.endpoint)
+	}
+	p.updateLock.RUnlock()
+
+	for i := range 100 {
+		_, _, err := p.exporterAndEndpoint([]byte{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)})
+		require.NoError(t, err)
+	}
+}
+
 func TestEndpointWithPort(t *testing.T) {
 	for _, tt := range []struct {
 		input, expected string

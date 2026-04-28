@@ -267,6 +267,18 @@ func (m *endpointHealthManager) eligibleEndpoints() []string {
 	return eligible
 }
 
+func (m *endpointHealthManager) eligibleEndpointsNoRefresh() []string {
+	if !m.enabled() {
+		return nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	eligible, _, _ := m.eligibleEndpointsLockedWithRefresh(m.settings.now(), false)
+	return eligible
+}
+
 func (m *endpointHealthManager) refreshExpiredQuarantines() endpointHealthRefreshResult {
 	if !m.enabled() {
 		return endpointHealthRefreshResult{}
@@ -320,6 +332,10 @@ func (m *endpointHealthManager) stateLocked(endpoint string) *endpointHealthStat
 }
 
 func (m *endpointHealthManager) eligibleEndpointsLocked(now time.Time) ([]string, bool, bool) {
+	return m.eligibleEndpointsLockedWithRefresh(now, true)
+}
+
+func (m *endpointHealthManager) eligibleEndpointsLockedWithRefresh(now time.Time, refreshExpired bool) ([]string, bool, bool) {
 	var eligible []string
 	var present []string
 	var nextExpiry time.Time
@@ -328,7 +344,7 @@ func (m *endpointHealthManager) eligibleEndpointsLocked(now time.Time) ([]string
 			continue
 		}
 		present = append(present, state.endpoint)
-		if !state.quarantinedUntil.IsZero() && !state.quarantinedUntil.After(now) {
+		if !state.quarantinedUntil.IsZero() && !state.quarantinedUntil.After(now) && refreshExpired {
 			state.quarantinedUntil = time.Time{}
 			state.failureReason = ""
 			state.lastStateChangeAt = now
