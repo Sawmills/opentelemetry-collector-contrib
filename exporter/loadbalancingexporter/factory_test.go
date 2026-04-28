@@ -109,6 +109,7 @@ func TestDefaultLogBatcherConfig(t *testing.T) {
 	assert.Equal(t, defaultLogBatchMaxRecords, cfg.LogBatcher.MaxRecords)
 	assert.Equal(t, defaultLogBatchMaxBytes, cfg.LogBatcher.MaxBytes)
 	assert.Equal(t, defaultLogBatchFlushTimeout, cfg.LogBatcher.FlushInterval)
+	assert.Equal(t, QueuePayloadCompressionNone, cfg.LogBatcher.PayloadCompression)
 }
 
 func TestDefaultMetricBatcherConfig(t *testing.T) {

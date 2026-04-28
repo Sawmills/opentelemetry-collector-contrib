@@ -87,6 +87,13 @@ func TestConfigValidateLogBatcher(t *testing.T) {
 	require.ErrorContains(t, cfg.Validate(), "log_batcher.flush_interval")
 
 	cfg.LogBatcher.FlushInterval = time.Second
+	cfg.LogBatcher.PayloadCompression = QueuePayloadCompression("brotli")
+	require.ErrorContains(t, cfg.Validate(), "log_batcher.payload_compression")
+
+	cfg.LogBatcher.PayloadCompression = QueuePayloadCompressionSnappy
+	require.NoError(t, cfg.Validate())
+
+	cfg.LogBatcher.PayloadCompression = QueuePayloadCompressionZstd
 	require.NoError(t, cfg.Validate())
 }
 
@@ -289,10 +296,11 @@ func TestLoadConfigWithLogBatcher(t *testing.T) {
 			},
 		},
 		"log_batcher": map[string]any{
-			"enabled":        true,
-			"max_records":    1024,
-			"max_bytes":      2097152,
-			"flush_interval": "250ms",
+			"enabled":             true,
+			"max_records":         1024,
+			"max_bytes":           2097152,
+			"flush_interval":      "250ms",
+			"payload_compression": "zstd",
 		},
 	})
 
@@ -301,6 +309,7 @@ func TestLoadConfigWithLogBatcher(t *testing.T) {
 	require.Equal(t, 1024, cfg.LogBatcher.MaxRecords)
 	require.Equal(t, 2097152, cfg.LogBatcher.MaxBytes)
 	require.Equal(t, 250*time.Millisecond, cfg.LogBatcher.FlushInterval)
+	require.Equal(t, QueuePayloadCompressionZstd, cfg.LogBatcher.PayloadCompression)
 }
 
 func TestLoadConfigWithMetricBatcher(t *testing.T) {
