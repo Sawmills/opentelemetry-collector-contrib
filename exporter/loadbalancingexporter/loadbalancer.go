@@ -359,6 +359,12 @@ func (lb *loadBalancer) shutdownSkippedExporter(ctx context.Context, endpoint st
 	})
 }
 
+func createdExporterExists(created []createdExporter, endpoint string) bool {
+	return slices.ContainsFunc(created, func(created createdExporter) bool {
+		return created.endpoint == endpointWithPort(endpoint)
+	})
+}
+
 func (lb *loadBalancer) installCreatedExportersLocked(created []createdExporter, endpoints []string) []createdExporter {
 	var duplicates []createdExporter
 	eligible := make(map[string]struct{}, len(endpoints))
@@ -462,9 +468,7 @@ func (lb *loadBalancer) handleBackendFailureHealthOnly(ctx context.Context, endp
 	lb.updateLock.Lock()
 	lb.ring = newHashRing(decision.eligible)
 	var removed []removedExporter
-	if _, refreshRequested := forceCreate[endpoint]; refreshRequested && slices.ContainsFunc(created, func(created createdExporter) bool {
-		return created.endpoint == endpoint
-	}) {
+	if createdExporterExists(created, endpoint) {
 		if exp, ok := lb.exporters[endpoint]; ok {
 			exp.markStopping()
 			delete(lb.exporters, endpoint)
