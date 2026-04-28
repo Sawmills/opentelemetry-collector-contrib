@@ -494,6 +494,40 @@ func TestLoadBalancerEndpointHealthFailOpenRefreshesFailedExporter(t *testing.T)
 	require.NotSame(t, endpoint2Original, p.exporters["endpoint-2:4317"])
 }
 
+func TestLoadBalancerEndpointHealthFailOpenKeepsExporterWhenRefreshFails(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+
+	var endpoint2Creations atomic.Int64
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		if endpoint == "endpoint-2:4317" && endpoint2Creations.Add(1) > 1 {
+			return nil, errors.New("endpoint-2 refresh failed")
+		}
+		return mockComponent{}, nil
+	}
+
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+
+	p.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	endpoint2Original := p.exporters["endpoint-2:4317"]
+
+	decision := p.handleBackendFailure(t.Context(), "endpoint-1:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, decision.quarantined)
+	require.False(t, decision.failOpen)
+
+	decision = p.handleBackendFailure(t.Context(), "endpoint-2:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, decision.failOpen)
+	require.Same(t, endpoint2Original, p.exporters["endpoint-2:4317"])
+
+	routingID := findRoutingIDForEndpoint(t, p.ring, "endpoint-2:4317")
+	exporter, endpoint, err := p.exporterAndEndpoint([]byte(routingID))
+	require.NoError(t, err)
+	require.Equal(t, "endpoint-2:4317", endpoint)
+	require.Same(t, endpoint2Original, exporter)
+}
+
 func TestLoadBalancerEndpointHealthHealthOnlyFailOpenRefreshesFailedExporter(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	cfg := simpleConfig()

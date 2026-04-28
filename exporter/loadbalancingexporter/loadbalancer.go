@@ -522,7 +522,8 @@ func (lb *loadBalancer) handleBackendFailureWithDrain(ctx context.Context, endpo
 	lb.ring = newHashRing(decision.eligible)
 
 	var removed []removedExporter
-	if exp, ok := lb.exporters[endpoint]; ok {
+	endpointEligible := slices.Contains(decision.eligible, endpoint)
+	if exp, ok := lb.exporters[endpoint]; ok && (!endpointEligible || createdExporterExists(created, endpoint)) {
 		exp.markStopping()
 		delete(lb.exporters, endpoint)
 		removed = append(removed, removedExporter{endpoint: endpoint, exporter: exp})
