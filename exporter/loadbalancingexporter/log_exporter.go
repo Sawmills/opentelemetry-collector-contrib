@@ -224,7 +224,9 @@ func (e *logExporterImp) consumeLogDirect(ctx context.Context, ld plog.Logs, rer
 	}
 	err, decision := e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect, true, true, false)
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, le.endpoint, decision, rerouteAttempt) {
-		return e.consumeLogDirect(ctx, retryLogs, rerouteAttempt+1)
+		rerouteErr := e.consumeLogDirect(ctx, retryLogs, rerouteAttempt+1)
+		e.loadBalancer.recordBackendReroute(ctx, "logs", decision.reason, rerouteErr)
+		return rerouteErr
 	}
 	return err
 }

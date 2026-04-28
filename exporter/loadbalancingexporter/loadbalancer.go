@@ -13,6 +13,8 @@ import (
 	"sync"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
@@ -39,6 +41,7 @@ type loadBalancer struct {
 	componentFactory  componentFactory
 	exporters         map[string]*wrappedExporter
 	onExporterRemove  func(context.Context, string, *wrappedExporter) error
+	telemetry         *metadata.TelemetryBuilder
 	endpointHealth    *endpointHealthManager
 	resolvedEndpoints []string
 
@@ -148,6 +151,7 @@ func newLoadBalancer(logger *zap.Logger, cfg component.Config, factory component
 		res:              res,
 		componentFactory: factory,
 		exporters:        map[string]*wrappedExporter{},
+		telemetry:        telemetry,
 		endpointHealth:   newEndpointHealthManager(endpointHealthSettingsFromConfig(oCfg.EndpointHealth)),
 	}, nil
 }
@@ -194,6 +198,7 @@ func (lb *loadBalancer) onBackendChangesWithEndpointHealth(resolved []string) {
 
 	// TODO: set a timeout?
 	ctx := context.Background()
+	lb.recordEndpointHealthReconcile(ctx, reconcile)
 	created := lb.createMissingExporters(ctx, reconcile.eligible, nil)
 
 	lb.updateLock.Lock()
@@ -416,6 +421,7 @@ func (lb *loadBalancer) handleBackendFailureWithoutDrain(ctx context.Context, en
 func (lb *loadBalancer) handleBackendFailureHealthOnly(ctx context.Context, endpoint string, err error) endpointHealthFailureDecision {
 	endpoint = endpointWithPort(endpoint)
 	decision := lb.endpointHealth.markFailure(endpoint, err)
+	lb.recordEndpointFailureDecision(ctx, endpoint, decision)
 	if !shouldCommitEndpointHealthFailure(endpoint, decision) {
 		return decision
 	}
@@ -455,6 +461,7 @@ func (lb *loadBalancer) cleanupBackendWithoutDrain(ctx context.Context, endpoint
 func (lb *loadBalancer) handleBackendFailureWithDrain(ctx context.Context, endpoint string, err error, drainRemoved bool) endpointHealthFailureDecision {
 	endpoint = endpointWithPort(endpoint)
 	decision := lb.endpointHealth.markFailure(endpoint, err)
+	lb.recordEndpointFailureDecision(ctx, endpoint, decision)
 	if !shouldCommitEndpointHealthFailure(endpoint, decision) {
 		return decision
 	}
@@ -504,11 +511,14 @@ func (lb *loadBalancer) handleBackendSuccess(endpoint string) {
 		return
 	}
 
-	if !lb.endpointHealth.markSuccess(endpointWithPort(endpoint)) {
+	endpoint = endpointWithPort(endpoint)
+	decision := lb.endpointHealth.markSuccessDecision(endpoint)
+	if !decision.recovered {
 		return
 	}
-	eligible := lb.endpointHealth.eligibleEndpoints()
 	ctx := context.Background()
+	lb.recordEndpointUnquarantine(ctx, endpoint, decision.reason)
+	eligible := decision.eligible
 	created := lb.createMissingExporters(ctx, eligible, nil)
 
 	lb.updateLock.Lock()
@@ -517,6 +527,86 @@ func (lb *loadBalancer) handleBackendSuccess(endpoint string) {
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)
+}
+
+func (lb *loadBalancer) recordEndpointHealthReconcile(ctx context.Context, reconcile endpointHealthReconcileResult) {
+	for _, endpoint := range reconcile.removed {
+		lb.recordEndpointStale(ctx, endpoint)
+	}
+	if reconcile.failOpenStarted {
+		lb.recordEndpointFailOpen(ctx)
+	}
+	for _, endpoint := range reconcile.eligible {
+		lb.recordEndpointState(ctx, endpoint, "eligible", 1)
+	}
+}
+
+func (lb *loadBalancer) recordEndpointFailureDecision(ctx context.Context, endpoint string, decision endpointHealthFailureDecision) {
+	if decision.quarantined {
+		lb.recordEndpointQuarantine(ctx, endpoint, decision.reason)
+	}
+	if decision.failOpenStarted {
+		lb.recordEndpointFailOpen(ctx)
+	}
+}
+
+func (lb *loadBalancer) recordEndpointQuarantine(ctx context.Context, endpoint string, reason endpointFailureReason) {
+	if lb.telemetry == nil {
+		return
+	}
+	attrs := metric.WithAttributes(attribute.String("endpoint", endpoint), attribute.String("reason", string(reason)))
+	lb.telemetry.LoadbalancerBackendQuarantineTotal.Add(ctx, 1, attrs)
+	lb.recordEndpointState(ctx, endpoint, "eligible", 0)
+	lb.recordEndpointState(ctx, endpoint, "quarantined", 1)
+}
+
+func (lb *loadBalancer) recordEndpointUnquarantine(ctx context.Context, endpoint string, reason endpointFailureReason) {
+	if lb.telemetry == nil {
+		return
+	}
+	attrs := metric.WithAttributes(attribute.String("endpoint", endpoint), attribute.String("reason", string(reason)))
+	lb.telemetry.LoadbalancerBackendUnquarantineTotal.Add(ctx, 1, attrs)
+	lb.recordEndpointState(ctx, endpoint, "quarantined", 0)
+	lb.recordEndpointState(ctx, endpoint, "eligible", 1)
+}
+
+func (lb *loadBalancer) recordEndpointStale(ctx context.Context, endpoint string) {
+	if lb.telemetry == nil {
+		return
+	}
+	lb.telemetry.LoadbalancerBackendStaleTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("endpoint", endpoint)))
+	lb.recordEndpointState(ctx, endpoint, "eligible", 0)
+	lb.recordEndpointState(ctx, endpoint, "quarantined", 0)
+	lb.recordEndpointState(ctx, endpoint, "stale", 1)
+}
+
+func (lb *loadBalancer) recordEndpointFailOpen(ctx context.Context) {
+	if lb.telemetry == nil {
+		return
+	}
+	lb.telemetry.LoadbalancerBackendFailOpenTotal.Add(ctx, 1)
+}
+
+func (lb *loadBalancer) recordEndpointState(ctx context.Context, endpoint, state string, value int64) {
+	if lb.telemetry == nil {
+		return
+	}
+	lb.telemetry.LoadbalancerBackendState.Record(ctx, value, metric.WithAttributes(attribute.String("endpoint", endpoint), attribute.String("state", state)))
+}
+
+func (lb *loadBalancer) recordBackendReroute(ctx context.Context, signal string, reason endpointFailureReason, err error) {
+	if lb.telemetry == nil {
+		return
+	}
+	result := "success"
+	if err != nil {
+		result = "failure"
+	}
+	lb.telemetry.LoadbalancerBackendRerouteTotal.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("signal", signal),
+		attribute.String("result", result),
+		attribute.String("reason", string(reason)),
+	))
 }
 
 func (lb *loadBalancer) Shutdown(ctx context.Context) error {

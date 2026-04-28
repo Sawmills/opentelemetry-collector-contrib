@@ -56,17 +56,25 @@ type endpointHealthState struct {
 }
 
 type endpointHealthReconcileResult struct {
-	eligible []string
-	removed  []string
-	failOpen bool
+	eligible        []string
+	removed         []string
+	failOpen        bool
+	failOpenStarted bool
 }
 
 type endpointHealthFailureDecision struct {
-	endpointLocal bool
-	quarantined   bool
-	reason        endpointFailureReason
-	eligible      []string
-	failOpen      bool
+	endpointLocal   bool
+	quarantined     bool
+	reason          endpointFailureReason
+	eligible        []string
+	failOpen        bool
+	failOpenStarted bool
+}
+
+type endpointHealthSuccessDecision struct {
+	recovered bool
+	reason    endpointFailureReason
+	eligible  []string
 }
 
 func newEndpointHealthManager(settings endpointHealthSettings) *endpointHealthManager {
@@ -139,11 +147,12 @@ func (m *endpointHealthManager) reconcile(resolved []string) endpointHealthRecon
 	}
 	sort.Strings(removed)
 
-	eligible, failOpen := m.eligibleEndpointsLocked(now)
+	eligible, failOpen, failOpenStarted := m.eligibleEndpointsLocked(now)
 	return endpointHealthReconcileResult{
-		eligible: eligible,
-		removed:  removed,
-		failOpen: failOpen,
+		eligible:        eligible,
+		removed:         removed,
+		failOpen:        failOpen,
+		failOpenStarted: failOpenStarted,
 	}
 }
 
@@ -169,13 +178,17 @@ func (m *endpointHealthManager) markFailure(endpoint string, err error) endpoint
 			}
 		}
 	}
-	decision.eligible, decision.failOpen = m.eligibleEndpointsLocked(now)
+	decision.eligible, decision.failOpen, decision.failOpenStarted = m.eligibleEndpointsLocked(now)
 	return decision
 }
 
 func (m *endpointHealthManager) markSuccess(endpoint string) bool {
+	return m.markSuccessDecision(endpoint).recovered
+}
+
+func (m *endpointHealthManager) markSuccessDecision(endpoint string) endpointHealthSuccessDecision {
 	if !m.enabled() {
-		return false
+		return endpointHealthSuccessDecision{}
 	}
 
 	m.mu.Lock()
@@ -183,15 +196,21 @@ func (m *endpointHealthManager) markSuccess(endpoint string) bool {
 
 	state, ok := m.endpoints[endpoint]
 	if !ok || !state.present {
-		return false
+		return endpointHealthSuccessDecision{}
 	}
 	if !state.quarantinedUntil.IsZero() || state.failureReason != "" {
+		reason := state.failureReason
 		state.quarantinedUntil = time.Time{}
 		state.failureReason = ""
 		state.lastStateChangeAt = m.settings.now()
-		return true
+		eligible, _, _ := m.eligibleEndpointsLocked(state.lastStateChangeAt)
+		return endpointHealthSuccessDecision{
+			recovered: true,
+			reason:    reason,
+			eligible:  eligible,
+		}
 	}
-	return false
+	return endpointHealthSuccessDecision{}
 }
 
 func (m *endpointHealthManager) isPresent(endpoint string) bool {
@@ -214,7 +233,7 @@ func (m *endpointHealthManager) failOpen() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	_, _ = m.eligibleEndpointsLocked(m.settings.now())
+	_, _, _ = m.eligibleEndpointsLocked(m.settings.now())
 	return m.failOpenActive
 }
 
@@ -226,7 +245,7 @@ func (m *endpointHealthManager) eligibleEndpoints() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	eligible, _ := m.eligibleEndpointsLocked(m.settings.now())
+	eligible, _, _ := m.eligibleEndpointsLocked(m.settings.now())
 	return eligible
 }
 
@@ -239,7 +258,7 @@ func (m *endpointHealthManager) stateLocked(endpoint string) *endpointHealthStat
 	return state
 }
 
-func (m *endpointHealthManager) eligibleEndpointsLocked(now time.Time) ([]string, bool) {
+func (m *endpointHealthManager) eligibleEndpointsLocked(now time.Time) ([]string, bool, bool) {
 	var eligible []string
 	var present []string
 	for _, state := range m.endpoints {
@@ -260,11 +279,12 @@ func (m *endpointHealthManager) eligibleEndpointsLocked(now time.Time) ([]string
 	sort.Strings(present)
 	sort.Strings(eligible)
 	failOpen := len(present) > 0 && len(eligible) == 0
+	failOpenStarted := failOpen && !m.failOpenActive
 	m.failOpenActive = failOpen
 	if failOpen {
-		return present, true
+		return present, true, failOpenStarted
 	}
-	return eligible, false
+	return eligible, false, false
 }
 
 func classifyEndpointFailure(err error) (endpointFailureReason, bool) {

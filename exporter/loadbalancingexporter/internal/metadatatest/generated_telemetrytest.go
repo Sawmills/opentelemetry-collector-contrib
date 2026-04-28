@@ -21,6 +21,22 @@ func NewSettings(tt *componenttest.Telemetry) exporter.Settings {
 	return set
 }
 
+func AssertEqualLoadbalancerBackendFailOpenTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_backend_fail_open_total",
+		Description: "Number of times endpoint health failed open because every resolver-present backend was quarantined. [Development]",
+		Unit:        "{events}",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_backend_fail_open_total")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
 func AssertEqualLoadbalancerBackendLatency(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.HistogramDataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_loadbalancer_backend_latency",
@@ -48,6 +64,84 @@ func AssertEqualLoadbalancerBackendOutcome(t *testing.T, tt *componenttest.Telem
 		},
 	}
 	got, err := tt.GetMetric("otelcol_loadbalancer_backend_outcome")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerBackendQuarantineTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_backend_quarantine_total",
+		Description: "Number of times a backend endpoint was quarantined. [Development]",
+		Unit:        "{quarantines}",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_backend_quarantine_total")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerBackendRerouteTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_backend_reroute_total",
+		Description: "Number of endpoint-failure reroute attempts. [Development]",
+		Unit:        "{reroutes}",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_backend_reroute_total")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerBackendStaleTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_backend_stale_total",
+		Description: "Number of times a backend endpoint disappeared from resolver membership. [Development]",
+		Unit:        "{stale_endpoints}",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_backend_stale_total")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerBackendState(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_backend_state",
+		Description: "Current endpoint health state by backend. [Development]",
+		Unit:        "{backends}",
+		Data: metricdata.Gauge[int64]{
+			DataPoints: dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_backend_state")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerBackendUnquarantineTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_backend_unquarantine_total",
+		Description: "Number of times a backend endpoint was admitted after quarantine. [Development]",
+		Unit:        "{unquarantines}",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_backend_unquarantine_total")
 	require.NoError(t, err)
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }

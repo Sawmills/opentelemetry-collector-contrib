@@ -158,7 +158,9 @@ func (e *traceExporterImp) consumeTraces(ctx context.Context, td ptrace.Traces, 
 		duration := time.Since(start)
 		decision := e.recordBackendResult(ctx, exp, duration, err)
 		if err != nil && shouldRerouteDirectFailure(e.loadBalancer, exp.endpoint, decision, rerouteAttempt) {
-			err = e.consumeTraces(ctx, retryTraces, rerouteAttempt+1)
+			rerouteErr := e.consumeTraces(ctx, retryTraces, rerouteAttempt+1)
+			e.loadBalancer.recordBackendReroute(ctx, "traces", decision.reason, rerouteErr)
+			err = rerouteErr
 		}
 		errs = multierr.Append(errs, err)
 	}

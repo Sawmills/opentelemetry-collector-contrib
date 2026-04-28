@@ -26,10 +26,14 @@ import (
 	"go.opentelemetry.io/collector/exporter/exportertest"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/ptrace"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata/metricdatatest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadatatest"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/ptracetest"
 )
 
@@ -252,7 +256,7 @@ func TestConsumeTracesServiceBased(t *testing.T) {
 }
 
 func TestConsumeTracesReroutesEndpointLocalFailure(t *testing.T) {
-	ts, tb := getTelemetryAssets(t)
+	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
 	cfg := serviceBasedRoutingConfig()
 	enableEndpointHealth(cfg)
 
@@ -283,6 +287,18 @@ func TestConsumeTracesReroutesEndpointLocalFailure(t *testing.T) {
 	assert.Equal(t, 1, calls["endpoint-1:4317"])
 	assert.Equal(t, 1, calls["endpoint-2:4317"])
 	assert.NotContains(t, lb.exporters, "endpoint-1:4317")
+	metadatatest.AssertEqualLoadbalancerBackendQuarantineTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("reason", "unavailable")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+	metadatatest.AssertEqualLoadbalancerBackendRerouteTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("signal", "traces"), attribute.String("result", "success"), attribute.String("reason", "unavailable")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
 }
 
 func TestConsumeTracesReroutePreservesPayloadAfterExporterMutation(t *testing.T) {

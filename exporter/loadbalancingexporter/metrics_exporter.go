@@ -372,9 +372,12 @@ func (e *metricExporterImp) consumeMetricsByExporterAttempt(
 		if err != nil && shouldRerouteDirectFailure(e.loadBalancer, exp.endpoint, decision, rerouteAttempt) {
 			rerouted, splitErr := e.splitMetricsByRouting(retryMetrics)
 			if splitErr != nil {
+				e.loadBalancer.recordBackendReroute(ctx, "metrics", decision.reason, splitErr)
 				err = consumererror.NewMetrics(splitErr, failedMetrics)
 			} else {
-				err = wrapDirectMetricsRerouteError(e.consumeMetricsByExporterAttempt(ctx, rerouted, rerouteAttempt+1), failedMetrics)
+				rerouteErr := e.consumeMetricsByExporterAttempt(ctx, rerouted, rerouteAttempt+1)
+				e.loadBalancer.recordBackendReroute(ctx, "metrics", decision.reason, rerouteErr)
+				err = wrapDirectMetricsRerouteError(rerouteErr, failedMetrics)
 			}
 		}
 		errs = multierr.Append(errs, err)
