@@ -90,6 +90,9 @@ func TestConfigValidateLogBatcher(t *testing.T) {
 	cfg.LogBatcher.PayloadCompression = QueuePayloadCompression("brotli")
 	require.ErrorContains(t, cfg.Validate(), "log_batcher.payload_compression")
 
+	cfg.LogBatcher.PayloadCompression = QueuePayloadCompressionSnappy
+	require.NoError(t, cfg.Validate())
+
 	cfg.LogBatcher.PayloadCompression = QueuePayloadCompressionZstd
 	require.NoError(t, cfg.Validate())
 }
