@@ -34,9 +34,10 @@ const (
 var errLogBatcherExporterStopping = errors.New("log batcher exporter is stopping")
 
 type logBatcherSettings struct {
-	maxRecords    int
-	maxBytes      int
-	flushInterval time.Duration
+	maxRecords         int
+	maxBytes           int
+	flushInterval      time.Duration
+	payloadCompression QueuePayloadCompression
 }
 
 type logBatcherSendFunc func(context.Context, *wrappedExporter, plog.Logs, string) error
@@ -56,6 +57,7 @@ type logBatcher struct {
 type logBatcherRequest struct {
 	kind               logBatcherRequestKind
 	logs               plog.Logs
+	compressedChunk    compressedLogBatcherChunk
 	ctx                context.Context
 	reason             string
 	done               chan error
@@ -84,25 +86,30 @@ type backendLogBatcher struct {
 	done     chan struct{}
 	inflight sync.WaitGroup
 
-	pendingRecords atomic.Int64
-	pendingBytes   atomic.Int64
-	oldestEnqueue  atomic.Int64
+	pendingRecords         atomic.Int64
+	pendingBytes           atomic.Int64
+	pendingCompressedBytes atomic.Int64
+	oldestEnqueue          atomic.Int64
+
+	payloadCodecMu sync.Mutex
+	payloadCodec   *queuePayloadCodec
 }
 
 type logBatcherTelemetry struct {
-	logger               *zap.Logger
-	meter                metric.Meter
-	batchSize            metric.Int64Histogram
-	batchBytes           metric.Int64Histogram
-	flushTotal           metric.Int64Counter
-	flushErrors          metric.Int64Counter
-	flushOldestRecordAge metric.Int64Histogram
-	droppedRecords       metric.Int64Counter
-	overflowTotal        metric.Int64Counter
-	pendingRecords       metric.Int64ObservableGauge
-	pendingBytes         metric.Int64ObservableGauge
-	pendingOldestAge     metric.Int64ObservableGauge
-	pendingOldestAgeMax  metric.Int64ObservableGauge
+	logger                 *zap.Logger
+	meter                  metric.Meter
+	batchSize              metric.Int64Histogram
+	batchBytes             metric.Int64Histogram
+	flushTotal             metric.Int64Counter
+	flushErrors            metric.Int64Counter
+	flushOldestRecordAge   metric.Int64Histogram
+	droppedRecords         metric.Int64Counter
+	overflowTotal          metric.Int64Counter
+	pendingRecords         metric.Int64ObservableGauge
+	pendingBytes           metric.Int64ObservableGauge
+	pendingCompressedBytes metric.Int64ObservableGauge
+	pendingOldestAge       metric.Int64ObservableGauge
+	pendingOldestAgeMax    metric.Int64ObservableGauge
 
 	mu            sync.Mutex
 	registrations []metric.Registration
@@ -141,8 +148,17 @@ func (b *logBatcher) Enqueue(ctx context.Context, endpoint string, exp *wrappedE
 	}
 	defer backend.inflight.Done()
 	enqueuedAtUnixNano := time.Now().UnixNano()
+	req := logBatcherRequest{kind: logBatcherRequestEnqueue, logs: logs, enqueuedAtUnixNano: enqueuedAtUnixNano}
+	if backend.payloadCodec != nil {
+		compressedChunk, err := backend.newCompressedLogBatcherChunk(logs, enqueuedAtUnixNano)
+		if err != nil {
+			return err
+		}
+		req.logs = plog.NewLogs()
+		req.compressedChunk = compressedChunk
+	}
 	select {
-	case backend.requests <- logBatcherRequest{kind: logBatcherRequestEnqueue, logs: logs, enqueuedAtUnixNano: enqueuedAtUnixNano}:
+	case backend.requests <- req:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -222,6 +238,7 @@ func (b *logBatcher) snapshotPending() logBatcherSnapshot {
 	for endpoint, backend := range b.backends {
 		records := backend.pendingRecords.Load()
 		bytes := backend.pendingBytes.Load()
+		compressedBytes := backend.pendingCompressedBytes.Load()
 		var oldestAgeMillis int64
 		if records > 0 {
 			oldestAgeMillis = ageMillisFromUnixNano(now, backend.oldestEnqueue.Load())
@@ -233,6 +250,7 @@ func (b *logBatcher) snapshotPending() logBatcherSnapshot {
 			endpoint:        endpoint,
 			records:         records,
 			bytes:           bytes,
+			compressedBytes: compressedBytes,
 			oldestAgeMillis: oldestAgeMillis,
 		})
 	}
@@ -291,18 +309,26 @@ func newBackendLogBatcher(
 	send logBatcherSendFunc,
 ) *backendLogBatcher {
 	backend := &backendLogBatcher{
-		endpoint:  endpoint,
-		exp:       exp,
-		logger:    logger.With(zap.String("endpoint", endpoint)),
-		settings:  settings,
-		send:      send,
-		telemetry: telemetry,
-		requests:  make(chan logBatcherRequest, 16),
-		done:      make(chan struct{}),
+		endpoint:     endpoint,
+		exp:          exp,
+		logger:       logger.With(zap.String("endpoint", endpoint)),
+		settings:     settings,
+		send:         send,
+		telemetry:    telemetry,
+		requests:     make(chan logBatcherRequest, 16),
+		done:         make(chan struct{}),
+		payloadCodec: newLogBatcherPayloadCodec(settings.payloadCompression),
 	}
 
 	go backend.run()
 	return backend
+}
+
+func newLogBatcherPayloadCodec(compression QueuePayloadCompression) *queuePayloadCodec {
+	if compression == "" || compression == QueuePayloadCompressionNone {
+		return nil
+	}
+	return newQueuePayloadCodec(compression)
 }
 
 func (b *backendLogBatcher) stopAndFlush(ctx context.Context, reason string) error {
@@ -356,7 +382,20 @@ func waitForInflight(ctx context.Context, wg *sync.WaitGroup) error {
 
 func (b *backendLogBatcher) run() {
 	defer close(b.done)
+	if b.payloadCodec != nil {
+		defer func() {
+			if err := b.payloadCodec.Close(); err != nil {
+				b.logger.Warn("failed to close log batcher payload codec", zap.Error(err))
+			}
+		}()
+		b.runCompressed()
+		return
+	}
 
+	b.runUncompressed()
+}
+
+func (b *backendLogBatcher) runUncompressed() {
 	timer := time.NewTimer(time.Hour)
 	if !timer.Stop() {
 		<-timer.C
@@ -466,6 +505,173 @@ func (b *backendLogBatcher) mergeQueuedRequests(pending *plog.Logs, first logBat
 	return recordCount, oldestEnqueue
 }
 
+type compressedLogBatcherChunk struct {
+	payload               []byte
+	records               int
+	uncompressedBytes     int
+	compressedBytes       int
+	oldestEnqueueUnixNano int64
+}
+
+func (b *backendLogBatcher) runCompressed() {
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	var timerC <-chan time.Time
+
+	pending := make([]compressedLogBatcherChunk, 0, cap(b.requests))
+	pendingBytes := 0
+	pendingCompressedBytes := 0
+	pendingRecords := 0
+	marshaler := &plog.ProtoMarshaler{}
+	unmarshaler := &plog.ProtoUnmarshaler{}
+	var nextReq *logBatcherRequest
+
+	for {
+		if nextReq != nil {
+			req := *nextReq
+			nextReq = nil
+			if b.handleCompressedRequest(req, marshaler, unmarshaler, &pending, &pendingRecords, &pendingBytes, &pendingCompressedBytes, &nextReq, timer, &timerC) {
+				return
+			}
+			continue
+		}
+
+		select {
+		case req := <-b.requests:
+			if b.handleCompressedRequest(req, marshaler, unmarshaler, &pending, &pendingRecords, &pendingBytes, &pendingCompressedBytes, &nextReq, timer, &timerC) {
+				return
+			}
+		case <-timerC:
+			if err := b.flushCompressed(context.Background(), marshaler, unmarshaler, &pending, &pendingRecords, &pendingBytes, &pendingCompressedBytes, logFlushReasonTimeout, timer, &timerC); err != nil {
+				b.logger.Warn("failed to flush compressed log batch", zap.String("reason", logFlushReasonTimeout), zap.Error(err))
+			}
+		}
+	}
+}
+
+func (b *backendLogBatcher) handleCompressedRequest(
+	req logBatcherRequest,
+	marshaler *plog.ProtoMarshaler,
+	unmarshaler *plog.ProtoUnmarshaler,
+	pending *[]compressedLogBatcherChunk,
+	pendingRecords *int,
+	pendingBytes *int,
+	pendingCompressedBytes *int,
+	nextReq **logBatcherRequest,
+	timer *time.Timer,
+	timerC *<-chan time.Time,
+) bool {
+	switch req.kind {
+	case logBatcherRequestEnqueue:
+		recordsAdded, bytesAdded, compressedBytesAdded, oldestEnqueue := b.drainEnqueueRequestsIntoCompressedChunks(pending, req, nextReq)
+		*pendingRecords += recordsAdded
+		*pendingBytes += bytesAdded
+		*pendingCompressedBytes += compressedBytesAdded
+		if *pendingRecords > 0 && b.oldestEnqueue.Load() == 0 {
+			b.oldestEnqueue.Store(oldestEnqueue)
+		}
+		b.pendingRecords.Store(int64(*pendingRecords))
+		b.pendingBytes.Store(int64(*pendingBytes))
+		b.pendingCompressedBytes.Store(int64(*pendingCompressedBytes))
+		if *pendingRecords > 0 && *timerC == nil {
+			timer.Reset(b.settings.flushInterval)
+			*timerC = timer.C
+		}
+		if *pendingRecords >= b.settings.maxRecords || *pendingBytes >= b.settings.maxBytes {
+			b.telemetry.overflowTotal.Add(context.Background(), 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
+			if err := b.flushCompressed(context.Background(), marshaler, unmarshaler, pending, pendingRecords, pendingBytes, pendingCompressedBytes, logFlushReasonSize, timer, timerC); err != nil {
+				b.logger.Warn("failed to flush compressed log batch", zap.String("reason", logFlushReasonSize), zap.Error(err))
+			}
+		}
+	case logBatcherRequestFlushAndStop:
+		err := b.flushCompressed(req.ctx, marshaler, unmarshaler, pending, pendingRecords, pendingBytes, pendingCompressedBytes, req.reason, timer, timerC)
+		req.done <- err
+		return true
+	}
+	return false
+}
+
+func (b *backendLogBatcher) drainEnqueueRequestsIntoCompressedChunks(
+	pending *[]compressedLogBatcherChunk,
+	first logBatcherRequest,
+	nextReq **logBatcherRequest,
+) (int, int, int, int64) {
+	recordCount := 0
+	bytes := 0
+	compressedBytes := 0
+	var oldestEnqueue int64
+
+	appendRequest := func(req logBatcherRequest) {
+		count := req.compressedChunk.records
+		if count == 0 {
+			return
+		}
+		recordCount += count
+		bytes += req.compressedChunk.uncompressedBytes
+		compressedBytes += req.compressedChunk.compressedBytes
+		if oldestEnqueue == 0 || req.enqueuedAtUnixNano < oldestEnqueue {
+			oldestEnqueue = req.enqueuedAtUnixNano
+		}
+		*pending = append(*pending, req.compressedChunk)
+	}
+
+	appendRequest(first)
+
+	for i := 0; i < cap(b.requests); i++ {
+		select {
+		case req := <-b.requests:
+			if req.kind != logBatcherRequestEnqueue {
+				*nextReq = &req
+				return recordCount, bytes, compressedBytes, oldestEnqueue
+			}
+			appendRequest(req)
+		default:
+			return recordCount, bytes, compressedBytes, oldestEnqueue
+		}
+	}
+
+	return recordCount, bytes, compressedBytes, oldestEnqueue
+}
+
+func newCompressedLogBatcherChunk(marshaler *plog.ProtoMarshaler, codec *queuePayloadCodec, req logBatcherRequest) (compressedLogBatcherChunk, error) {
+	payload, err := marshaler.MarshalLogs(req.logs)
+	if err != nil {
+		return compressedLogBatcherChunk{}, err
+	}
+	encoded, err := codec.Encode(payload)
+	if err != nil {
+		return compressedLogBatcherChunk{}, err
+	}
+	encoded = append([]byte(nil), encoded...)
+	encoded = encoded[:len(encoded):len(encoded)]
+	return compressedLogBatcherChunk{
+		payload:               encoded,
+		records:               req.logs.LogRecordCount(),
+		uncompressedBytes:     len(payload),
+		compressedBytes:       len(encoded),
+		oldestEnqueueUnixNano: req.enqueuedAtUnixNano,
+	}, nil
+}
+
+func (b *backendLogBatcher) newCompressedLogBatcherChunk(logs plog.Logs, enqueuedAtUnixNano int64) (compressedLogBatcherChunk, error) {
+	b.payloadCodecMu.Lock()
+	defer b.payloadCodecMu.Unlock()
+	return newCompressedLogBatcherChunk(&plog.ProtoMarshaler{}, b.payloadCodec, logBatcherRequest{
+		logs:               logs,
+		enqueuedAtUnixNano: enqueuedAtUnixNano,
+	})
+}
+
+func decodeCompressedLogBatcherChunk(unmarshaler *plog.ProtoUnmarshaler, codec *queuePayloadCodec, chunk compressedLogBatcherChunk) (plog.Logs, error) {
+	payload, err := codec.Decode(chunk.payload)
+	if err != nil {
+		return plog.Logs{}, err
+	}
+	return unmarshaler.UnmarshalLogs(payload)
+}
+
 func (b *backendLogBatcher) flush(
 	ctx context.Context,
 	pending *plog.Logs,
@@ -511,10 +717,183 @@ func (b *backendLogBatcher) flush(
 	return err
 }
 
+func (b *backendLogBatcher) flushCompressed(
+	ctx context.Context,
+	sizer *plog.ProtoMarshaler,
+	unmarshaler *plog.ProtoUnmarshaler,
+	pending *[]compressedLogBatcherChunk,
+	pendingRecords *int,
+	pendingBytes *int,
+	pendingCompressedBytes *int,
+	reason string,
+	timer *time.Timer,
+	timerC *<-chan time.Time,
+) error {
+	if !timer.Stop() && *timerC != nil {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	*timerC = nil
+
+	if *pendingRecords == 0 {
+		return nil
+	}
+
+	drainedChunks := *pending
+	*pending = make([]compressedLogBatcherChunk, 0, cap(b.requests))
+	*pendingRecords = 0
+	*pendingBytes = 0
+	*pendingCompressedBytes = 0
+	b.pendingRecords.Store(0)
+	b.pendingBytes.Store(0)
+	b.pendingCompressedBytes.Store(0)
+	b.oldestEnqueue.Store(0)
+	defer clearCompressedLogBatcherChunks(drainedChunks)
+
+	var errs error
+	for len(drainedChunks) > 0 {
+		var window []compressedLogBatcherChunk
+		var records int
+		var oldestUnixNano int64
+		window, drainedChunks, records, oldestUnixNano = nextCompressedLogBatcherWindow(drainedChunks, b.settings.maxRecords, b.settings.maxBytes)
+
+		b.payloadCodecMu.Lock()
+		drained, err := mergeCompressedLogBatcherChunks(unmarshaler, b.payloadCodec, window)
+		b.payloadCodecMu.Unlock()
+		if err != nil {
+			b.telemetry.flushErrors.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
+			b.telemetry.droppedRecords.Add(ctx, int64(records), metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
+			errs = errors.Join(errs, err)
+			continue
+		}
+
+		bytes := sizer.LogsSize(drained)
+		oldestAgeMillis := ageMillisFromUnixNano(time.Now(), oldestUnixNano)
+		attrs := metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint)))
+		flushAttrs := metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint), attribute.String("reason", reason)))
+		b.telemetry.batchSize.Record(ctx, int64(records), attrs)
+		b.telemetry.batchBytes.Record(ctx, int64(bytes), attrs)
+		b.telemetry.flushOldestRecordAge.Record(ctx, oldestAgeMillis, flushAttrs)
+		b.telemetry.flushTotal.Add(ctx, 1, flushAttrs)
+
+		err = b.send(ctx, b.exporter(), drained, reason)
+		if err != nil {
+			b.telemetry.flushErrors.Add(ctx, 1, attrs)
+			b.telemetry.droppedRecords.Add(ctx, int64(records), attrs)
+			errs = errors.Join(errs, err)
+		}
+	}
+
+	return errs
+}
+
+func nextCompressedLogBatcherWindow(chunks []compressedLogBatcherChunk, maxRecords, maxBytes int) ([]compressedLogBatcherChunk, []compressedLogBatcherChunk, int, int64) {
+	records := 0
+	bytes := 0
+	var oldestUnixNano int64
+	end := 0
+	for end < len(chunks) {
+		chunk := chunks[end]
+		if end > 0 && (records+chunk.records > maxRecords || bytes+chunk.uncompressedBytes > maxBytes) {
+			break
+		}
+		records += chunk.records
+		bytes += chunk.uncompressedBytes
+		if oldestUnixNano == 0 || chunk.oldestEnqueueUnixNano < oldestUnixNano {
+			oldestUnixNano = chunk.oldestEnqueueUnixNano
+		}
+		end++
+		if records >= maxRecords || bytes >= maxBytes {
+			break
+		}
+	}
+	return chunks[:end], chunks[end:], records, oldestUnixNano
+}
+
+func mergeCompressedLogBatcherChunks(unmarshaler *plog.ProtoUnmarshaler, codec *queuePayloadCodec, chunks []compressedLogBatcherChunk) (plog.Logs, error) {
+	if len(chunks) == 0 {
+		return plog.NewLogs(), nil
+	}
+
+	merged, err := decodeCompressedLogBatcherChunk(unmarshaler, codec, chunks[0])
+	if err != nil {
+		return plog.Logs{}, err
+	}
+	for i := 1; i < len(chunks); i++ {
+		logs, err := decodeCompressedLogBatcherChunk(unmarshaler, codec, chunks[i])
+		if err != nil {
+			return plog.Logs{}, err
+		}
+		mergeLogChunksByMove(merged, logs)
+	}
+	return merged, nil
+}
+
+func mergeLogChunksByMove(dst, src plog.Logs) {
+	dstResourceLogs := dst.ResourceLogs()
+	srcResourceLogs := src.ResourceLogs()
+	for i := 0; i < srcResourceLogs.Len(); i++ {
+		srcRL := srcResourceLogs.At(i)
+		dstRL, ok := findMatchingResourceLogs(dst, srcRL)
+		if !ok {
+			dstRL = dstResourceLogs.AppendEmpty()
+			srcRL.MoveTo(dstRL)
+			continue
+		}
+
+		mergeResourceLogsByMove(dstRL, srcRL)
+	}
+}
+
+func mergeResourceLogsByMove(dst, src plog.ResourceLogs) {
+	dstScopeLogs := dst.ScopeLogs()
+	srcScopeLogs := src.ScopeLogs()
+	for i := 0; i < srcScopeLogs.Len(); i++ {
+		srcSL := srcScopeLogs.At(i)
+		dstSL, ok := findMatchingScopeLogs(dst, srcSL)
+		if !ok {
+			dstSL = dstScopeLogs.AppendEmpty()
+			srcSL.MoveTo(dstSL)
+			continue
+		}
+
+		srcSL.LogRecords().MoveAndAppendTo(dstSL.LogRecords())
+	}
+}
+
+func findMatchingResourceLogs(dest plog.Logs, src plog.ResourceLogs) (plog.ResourceLogs, bool) {
+	for i := 0; i < dest.ResourceLogs().Len(); i++ {
+		rl := dest.ResourceLogs().At(i)
+		if resourceLogsMatches(rl, src) {
+			return rl, true
+		}
+	}
+	return plog.ResourceLogs{}, false
+}
+
+func findMatchingScopeLogs(dest plog.ResourceLogs, src plog.ScopeLogs) (plog.ScopeLogs, bool) {
+	for i := 0; i < dest.ScopeLogs().Len(); i++ {
+		sl := dest.ScopeLogs().At(i)
+		if scopeLogsMatches(sl, src) {
+			return sl, true
+		}
+	}
+	return plog.ScopeLogs{}, false
+}
+
+func clearCompressedLogBatcherChunks(chunks []compressedLogBatcherChunk) {
+	for i := range chunks {
+		chunks[i] = compressedLogBatcherChunk{}
+	}
+}
+
 type logBatcherPending struct {
 	endpoint        string
 	records         int64
 	bytes           int64
+	compressedBytes int64
 	oldestAgeMillis int64
 }
 
@@ -577,6 +956,12 @@ func newLogBatcherTelemetry(settings component.TelemetrySettings) (*logBatcherTe
 		metric.WithUnit("By"),
 	)
 	errs = errors.Join(errs, err)
+	t.pendingCompressedBytes, err = meter.Int64ObservableGauge(
+		"otelcol_loadbalancer_log_batch_pending_compressed_bytes",
+		metric.WithDescription("Current compressed serialized OTLP bytes per pending backend batch."),
+		metric.WithUnit("By"),
+	)
+	errs = errors.Join(errs, err)
 	t.pendingOldestAge, err = meter.Int64ObservableGauge(
 		"otelcol_loadbalancer_log_batch_pending_oldest_record_age",
 		metric.WithDescription("Age in ms of the oldest pending log record per backend batch."),
@@ -600,11 +985,12 @@ func (t *logBatcherTelemetry) start(snapshot func() logBatcherSnapshot) error {
 			attrs := metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", pending.endpoint)))
 			observer.ObserveInt64(t.pendingRecords, pending.records, attrs)
 			observer.ObserveInt64(t.pendingBytes, pending.bytes, attrs)
+			observer.ObserveInt64(t.pendingCompressedBytes, pending.compressedBytes, attrs)
 			observer.ObserveInt64(t.pendingOldestAge, pending.oldestAgeMillis, attrs)
 		}
 		observer.ObserveInt64(t.pendingOldestAgeMax, state.maxOldestAgeMillis)
 		return nil
-	}, t.pendingRecords, t.pendingBytes, t.pendingOldestAge, t.pendingOldestAgeMax)
+	}, t.pendingRecords, t.pendingBytes, t.pendingCompressedBytes, t.pendingOldestAge, t.pendingOldestAgeMax)
 	if err != nil {
 		return err
 	}

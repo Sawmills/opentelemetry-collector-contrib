@@ -60,13 +60,15 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 		logger:       params.Logger,
 	}
 	if cfg.(*Config).LogBatcher.Enabled {
+		logBatcherCfg := cfg.(*Config).LogBatcher
 		logExporter.batcher, err = newLogBatcher(
 			params.Logger,
 			params.TelemetrySettings,
 			logBatcherSettings{
-				maxRecords:    cfg.(*Config).LogBatcher.MaxRecords,
-				maxBytes:      cfg.(*Config).LogBatcher.MaxBytes,
-				flushInterval: cfg.(*Config).LogBatcher.FlushInterval,
+				maxRecords:         logBatcherCfg.MaxRecords,
+				maxBytes:           logBatcherCfg.MaxBytes,
+				flushInterval:      logBatcherCfg.FlushInterval,
+				payloadCompression: logBatcherCfg.PayloadCompression,
 			},
 			logExporter.consumeBatch,
 		)
