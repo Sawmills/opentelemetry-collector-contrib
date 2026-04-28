@@ -399,8 +399,6 @@ func classifyEndpointFailure(err error) (endpointFailureReason, bool) {
 		strings.Contains(errText, "host unreachable"),
 		strings.Contains(errText, "network unreachable"):
 		return endpointFailureNoRoute, true
-	case isEndpointDNSFailure(err):
-		return endpointFailureDNS, true
 	case strings.Contains(errText, "transport: error while dialing"),
 		strings.Contains(errText, "transport is closing"),
 		strings.Contains(errText, "dial tcp"),
