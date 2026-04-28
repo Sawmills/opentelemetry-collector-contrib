@@ -516,7 +516,21 @@ func (e *metricExporterImp) rerouteDrainBatch(ctx context.Context, md pmetric.Me
 }
 
 func (e *metricExporterImp) recordBackendResult(ctx context.Context, we *wrappedExporter, duration time.Duration, err error, updateEndpointHealth bool) endpointHealthFailureDecision {
-	return e.recordBackendResultWithDrain(ctx, we, duration, err, updateEndpointHealth, true)
+	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(we.endpointAttr))
+	if err == nil {
+		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(we.successAttr))
+		if updateEndpointHealth {
+			e.loadBalancer.handleBackendSuccess(we.endpoint)
+		}
+		return endpointHealthFailureDecision{}
+	}
+
+	e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(we.failureAttr))
+	e.logger.Debug("failed to export metrics", zap.Error(err))
+	if !updateEndpointHealth {
+		return endpointHealthFailureDecision{}
+	}
+	return e.loadBalancer.handleBackendFailure(ctx, we.endpoint, err)
 }
 
 func (e *metricExporterImp) recordBackendResultHealthOnly(ctx context.Context, we *wrappedExporter, duration time.Duration, err error, updateEndpointHealth bool) endpointHealthFailureDecision {
@@ -535,27 +549,6 @@ func (e *metricExporterImp) recordBackendResultHealthOnly(ctx context.Context, w
 		return endpointHealthFailureDecision{}
 	}
 	return e.loadBalancer.handleBackendFailureHealthOnly(ctx, we.endpoint, err)
-}
-
-func (e *metricExporterImp) recordBackendResultWithDrain(ctx context.Context, we *wrappedExporter, duration time.Duration, err error, updateEndpointHealth bool, drainRemoved bool) endpointHealthFailureDecision {
-	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(we.endpointAttr))
-	if err == nil {
-		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(we.successAttr))
-		if updateEndpointHealth {
-			e.loadBalancer.handleBackendSuccess(we.endpoint)
-		}
-		return endpointHealthFailureDecision{}
-	}
-
-	e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(we.failureAttr))
-	e.logger.Debug("failed to export metrics", zap.Error(err))
-	if !updateEndpointHealth {
-		return endpointHealthFailureDecision{}
-	}
-	if drainRemoved {
-		return e.loadBalancer.handleBackendFailure(ctx, we.endpoint, err)
-	}
-	return e.loadBalancer.handleBackendFailureWithoutDrain(ctx, we.endpoint, err)
 }
 
 func wrapDirectMetricsRerouteError(err error, md pmetric.Metrics) error {

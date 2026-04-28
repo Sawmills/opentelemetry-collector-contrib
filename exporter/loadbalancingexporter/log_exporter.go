@@ -279,7 +279,7 @@ func (e *logExporterImp) rerouteDrainBatch(ctx context.Context, ld plog.Logs, re
 	batches, errs := e.groupLogsByEndpoint(ld)
 	for _, batch := range batches {
 		err, decision := e.consumeBatchWithDecision(ctx, batch.exp, batch.logs, reason, true, false, true)
-		if err != nil && decision.endpointLocal && !decision.failOpen && !slices.Contains(decision.eligible, batch.exp.endpoint) {
+		if err != nil && decision.endpointLocal && !decision.failOpen && !slices.Contains(decision.eligible, endpointWithPort(batch.exp.endpoint)) {
 			e.loadBalancer.cleanupBackendWithoutDrain(ctx, batch.exp.endpoint)
 		}
 		errs = multierr.Append(errs, err)
