@@ -529,6 +529,31 @@ func (lb *loadBalancer) handleBackendSuccess(endpoint string) {
 	lb.shutdownCreatedExporters(ctx, duplicates)
 }
 
+func (lb *loadBalancer) refreshExpiredEndpointHealth(ctx context.Context) {
+	if !lb.endpointHealth.enabled() {
+		return
+	}
+
+	refresh := lb.endpointHealth.refreshExpiredQuarantines()
+	if len(refresh.recovered) == 0 && !refresh.failOpenStarted {
+		return
+	}
+	for _, recovered := range refresh.recovered {
+		lb.recordEndpointUnquarantine(ctx, recovered.endpoint, recovered.reason)
+	}
+	if refresh.failOpenStarted {
+		lb.recordEndpointFailOpen(ctx)
+	}
+
+	created := lb.createMissingExporters(ctx, refresh.eligible, nil)
+	lb.updateLock.Lock()
+	lb.ring = newHashRing(refresh.eligible)
+	duplicates := lb.installCreatedExportersLocked(created, refresh.eligible)
+	lb.updateLock.Unlock()
+
+	lb.shutdownCreatedExporters(ctx, duplicates)
+}
+
 func (lb *loadBalancer) recordEndpointHealthReconcile(ctx context.Context, reconcile endpointHealthReconcileResult) {
 	for _, endpoint := range reconcile.removed {
 		lb.recordEndpointStale(ctx, endpoint)
@@ -537,6 +562,8 @@ func (lb *loadBalancer) recordEndpointHealthReconcile(ctx context.Context, recon
 		lb.recordEndpointFailOpen(ctx)
 	}
 	for _, endpoint := range reconcile.eligible {
+		lb.recordEndpointState(ctx, endpoint, "quarantined", 0)
+		lb.recordEndpointState(ctx, endpoint, "stale", 0)
 		lb.recordEndpointState(ctx, endpoint, "eligible", 1)
 	}
 }
@@ -626,6 +653,8 @@ func (lb *loadBalancer) Shutdown(ctx context.Context) error {
 
 // exporterAndEndpoint returns the exporter and the endpoint for the given identifier.
 func (lb *loadBalancer) exporterAndEndpoint(identifier []byte) (*wrappedExporter, string, error) {
+	lb.refreshExpiredEndpointHealth(context.Background())
+
 	lb.updateLock.RLock()
 	defer lb.updateLock.RUnlock()
 

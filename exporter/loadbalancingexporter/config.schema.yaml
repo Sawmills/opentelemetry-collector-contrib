@@ -39,9 +39,11 @@ $defs:
         type: boolean
       max_reroute_attempts:
         type: integer
+        minimum: 0
       quarantine_duration:
         type: string
         format: duration
+        description: Must be greater than 0 when endpoint_health.enabled is true.
       reroute_on_failure:
         type: boolean
   k_8_s_svc_resolver:

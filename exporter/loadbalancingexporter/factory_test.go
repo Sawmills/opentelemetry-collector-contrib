@@ -248,6 +248,16 @@ func TestWrappedExporterHasEndpointAttribute(t *testing.T) {
 	assert.False(t, successValue.AsBool())
 }
 
+func TestWrappedExporterNormalizesEndpointAttributeWithoutPort(t *testing.T) {
+	mockComponent := &struct{ component.Component }{}
+
+	wrappedExp := newWrappedExporter(mockComponent, "endpoint-1")
+
+	endpointValue, found := wrappedExp.endpointAttr.Value("endpoint")
+	require.True(t, found)
+	assert.Equal(t, "endpoint-1:4317", endpointValue.AsString())
+}
+
 func TestBuildExporterResilienceOptions(t *testing.T) {
 	newSettings := xexporterhelper.NewLogsQueueBatchSettings
 

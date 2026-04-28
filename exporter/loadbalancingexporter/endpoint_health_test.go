@@ -50,6 +50,12 @@ func TestEndpointHealthDisabledReconcilePreservesResolvedOrderAndDuplicates(t *t
 	require.Equal(t, []string{"endpoint-2", "endpoint-1", "endpoint-2"}, result.eligible)
 }
 
+func TestEndpointHealthDisabledIsPresentIsNoop(t *testing.T) {
+	manager := newEndpointHealthManager(endpointHealthSettings{})
+
+	require.True(t, manager.isPresent("endpoint-1"))
+}
+
 func TestEndpointHealthQuarantinesOnFirstEndpointLocalFailure(t *testing.T) {
 	now := time.Unix(100, 0)
 	manager := newEndpointHealthManager(endpointHealthSettings{
@@ -220,6 +226,17 @@ func TestEndpointFailureClassification(t *testing.T) {
 			err:    errors.New("dial tcp: no route to host"),
 			reason: endpointFailureNoRoute,
 			ok:     true,
+		},
+		{
+			name:   "dns lookup fallback",
+			err:    errors.New("lookup backend.default.svc: no such host"),
+			reason: endpointFailureDNS,
+			ok:     true,
+		},
+		{
+			name: "non transport lookup text",
+			err:  errors.New("metadata lookup failed"),
+			ok:   false,
 		},
 		{
 			name: "permanent error",

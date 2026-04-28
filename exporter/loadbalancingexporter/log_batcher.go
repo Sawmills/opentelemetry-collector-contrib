@@ -547,6 +547,7 @@ func (b *backendLogBatcher) flush(
 			var rerouteable logBatcherRerouteableError
 			if errors.As(err, &rerouteable) {
 				rerouteErr := b.drainErr(ctx, rerouteLogs, reason)
+				rerouteable.RecordReroute(ctx, rerouteErr)
 				if rerouteErr == nil {
 					return nil
 				}

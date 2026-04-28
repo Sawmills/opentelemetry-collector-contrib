@@ -21,12 +21,15 @@ import (
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata/metricdatatest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadatatest"
 )
 
 func TestMetricBatcherReroutesEndpointLocalFlushFailure(t *testing.T) {
-	ts, tb := getTelemetryAssets(t)
+	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
 	cfg := endpoint2Config()
 	enableEndpointHealth(cfg)
 	cfg.MetricBatcher = MetricBatcherConfig{Enabled: true, MaxDataPoints: 1, MaxBytes: 1 << 20, FlushInterval: time.Hour}
@@ -64,6 +67,29 @@ func TestMetricBatcherReroutesEndpointLocalFlushFailure(t *testing.T) {
 	require.Eventuallyf(t, func() bool {
 		return endpoint1Calls.Load() == 1 && endpoint2Calls.Load() == 1
 	}, 2*time.Second, 20*time.Millisecond, "endpoint-1 calls=%d endpoint-2 calls=%d", endpoint1Calls.Load(), endpoint2Calls.Load())
+	metadatatest.AssertEqualLoadbalancerBackendRerouteTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("signal", "metrics"), attribute.String("result", "success"), attribute.String("reason", "unavailable")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+}
+
+func TestMetricBatcherFlushExporterStoppingIsRerouteable(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	cfg := endpoint2Config()
+	enableEndpointHealth(cfg)
+
+	p, err := newMetricsExporter(ts, cfg)
+	require.NoError(t, err)
+	stoppingExp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
+	stoppingExp.markStopping()
+
+	err = p.consumeBatch(t.Context(), stoppingExp, singleDataPointMetric("stopping"), metricFlushReasonSize)
+
+	var rerouteable metricBatcherRerouteableError
+	require.ErrorAs(t, err, &rerouteable)
+	require.Equal(t, 1, rerouteable.Data().DataPointCount())
 }
 
 func TestMetricBatcherRerouteTargetEndpointLocalFailureMarksTargetUnhealthy(t *testing.T) {

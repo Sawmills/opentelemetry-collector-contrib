@@ -20,11 +20,15 @@ import (
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exportertest"
 	"go.opentelemetry.io/collector/exporter/otlpexporter"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata/metricdatatest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadatatest"
 )
 
 func TestNewLoadBalancerNoResolver(t *testing.T) {
@@ -539,6 +543,60 @@ func TestLoadBalancerEndpointHealthHealthySuccessDoesNotRebuildRing(t *testing.T
 
 	require.Zero(t, created.Load())
 	require.Same(t, originalRing, p.ring)
+}
+
+func TestLoadBalancerEndpointHealthRebuildsRingAfterQuarantineExpires(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	cfg.EndpointHealth.QuarantineDuration = 30 * time.Second
+	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		return mockComponent{}, nil
+	}
+	now := time.Unix(100, 0)
+
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	p.endpointHealth.settings.now = func() time.Time { return now }
+
+	p.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	routingID := findRoutingIDForEndpoint(t, p.ring, "endpoint-1:4317")
+
+	decision := p.handleBackendFailure(t.Context(), "endpoint-1:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, decision.quarantined)
+	require.NotContains(t, p.exporters, "endpoint-1:4317")
+
+	now = now.Add(31 * time.Second)
+
+	_, endpoint, err := p.exporterAndEndpoint([]byte(routingID))
+	require.NoError(t, err)
+	require.Equal(t, "endpoint-1:4317", endpoint)
+	require.Contains(t, p.exporters, "endpoint-1:4317")
+}
+
+func TestLoadBalancerEndpointHealthReconcileClearsStaleGaugeOnReadmit(t *testing.T) {
+	_, tb, telemetry := getTelemetryAssetsWithReader(t)
+	lb := &loadBalancer{telemetry: tb}
+
+	lb.recordEndpointStale(t.Context(), "endpoint-1:4317")
+	lb.recordEndpointHealthReconcile(t.Context(), endpointHealthReconcileResult{
+		eligible: []string{"endpoint-1:4317"},
+	})
+
+	metadatatest.AssertEqualLoadbalancerBackendState(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "eligible")),
+			Value:      1,
+		},
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "quarantined")),
+			Value:      0,
+		},
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "stale")),
+			Value:      0,
+		},
+	}, metricdatatest.IgnoreTimestamp())
 }
 
 func TestLoadBalancerEndpointHealthAlreadyQuarantinedFailureRefreshesStaleRing(t *testing.T) {

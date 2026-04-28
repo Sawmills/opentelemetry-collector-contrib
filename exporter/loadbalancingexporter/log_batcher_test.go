@@ -22,14 +22,16 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata/metricdatatest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadatatest"
 )
 
 func TestLogBatcherReroutesEndpointLocalFlushFailure(t *testing.T) {
-	ts, tb := getTelemetryAssets(t)
+	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
 	cfg := simpleConfig()
 	enableEndpointHealth(cfg)
 	cfg.LogBatcher = LogBatcherConfig{Enabled: true, MaxRecords: 1, MaxBytes: 1 << 20, FlushInterval: time.Hour}
@@ -65,6 +67,28 @@ func TestLogBatcherReroutesEndpointLocalFlushFailure(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return endpoint1Calls.Load() == 1 && endpoint2Calls.Load() == 1
 	}, 2*time.Second, 20*time.Millisecond)
+	metadatatest.AssertEqualLoadbalancerBackendRerouteTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("signal", "logs"), attribute.String("result", "success"), attribute.String("reason", "unavailable")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+}
+
+func TestLogBatcherFlushExporterStoppingIsRerouteable(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+
+	p, err := newLogsExporter(ts, cfg)
+	require.NoError(t, err)
+	stoppingExp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	stoppingExp.markStopping()
+
+	err = p.consumeBatcherFlush(t.Context(), stoppingExp, simpleLogs(), logFlushReasonSize)
+
+	var rerouteable logBatcherRerouteableError
+	require.ErrorAs(t, err, &rerouteable)
 }
 
 func TestLogBatcherRerouteTargetEndpointLocalFailureMarksTargetUnhealthy(t *testing.T) {

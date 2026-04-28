@@ -387,33 +387,44 @@ func (e *metricExporterImp) consumeMetricsByExporterAttempt(
 }
 
 func (e *metricExporterImp) consumeBatch(ctx context.Context, we *wrappedExporter, md pmetric.Metrics, reason string) error {
+	var retryMetrics pmetric.Metrics
+	retryAllowed := reason != metricFlushReasonShutdown && directRerouteAttemptAllowed(e.loadBalancer, 0)
+	if retryAllowed {
+		retryMetrics = pmetric.NewMetrics()
+		md.CopyTo(retryMetrics)
+	}
 	if reason == metricFlushReasonResolverChange || reason == metricFlushReasonShutdown {
 		we.forceStartConsume()
 	} else if !we.tryStartConsume() {
+		if retryAllowed {
+			return metricBatcherRerouteableError{err: errMetricBatcherExporterStopping, data: retryMetrics}
+		}
 		return errMetricBatcherExporterStopping
 	}
 	defer we.doneConsume()
 
-	var retryMetrics pmetric.Metrics
-	if reason != metricFlushReasonShutdown && directRerouteAttemptAllowed(e.loadBalancer, 0) {
-		retryMetrics = pmetric.NewMetrics()
-		md.CopyTo(retryMetrics)
-	}
 	start := time.Now()
 	err := we.ConsumeMetrics(ctx, md)
 	duration := time.Since(start)
 	decision := e.recordBackendResultHealthOnly(ctx, we, duration, err, reason != metricFlushReasonShutdown)
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, we.endpoint, decision, 0) {
 		e.loadBalancer.cleanupBackendWithoutDrain(ctx, we.endpoint)
-		return metricBatcherRerouteableError{err: err, data: retryMetrics}
+		return metricBatcherRerouteableError{
+			err:  err,
+			data: retryMetrics,
+			recordReroute: func(ctx context.Context, rerouteErr error) {
+				e.loadBalancer.recordBackendReroute(ctx, "metrics", decision.reason, rerouteErr)
+			},
+		}
 	}
 
 	return err
 }
 
 type metricBatcherRerouteableError struct {
-	err  error
-	data pmetric.Metrics
+	err           error
+	data          pmetric.Metrics
+	recordReroute func(context.Context, error)
 }
 
 func (e metricBatcherRerouteableError) Error() string {
@@ -426,6 +437,12 @@ func (e metricBatcherRerouteableError) Unwrap() error {
 
 func (e metricBatcherRerouteableError) Data() pmetric.Metrics {
 	return e.data
+}
+
+func (e metricBatcherRerouteableError) RecordReroute(ctx context.Context, err error) {
+	if e.recordReroute != nil {
+		e.recordReroute(ctx, err)
+	}
 }
 
 func (e *metricExporterImp) rerouteDrainBatch(ctx context.Context, md pmetric.Metrics, _ string) error {

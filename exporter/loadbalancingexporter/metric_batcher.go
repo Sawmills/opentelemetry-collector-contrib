@@ -558,6 +558,7 @@ func (b *backendMetricBatcher) flush(
 		if b.drainErr != nil && reason != metricFlushReasonShutdown && errors.As(err, &rerouteable) {
 			rerouteAttempted = true
 			rerouteErr := b.drainErr(ctx, rerouteable.Data(), reason)
+			rerouteable.RecordReroute(ctx, rerouteErr)
 			if rerouteErr == nil {
 				b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
 				*retryingSince = time.Time{}

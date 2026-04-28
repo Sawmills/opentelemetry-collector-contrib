@@ -39,7 +39,7 @@ type endpointHealthSettings struct {
 }
 
 type endpointHealthManager struct {
-	mu             sync.Mutex
+	mu             sync.RWMutex
 	settings       endpointHealthSettings
 	endpoints      map[string]*endpointHealthState
 	failOpenActive bool
@@ -75,6 +75,17 @@ type endpointHealthSuccessDecision struct {
 	recovered bool
 	reason    endpointFailureReason
 	eligible  []string
+}
+
+type endpointHealthRecovered struct {
+	endpoint string
+	reason   endpointFailureReason
+}
+
+type endpointHealthRefreshResult struct {
+	eligible        []string
+	recovered       []endpointHealthRecovered
+	failOpenStarted bool
 }
 
 func newEndpointHealthManager(settings endpointHealthSettings) *endpointHealthManager {
@@ -191,10 +202,18 @@ func (m *endpointHealthManager) markSuccessDecision(endpoint string) endpointHea
 		return endpointHealthSuccessDecision{}
 	}
 
+	m.mu.RLock()
+	state, ok := m.endpoints[endpoint]
+	if !ok || !state.present || (state.quarantinedUntil.IsZero() && state.failureReason == "") {
+		m.mu.RUnlock()
+		return endpointHealthSuccessDecision{}
+	}
+	m.mu.RUnlock()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	state, ok := m.endpoints[endpoint]
+	state, ok = m.endpoints[endpoint]
 	if !ok || !state.present {
 		return endpointHealthSuccessDecision{}
 	}
@@ -215,11 +234,11 @@ func (m *endpointHealthManager) markSuccessDecision(endpoint string) endpointHea
 
 func (m *endpointHealthManager) isPresent(endpoint string) bool {
 	if !m.enabled() {
-		return false
+		return true
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
 	state, ok := m.endpoints[endpoint]
 	return ok && state.present
@@ -247,6 +266,37 @@ func (m *endpointHealthManager) eligibleEndpoints() []string {
 
 	eligible, _, _ := m.eligibleEndpointsLocked(m.settings.now())
 	return eligible
+}
+
+func (m *endpointHealthManager) refreshExpiredQuarantines() endpointHealthRefreshResult {
+	if !m.enabled() {
+		return endpointHealthRefreshResult{}
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := m.settings.now()
+	var recovered []endpointHealthRecovered
+	for _, state := range m.endpoints {
+		if !state.present || state.quarantinedUntil.IsZero() || state.quarantinedUntil.After(now) {
+			continue
+		}
+		recovered = append(recovered, endpointHealthRecovered{endpoint: state.endpoint, reason: state.failureReason})
+		state.quarantinedUntil = time.Time{}
+		state.failureReason = ""
+		state.lastStateChangeAt = now
+	}
+	if len(recovered) == 0 {
+		return endpointHealthRefreshResult{}
+	}
+
+	eligible, _, failOpenStarted := m.eligibleEndpointsLocked(now)
+	return endpointHealthRefreshResult{
+		eligible:        eligible,
+		recovered:       recovered,
+		failOpenStarted: failOpenStarted,
+	}
 }
 
 func (m *endpointHealthManager) stateLocked(endpoint string) *endpointHealthState {
@@ -327,9 +377,10 @@ func classifyEndpointFailure(err error) (endpointFailureReason, bool) {
 		strings.Contains(errText, "host unreachable"),
 		strings.Contains(errText, "network unreachable"):
 		return endpointFailureNoRoute, true
-	case strings.Contains(errText, "lookup"), strings.Contains(errText, "no such host"):
+	case strings.HasPrefix(errText, "lookup "), strings.Contains(errText, "no such host"):
 		return endpointFailureDNS, true
-	case strings.Contains(errText, "transport"),
+	case strings.Contains(errText, "transport: error while dialing"),
+		strings.Contains(errText, "transport is closing"),
 		strings.Contains(errText, "dial tcp"),
 		strings.Contains(errText, "read tcp"),
 		strings.Contains(errText, "write tcp"):

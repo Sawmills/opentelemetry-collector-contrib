@@ -238,15 +238,24 @@ func (e *logExporterImp) consumeBatch(ctx context.Context, le *wrappedExporter, 
 
 func (e *logExporterImp) consumeBatcherFlush(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string) error {
 	err, decision := e.consumeBatchWithDecision(ctx, le, ld, reason, reason != logFlushReasonShutdown, false, true)
+	if errors.Is(err, errLogBatcherExporterStopping) && reason != logFlushReasonShutdown && directRerouteAttemptAllowed(e.loadBalancer, 0) {
+		return logBatcherRerouteableError{err: err}
+	}
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, le.endpoint, decision, 0) {
 		e.loadBalancer.cleanupBackendWithoutDrain(ctx, le.endpoint)
-		return logBatcherRerouteableError{err: err}
+		return logBatcherRerouteableError{
+			err: err,
+			recordReroute: func(ctx context.Context, rerouteErr error) {
+				e.loadBalancer.recordBackendReroute(ctx, "logs", decision.reason, rerouteErr)
+			},
+		}
 	}
 	return err
 }
 
 type logBatcherRerouteableError struct {
-	err error
+	err           error
+	recordReroute func(context.Context, error)
 }
 
 func (e logBatcherRerouteableError) Error() string {
@@ -255,6 +264,12 @@ func (e logBatcherRerouteableError) Error() string {
 
 func (e logBatcherRerouteableError) Unwrap() error {
 	return e.err
+}
+
+func (e logBatcherRerouteableError) RecordReroute(ctx context.Context, err error) {
+	if e.recordReroute != nil {
+		e.recordReroute(ctx, err)
+	}
 }
 
 func (e *logExporterImp) rerouteDrainBatch(ctx context.Context, ld plog.Logs, reason string) error {
