@@ -458,7 +458,7 @@ func (lb *loadBalancer) handleBackendFailureHealthOnly(ctx context.Context, endp
 	}
 
 	forceCreate := map[string]struct{}{}
-	if slices.Contains(decision.eligible, endpoint) {
+	if endpointListContains(decision.eligible, endpoint) {
 		forceCreate[endpoint] = struct{}{}
 	}
 	created := lb.createMissingExporters(ctx, decision.eligible, forceCreate)
@@ -512,7 +512,7 @@ func (lb *loadBalancer) handleBackendFailureWithDrain(ctx context.Context, endpo
 	}
 
 	forceCreate := map[string]struct{}{}
-	if slices.Contains(decision.eligible, endpoint) {
+	if endpointListContains(decision.eligible, endpoint) {
 		forceCreate[endpoint] = struct{}{}
 	}
 	created := lb.createMissingExporters(ctx, decision.eligible, forceCreate)
@@ -522,7 +522,7 @@ func (lb *loadBalancer) handleBackendFailureWithDrain(ctx context.Context, endpo
 	lb.ring = newHashRing(eligible)
 
 	var removed []removedExporter
-	endpointEligible := slices.Contains(eligible, endpoint)
+	endpointEligible := endpointListContains(eligible, endpoint)
 	if exp, ok := lb.exporters[endpoint]; ok && (!endpointEligible || createdExporterExists(created, endpoint)) {
 		exp.markStopping()
 		delete(lb.exporters, endpoint)
@@ -550,7 +550,14 @@ func shouldCommitEndpointHealthFailure(endpoint string, decision endpointHealthF
 	if decision.quarantined {
 		return true
 	}
-	return decision.endpointLocal && !decision.failOpen && !slices.Contains(decision.eligible, endpointWithPort(endpoint))
+	return decision.endpointLocal && !decision.failOpen && !endpointListContains(decision.eligible, endpoint)
+}
+
+func endpointListContains(endpoints []string, endpoint string) bool {
+	endpoint = endpointWithPort(endpoint)
+	return slices.ContainsFunc(endpoints, func(candidate string) bool {
+		return endpointWithPort(candidate) == endpoint
+	})
 }
 
 func (lb *loadBalancer) handleBackendSuccess(endpoint string) {
@@ -692,7 +699,14 @@ func (lb *loadBalancer) Shutdown(ctx context.Context) error {
 
 	err = errors.Join(err, lb.waitForAsyncCleanup(ctx))
 
+	lb.updateLock.RLock()
+	exporters := make([]*wrappedExporter, 0, len(lb.exporters))
 	for _, e := range lb.exporters {
+		exporters = append(exporters, e)
+	}
+	lb.updateLock.RUnlock()
+
+	for _, e := range exporters {
 		err = errors.Join(err, e.Shutdown(ctx))
 	}
 	return err

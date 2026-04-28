@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"slices"
 	"sort"
 	"sync/atomic"
 	"time"
@@ -503,7 +502,7 @@ func (e *metricExporterImp) rerouteDrainBatch(ctx context.Context, md pmetric.Me
 
 		exp.doneConsume()
 		decision := e.recordBackendResultHealthOnly(ctx, exp, duration, err, true)
-		if err != nil && decision.endpointLocal && !decision.failOpen && !slices.Contains(decision.eligible, exp.endpoint) {
+		if err != nil && decision.endpointLocal && !decision.failOpen && !endpointListContains(decision.eligible, exp.endpoint) {
 			e.loadBalancer.cleanupBackendWithoutDrain(ctx, exp.endpoint)
 		}
 		if err == nil {

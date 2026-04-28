@@ -524,6 +524,16 @@ func TestLoadBalancerEndpointHealthFailOpenKeepsExporterWhenRefreshFails(t *test
 	require.Same(t, endpoint2Original, exporter)
 }
 
+func TestShouldCommitEndpointHealthFailureNormalizesEligibleEndpoints(t *testing.T) {
+	decision := endpointHealthFailureDecision{
+		endpointLocal: true,
+		eligible:      []string{"endpoint-1"},
+	}
+
+	require.False(t, shouldCommitEndpointHealthFailure("endpoint-1:4317", decision))
+	require.True(t, shouldCommitEndpointHealthFailure("endpoint-2:4317", decision))
+}
+
 func TestLoadBalancerEndpointHealthHealthOnlyFailOpenRefreshesFailedExporter(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	cfg := simpleConfig()

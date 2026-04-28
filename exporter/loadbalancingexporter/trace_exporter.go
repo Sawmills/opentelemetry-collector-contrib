@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -188,7 +187,7 @@ func shouldRerouteDirectFailure(lb *loadBalancer, endpoint string, decision endp
 	if !decision.endpointLocal || decision.failOpen {
 		return false
 	}
-	return !slices.Contains(decision.eligible, endpointWithPort(endpoint))
+	return !endpointListContains(decision.eligible, endpoint)
 }
 
 func directRerouteAttemptAllowed(lb *loadBalancer, attempt int) bool {

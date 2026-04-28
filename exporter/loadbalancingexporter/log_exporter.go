@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"math/rand/v2"
-	"slices"
 	"sync/atomic"
 	"time"
 
@@ -284,7 +283,7 @@ func (e *logExporterImp) rerouteDrainBatch(ctx context.Context, ld plog.Logs, re
 	batches, errs := e.groupLogsByEndpoint(ld)
 	for _, batch := range batches {
 		decision, err := e.consumeBatchWithDecision(ctx, batch.exp, batch.logs, reason, true, false, true)
-		if err != nil && decision.endpointLocal && !decision.failOpen && !slices.Contains(decision.eligible, endpointWithPort(batch.exp.endpoint)) {
+		if err != nil && decision.endpointLocal && !decision.failOpen && !endpointListContains(decision.eligible, batch.exp.endpoint) {
 			e.loadBalancer.cleanupBackendWithoutDrain(ctx, batch.exp.endpoint)
 		}
 		errs = multierr.Append(errs, err)
