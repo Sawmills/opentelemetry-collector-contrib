@@ -16,6 +16,9 @@ attributes:
   endpoint:
     description: The endpoint of the backend
     type: string
+  reason:
+    description: Low-cardinality endpoint health reason
+    type: string
   resolver:
     description: Resolver used
     type: string
@@ -24,12 +27,41 @@ attributes:
       - dns
       - k8s
       - static
+  result:
+    description: Reroute result
+    type: string
+    enum:
+      - success
+      - failure
+      - skipped
+  signal:
+    description: Telemetry signal
+    type: string
+    enum:
+      - traces
+      - logs
+      - metrics
+  state:
+    description: Endpoint health state
+    type: string
+    enum:
+      - eligible
+      - quarantined
+      - stale
   success:
     description: Whether an outcome was successful
     type: bool
 
 telemetry:
   metrics:
+    loadbalancer_backend_fail_open_total:
+      enabled: true
+      stability: development
+      description: Number of times endpoint health failed open because every resolver-present backend was quarantined.
+      unit: "{events}"
+      sum:
+        value_type: int
+        monotonic: true
     loadbalancer_backend_latency:
       attributes: [endpoint]
       enabled: true
@@ -45,6 +77,50 @@ telemetry:
       stability: development
       description: Number of successes and failures for each endpoint.
       unit: "{outcomes}"
+      sum:
+        value_type: int
+        monotonic: true
+    loadbalancer_backend_quarantine_total:
+      attributes: [endpoint, reason]
+      enabled: true
+      stability: development
+      description: Number of times a backend endpoint was quarantined.
+      unit: "{quarantines}"
+      sum:
+        value_type: int
+        monotonic: true
+    loadbalancer_backend_reroute_total:
+      attributes: [signal, result, reason]
+      enabled: true
+      stability: development
+      description: Number of endpoint-failure reroute attempts.
+      unit: "{reroutes}"
+      sum:
+        value_type: int
+        monotonic: true
+    loadbalancer_backend_stale_total:
+      attributes: [endpoint]
+      enabled: true
+      stability: development
+      description: Number of times a backend endpoint disappeared from resolver membership.
+      unit: "{stale_endpoints}"
+      sum:
+        value_type: int
+        monotonic: true
+    loadbalancer_backend_state:
+      attributes: [endpoint, state]
+      enabled: true
+      stability: development
+      description: Current endpoint health state by backend.
+      unit: "{backends}"
+      gauge:
+        value_type: int
+    loadbalancer_backend_unquarantine_total:
+      attributes: [endpoint, reason]
+      enabled: true
+      stability: development
+      description: Number of times a backend endpoint was admitted after quarantine.
+      unit: "{unquarantines}"
       sum:
         value_type: int
         monotonic: true

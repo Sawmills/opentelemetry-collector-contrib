@@ -1,0 +1,7 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Add optional endpoint health quarantine and availability-first reroute for DNS-discovered backends.
+issues: [7303]
+subtext: |-
+  The endpoint_health configuration lets the loadbalancing exporter quarantine backend endpoints on endpoint-local transport failures, reroute failed telemetry once to another eligible backend, and emit endpoint health metrics.
+change_logs: [user]

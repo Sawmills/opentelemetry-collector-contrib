@@ -539,9 +539,42 @@ func (b *backendMetricBatcher) flush(
 	b.telemetry.batchBytes.Record(ctx, int64(bytes), attrs)
 	b.telemetry.flushTotal.Add(ctx, 1, flushAttrs)
 
-	err := b.send(ctx, b.exporter(), drained, reason)
+	var rerouteMetrics pmetric.Metrics
+	if b.drainErr != nil && reason != metricFlushReasonShutdown {
+		rerouteMetrics = pmetric.NewMetrics()
+		drained.CopyTo(rerouteMetrics)
+	}
+	exp := b.exporter()
+	var err error
+	if exp != nil && exp.isStopping() && b.drainErr != nil && reason != metricFlushReasonShutdown {
+		err = metricBatcherRerouteableError{err: errMetricBatcherExporterStopping, data: rerouteMetrics}
+	} else {
+		err = b.send(ctx, exp, drained, reason)
+	}
 	if err != nil {
 		b.telemetry.flushErrors.Add(ctx, 1, attrs)
+		rerouteAttempted := false
+		var rerouteable metricBatcherRerouteableError
+		if b.drainErr != nil && reason != metricFlushReasonShutdown && errors.As(err, &rerouteable) {
+			rerouteAttempted = true
+			rerouteErr := b.drainErr(ctx, rerouteable.Data(), reason)
+			rerouteable.RecordReroute(ctx, rerouteErr)
+			if rerouteErr == nil {
+				b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
+				*retryingSince = time.Time{}
+				b.flushFailures = 0
+				return nil
+			}
+			var rerouteMetricsErr consumererror.Metrics
+			if errors.As(rerouteErr, &rerouteMetricsErr) {
+				drained = rerouteMetricsErr.Data()
+			} else {
+				drained = rerouteMetrics
+			}
+			datapoints = drained.DataPointCount()
+			bytes = sizer.MetricsSize(drained)
+			err = errors.Join(err, rerouteErr)
+		}
 		if reason == metricFlushReasonSize || reason == metricFlushReasonTimeout {
 			now := time.Now()
 			if retryingSince.IsZero() {
@@ -572,7 +605,7 @@ func (b *backendMetricBatcher) flush(
 				*timerC = timer.C
 			}
 		} else {
-			if b.drainErr != nil && (reason == metricFlushReasonResolverChange || reason == metricFlushReasonShutdown) {
+			if !rerouteAttempted && b.drainErr != nil && (reason == metricFlushReasonResolverChange || reason == metricFlushReasonShutdown) {
 				rerouteErr := b.drainErr(ctx, drained, reason)
 				if rerouteErr == nil {
 					b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)

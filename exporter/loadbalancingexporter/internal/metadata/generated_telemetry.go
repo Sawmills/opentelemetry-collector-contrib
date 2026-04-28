@@ -22,14 +22,20 @@ func Tracer(settings component.TelemetrySettings) trace.Tracer {
 // TelemetryBuilder provides an interface for components to report telemetry
 // as defined in metadata and user config.
 type TelemetryBuilder struct {
-	meter                         metric.Meter
-	mu                            sync.Mutex
-	registrations                 []metric.Registration
-	LoadbalancerBackendLatency    metric.Int64Histogram
-	LoadbalancerBackendOutcome    metric.Int64Counter
-	LoadbalancerNumBackendUpdates metric.Int64Counter
-	LoadbalancerNumBackends       metric.Int64Gauge
-	LoadbalancerNumResolutions    metric.Int64Counter
+	meter                                metric.Meter
+	mu                                   sync.Mutex
+	registrations                        []metric.Registration
+	LoadbalancerBackendFailOpenTotal     metric.Int64Counter
+	LoadbalancerBackendLatency           metric.Int64Histogram
+	LoadbalancerBackendOutcome           metric.Int64Counter
+	LoadbalancerBackendQuarantineTotal   metric.Int64Counter
+	LoadbalancerBackendRerouteTotal      metric.Int64Counter
+	LoadbalancerBackendStaleTotal        metric.Int64Counter
+	LoadbalancerBackendState             metric.Int64Gauge
+	LoadbalancerBackendUnquarantineTotal metric.Int64Counter
+	LoadbalancerNumBackendUpdates        metric.Int64Counter
+	LoadbalancerNumBackends              metric.Int64Gauge
+	LoadbalancerNumResolutions           metric.Int64Counter
 }
 
 // TelemetryBuilderOption applies changes to default builder.
@@ -61,6 +67,12 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 	}
 	builder.meter = Meter(settings)
 	var err, errs error
+	builder.LoadbalancerBackendFailOpenTotal, err = builder.meter.Int64Counter(
+		"otelcol_loadbalancer_backend_fail_open_total",
+		metric.WithDescription("Number of times endpoint health failed open because every resolver-present backend was quarantined. [Development]"),
+		metric.WithUnit("{events}"),
+	)
+	errs = errors.Join(errs, err)
 	builder.LoadbalancerBackendLatency, err = builder.meter.Int64Histogram(
 		"otelcol_loadbalancer_backend_latency",
 		metric.WithDescription("Response latency in ms for the backends. [Development]"),
@@ -72,6 +84,36 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 		"otelcol_loadbalancer_backend_outcome",
 		metric.WithDescription("Number of successes and failures for each endpoint. [Development]"),
 		metric.WithUnit("{outcomes}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerBackendQuarantineTotal, err = builder.meter.Int64Counter(
+		"otelcol_loadbalancer_backend_quarantine_total",
+		metric.WithDescription("Number of times a backend endpoint was quarantined. [Development]"),
+		metric.WithUnit("{quarantines}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerBackendRerouteTotal, err = builder.meter.Int64Counter(
+		"otelcol_loadbalancer_backend_reroute_total",
+		metric.WithDescription("Number of endpoint-failure reroute attempts. [Development]"),
+		metric.WithUnit("{reroutes}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerBackendStaleTotal, err = builder.meter.Int64Counter(
+		"otelcol_loadbalancer_backend_stale_total",
+		metric.WithDescription("Number of times a backend endpoint disappeared from resolver membership. [Development]"),
+		metric.WithUnit("{stale_endpoints}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerBackendState, err = builder.meter.Int64Gauge(
+		"otelcol_loadbalancer_backend_state",
+		metric.WithDescription("Current endpoint health state by backend. [Development]"),
+		metric.WithUnit("{backends}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerBackendUnquarantineTotal, err = builder.meter.Int64Counter(
+		"otelcol_loadbalancer_backend_unquarantine_total",
+		metric.WithDescription("Number of times a backend endpoint was admitted after quarantine. [Development]"),
+		metric.WithUnit("{unquarantines}"),
 	)
 	errs = errors.Join(errs, err)
 	builder.LoadbalancerNumBackendUpdates, err = builder.meter.Int64Counter(
