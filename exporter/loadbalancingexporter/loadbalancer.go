@@ -199,7 +199,7 @@ func (lb *loadBalancer) onBackendChangesWithEndpointHealth(resolved []string) {
 	// TODO: set a timeout?
 	ctx := context.Background()
 	lb.recordEndpointHealthReconcile(ctx, reconcile)
-	created := lb.createMissingExporters(ctx, reconcile.eligible, nil)
+	created := lb.createEndpointHealthMissingExporters(ctx, reconcile.eligible)
 	eligible := lb.endpointHealth.eligibleEndpoints()
 
 	lb.updateLock.Lock()
@@ -304,9 +304,20 @@ type createdExporter struct {
 }
 
 func (lb *loadBalancer) createMissingExporters(ctx context.Context, endpoints []string, forceCreate map[string]struct{}) []createdExporter {
+	return lb.createMissingExportersWithGuard(ctx, endpoints, forceCreate, nil)
+}
+
+func (lb *loadBalancer) createEndpointHealthMissingExporters(ctx context.Context, endpoints []string) []createdExporter {
+	return lb.createMissingExportersWithGuard(ctx, endpoints, nil, lb.endpointHealthCurrentlyEligible)
+}
+
+func (lb *loadBalancer) createMissingExportersWithGuard(ctx context.Context, endpoints []string, forceCreate map[string]struct{}, shouldCreate func(string) bool) []createdExporter {
 	var created []createdExporter
 	for _, endpoint := range endpoints {
 		endpoint = endpointWithPort(endpoint)
+		if shouldCreate != nil && !shouldCreate(endpoint) {
+			continue
+		}
 
 		if _, force := forceCreate[endpoint]; !force {
 			lb.updateLock.RLock()
@@ -322,6 +333,9 @@ func (lb *loadBalancer) createMissingExporters(ctx context.Context, endpoints []
 			lb.logger.Error("failed to create new exporter for endpoint", zap.String("endpoint", endpoint), zap.Error(err))
 			continue
 		}
+		if shouldCreate != nil && !shouldCreate(endpoint) {
+			continue
+		}
 		we := newWrappedExporter(exp, endpoint)
 		if err = we.Start(ctx, lb.host); err != nil {
 			lb.logger.Error("failed to start new exporter for endpoint", zap.String("endpoint", endpoint), zap.Error(err))
@@ -330,6 +344,10 @@ func (lb *loadBalancer) createMissingExporters(ctx context.Context, endpoints []
 		created = append(created, createdExporter{endpoint: endpoint, exporter: we})
 	}
 	return created
+}
+
+func (lb *loadBalancer) endpointHealthCurrentlyEligible(endpoint string) bool {
+	return slices.Contains(lb.endpointHealth.eligibleEndpoints(), endpointWithPort(endpoint))
 }
 
 func (lb *loadBalancer) installCreatedExportersLocked(created []createdExporter, endpoints []string) []createdExporter {

@@ -737,6 +737,7 @@ func TestLoadBalancerEndpointHealthResolverRecomputesEligibilityBeforeRingInstal
 	enableEndpointHealth(cfg)
 
 	var shutdowns sync.Map
+	var starts sync.Map
 	var blockedEndpoint1 atomic.Bool
 	endpoint1CreateBlocked := make(chan struct{})
 	releaseEndpoint1Create := make(chan struct{})
@@ -749,7 +750,7 @@ func TestLoadBalancerEndpointHealthResolverRecomputesEligibilityBeforeRingInstal
 				return nil, errors.New("timed out waiting to release endpoint-1 creation")
 			}
 		}
-		return &countingComponent{endpoint: endpoint, shutdowns: &shutdowns}, nil
+		return &countingComponent{endpoint: endpoint, starts: &starts, shutdowns: &shutdowns}, nil
 	}
 
 	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
@@ -792,10 +793,13 @@ func TestLoadBalancerEndpointHealthResolverRecomputesEligibilityBeforeRingInstal
 
 	require.NotContains(t, p.exporters, "endpoint-1:4317")
 	require.Contains(t, p.exporters, "endpoint-2:4317")
-	require.Eventually(t, func() bool {
-		count, ok := shutdowns.Load("endpoint-1:4317")
-		return ok && count.(*atomic.Int64).Load() > 0
-	}, time.Second, 10*time.Millisecond)
+	_, endpoint1Started := starts.Load("endpoint-1:4317")
+	require.False(t, endpoint1Started)
+	_, endpoint1Shutdown := shutdowns.Load("endpoint-1:4317")
+	require.False(t, endpoint1Shutdown)
+	endpoint2Starts, endpoint2Started := starts.Load("endpoint-2:4317")
+	require.True(t, endpoint2Started)
+	require.Equal(t, int64(1), endpoint2Starts.(*atomic.Int64).Load())
 
 	for i := range 100 {
 		_, endpoint, err := p.exporterAndEndpoint([]byte{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)})
@@ -967,10 +971,15 @@ func enableEndpointHealth(cfg *Config) {
 
 type countingComponent struct {
 	endpoint  string
+	starts    *sync.Map
 	shutdowns *sync.Map
 }
 
-func (*countingComponent) Start(context.Context, component.Host) error {
+func (c *countingComponent) Start(context.Context, component.Host) error {
+	if c.starts != nil {
+		count, _ := c.starts.LoadOrStore(c.endpoint, &atomic.Int64{})
+		count.(*atomic.Int64).Add(1)
+	}
 	return nil
 }
 
