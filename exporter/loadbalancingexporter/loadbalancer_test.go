@@ -831,8 +831,9 @@ func TestLoadBalancerEndpointHealthResolverCommitUsesLockedEligibility(t *testin
 	require.True(t, decision.quarantined)
 	require.Equal(t, []string{"endpoint-2:4317"}, decision.eligible)
 
+	eligible := p.endpointHealth.eligibleEndpoints()
 	p.updateLock.Lock()
-	duplicates, removed := p.commitEndpointHealthResolverUpdateLocked(resolved, created)
+	duplicates, removed := p.commitEndpointHealthResolverUpdateLocked(resolved, eligible, created)
 	p.updateLock.Unlock()
 	p.shutdownCreatedExporters(t.Context(), duplicates)
 	p.drainRemovedExporters(t.Context(), removed)

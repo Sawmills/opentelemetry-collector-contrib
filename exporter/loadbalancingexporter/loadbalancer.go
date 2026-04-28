@@ -200,9 +200,10 @@ func (lb *loadBalancer) onBackendChangesWithEndpointHealth(resolved []string) {
 	ctx := context.Background()
 	lb.recordEndpointHealthReconcile(ctx, reconcile)
 	created := lb.createMissingExporters(ctx, reconcile.eligible, nil)
+	eligible := lb.endpointHealth.eligibleEndpoints()
 
 	lb.updateLock.Lock()
-	duplicates, removed := lb.commitEndpointHealthResolverUpdateLocked(resolved, created)
+	duplicates, removed := lb.commitEndpointHealthResolverUpdateLocked(resolved, eligible, created)
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)
@@ -213,8 +214,7 @@ func (lb *loadBalancer) onBackendChangesWithEndpointHealth(resolved []string) {
 	}
 }
 
-func (lb *loadBalancer) commitEndpointHealthResolverUpdateLocked(resolved []string, created []createdExporter) ([]createdExporter, []removedExporter) {
-	eligible := lb.endpointHealth.eligibleEndpoints()
+func (lb *loadBalancer) commitEndpointHealthResolverUpdateLocked(resolved []string, eligible []string, created []createdExporter) ([]createdExporter, []removedExporter) {
 	lb.ring = newHashRing(eligible)
 	lb.resolvedEndpoints = resolved
 
