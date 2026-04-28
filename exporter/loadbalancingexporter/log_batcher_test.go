@@ -123,7 +123,7 @@ func TestLogBatcherRerouteTargetEndpointLocalFailureMarksTargetUnhealthy(t *test
 	p.started.Store(true)
 	defer func() { _ = p.Shutdown(context.WithoutCancel(t.Context())) }()
 
-	route := findTraceIDForEndpointsBeforeAndAfterReroute(t, p.loadBalancer.ring, "endpoint-1:4317", "endpoint-2:4317")
+	route := findTraceIDForEndpointsBeforeAndAfterReroute(t, p.loadBalancer.ring, "endpoint-1:4317", "endpoint-2:4317", "endpoint-3:4317")
 	require.NoError(t, p.ConsumeLogs(t.Context(), simpleLogWithID(route)))
 
 	require.Eventuallyf(t, func() bool {
@@ -183,10 +183,11 @@ func TestLogBatcherQueuedDataDuringCleanupReroutesAwayFromStoppedExporter(t *tes
 	}, 2*time.Second, 20*time.Millisecond)
 }
 
-func findTraceIDForEndpointsBeforeAndAfterReroute(t *testing.T, ring *hashRing, firstEndpoint, rerouteEndpoint string) pcommon.TraceID {
+func findTraceIDForEndpointsBeforeAndAfterReroute(t *testing.T, ring *hashRing, firstEndpoint, rerouteEndpoint string, additionalRerouteEndpoints ...string) pcommon.TraceID {
 	t.Helper()
 
-	rerouteRing := newHashRing([]string{rerouteEndpoint, "endpoint-3:4317"})
+	rerouteEndpoints := append([]string{rerouteEndpoint}, additionalRerouteEndpoints...)
+	rerouteRing := newHashRing(rerouteEndpoints)
 	for i := range 4096 {
 		var traceID pcommon.TraceID
 		copy(traceID[:], []byte(strconv.Itoa(i)))

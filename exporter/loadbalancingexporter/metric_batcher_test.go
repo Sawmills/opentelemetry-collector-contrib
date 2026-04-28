@@ -117,7 +117,7 @@ func TestMetricBatcherRerouteTargetEndpointLocalFailureMarksTargetUnhealthy(t *t
 	p.started.Store(true)
 	defer func() { _ = p.Shutdown(context.WithoutCancel(t.Context())) }()
 
-	service := findRoutingIDForEndpointsBeforeAndAfterReroute(t, p.loadBalancer.ring, "endpoint-1:4317", "endpoint-2:4317")
+	service := findRoutingIDForEndpointsBeforeAndAfterReroute(t, p.loadBalancer.ring, "endpoint-1:4317", "endpoint-2:4317", "endpoint-3:4317")
 	md := singleDataPointMetric("batcher-reroute-target-failure")
 	md.ResourceMetrics().At(0).Resource().Attributes().PutStr(serviceNameKey, service)
 	require.NoError(t, p.ConsumeMetrics(t.Context(), md))
@@ -128,10 +128,11 @@ func TestMetricBatcherRerouteTargetEndpointLocalFailureMarksTargetUnhealthy(t *t
 	}, 2*time.Second, 20*time.Millisecond)
 }
 
-func findRoutingIDForEndpointsBeforeAndAfterReroute(t *testing.T, ring *hashRing, firstEndpoint, rerouteEndpoint string) string {
+func findRoutingIDForEndpointsBeforeAndAfterReroute(t *testing.T, ring *hashRing, firstEndpoint, rerouteEndpoint string, additionalRerouteEndpoints ...string) string {
 	t.Helper()
 
-	rerouteRing := newHashRing([]string{rerouteEndpoint, "endpoint-3:4317"})
+	rerouteEndpoints := append([]string{rerouteEndpoint}, additionalRerouteEndpoints...)
+	rerouteRing := newHashRing(rerouteEndpoints)
 	for i := range 4096 {
 		routingID := fmt.Sprintf("routing-id-%d", i)
 		if ring.endpointFor([]byte(routingID)) == firstEndpoint && rerouteRing.endpointFor([]byte(routingID)) == rerouteEndpoint {
