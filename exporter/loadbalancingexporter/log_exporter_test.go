@@ -425,7 +425,7 @@ func TestConsumeLogsBatcherFlushDoesNotQuarantineEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	p.loadBalancer = lb
 
-	err = p.consumeBatch(t.Context(), exp, simpleLogs(), logFlushReasonShutdown)
+	err = p.consumeBatcherFlush(t.Context(), exp, simpleLogs(), logFlushReasonShutdown)
 	require.Error(t, err)
 	assert.Contains(t, lb.exporters, "endpoint-1:4317")
 	assert.ElementsMatch(t, []string{"endpoint-1:4317", "endpoint-2:4317"}, lb.endpointHealth.eligibleEndpoints())

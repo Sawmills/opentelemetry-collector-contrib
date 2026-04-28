@@ -119,6 +119,32 @@ func TestShouldRerouteDirectFailureAllowsAlreadyQuarantinedEndpoint(t *testing.T
 	require.True(t, shouldRerouteDirectFailure(lb, "endpoint-1:4317", secondDecision, 0))
 }
 
+func TestEndpointHealthUpdatesFailureReasonWhileQuarantined(t *testing.T) {
+	now := time.Unix(100, 0)
+	manager := newEndpointHealthManager(endpointHealthSettings{
+		enabled:            true,
+		quarantineDuration: 30 * time.Second,
+		now:                func() time.Time { return now },
+	})
+	manager.reconcile([]string{"endpoint-1", "endpoint-2"})
+
+	firstDecision := manager.markFailure("endpoint-1", status.Error(codes.Unavailable, "backend unavailable"))
+	require.True(t, firstDecision.quarantined)
+
+	now = now.Add(time.Second)
+	secondDecision := manager.markFailure("endpoint-1", context.DeadlineExceeded)
+	require.False(t, secondDecision.quarantined)
+	require.Equal(t, endpointFailureTimeout, secondDecision.reason)
+
+	manager.mu.RLock()
+	state := manager.endpoints["endpoint-1"]
+	failureReason := state.failureReason
+	lastFailedAt := state.lastFailedAt
+	manager.mu.RUnlock()
+	require.Equal(t, endpointFailureTimeout, failureReason)
+	require.Equal(t, now, lastFailedAt)
+}
+
 func TestEndpointHealthMarkSuccessClearsQuarantineAndFailOpen(t *testing.T) {
 	now := time.Unix(100, 0)
 	manager := newEndpointHealthManager(endpointHealthSettings{
@@ -221,6 +247,12 @@ func TestEndpointFailureClassification(t *testing.T) {
 			name:   "grpc unavailable",
 			err:    status.Error(codes.Unavailable, "unavailable"),
 			reason: endpointFailureUnavailable,
+			ok:     true,
+		},
+		{
+			name:   "grpc unavailable dns lookup",
+			err:    status.Error(codes.Unavailable, "transport: error while dialing: dial tcp: lookup backend.default.svc: no such host"),
+			reason: endpointFailureDNS,
 			ok:     true,
 		},
 		{

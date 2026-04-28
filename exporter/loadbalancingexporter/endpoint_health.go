@@ -180,9 +180,9 @@ func (m *endpointHealthManager) markFailure(endpoint string, err error) endpoint
 	if ok {
 		if state, exists := m.endpoints[endpoint]; exists && state.present {
 			state.lastFailedAt = now
+			state.failureReason = reason
 			if state.quarantinedUntil.IsZero() || !state.quarantinedUntil.After(now) {
 				state.quarantinedUntil = now.Add(m.settings.quarantineDuration)
-				state.failureReason = reason
 				state.lastStateChangeAt = now
 				decision.quarantined = true
 			}
@@ -363,6 +363,9 @@ func classifyEndpointFailure(err error) (endpointFailureReason, bool) {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return endpointFailureTimeout, true
 	}
+	if isEndpointDNSFailure(err) {
+		return endpointFailureDNS, true
+	}
 	switch status.Code(err) {
 	case codes.DeadlineExceeded:
 		return endpointFailureTimeout, true
@@ -396,7 +399,7 @@ func classifyEndpointFailure(err error) (endpointFailureReason, bool) {
 		strings.Contains(errText, "host unreachable"),
 		strings.Contains(errText, "network unreachable"):
 		return endpointFailureNoRoute, true
-	case strings.HasPrefix(errText, "lookup "), strings.Contains(errText, "no such host"):
+	case isEndpointDNSFailure(err):
 		return endpointFailureDNS, true
 	case strings.Contains(errText, "transport: error while dialing"),
 		strings.Contains(errText, "transport is closing"),
@@ -407,4 +410,13 @@ func classifyEndpointFailure(err error) (endpointFailureReason, bool) {
 	default:
 		return "", false
 	}
+}
+
+func isEndpointDNSFailure(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	errText := strings.ToLower(err.Error())
+	return strings.HasPrefix(errText, "lookup ") || strings.Contains(errText, "no such host")
 }
