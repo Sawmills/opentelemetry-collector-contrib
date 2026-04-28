@@ -76,7 +76,7 @@ func TestLogBatcherReroutesEndpointLocalFlushFailure(t *testing.T) {
 }
 
 func TestLogBatcherFlushExporterStoppingIsRerouteable(t *testing.T) {
-	ts, _ := getTelemetryAssets(t)
+	ts, _, telemetry := getTelemetryAssetsWithReader(t)
 	cfg := simpleConfig()
 	enableEndpointHealth(cfg)
 
@@ -89,6 +89,13 @@ func TestLogBatcherFlushExporterStoppingIsRerouteable(t *testing.T) {
 
 	var rerouteable logBatcherRerouteableError
 	require.ErrorAs(t, err, &rerouteable)
+	rerouteable.RecordReroute(t.Context(), nil)
+	metadatatest.AssertEqualLoadbalancerBackendRerouteTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("signal", "logs"), attribute.String("result", "success"), attribute.String("reason", "exporter_stopping")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
 }
 
 func TestLogBatcherRerouteTargetEndpointLocalFailureMarksTargetUnhealthy(t *testing.T) {

@@ -397,7 +397,13 @@ func (e *metricExporterImp) consumeBatch(ctx context.Context, we *wrappedExporte
 		we.forceStartConsume()
 	} else if !we.tryStartConsume() {
 		if retryAllowed {
-			return metricBatcherRerouteableError{err: errMetricBatcherExporterStopping, data: retryMetrics}
+			return metricBatcherRerouteableError{
+				err:  errMetricBatcherExporterStopping,
+				data: retryMetrics,
+				recordReroute: func(ctx context.Context, rerouteErr error) {
+					e.loadBalancer.recordBackendReroute(ctx, "metrics", endpointFailureExporterStopping, rerouteErr)
+				},
+			}
 		}
 		return errMetricBatcherExporterStopping
 	}

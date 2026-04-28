@@ -29,6 +29,7 @@ const (
 	endpointFailureNoRoute           endpointFailureReason = "no_route"
 	endpointFailureDNS               endpointFailureReason = "dns"
 	endpointFailureUnknownTransport  endpointFailureReason = "unknown_transport"
+	endpointFailureExporterStopping  endpointFailureReason = "exporter_stopping"
 )
 
 type endpointHealthSettings struct {

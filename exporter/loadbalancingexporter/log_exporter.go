@@ -239,7 +239,12 @@ func (e *logExporterImp) consumeBatch(ctx context.Context, le *wrappedExporter, 
 func (e *logExporterImp) consumeBatcherFlush(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string) error {
 	decision, err := e.consumeBatchWithDecision(ctx, le, ld, reason, reason != logFlushReasonShutdown, false, true)
 	if errors.Is(err, errLogBatcherExporterStopping) && reason != logFlushReasonShutdown && directRerouteAttemptAllowed(e.loadBalancer, 0) {
-		return logBatcherRerouteableError{err: err}
+		return logBatcherRerouteableError{
+			err: err,
+			recordReroute: func(ctx context.Context, rerouteErr error) {
+				e.loadBalancer.recordBackendReroute(ctx, "logs", endpointFailureExporterStopping, rerouteErr)
+			},
+		}
 	}
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, le.endpoint, decision, 0) {
 		e.loadBalancer.cleanupBackendWithoutDrain(ctx, le.endpoint)
