@@ -319,8 +319,14 @@ func TestMetricBatcherFailOpenDoesNotRerouteOrPoisonBackend(t *testing.T) {
 	p.batcher.mu.RLock()
 	backend := p.batcher.backends["endpoint-1:4317"]
 	p.batcher.mu.RUnlock()
-	require.NotNil(t, backend)
-	require.False(t, backend.exporter().isStopping())
+	if backend != nil {
+		require.False(t, backend.exporter().isStopping())
+	}
+	p.loadBalancer.updateLock.RLock()
+	activeExp := p.loadBalancer.exporters["endpoint-1:4317"]
+	p.loadBalancer.updateLock.RUnlock()
+	require.NotNil(t, activeExp)
+	require.False(t, activeExp.isStopping())
 }
 
 func TestMetricBatcherQueuedDataDuringCleanupReroutesAwayFromStoppedExporter(t *testing.T) {

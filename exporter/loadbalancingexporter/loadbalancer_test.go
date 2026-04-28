@@ -494,6 +494,37 @@ func TestLoadBalancerEndpointHealthFailOpenRefreshesFailedExporter(t *testing.T)
 	require.NotSame(t, endpoint2Original, p.exporters["endpoint-2:4317"])
 }
 
+func TestLoadBalancerEndpointHealthHealthOnlyFailOpenRefreshesFailedExporter(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		return mockComponent{}, nil
+	}
+
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+
+	p.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	endpoint1Original := p.exporters["endpoint-1:4317"]
+	endpoint2Original := p.exporters["endpoint-2:4317"]
+
+	decision := p.handleBackendFailureHealthOnly(t.Context(), "endpoint-1:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, decision.quarantined)
+	require.False(t, decision.failOpen)
+	if shouldRerouteDirectFailure(p, "endpoint-1:4317", decision, 0) {
+		p.cleanupBackendWithoutDrain(t.Context(), "endpoint-1:4317")
+	}
+
+	decision = p.handleBackendFailureHealthOnly(t.Context(), "endpoint-2:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, decision.quarantined)
+	require.True(t, decision.failOpen)
+	require.Contains(t, decision.eligible, "endpoint-1:4317")
+	require.Contains(t, decision.eligible, "endpoint-2:4317")
+	require.NotSame(t, endpoint1Original, p.exporters["endpoint-1:4317"])
+	require.NotSame(t, endpoint2Original, p.exporters["endpoint-2:4317"])
+}
+
 func TestLoadBalancerEndpointHealthSuccessRecoversFailOpenRing(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	cfg := simpleConfig()

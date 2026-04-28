@@ -434,10 +434,23 @@ func (lb *loadBalancer) handleBackendFailureHealthOnly(ctx context.Context, endp
 
 	lb.updateLock.Lock()
 	lb.ring = newHashRing(decision.eligible)
+	var removed []removedExporter
+	if _, refreshFailed := forceCreate[endpoint]; refreshFailed {
+		if exp, ok := lb.exporters[endpoint]; ok {
+			exp.markStopping()
+			delete(lb.exporters, endpoint)
+			removed = append(removed, removedExporter{endpoint: endpoint, exporter: exp})
+		}
+	}
 	duplicates := lb.installCreatedExportersLocked(created, decision.eligible)
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)
+	if len(removed) > 0 {
+		lb.runCleanupAsync(func() {
+			lb.drainRemovedExporters(context.WithoutCancel(ctx), removed)
+		})
+	}
 	return decision
 }
 
