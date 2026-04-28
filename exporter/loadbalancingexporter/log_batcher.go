@@ -519,7 +519,17 @@ func (b *backendLogBatcher) flush(
 		rerouteLogs = plog.NewLogs()
 		drained.CopyTo(rerouteLogs)
 	}
-	err := b.send(ctx, b.exporter(), drained, reason)
+	exp := b.exporter()
+	if exp != nil && exp.isStopping() && b.drainErr != nil && reason != logFlushReasonShutdown {
+		rerouteErr := b.drainErr(ctx, rerouteLogs, reason)
+		if rerouteErr == nil {
+			return nil
+		}
+		b.telemetry.flushErrors.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
+		b.telemetry.droppedRecords.Add(ctx, int64(records), metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
+		return rerouteErr
+	}
+	err := b.send(ctx, exp, drained, reason)
 	if err != nil {
 		b.telemetry.flushErrors.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint))))
 		if b.drainErr != nil && reason != logFlushReasonShutdown {

@@ -365,6 +365,43 @@ func (lb *loadBalancer) handleBackendFailureWithoutDrain(ctx context.Context, en
 	return lb.handleBackendFailureWithDrain(ctx, endpoint, err, false)
 }
 
+func (lb *loadBalancer) handleBackendFailureHealthOnly(ctx context.Context, endpoint string, err error) endpointHealthFailureDecision {
+	endpoint = endpointWithPort(endpoint)
+	decision := lb.endpointHealth.markFailure(endpoint, err)
+	if !shouldCommitEndpointHealthFailure(endpoint, decision) {
+		return decision
+	}
+
+	forceCreate := map[string]struct{}{}
+	if slices.Contains(decision.eligible, endpoint) {
+		forceCreate[endpoint] = struct{}{}
+	}
+	created := lb.createMissingExporters(ctx, decision.eligible, forceCreate)
+
+	lb.updateLock.Lock()
+	lb.ring = newHashRing(decision.eligible)
+	duplicates := lb.installCreatedExportersLocked(created, decision.eligible)
+	lb.updateLock.Unlock()
+
+	lb.shutdownCreatedExporters(ctx, duplicates)
+	return decision
+}
+
+func (lb *loadBalancer) cleanupBackendWithoutDrain(ctx context.Context, endpoint string) {
+	endpoint = endpointWithPort(endpoint)
+	lb.updateLock.Lock()
+	var removed []removedExporter
+	if exp, ok := lb.exporters[endpoint]; ok {
+		exp.markStopping()
+		delete(lb.exporters, endpoint)
+		removed = append(removed, removedExporter{endpoint: endpoint, exporter: exp})
+	}
+	lb.updateLock.Unlock()
+	if len(removed) > 0 {
+		go lb.drainRemovedExporters(context.WithoutCancel(ctx), removed)
+	}
+}
+
 func (lb *loadBalancer) handleBackendFailureWithDrain(ctx context.Context, endpoint string, err error, drainRemoved bool) endpointHealthFailureDecision {
 	endpoint = endpointWithPort(endpoint)
 	decision := lb.endpointHealth.markFailure(endpoint, err)
@@ -394,17 +431,9 @@ func (lb *loadBalancer) handleBackendFailureWithDrain(ctx context.Context, endpo
 	if drainRemoved {
 		lb.drainRemovedExporters(ctx, removed)
 	} else {
-		lb.shutdownRemovedExporters(ctx, removed)
+		go lb.drainRemovedExporters(context.WithoutCancel(ctx), removed)
 	}
 	return decision
-}
-
-func (lb *loadBalancer) shutdownRemovedExporters(ctx context.Context, removed []removedExporter) {
-	for _, removedExporter := range removed {
-		go func(exp *wrappedExporter) {
-			_ = exp.Shutdown(ctx)
-		}(removedExporter.exporter)
-	}
 }
 
 func shouldCommitEndpointHealthFailure(endpoint string, decision endpointHealthFailureDecision) bool {

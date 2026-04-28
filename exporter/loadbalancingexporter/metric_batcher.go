@@ -544,14 +544,20 @@ func (b *backendMetricBatcher) flush(
 		rerouteMetrics = pmetric.NewMetrics()
 		drained.CopyTo(rerouteMetrics)
 	}
-	err := b.send(ctx, b.exporter(), drained, reason)
+	exp := b.exporter()
+	var err error
+	if exp != nil && exp.isStopping() && b.drainErr != nil && reason != metricFlushReasonShutdown {
+		err = metricBatcherRerouteableError{err: errMetricBatcherExporterStopping, data: rerouteMetrics}
+	} else {
+		err = b.send(ctx, exp, drained, reason)
+	}
 	if err != nil {
 		b.telemetry.flushErrors.Add(ctx, 1, attrs)
 		rerouteAttempted := false
-		var sendMetricsErr consumererror.Metrics
-		if b.drainErr != nil && reason != metricFlushReasonShutdown && errors.As(err, &sendMetricsErr) {
+		var rerouteable metricBatcherRerouteableError
+		if b.drainErr != nil && reason != metricFlushReasonShutdown && errors.As(err, &rerouteable) {
 			rerouteAttempted = true
-			rerouteErr := b.drainErr(ctx, sendMetricsErr.Data(), reason)
+			rerouteErr := b.drainErr(ctx, rerouteable.Data(), reason)
 			if rerouteErr == nil {
 				b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
 				*retryingSince = time.Time{}

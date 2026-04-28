@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"math/rand/v2"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -221,7 +222,7 @@ func (e *logExporterImp) consumeLogDirect(ctx context.Context, ld plog.Logs, rer
 		retryLogs = plog.NewLogs()
 		ld.CopyTo(retryLogs)
 	}
-	err, decision := e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect, true, true)
+	err, decision := e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect, true, true, false)
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, le.endpoint, decision, rerouteAttempt) {
 		return e.consumeLogDirect(ctx, retryLogs, rerouteAttempt+1)
 	}
@@ -229,13 +230,14 @@ func (e *logExporterImp) consumeLogDirect(ctx context.Context, ld plog.Logs, rer
 }
 
 func (e *logExporterImp) consumeBatch(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string) error {
-	err, _ := e.consumeBatchWithDecision(ctx, le, ld, reason, false, true)
+	err, _ := e.consumeBatchWithDecision(ctx, le, ld, reason, false, true, false)
 	return err
 }
 
 func (e *logExporterImp) consumeBatcherFlush(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string) error {
-	err, decision := e.consumeBatchWithDecision(ctx, le, ld, reason, reason != logFlushReasonShutdown, false)
+	err, decision := e.consumeBatchWithDecision(ctx, le, ld, reason, reason != logFlushReasonShutdown, false, true)
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, le.endpoint, decision, 0) {
+		e.loadBalancer.cleanupBackendWithoutDrain(ctx, le.endpoint)
 		return logBatcherRerouteableError{err: err}
 	}
 	return err
@@ -259,13 +261,16 @@ func (e *logExporterImp) rerouteDrainBatch(ctx context.Context, ld plog.Logs, re
 	}
 	batches, errs := e.groupLogsByEndpoint(ld)
 	for _, batch := range batches {
-		err, _ := e.consumeBatchWithDecision(ctx, batch.exp, batch.logs, reason, false, true)
+		err, decision := e.consumeBatchWithDecision(ctx, batch.exp, batch.logs, reason, true, false, true)
+		if err != nil && decision.endpointLocal && !decision.failOpen && !slices.Contains(decision.eligible, batch.exp.endpoint) {
+			e.loadBalancer.cleanupBackendWithoutDrain(ctx, batch.exp.endpoint)
+		}
 		errs = multierr.Append(errs, err)
 	}
 	return errs
 }
 
-func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string, updateEndpointHealth bool, drainRemoved bool) (error, endpointHealthFailureDecision) {
+func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string, updateEndpointHealth bool, drainRemoved bool, healthOnly bool) (error, endpointHealthFailureDecision) {
 	if reason == logFlushReasonDirect || reason == logFlushReasonResolverChange || reason == logFlushReasonShutdown {
 		le.forceStartConsume()
 	} else if !le.tryStartConsume() {
@@ -289,6 +294,9 @@ func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrapp
 	e.logger.Debug("failed to export log", zap.Error(err))
 	if !updateEndpointHealth {
 		return err, endpointHealthFailureDecision{}
+	}
+	if healthOnly {
+		return err, e.loadBalancer.handleBackendFailureHealthOnly(ctx, le.endpoint, err)
 	}
 	if drainRemoved {
 		return err, e.loadBalancer.handleBackendFailure(ctx, le.endpoint, err)
