@@ -43,7 +43,6 @@ $defs:
       quarantine_duration:
         type: string
         format: duration
-        pattern: "^.*[1-9].*$"
         description: Must be greater than 0 when endpoint_health.enabled is true.
       reroute_on_failure:
         type: boolean

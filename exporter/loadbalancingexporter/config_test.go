@@ -122,10 +122,17 @@ func TestConfigValidateEndpointHealth(t *testing.T) {
 	require.Equal(t, 1, cfg.EndpointHealth.MaxRerouteAttempts)
 	require.NoError(t, cfg.Validate())
 
+	cfg.EndpointHealth.QuarantineDuration = -time.Second
+	require.NoError(t, cfg.Validate())
+	cfg.EndpointHealth.QuarantineDuration = defaultEndpointHealthQuarantineDuration
+
 	cfg.EndpointHealth.Enabled = true
 	require.NoError(t, cfg.Validate())
 
 	cfg.EndpointHealth.QuarantineDuration = 0
+	require.ErrorContains(t, cfg.Validate(), "endpoint_health.quarantine_duration")
+
+	cfg.EndpointHealth.QuarantineDuration = -time.Second
 	require.ErrorContains(t, cfg.Validate(), "endpoint_health.quarantine_duration")
 
 	cfg.EndpointHealth.QuarantineDuration = time.Second
