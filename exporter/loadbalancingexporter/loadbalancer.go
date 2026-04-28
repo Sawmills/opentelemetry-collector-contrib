@@ -38,12 +38,11 @@ type loadBalancer struct {
 	res  resolver
 	ring *hashRing
 
-	componentFactory  componentFactory
-	exporters         map[string]*wrappedExporter
-	onExporterRemove  func(context.Context, string, *wrappedExporter) error
-	telemetry         *metadata.TelemetryBuilder
-	endpointHealth    *endpointHealthManager
-	resolvedEndpoints []string
+	componentFactory componentFactory
+	exporters        map[string]*wrappedExporter
+	onExporterRemove func(context.Context, string, *wrappedExporter) error
+	telemetry        *metadata.TelemetryBuilder
+	endpointHealth   *endpointHealthManager
 
 	stopped   bool
 	cleanupMu sync.Mutex
@@ -216,7 +215,6 @@ func (lb *loadBalancer) onBackendChangesWithEndpointHealth(resolved []string) {
 func (lb *loadBalancer) commitEndpointHealthResolverUpdateLocked(resolved []string, created []createdExporter) ([]createdExporter, []removedExporter) {
 	eligible := lb.endpointHealth.eligibleEndpoints()
 	lb.ring = newHashRing(eligible)
-	lb.resolvedEndpoints = resolved
 
 	duplicates := lb.installCreatedExportersLocked(created, eligible)
 	removed := lb.removeExtraExportersLocked(resolved)
@@ -466,7 +464,8 @@ func (lb *loadBalancer) handleBackendFailureHealthOnly(ctx context.Context, endp
 	created := lb.createMissingExporters(ctx, decision.eligible, forceCreate)
 
 	lb.updateLock.Lock()
-	lb.ring = newHashRing(decision.eligible)
+	eligible := lb.endpointHealth.eligibleEndpoints()
+	lb.ring = newHashRing(eligible)
 	var removed []removedExporter
 	if createdExporterExists(created, endpoint) {
 		if exp, ok := lb.exporters[endpoint]; ok {
@@ -475,7 +474,7 @@ func (lb *loadBalancer) handleBackendFailureHealthOnly(ctx context.Context, endp
 			removed = append(removed, removedExporter{endpoint: endpoint, exporter: exp})
 		}
 	}
-	duplicates := lb.installCreatedExportersLocked(created, decision.eligible)
+	duplicates := lb.installCreatedExportersLocked(created, eligible)
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)
@@ -519,16 +518,17 @@ func (lb *loadBalancer) handleBackendFailureWithDrain(ctx context.Context, endpo
 	created := lb.createMissingExporters(ctx, decision.eligible, forceCreate)
 
 	lb.updateLock.Lock()
-	lb.ring = newHashRing(decision.eligible)
+	eligible := lb.endpointHealth.eligibleEndpoints()
+	lb.ring = newHashRing(eligible)
 
 	var removed []removedExporter
-	endpointEligible := slices.Contains(decision.eligible, endpoint)
+	endpointEligible := slices.Contains(eligible, endpoint)
 	if exp, ok := lb.exporters[endpoint]; ok && (!endpointEligible || createdExporterExists(created, endpoint)) {
 		exp.markStopping()
 		delete(lb.exporters, endpoint)
 		removed = append(removed, removedExporter{endpoint: endpoint, exporter: exp})
 	}
-	duplicates := lb.installCreatedExportersLocked(created, decision.eligible)
+	duplicates := lb.installCreatedExportersLocked(created, eligible)
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)
@@ -565,10 +565,10 @@ func (lb *loadBalancer) handleBackendSuccess(endpoint string) {
 	}
 	ctx := context.Background()
 	lb.recordEndpointUnquarantine(ctx, endpoint, decision.reason)
-	eligible := decision.eligible
-	created := lb.createMissingExporters(ctx, eligible, nil)
+	created := lb.createMissingExporters(ctx, decision.eligible, nil)
 
 	lb.updateLock.Lock()
+	eligible := lb.endpointHealth.eligibleEndpoints()
 	lb.ring = newHashRing(eligible)
 	duplicates := lb.installCreatedExportersLocked(created, eligible)
 	lb.updateLock.Unlock()
