@@ -831,8 +831,10 @@ func TestLoadBalancerEndpointHealthResolverRecomputesEligibilityBeforeRingInstal
 	require.Contains(t, p.exporters, "endpoint-2:4317")
 	_, endpoint1Started := starts.Load("endpoint-1:4317")
 	require.False(t, endpoint1Started)
-	_, endpoint1Shutdown := shutdowns.Load("endpoint-1:4317")
-	require.False(t, endpoint1Shutdown)
+	require.Eventually(t, func() bool {
+		count, ok := shutdowns.Load("endpoint-1:4317")
+		return ok && count.(*atomic.Int64).Load() > 0
+	}, time.Second, 10*time.Millisecond)
 	endpoint2Starts, endpoint2Started := starts.Load("endpoint-2:4317")
 	require.True(t, endpoint2Started)
 	require.Equal(t, int64(1), endpoint2Starts.(*atomic.Int64).Load())
@@ -859,6 +861,8 @@ func TestLoadBalancerEndpointHealthResolverCommitUsesLockedEligibility(t *testin
 	resolved := normalizeEndpoints([]string{"endpoint-1", "endpoint-2"})
 	reconcile := p.endpointHealth.reconcile(resolved)
 	require.Equal(t, []string{"endpoint-1:4317", "endpoint-2:4317"}, reconcile.eligible)
+	staleEligible := append([]string(nil), reconcile.eligible...)
+	require.Contains(t, staleEligible, "endpoint-1:4317")
 
 	staleEndpoint1 := newWrappedExporter(&countingComponent{endpoint: "endpoint-1:4317", shutdowns: &shutdowns}, "endpoint-1:4317")
 	endpoint2 := newWrappedExporter(&countingComponent{endpoint: "endpoint-2:4317", shutdowns: &shutdowns}, "endpoint-2:4317")
@@ -871,9 +875,8 @@ func TestLoadBalancerEndpointHealthResolverCommitUsesLockedEligibility(t *testin
 	require.True(t, decision.quarantined)
 	require.Equal(t, []string{"endpoint-2:4317"}, decision.eligible)
 
-	eligible := p.endpointHealth.eligibleEndpoints()
 	p.updateLock.Lock()
-	duplicates, removed := p.commitEndpointHealthResolverUpdateLocked(resolved, eligible, created)
+	duplicates, removed := p.commitEndpointHealthResolverUpdateLocked(resolved, created)
 	p.updateLock.Unlock()
 	p.shutdownCreatedExporters(t.Context(), duplicates)
 	p.drainRemovedExporters(t.Context(), removed)
