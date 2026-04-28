@@ -154,7 +154,7 @@ func TestEndpointHealthFailOpenWhenAllPresentEndpointsQuarantined(t *testing.T) 
 	require.True(t, manager.failOpen())
 }
 
-func TestEndpointHealthReconcileClearsStateForRemovedEndpoint(t *testing.T) {
+func TestEndpointHealthReconcileDeletesStateForRemovedEndpoint(t *testing.T) {
 	now := time.Unix(100, 0)
 	manager := newEndpointHealthManager(endpointHealthSettings{
 		enabled:            true,
@@ -168,16 +168,9 @@ func TestEndpointHealthReconcileClearsStateForRemovedEndpoint(t *testing.T) {
 	require.Equal(t, []string{"endpoint-1"}, result.removed)
 
 	manager.mu.Lock()
-	state := manager.endpoints["endpoint-1"]
-	present := state.present
-	quarantinedUntil := state.quarantinedUntil
-	failureReason := state.failureReason
-	lastFailedAt := state.lastFailedAt
+	_, exists := manager.endpoints["endpoint-1"]
 	manager.mu.Unlock()
-	require.False(t, present)
-	require.Zero(t, quarantinedUntil)
-	require.Empty(t, failureReason)
-	require.Zero(t, lastFailedAt)
+	require.False(t, exists)
 
 	result = manager.reconcile([]string{"endpoint-1", "endpoint-2"})
 	require.Equal(t, []string{"endpoint-1", "endpoint-2"}, result.eligible)

@@ -149,11 +149,7 @@ func (m *endpointHealthManager) reconcile(resolved []string) endpointHealthRecon
 		if _, ok := present[endpoint]; ok || !state.present {
 			continue
 		}
-		state.present = false
-		state.quarantinedUntil = time.Time{}
-		state.failureReason = ""
-		state.lastFailedAt = time.Time{}
-		state.lastStateChangeAt = now
+		delete(m.endpoints, endpoint)
 		removed = append(removed, endpoint)
 	}
 	sort.Strings(removed)
