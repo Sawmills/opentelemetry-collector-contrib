@@ -474,6 +474,65 @@ func TestLoadBalancerEndpointHealthHealthySuccessDoesNotRebuildRing(t *testing.T
 	require.Same(t, originalRing, p.ring)
 }
 
+func TestLoadBalancerEndpointHealthAlreadyQuarantinedFailureRefreshesStaleRing(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+
+	endpoint2CreateStarted := make(chan struct{})
+	releaseEndpoint2Create := make(chan struct{})
+	var blockedEndpoint2Create atomic.Bool
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		if endpoint == "endpoint-2:4317" && blockedEndpoint2Create.CompareAndSwap(false, true) {
+			close(endpoint2CreateStarted)
+			select {
+			case <-releaseEndpoint2Create:
+			case <-time.After(5 * time.Second):
+				return nil, errors.New("timed out waiting to release endpoint-2 creation")
+			}
+		}
+		return mockComponent{}, nil
+	}
+
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	p.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	p.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	p.exporters = map[string]*wrappedExporter{
+		"endpoint-1:4317": newWrappedExporter(mockComponent{}, "endpoint-1:4317"),
+	}
+	routingID := findRoutingIDForEndpoint(t, p.ring, "endpoint-1:4317")
+
+	firstFailureDone := make(chan endpointHealthFailureDecision, 1)
+	go func() {
+		firstFailureDone <- p.handleBackendFailure(t.Context(), "endpoint-1:4317", status.Error(codes.Unavailable, "unavailable"))
+	}()
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-endpoint2CreateStarted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	secondDecision := p.handleBackendFailure(t.Context(), "endpoint-1:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, secondDecision.endpointLocal)
+	require.False(t, secondDecision.quarantined)
+	require.Equal(t, []string{"endpoint-2:4317"}, secondDecision.eligible)
+
+	_, endpoint, err := p.exporterAndEndpoint([]byte(routingID))
+	require.NoError(t, err)
+	require.Equal(t, "endpoint-2:4317", endpoint)
+	require.Contains(t, p.exporters, "endpoint-2:4317")
+	require.NotContains(t, p.exporters, "endpoint-1:4317")
+
+	close(releaseEndpoint2Create)
+	firstDecision := <-firstFailureDone
+	require.True(t, firstDecision.quarantined)
+}
+
 func TestLoadBalancerEndpointHealthCreatesExportersOutsideUpdateLock(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	cfg := simpleConfig()

@@ -360,7 +360,7 @@ func (lb *loadBalancer) removeExtraExportersLocked(endpoints []string) []removed
 func (lb *loadBalancer) handleBackendFailure(ctx context.Context, endpoint string, err error) endpointHealthFailureDecision {
 	endpoint = endpointWithPort(endpoint)
 	decision := lb.endpointHealth.markFailure(endpoint, err)
-	if !decision.quarantined {
+	if !shouldCommitEndpointHealthFailure(endpoint, decision) {
 		return decision
 	}
 
@@ -385,6 +385,13 @@ func (lb *loadBalancer) handleBackendFailure(ctx context.Context, endpoint strin
 	lb.shutdownCreatedExporters(ctx, duplicates)
 	lb.drainRemovedExporters(ctx, removed)
 	return decision
+}
+
+func shouldCommitEndpointHealthFailure(endpoint string, decision endpointHealthFailureDecision) bool {
+	if decision.quarantined {
+		return true
+	}
+	return decision.endpointLocal && !decision.failOpen && !slices.Contains(decision.eligible, endpointWithPort(endpoint))
 }
 
 func (lb *loadBalancer) handleBackendSuccess(endpoint string) {
