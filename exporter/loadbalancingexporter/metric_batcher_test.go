@@ -6,17 +6,420 @@ package loadbalancingexporter
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/config/configoptional"
+	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata/metricdatatest"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadatatest"
 )
+
+func TestMetricBatcherReroutesEndpointLocalFlushFailure(t *testing.T) {
+	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
+	cfg := endpoint2Config()
+	enableEndpointHealth(cfg)
+	cfg.MetricBatcher = MetricBatcherConfig{Enabled: true, MaxDataPoints: 1, MaxBytes: 1 << 20, FlushInterval: time.Hour}
+	cfg.Resolver.Static = configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2"}})
+
+	var endpoint1Calls atomic.Int64
+	var endpoint2Calls atomic.Int64
+	p, err := newMetricsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer, err = newLoadBalancer(ts.Logger, cfg, func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockMetricsExporter(func(_ context.Context, _ pmetric.Metrics) error {
+			switch endpoint {
+			case "endpoint-1:4317":
+				endpoint1Calls.Add(1)
+				return status.Error(codes.Unavailable, "backend down")
+			case "endpoint-2:4317":
+				endpoint2Calls.Add(1)
+			}
+			return nil
+		}), nil
+	}, tb)
+	require.NoError(t, err)
+	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+		return p.batcher.Remove(ctx, endpoint, exp)
+	}
+	p.loadBalancer.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	p.started.Store(true)
+	defer func() { _ = p.Shutdown(context.WithoutCancel(t.Context())) }()
+
+	service := findRoutingIDForEndpoint(t, p.loadBalancer.ring, "endpoint-1:4317")
+	md := singleDataPointMetric("batcher-reroute")
+	md.ResourceMetrics().At(0).Resource().Attributes().PutStr(serviceNameKey, service)
+	require.NoError(t, p.ConsumeMetrics(t.Context(), md))
+
+	require.Eventuallyf(t, func() bool {
+		return endpoint1Calls.Load() == 1 && endpoint2Calls.Load() == 1
+	}, 2*time.Second, 20*time.Millisecond, "endpoint-1 calls=%d endpoint-2 calls=%d", endpoint1Calls.Load(), endpoint2Calls.Load())
+	metadatatest.AssertEqualLoadbalancerBackendRerouteTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("signal", "metrics"), attribute.String("result", "success"), attribute.String("reason", "unavailable")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+}
+
+func TestMetricBatcherFlushExporterStoppingIsRerouteable(t *testing.T) {
+	ts, _, telemetry := getTelemetryAssetsWithReader(t)
+	cfg := endpoint2Config()
+	enableEndpointHealth(cfg)
+
+	p, err := newMetricsExporter(ts, cfg)
+	require.NoError(t, err)
+	stoppingExp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
+	stoppingExp.markStopping()
+
+	err = p.consumeBatch(t.Context(), stoppingExp, singleDataPointMetric("stopping"), metricFlushReasonSize)
+
+	var rerouteable metricBatcherRerouteableError
+	require.ErrorAs(t, err, &rerouteable)
+	require.Equal(t, 1, rerouteable.Data().DataPointCount())
+	rerouteable.RecordReroute(t.Context(), nil)
+	metadatatest.AssertEqualLoadbalancerBackendRerouteTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("signal", "metrics"), attribute.String("result", "success"), attribute.String("reason", "exporter_stopping")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+}
+
+func TestMetricBatcherRerouteTargetEndpointLocalFailureMarksTargetUnhealthy(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := endpoint2Config()
+	enableEndpointHealth(cfg)
+	cfg.MetricBatcher = MetricBatcherConfig{Enabled: true, MaxDataPoints: 1, MaxBytes: 1 << 20, FlushInterval: time.Hour}
+	cfg.Resolver.Static = configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2", "endpoint-3"}})
+
+	p, err := newMetricsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer, err = newLoadBalancer(ts.Logger, cfg, func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockMetricsExporter(func(_ context.Context, _ pmetric.Metrics) error {
+			if endpoint == "endpoint-1:4317" || endpoint == "endpoint-2:4317" {
+				return status.Error(codes.Unavailable, "backend down")
+			}
+			return nil
+		}), nil
+	}, tb)
+	require.NoError(t, err)
+	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+		return p.batcher.Remove(ctx, endpoint, exp)
+	}
+	p.loadBalancer.onBackendChanges([]string{"endpoint-1", "endpoint-2", "endpoint-3"})
+	p.started.Store(true)
+	defer func() { _ = p.Shutdown(context.WithoutCancel(t.Context())) }()
+
+	service := findRoutingIDForEndpointsBeforeAndAfterReroute(t, p.loadBalancer.ring, "endpoint-1:4317", "endpoint-2:4317", "endpoint-3:4317")
+	md := singleDataPointMetric("batcher-reroute-target-failure")
+	md.ResourceMetrics().At(0).Resource().Attributes().PutStr(serviceNameKey, service)
+	require.NoError(t, p.ConsumeMetrics(t.Context(), md))
+
+	require.Eventually(t, func() bool {
+		eligible := p.loadBalancer.endpointHealth.eligibleEndpoints()
+		return !slices.Contains(eligible, "endpoint-1:4317") && !slices.Contains(eligible, "endpoint-2:4317")
+	}, 2*time.Second, 20*time.Millisecond)
+}
+
+func findRoutingIDForEndpointsBeforeAndAfterReroute(t *testing.T, ring *hashRing, firstEndpoint, rerouteEndpoint string, additionalRerouteEndpoints ...string) string {
+	t.Helper()
+
+	rerouteEndpoints := append([]string{rerouteEndpoint}, additionalRerouteEndpoints...)
+	rerouteRing := newHashRing(rerouteEndpoints)
+	for i := range 4096 {
+		routingID := fmt.Sprintf("routing-id-%d", i)
+		if ring.endpointFor([]byte(routingID)) == firstEndpoint && rerouteRing.endpointFor([]byte(routingID)) == rerouteEndpoint {
+			return routingID
+		}
+	}
+
+	require.FailNow(t, "failed to find routing id for endpoints", "first=%s reroute=%s", firstEndpoint, rerouteEndpoint)
+	return ""
+}
+
+func TestMetricBatcherDoesNotReroutePlainConsumerErrorMetrics(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	var flushCalls atomic.Int64
+	var rerouteCalls atomic.Int64
+	batcher, err := newMetricBatcher(
+		ts.Logger,
+		ts.TelemetrySettings,
+		metricBatcherSettings{maxDataPoints: 1, maxBytes: 1 << 20, flushInterval: 20 * time.Millisecond},
+		func(_ context.Context, _ *wrappedExporter, md pmetric.Metrics, _ string) error {
+			flushCalls.Add(1)
+			return consumererror.NewMetrics(errors.New("partial non-endpoint failure"), md)
+		},
+		func(context.Context, pmetric.Metrics, string) error {
+			rerouteCalls.Add(1)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("m1"))
+
+	require.Eventually(t, func() bool {
+		return flushCalls.Load() >= 2
+	}, 2*time.Second, 20*time.Millisecond)
+	require.Zero(t, rerouteCalls.Load())
+}
+
+func TestMetricBatcherMaxRerouteAttemptsZeroDoesNotPoisonBackend(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := endpoint2Config()
+	enableEndpointHealth(cfg)
+	cfg.EndpointHealth.MaxRerouteAttempts = 0
+	cfg.MetricBatcher = MetricBatcherConfig{Enabled: true, MaxDataPoints: 1, MaxBytes: 1 << 20, FlushInterval: 20 * time.Millisecond}
+
+	var endpoint1Calls atomic.Int64
+	var endpoint2Calls atomic.Int64
+	p, err := newMetricsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer, err = newLoadBalancer(ts.Logger, cfg, func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockMetricsExporter(func(_ context.Context, _ pmetric.Metrics) error {
+			switch endpoint {
+			case "endpoint-1:4317":
+				endpoint1Calls.Add(1)
+				return status.Error(codes.Unavailable, "backend down")
+			case "endpoint-2:4317":
+				endpoint2Calls.Add(1)
+			}
+			return nil
+		}), nil
+	}, tb)
+	require.NoError(t, err)
+	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+		return p.batcher.Remove(ctx, endpoint, exp)
+	}
+	p.loadBalancer.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	p.started.Store(true)
+	defer func() { require.NoError(t, p.Shutdown(context.WithoutCancel(t.Context()))) }()
+
+	service := findRoutingIDForEndpoint(t, p.loadBalancer.ring, "endpoint-1:4317")
+	md := singleDataPointMetric("batcher-no-reroute")
+	md.ResourceMetrics().At(0).Resource().Attributes().PutStr(serviceNameKey, service)
+	require.NoError(t, p.ConsumeMetrics(t.Context(), md))
+
+	require.Eventually(t, func() bool {
+		return endpoint1Calls.Load() >= 2
+	}, 2*time.Second, 20*time.Millisecond)
+	require.Zero(t, endpoint2Calls.Load())
+
+	p.batcher.mu.RLock()
+	backend := p.batcher.backends["endpoint-1:4317"]
+	p.batcher.mu.RUnlock()
+	require.NotNil(t, backend)
+	require.False(t, backend.exporter().isStopping())
+}
+
+func TestMetricBatcherEndpointHealthDisabledDoesNotRerouteOrPoisonBackend(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := endpoint2Config()
+	cfg.MetricBatcher = MetricBatcherConfig{Enabled: true, MaxDataPoints: 1, MaxBytes: 1 << 20, FlushInterval: 20 * time.Millisecond}
+
+	var endpoint1Calls atomic.Int64
+	var endpoint2Calls atomic.Int64
+	p, err := newMetricsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer, err = newLoadBalancer(ts.Logger, cfg, func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockMetricsExporter(func(_ context.Context, _ pmetric.Metrics) error {
+			switch endpoint {
+			case "endpoint-1:4317":
+				endpoint1Calls.Add(1)
+				return status.Error(codes.Unavailable, "backend down")
+			case "endpoint-2:4317":
+				endpoint2Calls.Add(1)
+			}
+			return nil
+		}), nil
+	}, tb)
+	require.NoError(t, err)
+	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+		return p.batcher.Remove(ctx, endpoint, exp)
+	}
+	p.loadBalancer.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	p.started.Store(true)
+	defer func() { _ = p.Shutdown(context.WithoutCancel(t.Context())) }()
+
+	service := findRoutingIDForEndpoint(t, p.loadBalancer.ring, "endpoint-1:4317")
+	md := singleDataPointMetric("batcher-health-disabled")
+	md.ResourceMetrics().At(0).Resource().Attributes().PutStr(serviceNameKey, service)
+	require.NoError(t, p.ConsumeMetrics(t.Context(), md))
+
+	require.Eventually(t, func() bool {
+		return endpoint1Calls.Load() >= 2
+	}, 2*time.Second, 20*time.Millisecond)
+	require.Zero(t, endpoint2Calls.Load())
+
+	p.batcher.mu.RLock()
+	backend := p.batcher.backends["endpoint-1:4317"]
+	p.batcher.mu.RUnlock()
+	require.NotNil(t, backend)
+	require.False(t, backend.exporter().isStopping())
+}
+
+func TestMetricBatcherFailOpenDoesNotRerouteOrPoisonBackend(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := endpoint2Config()
+	enableEndpointHealth(cfg)
+	cfg.MetricBatcher = MetricBatcherConfig{Enabled: true, MaxDataPoints: 1, MaxBytes: 1 << 20, FlushInterval: 20 * time.Millisecond}
+	cfg.Resolver.Static = configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1"}})
+
+	var endpoint1Calls atomic.Int64
+	var endpoint2Calls atomic.Int64
+	p, err := newMetricsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer, err = newLoadBalancer(ts.Logger, cfg, func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockMetricsExporter(func(_ context.Context, _ pmetric.Metrics) error {
+			switch endpoint {
+			case "endpoint-1:4317":
+				endpoint1Calls.Add(1)
+				return status.Error(codes.Unavailable, "backend down")
+			case "endpoint-2:4317":
+				endpoint2Calls.Add(1)
+			}
+			return nil
+		}), nil
+	}, tb)
+	require.NoError(t, err)
+	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+		return p.batcher.Remove(ctx, endpoint, exp)
+	}
+	p.loadBalancer.onBackendChanges([]string{"endpoint-1"})
+	p.started.Store(true)
+	defer func() { _ = p.Shutdown(context.WithoutCancel(t.Context())) }()
+
+	md := singleDataPointMetric("batcher-fail-open")
+	md.ResourceMetrics().At(0).Resource().Attributes().PutStr(serviceNameKey, "endpoint-1-route")
+	require.NoError(t, p.ConsumeMetrics(t.Context(), md))
+
+	require.Eventually(t, func() bool {
+		return endpoint1Calls.Load() >= 2
+	}, 2*time.Second, 20*time.Millisecond)
+	require.Zero(t, endpoint2Calls.Load())
+
+	p.batcher.mu.RLock()
+	backend := p.batcher.backends["endpoint-1:4317"]
+	p.batcher.mu.RUnlock()
+	if backend != nil {
+		require.False(t, backend.exporter().isStopping())
+	}
+	p.loadBalancer.updateLock.RLock()
+	activeExp := p.loadBalancer.exporters["endpoint-1:4317"]
+	p.loadBalancer.updateLock.RUnlock()
+	require.NotNil(t, activeExp)
+	require.False(t, activeExp.isStopping())
+}
+
+func TestMetricBatcherQueuedDataDuringCleanupReroutesAwayFromStoppedExporter(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := endpoint2Config()
+	enableEndpointHealth(cfg)
+	cfg.MetricBatcher = MetricBatcherConfig{Enabled: true, MaxDataPoints: 1, MaxBytes: 1 << 20, FlushInterval: time.Hour}
+
+	firstFlushStarted := make(chan struct{})
+	releaseFirstFlush := make(chan struct{})
+	var endpoint1Calls atomic.Int64
+	var endpoint2Calls atomic.Int64
+	p, err := newMetricsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer, err = newLoadBalancer(ts.Logger, cfg, func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockMetricsExporter(func(_ context.Context, _ pmetric.Metrics) error {
+			switch endpoint {
+			case "endpoint-1:4317":
+				if endpoint1Calls.Add(1) == 1 {
+					close(firstFlushStarted)
+					<-releaseFirstFlush
+				}
+				return status.Error(codes.Unavailable, "backend down")
+			case "endpoint-2:4317":
+				endpoint2Calls.Add(1)
+			}
+			return nil
+		}), nil
+	}, tb)
+	require.NoError(t, err)
+	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+		return p.batcher.Remove(ctx, endpoint, exp)
+	}
+	p.loadBalancer.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	p.started.Store(true)
+	defer func() { _ = p.Shutdown(context.WithoutCancel(t.Context())) }()
+
+	service := findRoutingIDForEndpoint(t, p.loadBalancer.ring, "endpoint-1:4317")
+	firstMetric := singleDataPointMetric("batcher-cleanup-first")
+	firstMetric.ResourceMetrics().At(0).Resource().Attributes().PutStr(serviceNameKey, service)
+	require.NoError(t, p.ConsumeMetrics(t.Context(), firstMetric))
+	<-firstFlushStarted
+
+	secondMetric := singleDataPointMetric("batcher-cleanup-second")
+	secondMetric.ResourceMetrics().At(0).Resource().Attributes().PutStr(serviceNameKey, service)
+	require.NoError(t, p.ConsumeMetrics(t.Context(), secondMetric))
+	close(releaseFirstFlush)
+
+	require.Eventually(t, func() bool {
+		return endpoint1Calls.Load() == 1 && endpoint2Calls.Load() == 2
+	}, 2*time.Second, 20*time.Millisecond)
+}
+
+func TestMetricBatcherRerouteFailureRestoresFailedMetricsForRetry(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	var sendCalls atomic.Int64
+	var rerouteCalls atomic.Int64
+	retriedFailedData := make(chan struct{}, 1)
+
+	failedRerouteData := singleDataPointMetric("failed-reroute")
+	batcher, err := newMetricBatcher(
+		ts.Logger,
+		ts.TelemetrySettings,
+		metricBatcherSettings{maxDataPoints: 1, maxBytes: 1 << 20, flushInterval: 20 * time.Millisecond},
+		func(_ context.Context, _ *wrappedExporter, md pmetric.Metrics, _ string) error {
+			if sendCalls.Add(1) == 1 {
+				return metricBatcherRerouteableError{err: status.Error(codes.Unavailable, "backend down"), data: md}
+			}
+			if metricNameExists(md, "failed-reroute") {
+				retriedFailedData <- struct{}{}
+			}
+			return nil
+		},
+		func(context.Context, pmetric.Metrics, string) error {
+			rerouteCalls.Add(1)
+			return consumererror.NewMetrics(errors.New("reroute failed"), failedRerouteData)
+		},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	exp := newWrappedExporter(newNopMockMetricsExporter(), "endpoint-1:4317")
+	requireMetricBatcherEnqueued(t, batcher, exp, singleDataPointMetric("original"))
+
+	select {
+	case <-retriedFailedData:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected failed reroute metrics to be restored for retry")
+	}
+	require.Equal(t, int64(1), rerouteCalls.Load())
+}
 
 func TestMetricBatcherFlushesOnMaxDataPoints(t *testing.T) {
 	ts, _ := getTelemetryAssets(t)
@@ -787,6 +1190,21 @@ func singleDataPointMetric(name string) pmetric.Metrics {
 	g := m.SetEmptyGauge()
 	g.DataPoints().AppendEmpty().SetIntValue(1)
 	return md
+}
+
+func metricNameExists(md pmetric.Metrics, name string) bool {
+	for i := 0; i < md.ResourceMetrics().Len(); i++ {
+		rm := md.ResourceMetrics().At(i)
+		for j := 0; j < rm.ScopeMetrics().Len(); j++ {
+			sm := rm.ScopeMetrics().At(j)
+			for k := 0; k < sm.Metrics().Len(); k++ {
+				if sm.Metrics().At(k).Name() == name {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func metricWithResourceScopeGauge(resourceValue, scopeName, metricName string, value int64) pmetric.Metrics {

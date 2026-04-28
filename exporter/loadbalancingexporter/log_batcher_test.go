@@ -5,6 +5,8 @@ package loadbalancingexporter
 
 import (
 	"context"
+	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -21,9 +23,268 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata/metricdatatest"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadatatest"
 )
+
+func TestLogBatcherReroutesEndpointLocalFlushFailure(t *testing.T) {
+	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	cfg.LogBatcher = LogBatcherConfig{Enabled: true, MaxRecords: 1, MaxBytes: 1 << 20, FlushInterval: time.Hour}
+	cfg.Resolver.Static = configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2"}})
+
+	var endpoint1Calls atomic.Int64
+	var endpoint2Calls atomic.Int64
+	p, err := newLogsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer, err = newLoadBalancer(ts.Logger, cfg, func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockLogsExporter(func(_ context.Context, _ plog.Logs) error {
+			switch endpoint {
+			case "endpoint-1:4317":
+				endpoint1Calls.Add(1)
+				return status.Error(codes.Unavailable, "backend down")
+			case "endpoint-2:4317":
+				endpoint2Calls.Add(1)
+			}
+			return nil
+		}), nil
+	}, tb)
+	require.NoError(t, err)
+	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+		return p.batcher.Remove(ctx, endpoint, exp)
+	}
+	p.loadBalancer.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	p.started.Store(true)
+	defer func() { _ = p.Shutdown(context.WithoutCancel(t.Context())) }()
+
+	route := findTraceIDForEndpointsBeforeAndAfterReroute(t, p.loadBalancer.ring, "endpoint-1:4317", "endpoint-2:4317")
+	require.NoError(t, p.ConsumeLogs(t.Context(), simpleLogWithID(route)))
+
+	require.Eventually(t, func() bool {
+		return endpoint1Calls.Load() == 1 && endpoint2Calls.Load() == 1
+	}, 2*time.Second, 20*time.Millisecond)
+	metadatatest.AssertEqualLoadbalancerBackendRerouteTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("signal", "logs"), attribute.String("result", "success"), attribute.String("reason", "unavailable")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+}
+
+func TestCompressedLogBatcherReroutesEndpointLocalFlushFailure(t *testing.T) {
+	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	cfg.LogBatcher = LogBatcherConfig{
+		Enabled:            true,
+		MaxRecords:         1,
+		MaxBytes:           1 << 20,
+		FlushInterval:      time.Hour,
+		PayloadCompression: QueuePayloadCompressionZstd,
+	}
+	cfg.Resolver.Static = configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2"}})
+
+	var endpoint1Calls atomic.Int64
+	var endpoint2Calls atomic.Int64
+	p, err := newLogsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer, err = newLoadBalancer(ts.Logger, cfg, func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockLogsExporter(func(_ context.Context, _ plog.Logs) error {
+			switch endpoint {
+			case "endpoint-1:4317":
+				endpoint1Calls.Add(1)
+				return status.Error(codes.Unavailable, "backend down")
+			case "endpoint-2:4317":
+				endpoint2Calls.Add(1)
+			}
+			return nil
+		}), nil
+	}, tb)
+	require.NoError(t, err)
+	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+		return p.batcher.Remove(ctx, endpoint, exp)
+	}
+	p.loadBalancer.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	p.started.Store(true)
+	defer func() { _ = p.Shutdown(context.WithoutCancel(t.Context())) }()
+
+	route := findTraceIDForEndpointsBeforeAndAfterReroute(t, p.loadBalancer.ring, "endpoint-1:4317", "endpoint-2:4317")
+	require.NoError(t, p.ConsumeLogs(t.Context(), simpleLogWithID(route)))
+
+	require.Eventually(t, func() bool {
+		return endpoint1Calls.Load() == 1 && endpoint2Calls.Load() == 1
+	}, 2*time.Second, 20*time.Millisecond)
+	metadatatest.AssertEqualLoadbalancerBackendRerouteTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("signal", "logs"), attribute.String("result", "success"), attribute.String("reason", "unavailable")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+}
+
+func TestLogBatcherFlushExporterStoppingIsRerouteable(t *testing.T) {
+	ts, _, telemetry := getTelemetryAssetsWithReader(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+
+	p, err := newLogsExporter(ts, cfg)
+	require.NoError(t, err)
+	stoppingExp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	stoppingExp.markStopping()
+
+	err = p.consumeBatcherFlush(t.Context(), stoppingExp, simpleLogs(), logFlushReasonSize)
+
+	var rerouteable logBatcherRerouteableError
+	require.ErrorAs(t, err, &rerouteable)
+	rerouteable.RecordReroute(t.Context(), nil)
+	metadatatest.AssertEqualLoadbalancerBackendRerouteTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("signal", "logs"), attribute.String("result", "success"), attribute.String("reason", "exporter_stopping")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+}
+
+func TestCompressedLogBatcherFlushReroutesStoppingExporter(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	var reroutedRecords atomic.Int64
+	batcher, err := newLogBatcher(ts.Logger, ts.TelemetrySettings, logBatcherSettings{
+		maxRecords:         100,
+		maxBytes:           1 << 20,
+		flushInterval:      time.Hour,
+		payloadCompression: QueuePayloadCompressionZstd,
+	}, func(context.Context, *wrappedExporter, plog.Logs, string) error {
+		t.Fatal("send should not be called when compressed flush can reroute a stopping exporter")
+		return nil
+	}, func(_ context.Context, ld plog.Logs, reason string) error {
+		require.Equal(t, logFlushReasonResolverChange, reason)
+		reroutedRecords.Add(int64(ld.LogRecordCount()))
+		return nil
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, batcher.Shutdown(context.WithoutCancel(t.Context()))) }()
+
+	exp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	require.NoError(t, batcher.Enqueue(t.Context(), "endpoint-1:4317", exp, simpleLogs()))
+	exp.markStopping()
+	require.NoError(t, batcher.Remove(t.Context(), "endpoint-1:4317", exp))
+
+	require.Equal(t, int64(1), reroutedRecords.Load())
+}
+
+func TestLogBatcherRerouteTargetEndpointLocalFailureMarksTargetUnhealthy(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	cfg.LogBatcher = LogBatcherConfig{Enabled: true, MaxRecords: 1, MaxBytes: 1 << 20, FlushInterval: time.Hour}
+	cfg.Resolver.Static = configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2", "endpoint-3"}})
+
+	var endpoint1Calls atomic.Int64
+	var endpoint2Calls atomic.Int64
+	p, err := newLogsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer, err = newLoadBalancer(ts.Logger, cfg, func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockLogsExporter(func(_ context.Context, _ plog.Logs) error {
+			switch endpoint {
+			case "endpoint-1:4317":
+				endpoint1Calls.Add(1)
+				return status.Error(codes.Unavailable, "backend down")
+			case "endpoint-2:4317":
+				endpoint2Calls.Add(1)
+				return status.Error(codes.Unavailable, "backend down")
+			}
+			return nil
+		}), nil
+	}, tb)
+	require.NoError(t, err)
+	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+		return p.batcher.Remove(ctx, endpoint, exp)
+	}
+	p.loadBalancer.onBackendChanges([]string{"endpoint-1", "endpoint-2", "endpoint-3"})
+	p.started.Store(true)
+	defer func() { _ = p.Shutdown(context.WithoutCancel(t.Context())) }()
+
+	route := findTraceIDForEndpointsBeforeAndAfterReroute(t, p.loadBalancer.ring, "endpoint-1:4317", "endpoint-2:4317", "endpoint-3:4317")
+	require.NoError(t, p.ConsumeLogs(t.Context(), simpleLogWithID(route)))
+
+	require.Eventuallyf(t, func() bool {
+		eligible := p.loadBalancer.endpointHealth.eligibleEndpoints()
+		return !slices.Contains(eligible, "endpoint-1:4317") && !slices.Contains(eligible, "endpoint-2:4317")
+	}, 2*time.Second, 20*time.Millisecond, "eligible=%v endpoint1=%d endpoint2=%d", p.loadBalancer.endpointHealth.eligibleEndpoints(), endpoint1Calls.Load(), endpoint2Calls.Load())
+}
+
+func TestLogBatcherQueuedDataDuringCleanupReroutesAwayFromStoppedExporter(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	cfg.LogBatcher = LogBatcherConfig{Enabled: true, MaxRecords: 1, MaxBytes: 1 << 20, FlushInterval: time.Hour}
+	cfg.Resolver.Static = configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1", "endpoint-2"}})
+
+	firstFlushStarted := make(chan struct{})
+	releaseFirstFlush := make(chan struct{})
+	var endpoint1Calls atomic.Int64
+	var endpoint2Calls atomic.Int64
+	p, err := newLogsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer, err = newLoadBalancer(ts.Logger, cfg, func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockLogsExporter(func(_ context.Context, _ plog.Logs) error {
+			switch endpoint {
+			case "endpoint-1:4317":
+				if endpoint1Calls.Add(1) == 1 {
+					close(firstFlushStarted)
+					<-releaseFirstFlush
+				}
+				return status.Error(codes.Unavailable, "backend down")
+			case "endpoint-2:4317":
+				endpoint2Calls.Add(1)
+			}
+			return nil
+		}), nil
+	}, tb)
+	require.NoError(t, err)
+	p.loadBalancer.onExporterRemove = func(ctx context.Context, endpoint string, exp *wrappedExporter) error {
+		return p.batcher.Remove(ctx, endpoint, exp)
+	}
+	p.loadBalancer.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	p.started.Store(true)
+	defer func() { _ = p.Shutdown(context.WithoutCancel(t.Context())) }()
+
+	route := findTraceIDForEndpoint(t, p.loadBalancer.ring, "endpoint-1:4317")
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- p.ConsumeLogs(t.Context(), simpleLogWithID(route))
+	}()
+	<-firstFlushStarted
+	require.NoError(t, p.ConsumeLogs(t.Context(), simpleLogWithID(route)))
+	close(releaseFirstFlush)
+	require.NoError(t, <-firstDone)
+
+	require.Eventually(t, func() bool {
+		return endpoint1Calls.Load() == 1 && endpoint2Calls.Load() == 2
+	}, 2*time.Second, 20*time.Millisecond)
+}
+
+func findTraceIDForEndpointsBeforeAndAfterReroute(t *testing.T, ring *hashRing, firstEndpoint, rerouteEndpoint string, additionalRerouteEndpoints ...string) pcommon.TraceID {
+	t.Helper()
+
+	rerouteEndpoints := append([]string{rerouteEndpoint}, additionalRerouteEndpoints...)
+	rerouteRing := newHashRing(rerouteEndpoints)
+	for i := range 4096 {
+		var traceID pcommon.TraceID
+		copy(traceID[:], strconv.Itoa(i))
+		if ring.endpointFor(traceID[:]) == firstEndpoint && rerouteRing.endpointFor(traceID[:]) == rerouteEndpoint {
+			return traceID
+		}
+	}
+
+	require.FailNow(t, "failed to find trace id for endpoints", "first=%s reroute=%s", firstEndpoint, rerouteEndpoint)
+	return pcommon.TraceID{}
+}
 
 func TestLogBatcherMergesSameBackendOnShutdown(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)

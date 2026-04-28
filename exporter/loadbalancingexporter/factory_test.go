@@ -86,7 +86,7 @@ func TestLogExporterWithCompressedInMemoryQueueStartsWithoutStorageExtension(t *
 
 	require.NoError(t, exp.Start(t.Context(), componenttest.NewNopHost()))
 	t.Cleanup(func() {
-		require.NoError(t, exp.Shutdown(t.Context()))
+		require.NoError(t, exp.Shutdown(context.WithoutCancel(t.Context())))
 	})
 }
 
@@ -247,6 +247,16 @@ func TestWrappedExporterHasEndpointAttribute(t *testing.T) {
 	successValue, found = wrappedExp.failureAttr.Value("success")
 	require.True(t, found, "failure attr should have success field")
 	assert.False(t, successValue.AsBool())
+}
+
+func TestWrappedExporterNormalizesEndpointAttributeWithoutPort(t *testing.T) {
+	mockComponent := &struct{ component.Component }{}
+
+	wrappedExp := newWrappedExporter(mockComponent, "endpoint-1")
+
+	endpointValue, found := wrappedExp.endpointAttr.Value("endpoint")
+	require.True(t, found)
+	assert.Equal(t, "endpoint-1:4317", endpointValue.AsString())
 }
 
 func TestBuildExporterResilienceOptions(t *testing.T) {

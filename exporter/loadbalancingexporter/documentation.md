@@ -6,6 +6,14 @@
 
 The following telemetry is emitted by this component.
 
+### otelcol_loadbalancer_backend_fail_open_total
+
+Number of times endpoint health failed open because every resolver-present backend was quarantined.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| {events} | Sum | Int | true | Development |
+
 ### otelcol_loadbalancer_backend_latency
 
 Response latency in ms for the backends.
@@ -33,6 +41,81 @@ Number of successes and failures for each endpoint.
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
 | success | Whether an outcome was successful | Any Bool | - |
+
+### otelcol_loadbalancer_backend_quarantine_total
+
+Number of times a backend endpoint was quarantined.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| {quarantines} | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| endpoint | The endpoint of the backend | Any Str | - |
+| reason | Low-cardinality endpoint health reason | Any Str | - |
+
+### otelcol_loadbalancer_backend_reroute_total
+
+Number of endpoint-failure reroute attempts.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| {reroutes} | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
+| result | Reroute result | Str: ``success``, ``failure``, ``skipped`` | - |
+| reason | Low-cardinality endpoint health reason | Any Str | - |
+
+### otelcol_loadbalancer_backend_stale_total
+
+Number of times a backend endpoint disappeared from resolver membership.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| {stale_endpoints} | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| endpoint | The endpoint of the backend | Any Str | - |
+
+### otelcol_loadbalancer_backend_state
+
+Current endpoint health state by backend.
+
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| {backends} | Gauge | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| endpoint | The endpoint of the backend | Any Str | - |
+| state | Endpoint health state | Str: ``eligible``, ``quarantined``, ``stale`` | - |
+
+### otelcol_loadbalancer_backend_unquarantine_total
+
+Number of times a backend endpoint was admitted after quarantine.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| {unquarantines} | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| endpoint | The endpoint of the backend | Any Str | - |
+| reason | Low-cardinality endpoint health reason | Any Str | - |
 
 ### otelcol_loadbalancer_num_backend_updates
 

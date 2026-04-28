@@ -67,6 +67,12 @@ func createDefaultConfig() component.Config {
 			FlushInterval:            defaultMetricBatchFlushTimeout,
 			MaxRetryBufferMultiplier: defaultMetricBatchRetryBufferMultiplier,
 		},
+		EndpointHealth: EndpointHealthConfig{
+			Enabled:            false,
+			QuarantineDuration: defaultEndpointHealthQuarantineDuration,
+			RerouteOnFailure:   true,
+			MaxRerouteAttempts: 1,
+		},
 	}
 }
 

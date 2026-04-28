@@ -79,6 +79,7 @@ The `loadbalancingexporter` will, irrespective of the chosen resolver (`static`,
 * When using `k8s`, `dns`, and likely future resolvers, topology changes are eventually reflected in the `loadbalancingexporter`. The `k8s` resolver will update more quickly than `dns`, but a window of time in which the true topology doesn't match the view of the `loadbalancingexporter` remains.
 * Resiliency options 1 (`timeout`, `retry_on_failure` and `sending_queue` settings in `loadbalancing` section) - are useful for highly elastic environment (like k8s), where list of resolved endpoints frequently changed due to deployments, scale-up or scale-down events. In case of permanent change of list of resolved exporters this options provide capability to re-route data into new set of healthy backends. Disabled by default.
 * Resiliency options 2 (`timeout`, `retry_on_failure` and `sending_queue` settings in `otlp` section) - are useful for temporary problems with specific backend, like network flukes. Persistent Queue is NOT supported here as all sub-exporter shares the same `sending_queue` configuration, including `storage`. Enabled by default.
+* The `endpoint_health` option can be enabled to quarantine a resolver-present backend after the first endpoint-local transport failure. When `reroute_on_failure` is enabled, the failed telemetry is rerouted once to another eligible backend, which can temporarily break routing affinity to preserve availability. If every resolver-present backend is quarantined, endpoint health fails open and keeps those endpoints eligible so traffic is not blackholed.
 
 Unfortunately, data loss is still possible for any resolver type if all of the exporter's targets remains unavailable once redelivery is exhausted. Due consideration needs to be given to the exporter queue and retry configuration when running in a highly elastic environment.
 
@@ -125,6 +126,11 @@ Refer to [config.yaml](./testdata/config.yaml) for detailed examples on using th
   * `streamID`: Routes metrics based on their datapoint streamID. That's the unique hash of all it's attributes, plus the attributes and identifying information of its resource, scope, and metric data
 * loadbalancing exporter supports set of standard [queuing, retry and timeout settings](https://github.com/open-telemetry/opentelemetry-collector/blob/main/exporter/exporterhelper/README.md), but they are disable by default to maintain compatibility
 * The `routing_attributes` property is used to list the attributes that should be used if the `routing_key` is `attributes`.
+* The `endpoint_health` property is disabled by default and accepts the following optional properties:
+  * `enabled` turns endpoint health quarantine and eligibility filtering on or off.
+  * `quarantine_duration` keeps a backend out of the eligible routing ring for this duration after an endpoint-local failure. Default: `30s`.
+  * `reroute_on_failure` reroutes failed telemetry once to another eligible backend when the failure is endpoint-local. Default: `true`.
+  * `max_reroute_attempts` limits endpoint-failure reroute attempts. Default: `1`.
 * The `log_batcher` property enables post-routing log batching per backend. It is `disabled` by default for backward compatibility.
   * `enabled` turns post-routing log batching on or off.
   * `max_records` flushes a backend batch when it reaches this many log records. Default: `512`.
@@ -145,6 +151,11 @@ processors:
 
 exporters:
   loadbalancing:
+    endpoint_health:
+      enabled: true
+      quarantine_duration: 30s
+      reroute_on_failure: true
+      max_reroute_attempts: 1
     log_batcher:
       enabled: true
       max_records: 512
