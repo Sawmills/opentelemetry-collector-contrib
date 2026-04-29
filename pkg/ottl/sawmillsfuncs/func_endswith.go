@@ -72,6 +72,7 @@ func endsWith[K any](
 			return false, nil
 		}
 		if !caseSensitive {
+			// Avoid lowercasing already-lowercase hot-path values.
 			if endsWithAny(val, suffixes) {
 				return true, nil
 			}

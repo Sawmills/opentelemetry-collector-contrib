@@ -72,6 +72,7 @@ func contains[K any](
 			return false, nil
 		}
 		if !caseSensitive {
+			// Avoid lowercasing already-lowercase hot-path values.
 			if containsAny(val, patterns) {
 				return true, nil
 			}

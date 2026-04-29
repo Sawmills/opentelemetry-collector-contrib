@@ -153,6 +153,16 @@ func extractRequiredGrokLiterals(pattern string) []string {
 		switch ch {
 		case '(':
 			flush()
+			if strings.HasPrefix(pattern[i:], "(?:") {
+				close := findClosingGrokGroup(pattern, i)
+				if close > i && isRequiredGrokGroup(pattern, close) {
+					literals = append(literals, extractRequiredGrokLiterals(pattern[i+3:close])...)
+				}
+				if close > i {
+					i = close
+					continue
+				}
+			}
 			parenDepth++
 		case '[':
 			flush()
@@ -176,6 +186,51 @@ func extractRequiredGrokLiterals(pattern string) []string {
 		return nil
 	}
 	return literals
+}
+
+func findClosingGrokGroup(pattern string, open int) int {
+	depth := 0
+	inClass := false
+	for i := open; i < len(pattern); i++ {
+		ch := pattern[i]
+		if ch == '\\' {
+			i++
+			continue
+		}
+		if inClass {
+			if ch == ']' {
+				inClass = false
+			}
+			continue
+		}
+		switch ch {
+		case '[':
+			inClass = true
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func isRequiredGrokGroup(pattern string, close int) bool {
+	next := close + 1
+	if next >= len(pattern) {
+		return true
+	}
+	switch pattern[next] {
+	case '?', '*':
+		return false
+	case '{':
+		return next+1 >= len(pattern) || pattern[next+1] != '0'
+	default:
+		return true
+	}
 }
 
 func extractRequiredGrokRegexLiterals(pattern string) ([]string, bool) {

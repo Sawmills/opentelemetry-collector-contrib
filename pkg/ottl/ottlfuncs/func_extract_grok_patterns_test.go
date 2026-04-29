@@ -348,3 +348,15 @@ func Test_newGrokLiteralPrefilterUsesPatternDefinitions(t *testing.T) {
 	require.True(t, prefilter(`2024-06-18 12:34:56 fixed marker ok`))
 	require.False(t, prefilter(`2024-06-18 12:34:56 other marker ok`))
 }
+
+func Test_extractRequiredGrokLiteralsFallbackKeepsMandatoryNonCapturingGroup(t *testing.T) {
+	literals := extractRequiredGrokLiterals(`(?:required marker)(?= suffix)`)
+
+	require.Contains(t, literals, "required marker")
+}
+
+func Test_extractRequiredGrokLiteralsFallbackSkipsOptionalNonCapturingGroup(t *testing.T) {
+	literals := extractRequiredGrokLiterals(`(?:optional marker)?(?= suffix)`)
+
+	require.NotContains(t, literals, "optional marker")
+}
