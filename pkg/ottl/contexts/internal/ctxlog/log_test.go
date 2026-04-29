@@ -500,6 +500,29 @@ func TestPathGetSetterBodyKeySetInvalidatesCachedCompositeBodyString(t *testing.
 	assert.Equal(t, `{"key":"updated"}`, got)
 }
 
+func TestPathGetSetterBodyKeySetInvalidatesCachedCompositeBodyStringOnError(t *testing.T) {
+	keyPath := &pathtest.Path[*testContext]{
+		N: "body",
+		KeySlice: []ottl.Key[*testContext]{
+			&pathtest.Key[*testContext]{
+				I: ottltest.Intp(99),
+			},
+		},
+	}
+	keyAccessor, err := ctxlog.PathGetSetter(keyPath)
+	require.NoError(t, err)
+
+	log := createTelemetry("slice")
+	tCtx := newTestContext(log)
+	ctxlog.CacheBodyStringIfNeeded(tCtx)
+
+	err = keyAccessor.Set(t.Context(), tCtx, "updated")
+	require.Error(t, err)
+
+	_, ok := tCtx.GetCache().Get("_internal.body_string")
+	assert.False(t, ok)
+}
+
 func TestPathGetSetterBodyStringCacheMatchesPdataForInvalidCompositeFloat(t *testing.T) {
 	stringPath := &pathtest.Path[*testContext]{
 		N: "body",

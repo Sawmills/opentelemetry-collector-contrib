@@ -17,6 +17,8 @@ func TestDdStatusRemapper(t *testing.T) {
 	var nilString *string
 	var nilByteSlice *pcommon.ByteSlice
 	var nilValue *pcommon.Value
+	pcommonByteSlice := pcommon.NewByteSlice()
+	pcommonByteSlice.Append([]byte("notice")...)
 	pcommonValue := pcommon.NewValueStr("warning")
 	pcommonValuePtr := pcommon.NewValueStr("debug")
 
@@ -53,13 +55,14 @@ func TestDdStatusRemapper(t *testing.T) {
 		{name: "d prefix", value: "debug", want: "debug"},
 		{name: "trace prefix", value: "trace", want: "debug"},
 		{name: "verbose prefix", value: "verbose", want: "debug"},
-		{name: "o prefix", value: "ok", want: "ok"},
-		{name: "s prefix", value: "success", want: "ok"},
 		{name: "exactly ok", value: "ok", want: "ok"},
 		{name: "exactly success", value: "success", want: "ok"},
+		{name: "offline is not ok", value: "offline", want: "info"},
+		{name: "severe is not ok", value: "severe", want: "info"},
 		{name: "empty string", value: "", want: "info"},
 		{name: "unknown string", value: "unknown", want: "info"},
 		{name: "byte slice text prefix", value: []byte("error"), want: "error"},
+		{name: "pcommon byte slice text prefix", value: pcommonByteSlice, want: "notice"},
 		{name: "pcommon value text prefix", value: pcommonValue, want: "warning"},
 		{name: "pcommon value pointer text prefix", value: &pcommonValuePtr, want: "debug"},
 	}
@@ -84,4 +87,14 @@ func TestDdStatusRemapper(t *testing.T) {
 			require.Equal(t, tt.want, result)
 		})
 	}
+}
+
+func TestDdStatusRemapperRequiresTarget(t *testing.T) {
+	expressionFunc, err := createDdStatusRemapperFunction[any](
+		ottl.FunctionContext{},
+		&DdStatusRemapperArguments[any]{},
+	)
+
+	require.Error(t, err)
+	require.Nil(t, expressionFunc)
 }

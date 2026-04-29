@@ -221,17 +221,20 @@ func accessBodyKey[K Context](key []ottl.Key[K]) ottl.StandardGetSetter[K] {
 			body := tCtx.GetLogRecord().Body()
 			switch body.Type() {
 			case pcommon.ValueTypeMap:
-				if err := ctxutil.SetMapValue[K](ctx, tCtx, tCtx.GetLogRecord().Body().Map(), key, val); err != nil {
+				err := ctxutil.SetMapValue[K](ctx, tCtx, tCtx.GetLogRecord().Body().Map(), key, val)
+				invalidateCachedBodyString(tCtx)
+				if err != nil {
 					return err
 				}
 			case pcommon.ValueTypeSlice:
-				if err := ctxutil.SetSliceValue[K](ctx, tCtx, tCtx.GetLogRecord().Body().Slice(), key, val); err != nil {
+				err := ctxutil.SetSliceValue[K](ctx, tCtx, tCtx.GetLogRecord().Body().Slice(), key, val)
+				invalidateCachedBodyString(tCtx)
+				if err != nil {
 					return err
 				}
 			default:
 				return fmt.Errorf("log bodies of type %s cannot be indexed", body.Type().String())
 			}
-			invalidateCachedBodyString(tCtx)
 			return nil
 		},
 	}

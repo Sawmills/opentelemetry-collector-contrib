@@ -37,6 +37,9 @@ func createDdStatusRemapperFunction[K any](
 			"DdStatusRemapperFactory args must be of type *DdStatusRemapperArguments[K]",
 		)
 	}
+	if args.Target == nil {
+		return nil, errors.New("DdStatusRemapperFactory target must not be nil")
+	}
 
 	return statusRemapper(args.Target), nil
 }
@@ -124,7 +127,7 @@ func statusRemapper[K any](target ottl.Getter[K]) ottl.ExprFunc[K] {
 			return "info", nil
 		case strings.HasPrefix(levelLower, "d") || strings.HasPrefix(levelLower, "trace") || strings.HasPrefix(levelLower, "verbose"):
 			return "debug", nil
-		case strings.HasPrefix(levelLower, "o") || strings.HasPrefix(levelLower, "s"):
+		case levelLower == "ok" || levelLower == "success":
 			return "ok", nil
 		default:
 			return "info", nil
