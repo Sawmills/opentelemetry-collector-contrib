@@ -184,7 +184,9 @@ func extractRequiredGrokLiterals(pattern string) []string {
 			topLevelAlternation = true
 		case '*', '?':
 			flushQuantifiedOptionalLiteral()
-		case '.', '+', '^', '$', '{', '}':
+		case '+':
+			flush()
+		case '.', '^', '$', '{', '}':
 			flush()
 		default:
 			if ch < 0x20 {

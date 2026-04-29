@@ -383,13 +383,22 @@ func Test_extractRequiredGrokLiteralsFallbackSkipsOptionalQuantifiedByte(t *test
 			pattern: `foo*bar(?<=unsupported)`,
 			input:   "fbar unsupported",
 		},
+		{
+			name:    "plus",
+			pattern: `foo+bar(?<=unsupported)`,
+			input:   "foobar unsupported",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			literals := extractRequiredGrokLiterals(tt.pattern)
-			require.NotContains(t, literals, "foo")
 			require.Contains(t, literals, "bar")
+			if tt.name == "plus" {
+				require.Contains(t, literals, "foo")
+			} else {
+				require.NotContains(t, literals, "foo")
+			}
 
 			prefilter := newGrokLiteralPrefilter(tt.pattern)
 			require.NotNil(t, prefilter)

@@ -809,3 +809,17 @@ func Test_groupNumberDataPointsDoesNotMutateInputSlice(t *testing.T) {
 	require.Equal(t, 100.0, dps.At(0).DoubleValue())
 	require.Equal(t, 50.0, dps.At(1).DoubleValue())
 }
+
+func Test_generatedMetricTrackerClearsWhenMetricSliceChanges(t *testing.T) {
+	tracker := newGeneratedMetricTracker()
+
+	firstMetrics := pmetric.NewMetricSlice()
+	firstGenerated := firstMetrics.AppendEmpty()
+	tracker.mark(firstMetrics, firstGenerated)
+	require.Equal(t, 1, tracker.pendingLen())
+
+	secondMetrics := pmetric.NewMetricSlice()
+	secondMetric := secondMetrics.AppendEmpty()
+	require.False(t, tracker.consume(secondMetrics, secondMetric))
+	require.Equal(t, 0, tracker.pendingLen())
+}
