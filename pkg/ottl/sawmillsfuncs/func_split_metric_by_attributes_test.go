@@ -741,3 +741,71 @@ func Test_splitMetricByAttributesSkipsTrackedGeneratedMetric(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, metrics.Len())
 }
+
+func Test_splitMetricByAttributesDoesNotSkipSameNameSourceBeforeGeneratedOutput(t *testing.T) {
+	evaluate := splitMetricByAttributes[*ottlmetric.TransformContext](
+		"prefix",
+		ottl.Optional[[]string]{},
+	)
+
+	rm := pmetric.NewResourceMetrics()
+	sm := rm.ScopeMetrics().AppendEmpty()
+	metrics := sm.Metrics()
+
+	metricInput := metrics.AppendEmpty()
+	metricInput.SetEmptySum()
+	metricInput.SetName("sum_metric")
+	input := metricInput.Sum().DataPoints().AppendEmpty()
+	input.SetDoubleValue(100)
+	input.Attributes().PutStr("key1", "val1")
+	input.Attributes().PutStr("key2", "val2")
+
+	sameNameSource := metrics.AppendEmpty()
+	sameNameSource.SetEmptySum()
+	sameNameSource.SetName("prefix_sum_metric")
+	prefixedInput := sameNameSource.Sum().DataPoints().AppendEmpty()
+	prefixedInput.SetDoubleValue(7)
+	prefixedInput.Attributes().PutStr("key3", "val3")
+	prefixedInput.Attributes().PutStr("key4", "val4")
+
+	ctx := ottlmetric.NewTransformContextPtr(rm, sm, metrics.At(0))
+	_, err := evaluate(t.Context(), ctx)
+	ctx.Close()
+
+	require.NoError(t, err)
+	require.Equal(t, 3, metrics.Len())
+	require.Equal(t, "prefix_sum_metric", metrics.At(2).Name())
+
+	ctx = ottlmetric.NewTransformContextPtr(rm, sm, metrics.At(1))
+	_, err = evaluate(t.Context(), ctx)
+	ctx.Close()
+
+	require.NoError(t, err)
+	require.Equal(t, 4, metrics.Len())
+	require.Equal(t, "prefix_prefix_sum_metric", metrics.At(3).Name())
+
+	ctx = ottlmetric.NewTransformContextPtr(rm, sm, metrics.At(2))
+	_, err = evaluate(t.Context(), ctx)
+	ctx.Close()
+
+	require.NoError(t, err)
+	require.Equal(t, 4, metrics.Len())
+}
+
+func Test_groupNumberDataPointsDoesNotMutateInputSlice(t *testing.T) {
+	dps := pmetric.NewNumberDataPointSlice()
+	dp := dps.AppendEmpty()
+	dp.SetDoubleValue(100)
+	dp.Attributes().PutStr("key", "val")
+
+	duplicate := dps.AppendEmpty()
+	duplicate.SetDoubleValue(50)
+	duplicate.Attributes().PutStr("key", "val")
+
+	grouped := groupNumberDataPoints(dps, false)
+
+	require.Equal(t, 1, grouped.Len())
+	require.Equal(t, 150.0, grouped.At(0).DoubleValue())
+	require.Equal(t, 100.0, dps.At(0).DoubleValue())
+	require.Equal(t, 50.0, dps.At(1).DoubleValue())
+}

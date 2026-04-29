@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
@@ -210,4 +211,33 @@ func Test_newRegexLiteralPrefilter(t *testing.T) {
 			require.False(t, prefilter(tt.nonMatching))
 		})
 	}
+}
+
+func Test_extractPatternsLiteralPrefilterReturnsEmptyMap(t *testing.T) {
+	parser, err := ottl.NewParser[any](
+		StandardConverters[any](),
+		func(path ottl.Path[any]) (ottl.GetSetter[any], error) {
+			require.Equal(t, "body", path.Name())
+			return &ottl.StandardGetSetter[any]{
+				Getter: func(context.Context, any) (any, error) {
+					return "OTHER=abc123", nil
+				},
+				Setter: func(context.Context, any, any) error {
+					return nil
+				},
+			}, nil
+		},
+		componenttest.NewNopTelemetrySettings(),
+	)
+	require.NoError(t, err)
+
+	expr, err := parser.ParseValueExpression(`ExtractPatterns(body, "GIT_SHA=(?P<git_sha>\\w+)")`)
+	require.NoError(t, err)
+
+	result, err := expr.Eval(t.Context(), nil)
+	require.NoError(t, err)
+
+	resultMap, ok := result.(pcommon.Map)
+	require.True(t, ok)
+	require.Equal(t, 0, resultMap.Len())
 }
