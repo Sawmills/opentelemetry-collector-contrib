@@ -84,8 +84,8 @@ type TransformContextOption func(*TransformContext)
 // NewTransformContext creates a value TransformContext for backward compatibility.
 func NewTransformContext(
 	logRecord plog.LogRecord,
-	instrumentationScope pcommon.InstrumentationScope,
-	resource pcommon.Resource,
+	_ pcommon.InstrumentationScope,
+	_ pcommon.Resource,
 	scopeLogs plog.ScopeLogs,
 	resourceLogs plog.ResourceLogs,
 	options ...TransformContextOption,

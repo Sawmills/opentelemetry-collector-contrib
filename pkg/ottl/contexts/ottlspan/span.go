@@ -58,8 +58,8 @@ type TransformContextOption func(*TransformContext)
 // NewTransformContext creates a value TransformContext for backward compatibility.
 func NewTransformContext(
 	span ptrace.Span,
-	instrumentationScope pcommon.InstrumentationScope,
-	resource pcommon.Resource,
+	_ pcommon.InstrumentationScope,
+	_ pcommon.Resource,
 	scopeSpans ptrace.ScopeSpans,
 	resourceSpans ptrace.ResourceSpans,
 	options ...TransformContextOption,

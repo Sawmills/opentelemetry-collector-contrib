@@ -2706,7 +2706,6 @@ func Test_newStandardStringGetter(t *testing.T) {
 	type testCase[K any] struct {
 		name            string
 		args            args[K]
-		wantValue       string
 		wantLiteralTrue bool
 		wantErr         bool
 	}

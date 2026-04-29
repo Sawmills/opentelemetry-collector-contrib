@@ -67,8 +67,8 @@ type TransformContextOption func(*TransformContext)
 func NewTransformContext(
 	spanEvent ptrace.SpanEvent,
 	span ptrace.Span,
-	instrumentationScope pcommon.InstrumentationScope,
-	resource pcommon.Resource,
+	_ pcommon.InstrumentationScope,
+	_ pcommon.Resource,
 	scopeSpans ptrace.ScopeSpans,
 	resourceSpans ptrace.ResourceSpans,
 	options ...TransformContextOption,

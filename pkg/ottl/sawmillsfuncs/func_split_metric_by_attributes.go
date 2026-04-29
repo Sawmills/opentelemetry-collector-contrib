@@ -1,3 +1,6 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package sawmillsfuncs // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/sawmillsfuncs"
 
 import (
@@ -8,10 +11,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlmetric"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlmetric"
 )
 
 type DataPointSlice[T DataPoint] interface {
@@ -51,7 +55,7 @@ func createSplitMetricFunction[K any](
 		)
 	}
 
-	return splitMetricByAttributes[K](args.Prefix, args.PreservedAttributes)
+	return splitMetricByAttributes[K](args.Prefix, args.PreservedAttributes), nil
 }
 
 func groupNumberDataPoints(
@@ -185,7 +189,7 @@ func writeHashBytes(b *strings.Builder, bs []byte) {
 func splitMetricByAttributes[K any](
 	prefix string,
 	preservedAttrs ottl.Optional[[]string],
-) (ottl.ExprFunc[K], error) {
+) ottl.ExprFunc[K] {
 	preservedKeys := preservedAttrs.Get()
 	preservedKeysMap := make(map[string]bool, len(preservedKeys))
 
@@ -193,7 +197,7 @@ func splitMetricByAttributes[K any](
 		preservedKeysMap[key] = true
 	}
 
-	return func(ctx context.Context, tCtx K) (any, error) {
+	return func(_ context.Context, tCtx K) (any, error) {
 		tmCtx, err := metricTransformContext(any(tCtx))
 		if err != nil {
 			return nil, err
@@ -308,7 +312,7 @@ func splitMetricByAttributes[K any](
 		}
 
 		return nil, nil
-	}, nil
+	}
 }
 
 func isSplitMetricOutput(metricName, prefix string) bool {
@@ -333,7 +337,7 @@ func handleDataPoints[S DataPointSlice[P], P DataPoint](
 	preservedKeysMap map[string]bool,
 	newDataPointSliceFunc func() S,
 	newDataPointFunc func() P,
-	copyFunc func(src P, dest P),
+	copyFunc func(src, dest P),
 ) S {
 	newDataPoints := newDataPointSliceFunc()
 
@@ -362,7 +366,7 @@ func handleDataPoints[S DataPointSlice[P], P DataPoint](
 			newPoint := newDataPointFunc()
 			copyFunc(point, newPoint)
 
-			newPoint.Attributes().RemoveIf(func(k string, v pcommon.Value) bool {
+			newPoint.Attributes().RemoveIf(func(k string, _ pcommon.Value) bool {
 				if preservedKeysMap[k] || k == varyingAttrKey {
 					return false
 				}

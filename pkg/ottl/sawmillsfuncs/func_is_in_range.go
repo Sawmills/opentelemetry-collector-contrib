@@ -1,7 +1,11 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package sawmillsfuncs // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/sawmillsfuncs"
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
@@ -23,17 +27,17 @@ func createIsInRangeFunction[K any](
 ) (ottl.ExprFunc[K], error) {
 	args, ok := oArgs.(*IsInRangeArguments[K])
 	if !ok {
-		return nil, fmt.Errorf("IsInRangeFactory args must be of type *IsInRangeArguments[K]")
+		return nil, errors.New("IsInRangeFactory args must be of type *IsInRangeArguments[K]")
 	}
 
 	if args.Target == nil {
-		return nil, fmt.Errorf("target is required")
+		return nil, errors.New("target is required")
 	}
 	if args.Min == nil {
-		return nil, fmt.Errorf("min is required")
+		return nil, errors.New("min is required")
 	}
 	if args.Max == nil {
-		return nil, fmt.Errorf("max is required")
+		return nil, errors.New("max is required")
 	}
 
 	return func(ctx context.Context, tCtx K) (any, error) {
@@ -51,7 +55,7 @@ func createIsInRangeFunction[K any](
 		}
 
 		if minFloat > maxFloat {
-			return nil, fmt.Errorf("min must be less than or equal to max")
+			return nil, errors.New("min must be less than or equal to max")
 		}
 		return targetFloat >= minFloat && targetFloat <= maxFloat, nil
 	}, nil

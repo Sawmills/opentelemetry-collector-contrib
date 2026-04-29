@@ -1,3 +1,6 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package sawmillsfuncs
 
 import (
@@ -161,7 +164,7 @@ func TestIsInRange(t *testing.T) {
 
 			require.NoError(t, err)
 
-			result, err := function(context.Background(), nil)
+			result, err := function(t.Context(), nil)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
@@ -208,7 +211,7 @@ func TestIsInRangeDefersGetterEvaluation(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	result, err := function(context.Background(), &rangeContext{
+	result, err := function(t.Context(), &rangeContext{
 		target: 5,
 		min:    1,
 		max:    10,

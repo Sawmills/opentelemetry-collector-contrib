@@ -1,15 +1,18 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package sawmillsfuncs
 
 import (
 	"math"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"go.opentelemetry.io/collector/pdata/pmetric"
+
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlmetric"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/pmetrictest"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/collector/pdata/pmetric"
 )
 
 func Test_splitMetricByAttributes(t *testing.T) {
@@ -628,8 +631,7 @@ func Test_splitMetricByAttributes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			evaluate, err := splitMetricByAttributes[*ottlmetric.TransformContext](tt.prefix, tt.attributes)
-			require.NoError(t, err)
+			evaluate := splitMetricByAttributes[*ottlmetric.TransformContext](tt.prefix, tt.attributes)
 
 			ms := pmetric.NewMetricSlice()
 			input := tt.input()
@@ -645,7 +647,7 @@ func Test_splitMetricByAttributes(t *testing.T) {
 			ctx := ottlmetric.NewTransformContextPtr(rm, sm, sm.Metrics().At(0))
 			defer ctx.Close()
 
-			_, err = evaluate(nil, ctx)
+			_, err := evaluate(nil, ctx)
 			assert.Equal(t, tt.wantErr, err)
 
 			inputMetrics := pmetric.NewMetrics()

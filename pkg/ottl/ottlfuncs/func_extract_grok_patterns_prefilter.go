@@ -154,12 +154,12 @@ func extractRequiredGrokLiterals(pattern string) []string {
 		case '(':
 			flush()
 			if strings.HasPrefix(pattern[i:], "(?:") {
-				close := findClosingGrokGroup(pattern, i)
-				if close > i && isRequiredGrokGroup(pattern, close) {
-					literals = append(literals, extractRequiredGrokLiterals(pattern[i+3:close])...)
+				groupEnd := findClosingGrokGroup(pattern, i)
+				if groupEnd > i && isRequiredGrokGroup(pattern, groupEnd) {
+					literals = append(literals, extractRequiredGrokLiterals(pattern[i+3:groupEnd])...)
 				}
-				if close > i {
-					i = close
+				if groupEnd > i {
+					i = groupEnd
 					continue
 				}
 			}
@@ -218,8 +218,8 @@ func findClosingGrokGroup(pattern string, open int) int {
 	return -1
 }
 
-func isRequiredGrokGroup(pattern string, close int) bool {
-	next := close + 1
+func isRequiredGrokGroup(pattern string, groupEnd int) bool {
+	next := groupEnd + 1
 	if next >= len(pattern) {
 		return true
 	}

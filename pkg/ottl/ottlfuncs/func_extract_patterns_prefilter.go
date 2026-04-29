@@ -5,6 +5,7 @@ package ottlfuncs // import "github.com/open-telemetry/opentelemetry-collector-c
 
 import (
 	"regexp/syntax"
+	"slices"
 	sortpkg "sort"
 	"strings"
 )
@@ -67,12 +68,7 @@ func hasRegexFoldCase(re *syntax.Regexp) bool {
 	if re.Flags&syntax.FoldCase != 0 {
 		return true
 	}
-	for _, sub := range re.Sub {
-		if hasRegexFoldCase(sub) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(re.Sub, hasRegexFoldCase)
 }
 
 func selectRegexPrefilterLiterals(literals []string) []string {

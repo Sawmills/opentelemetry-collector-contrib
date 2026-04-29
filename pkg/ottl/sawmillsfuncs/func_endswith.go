@@ -1,9 +1,11 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package sawmillsfuncs // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/sawmillsfuncs"
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
@@ -30,12 +32,12 @@ func createEndsWithFunction[K any](
 	args, ok := oArgs.(*EndsWithArguments[K])
 
 	if !ok {
-		return nil, fmt.Errorf(
+		return nil, errors.New(
 			"NewEndsWithFactory args must be of type *EndsWithArguments[K]",
 		)
 	}
 
-	return endsWith(args.Target, args.Suffixes, args.CaseSensitive)
+	return endsWith(args.Target, args.Suffixes, args.CaseSensitive), nil
 }
 
 func endsWithAny(s string, suffixes []string) bool {
@@ -51,7 +53,7 @@ func endsWith[K any](
 	target ottl.StringGetter[K],
 	suffixes []string,
 	caseSensitive bool,
-) (ottl.ExprFunc[K], error) {
+) ottl.ExprFunc[K] {
 	if !caseSensitive {
 		for i, suffix := range suffixes {
 			suffixes[i] = strings.ToLower(suffix)
@@ -79,5 +81,5 @@ func endsWith[K any](
 			val = strings.ToLower(val)
 		}
 		return endsWithAny(val, suffixes), nil
-	}, nil
+	}
 }

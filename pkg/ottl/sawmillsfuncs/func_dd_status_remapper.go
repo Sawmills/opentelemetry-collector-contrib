@@ -1,8 +1,11 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package sawmillsfuncs // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/sawmillsfuncs"
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strconv"
 	"strings"
 
@@ -30,15 +33,15 @@ func createDdStatusRemapperFunction[K any](
 	args, ok := oArgs.(*DdStatusRemapperArguments[K])
 
 	if !ok {
-		return nil, fmt.Errorf(
+		return nil, errors.New(
 			"DdStatusRemapperFactory args must be of type *DdStatusRemapperArguments[K]",
 		)
 	}
 
-	return statusRemapper(args.Target)
+	return statusRemapper(args.Target), nil
 }
 
-func statusRemapper[K any](target ottl.Getter[K]) (ottl.ExprFunc[K], error) {
+func statusRemapper[K any](target ottl.Getter[K]) ottl.ExprFunc[K] {
 	return func(ctx context.Context, tCtx K) (any, error) {
 		val, err := target.Get(ctx, tCtx)
 		if err != nil {
@@ -126,5 +129,5 @@ func statusRemapper[K any](target ottl.Getter[K]) (ottl.ExprFunc[K], error) {
 		default:
 			return "info", nil
 		}
-	}, nil
+	}
 }

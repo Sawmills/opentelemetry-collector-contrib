@@ -1,3 +1,6 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package sawmillsfuncs
 
 import (
@@ -59,7 +62,7 @@ func TestStartsWith(t *testing.T) {
 
 			require.NoError(t, err)
 
-			result, err := expressionFunc(context.Background(), nil)
+			result, err := expressionFunc(t.Context(), nil)
 			if tt.expectErr {
 				require.Error(t, err)
 				return

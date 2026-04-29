@@ -77,9 +77,9 @@ type TransformContextOption func(*TransformContext)
 func NewTransformContext(
 	dataPoint any,
 	metric pmetric.Metric,
-	metrics pmetric.MetricSlice,
-	instrumentationScope pcommon.InstrumentationScope,
-	resource pcommon.Resource,
+	_ pmetric.MetricSlice,
+	_ pcommon.InstrumentationScope,
+	_ pcommon.Resource,
 	scopeMetrics pmetric.ScopeMetrics,
 	resourceMetrics pmetric.ResourceMetrics,
 	options ...TransformContextOption,

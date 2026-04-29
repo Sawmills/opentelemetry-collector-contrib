@@ -1,11 +1,15 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package sawmillsfuncs // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/sawmillsfuncs"
 
 import (
 	"context"
-	"fmt"
+	"errors"
+
+	"go.opentelemetry.io/collector/client"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
-	"go.opentelemetry.io/collector/client"
 )
 
 type FromContextArguments[K any] struct {
@@ -27,16 +31,16 @@ func createFromContextFunction[K any](
 	args, ok := oArgs.(*FromContextArguments[K])
 
 	if !ok {
-		return nil, fmt.Errorf(
+		return nil, errors.New(
 			"FromContextFactory args must be of type *FromContextArguments[K]",
 		)
 	}
 
-	return getFromContext[K](args.Key)
+	return getFromContext[K](args.Key), nil
 }
 
-func getFromContext[K any](key string) (ottl.ExprFunc[K], error) {
-	return func(ctx context.Context, tCtx K) (any, error) {
+func getFromContext[K any](key string) ottl.ExprFunc[K] {
+	return func(ctx context.Context, _ K) (any, error) {
 		cl := client.FromContext(ctx)
 		ss := cl.Metadata.Get(key)
 
@@ -45,5 +49,5 @@ func getFromContext[K any](key string) (ottl.ExprFunc[K], error) {
 		}
 
 		return ss[0], nil
-	}, nil
+	}
 }
