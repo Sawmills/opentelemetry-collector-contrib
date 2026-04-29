@@ -439,7 +439,11 @@ func Test_splitMetricByAttributes(t *testing.T) {
 				input.Attributes().PutStr("key3", "val3")
 
 				input = sumMetric.Gauge().DataPoints().AppendEmpty()
-				input.SetDoubleValue(70)
+				input.SetDoubleValue(50)
+				input.Attributes().PutStr("key4", "val4")
+
+				input = sumMetric.Gauge().DataPoints().AppendEmpty()
+				input.SetDoubleValue(20)
 				input.Attributes().PutStr("key4", "val4")
 
 				input = sumMetric.Gauge().DataPoints().AppendEmpty()
@@ -824,5 +828,17 @@ func Test_generatedMetricTrackerKeepsInterleavedIterationsIndependent(t *testing
 
 	require.True(t, tracker.consume(firstIteration, 1))
 	require.True(t, tracker.consume(secondIteration, 1))
+	require.Equal(t, 0, tracker.pendingLen())
+}
+
+func Test_generatedMetricTrackerClearsIterationOnClose(t *testing.T) {
+	tracker := newGeneratedMetricTracker()
+	iteration := ottlmetric.NewMetricIteration()
+
+	tracker.mark(iteration, 1)
+	tracker.mark(iteration, 2)
+	require.Equal(t, 2, tracker.pendingLen())
+
+	iteration.Close()
 	require.Equal(t, 0, tracker.pendingLen())
 }

@@ -188,7 +188,22 @@ func extractRequiredGrokLiterals(pattern string) []string {
 			flushQuantifiedOptionalLiteral()
 		case '+':
 			flush()
-		case '.', '^', '$', '{', '}':
+		case '{':
+			quantifierEnd := i + 1
+			for quantifierEnd < len(pattern) && pattern[quantifierEnd] != '}' {
+				quantifierEnd++
+			}
+			if quantifierEnd < len(pattern) {
+				if isZeroMinimumGrokBraceQuantifier(pattern[i+1 : quantifierEnd]) {
+					flushQuantifiedOptionalLiteral()
+				} else {
+					flush()
+				}
+				i = quantifierEnd
+				continue
+			}
+			flush()
+		case '.', '^', '$', '}':
 			flush()
 		default:
 			if ch < 0x20 {
@@ -242,6 +257,11 @@ func hasGrokInlineCaseInsensitiveFlag(pattern string) bool {
 	next:
 	}
 	return false
+}
+
+func isZeroMinimumGrokBraceQuantifier(quantifier string) bool {
+	minimum, _, _ := strings.Cut(quantifier, ",")
+	return strings.TrimSpace(minimum) == "0"
 }
 
 func findClosingGrokGroup(pattern string, open int) int {

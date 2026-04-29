@@ -334,6 +334,18 @@ func Test_newGrokLiteralPrefilter(t *testing.T) {
 			wantNil: true,
 		},
 		{
+			name:     "skips fallback brace quantifier bytes",
+			pattern:  `foo{1,2}bar(?<=done)%{WORD:value}`,
+			match:    `foobar done ok`,
+			mismatch: `foo done ok`,
+		},
+		{
+			name:     "treats zero minimum fallback brace quantifier as optional",
+			pattern:  `foo{0,2}bar(?<=done)%{WORD:value}`,
+			match:    `fobar done ok`,
+			mismatch: `f done ok`,
+		},
+		{
 			name:    "skips literals inside character classes in lookaheads",
 			pattern: `(?=[^)]foo)%{GREEDYDATA:value}`,
 			wantNil: true,

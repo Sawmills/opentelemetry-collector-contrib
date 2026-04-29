@@ -55,6 +55,9 @@ func (t *generatedMetricTracker) mark(iteration *ottlmetric.MetricIteration, met
 	if pending == nil {
 		pending = make(map[int]int)
 		t.pending[iteration] = pending
+		iteration.RegisterCleanup(func() {
+			t.clearIteration(iteration)
+		})
 	}
 	pending[metricIndex]++
 }
@@ -79,6 +82,15 @@ func (t *generatedMetricTracker) consume(iteration *ottlmetric.MetricIteration, 
 		pending[metricIndex] = count - 1
 	}
 	return true
+}
+
+func (t *generatedMetricTracker) clearIteration(iteration *ottlmetric.MetricIteration) {
+	if iteration == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.pending, iteration)
 }
 
 func (t *generatedMetricTracker) pendingLen() int {
@@ -284,14 +296,13 @@ func splitMetricByAttributes[K any](
 					src.CopyTo(dest)
 				})
 			if newDataPoints.Len() > 0 {
-				grouped := groupNumberDataPoints(newDataPoints, false)
 				newMetric := metrics.AppendEmpty()
 				generatedMetrics.mark(iteration, metrics.Len()-1)
 				currentMetric.CopyTo(newMetric)
 
 				newGaugeMetric := newMetric.Gauge()
 				newMetric.SetName(newMetricName)
-				grouped.CopyTo(newGaugeMetric.DataPoints())
+				newDataPoints.CopyTo(newGaugeMetric.DataPoints())
 			}
 		case pmetric.MetricTypeSum:
 			sum := currentMetric.Sum()

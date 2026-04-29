@@ -423,8 +423,8 @@ func Test_ProcessMetrics_MetricContextPropagatesMetricIteration(t *testing.T) {
 	require.Equal(t, []int{0, 1, 2, 3, 4}, seenIndexes)
 	require.Len(t, seenIterations, len(seenIndexes))
 	require.NotNil(t, seenIterations[0])
-	for _, iteration := range seenIterations {
-		require.Equal(t, seenIterations[0], iteration)
+	for _, iteration := range seenIterations[1:] {
+		require.Same(t, seenIterations[0], iteration)
 	}
 
 	metrics := td.ResourceMetrics().At(0).ScopeMetrics().At(0).Metrics()

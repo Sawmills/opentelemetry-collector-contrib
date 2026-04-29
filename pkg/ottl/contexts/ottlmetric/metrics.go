@@ -51,12 +51,45 @@ type TransformContext struct {
 
 // MetricIteration identifies one pass over a metric slice.
 type MetricIteration struct {
-	_ byte
+	mu       sync.Mutex
+	cleanups []func()
+	closed   bool
 }
 
 // NewMetricIteration creates a marker shared by all metric contexts in one metric-slice pass.
 func NewMetricIteration() *MetricIteration {
 	return &MetricIteration{}
+}
+
+// RegisterCleanup registers cleanup to run when the metric-slice pass finishes.
+func (m *MetricIteration) RegisterCleanup(cleanup func()) {
+	if m == nil || cleanup == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		cleanup()
+		return
+	}
+	m.cleanups = append(m.cleanups, cleanup)
+	m.mu.Unlock()
+}
+
+// Close runs cleanup for the metric-slice pass.
+func (m *MetricIteration) Close() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	cleanups := m.cleanups
+	m.cleanups = nil
+	m.closed = true
+	m.mu.Unlock()
+
+	for _, cleanup := range cleanups {
+		cleanup()
+	}
 }
 
 // MarshalLogObject serializes the metric into a zapcore.ObjectEncoder for logging.

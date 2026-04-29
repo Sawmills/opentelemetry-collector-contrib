@@ -47,17 +47,20 @@ func (m metricStatements) ConsumeMetrics(ctx context.Context, md pmetric.Metrics
 				condition, err := m.Eval(ctx, tCtx)
 				if err != nil {
 					tCtx.Close()
+					iteration.Close()
 					return err
 				}
 				if condition {
 					err = m.Execute(ctx, tCtx)
 					if err != nil {
 						tCtx.Close()
+						iteration.Close()
 						return err
 					}
 				}
 				tCtx.Close()
 			}
+			iteration.Close()
 		}
 	}
 	return nil
