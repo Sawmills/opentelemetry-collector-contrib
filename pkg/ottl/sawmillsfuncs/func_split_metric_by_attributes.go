@@ -23,8 +23,6 @@ type DataPointSlice[T DataPoint] interface {
 	Len() int
 	At(int) T
 	AppendEmpty() T
-	EnsureCapacity(int)
-	RemoveIf(func(T) bool)
 }
 
 type DataPoint interface {
@@ -37,14 +35,13 @@ type splitMetricArguments struct {
 }
 
 type generatedMetricTracker struct {
-	mu        sync.Mutex
-	iteration *ottlmetric.MetricIteration
-	pending   map[int]int
+	mu      sync.Mutex
+	pending map[*ottlmetric.MetricIteration]map[int]int
 }
 
 func newGeneratedMetricTracker() *generatedMetricTracker {
 	return &generatedMetricTracker{
-		pending: make(map[int]int),
+		pending: make(map[*ottlmetric.MetricIteration]map[int]int),
 	}
 }
 
@@ -54,8 +51,12 @@ func (t *generatedMetricTracker) mark(iteration *ottlmetric.MetricIteration, met
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.resetIfNewIteration(iteration)
-	t.pending[metricIndex]++
+	pending := t.pending[iteration]
+	if pending == nil {
+		pending = make(map[int]int)
+		t.pending[iteration] = pending
+	}
+	pending[metricIndex]++
 }
 
 func (t *generatedMetricTracker) consume(iteration *ottlmetric.MetricIteration, metricIndex int) bool {
@@ -64,31 +65,30 @@ func (t *generatedMetricTracker) consume(iteration *ottlmetric.MetricIteration, 
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.resetIfNewIteration(iteration)
-	count := t.pending[metricIndex]
+	pending := t.pending[iteration]
+	count := pending[metricIndex]
 	if count == 0 {
 		return false
 	}
 	if count == 1 {
-		delete(t.pending, metricIndex)
+		delete(pending, metricIndex)
+		if len(pending) == 0 {
+			delete(t.pending, iteration)
+		}
 	} else {
-		t.pending[metricIndex] = count - 1
+		pending[metricIndex] = count - 1
 	}
 	return true
-}
-
-func (t *generatedMetricTracker) resetIfNewIteration(iteration *ottlmetric.MetricIteration) {
-	if t.iteration == iteration {
-		return
-	}
-	clear(t.pending)
-	t.iteration = iteration
 }
 
 func (t *generatedMetricTracker) pendingLen() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return len(t.pending)
+	count := 0
+	for _, pending := range t.pending {
+		count += len(pending)
+	}
+	return count
 }
 
 func NewSplitMetricFactory[K any]() ottl.Factory[K] {

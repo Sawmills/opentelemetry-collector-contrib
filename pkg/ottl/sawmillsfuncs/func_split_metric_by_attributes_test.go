@@ -812,14 +812,17 @@ func Test_groupNumberDataPointsDoesNotMutateInputSlice(t *testing.T) {
 	require.Equal(t, 50.0, dps.At(1).DoubleValue())
 }
 
-func Test_generatedMetricTrackerClearsWhenMetricSliceChanges(t *testing.T) {
+func Test_generatedMetricTrackerKeepsInterleavedIterationsIndependent(t *testing.T) {
 	tracker := newGeneratedMetricTracker()
 
 	firstIteration := ottlmetric.NewMetricIteration()
 	tracker.mark(firstIteration, 1)
-	require.Equal(t, 1, tracker.pendingLen())
 
 	secondIteration := ottlmetric.NewMetricIteration()
-	require.False(t, tracker.consume(secondIteration, 1))
+	tracker.mark(secondIteration, 1)
+	require.Equal(t, 2, tracker.pendingLen())
+
+	require.True(t, tracker.consume(firstIteration, 1))
+	require.True(t, tracker.consume(secondIteration, 1))
 	require.Equal(t, 0, tracker.pendingLen())
 }
