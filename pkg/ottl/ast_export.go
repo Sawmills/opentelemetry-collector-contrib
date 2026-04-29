@@ -1,4 +1,4 @@
-package ottl
+package ottl // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 
 // Public AST type aliases for downstream codegen and compatibility.
 type (

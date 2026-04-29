@@ -1,4 +1,4 @@
-package sawmillsfuncs
+package sawmillsfuncs // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/sawmillsfuncs"
 
 import (
 	"context"
