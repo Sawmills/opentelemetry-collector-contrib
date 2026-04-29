@@ -5,7 +5,6 @@ package ottlfuncs
 
 import (
 	"regexp/syntax"
-	sortpkg "sort"
 	"strings"
 )
 
@@ -201,27 +200,5 @@ func isEscapedGrokLiteral(ch byte) bool {
 }
 
 func selectGrokPrefilterLiterals(literals []string) []string {
-	seen := make(map[string]struct{}, len(literals))
-	selected := make([]string, 0, len(literals))
-	for _, literal := range literals {
-		literal = strings.TrimSpace(literal)
-		if len(literal) < 3 {
-			continue
-		}
-		if _, ok := seen[literal]; ok {
-			continue
-		}
-		seen[literal] = struct{}{}
-		selected = append(selected, literal)
-	}
-	sortpkg.Slice(selected, func(i, j int) bool {
-		if len(selected[i]) == len(selected[j]) {
-			return selected[i] < selected[j]
-		}
-		return len(selected[i]) > len(selected[j])
-	})
-	if len(selected) > maxGrokPrefilterLiterals {
-		selected = selected[:maxGrokPrefilterLiterals]
-	}
-	return selected
+	return selectPrefilterLiterals(literals, maxGrokPrefilterLiterals)
 }

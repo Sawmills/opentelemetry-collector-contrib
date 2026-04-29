@@ -185,9 +185,11 @@ func (bodyGetSetter[K]) Get(_ context.Context, tCtx K) (any, error) {
 }
 
 func (bodyGetSetter[K]) Set(_ context.Context, tCtx K, val any) error {
-	// This setter intentionally does not invalidate the cached body string.
-	// That is safe for read-only ConditionSequence evaluation, but not for mixed read-write StatementSequence usage.
-	return ctxutil.SetValue(tCtx.GetLogRecord().Body(), val)
+	if err := ctxutil.SetValue(tCtx.GetLogRecord().Body(), val); err != nil {
+		return err
+	}
+	invalidateCachedBodyString(tCtx)
+	return nil
 }
 
 func (bodyGetSetter[K]) GetStringLike(_ context.Context, tCtx K) (*string, bool, error) {
@@ -219,12 +221,18 @@ func accessBodyKey[K Context](key []ottl.Key[K]) ottl.StandardGetSetter[K] {
 			body := tCtx.GetLogRecord().Body()
 			switch body.Type() {
 			case pcommon.ValueTypeMap:
-				return ctxutil.SetMapValue[K](ctx, tCtx, tCtx.GetLogRecord().Body().Map(), key, val)
+				if err := ctxutil.SetMapValue[K](ctx, tCtx, tCtx.GetLogRecord().Body().Map(), key, val); err != nil {
+					return err
+				}
 			case pcommon.ValueTypeSlice:
-				return ctxutil.SetSliceValue[K](ctx, tCtx, tCtx.GetLogRecord().Body().Slice(), key, val)
+				if err := ctxutil.SetSliceValue[K](ctx, tCtx, tCtx.GetLogRecord().Body().Slice(), key, val); err != nil {
+					return err
+				}
 			default:
 				return fmt.Errorf("log bodies of type %s cannot be indexed", body.Type().String())
 			}
+			invalidateCachedBodyString(tCtx)
+			return nil
 		},
 	}
 }
@@ -243,6 +251,7 @@ func accessStringBody[K Context]() ottl.StandardGetSetter[K] {
 				return err
 			}
 			tCtx.GetLogRecord().Body().SetStr(str)
+			invalidateCachedBodyString(tCtx)
 			return nil
 		},
 	}

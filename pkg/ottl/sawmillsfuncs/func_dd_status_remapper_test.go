@@ -5,17 +5,27 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 )
 
 func TestDdStatusRemapper(t *testing.T) {
+	var nilString *string
+	var nilByteSlice *pcommon.ByteSlice
+	var nilValue *pcommon.Value
+	pcommonValue := pcommon.NewValueStr("warning")
+	pcommonValuePtr := pcommon.NewValueStr("debug")
+
 	tests := []struct {
 		name  string
 		value any
 		want  any
 	}{
 		{name: "nil value", value: nil, want: nil},
+		{name: "nil string pointer", value: nilString, want: nil},
+		{name: "nil byte slice pointer", value: nilByteSlice, want: nil},
+		{name: "nil value pointer", value: nilValue, want: nil},
 		{name: "level 0", value: "0", want: "emerg"},
 		{name: "level 1", value: "1", want: "alert"},
 		{name: "level 2", value: "2", want: "critical"},
@@ -46,6 +56,9 @@ func TestDdStatusRemapper(t *testing.T) {
 		{name: "exactly success", value: "success", want: "ok"},
 		{name: "empty string", value: "", want: "info"},
 		{name: "unknown string", value: "unknown", want: "info"},
+		{name: "byte slice text prefix", value: []byte("error"), want: "error"},
+		{name: "pcommon value text prefix", value: pcommonValue, want: "warning"},
+		{name: "pcommon value pointer text prefix", value: &pcommonValuePtr, want: "debug"},
 	}
 
 	for _, tt := range tests {

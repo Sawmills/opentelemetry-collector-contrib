@@ -5,6 +5,7 @@ package ctxlog_test
 
 import (
 	"encoding/hex"
+	"math"
 	"testing"
 	"time"
 
@@ -430,6 +431,91 @@ func TestPathGetSetterBodyStringFallsBackWithoutCache(t *testing.T) {
 
 	log := createTelemetry("map")
 	got, err := accessor.Get(t.Context(), newTestContext(log))
+	require.NoError(t, err)
+	assert.Equal(t, log.Body().AsString(), got)
+}
+
+func TestPathGetSetterBodySetInvalidatesCachedCompositeBodyString(t *testing.T) {
+	bodyPath := &pathtest.Path[*testContext]{N: "body"}
+	bodyAccessor, err := ctxlog.PathGetSetter(bodyPath)
+	require.NoError(t, err)
+
+	stringPath := &pathtest.Path[*testContext]{
+		N: "body",
+		NextPath: &pathtest.Path[*testContext]{
+			N: "string",
+		},
+	}
+	stringAccessor, err := ctxlog.PathGetSetter(stringPath)
+	require.NoError(t, err)
+
+	log := createTelemetry("map")
+	tCtx := newTestContext(log)
+	ctxlog.CacheBodyStringIfNeeded(tCtx)
+
+	err = bodyAccessor.Set(t.Context(), tCtx, "updated")
+	require.NoError(t, err)
+
+	_, ok := tCtx.GetCache().Get("_internal.body_string")
+	assert.False(t, ok)
+
+	got, err := stringAccessor.Get(t.Context(), tCtx)
+	require.NoError(t, err)
+	assert.Equal(t, "updated", got)
+}
+
+func TestPathGetSetterBodyKeySetInvalidatesCachedCompositeBodyString(t *testing.T) {
+	keyPath := &pathtest.Path[*testContext]{
+		N: "body",
+		KeySlice: []ottl.Key[*testContext]{
+			&pathtest.Key[*testContext]{
+				S: ottltest.Strp("key"),
+			},
+		},
+	}
+	keyAccessor, err := ctxlog.PathGetSetter(keyPath)
+	require.NoError(t, err)
+
+	stringPath := &pathtest.Path[*testContext]{
+		N: "body",
+		NextPath: &pathtest.Path[*testContext]{
+			N: "string",
+		},
+	}
+	stringAccessor, err := ctxlog.PathGetSetter(stringPath)
+	require.NoError(t, err)
+
+	log := createTelemetry("map")
+	tCtx := newTestContext(log)
+	ctxlog.CacheBodyStringIfNeeded(tCtx)
+
+	err = keyAccessor.Set(t.Context(), tCtx, "updated")
+	require.NoError(t, err)
+
+	_, ok := tCtx.GetCache().Get("_internal.body_string")
+	assert.False(t, ok)
+
+	got, err := stringAccessor.Get(t.Context(), tCtx)
+	require.NoError(t, err)
+	assert.Equal(t, `{"key":"updated"}`, got)
+}
+
+func TestPathGetSetterBodyStringCacheMatchesPdataForInvalidCompositeFloat(t *testing.T) {
+	stringPath := &pathtest.Path[*testContext]{
+		N: "body",
+		NextPath: &pathtest.Path[*testContext]{
+			N: "string",
+		},
+	}
+	stringAccessor, err := ctxlog.PathGetSetter(stringPath)
+	require.NoError(t, err)
+
+	log := plog.NewLogRecord()
+	log.Body().SetEmptyMap().PutDouble("bad", math.NaN())
+	tCtx := newTestContext(log)
+	ctxlog.CacheBodyStringIfNeeded(tCtx)
+
+	got, err := stringAccessor.Get(t.Context(), tCtx)
 	require.NoError(t, err)
 	assert.Equal(t, log.Body().AsString(), got)
 }

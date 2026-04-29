@@ -56,6 +56,14 @@ func getCachedBodyStringFromMap(cache pcommon.Map) (string, bool) {
 	return val.Str(), true
 }
 
+func invalidateCachedBodyString[K any](tCtx K) {
+	cacheCtx, ok := any(tCtx).(cacheCarrier)
+	if !ok {
+		return
+	}
+	cacheCtx.GetCache().Remove(bodyStringCacheKey)
+}
+
 func bodySupportsCachedString(body pcommon.Value) bool {
 	switch body.Type() {
 	case pcommon.ValueTypeMap, pcommon.ValueTypeSlice:
@@ -78,17 +86,23 @@ func bodyAsStringOptimized(v pcommon.Value) string {
 	case pcommon.ValueTypeInt:
 		return strconv.FormatInt(v.Int(), 10)
 	case pcommon.ValueTypeMap:
-		return mapToJSONString(v.Map())
+		if s, ok := mapToJSONString(v.Map()); ok {
+			return s
+		}
+		return ""
 	case pcommon.ValueTypeBytes:
 		return base64.StdEncoding.EncodeToString(v.Bytes().AsRaw())
 	case pcommon.ValueTypeSlice:
-		return sliceToJSONString(v.Slice())
+		if s, ok := sliceToJSONString(v.Slice()); ok {
+			return s
+		}
+		return ""
 	default:
 		return fmt.Sprintf("<Unknown OpenTelemetry attribute value type %q>", v.Type())
 	}
 }
 
-func mapToJSONString(m pcommon.Map) string {
+func mapToJSONString(m pcommon.Map) (string, bool) {
 	keys := make([]string, 0, m.Len())
 	m.Range(func(k string, _ pcommon.Value) bool {
 		keys = append(keys, k)
@@ -106,13 +120,15 @@ func mapToJSONString(m pcommon.Map) string {
 		b.WriteString(mustMarshalJSONString(k))
 		b.WriteByte(':')
 		v, _ := m.Get(k)
-		appendJSONValue(&b, v)
+		if !appendJSONValue(&b, v) {
+			return "", false
+		}
 	}
 	b.WriteByte('}')
-	return b.String()
+	return b.String(), true
 }
 
-func sliceToJSONString(s pcommon.Slice) string {
+func sliceToJSONString(s pcommon.Slice) (string, bool) {
 	var b strings.Builder
 	b.Grow(s.Len() * 12)
 	b.WriteByte('[')
@@ -120,13 +136,15 @@ func sliceToJSONString(s pcommon.Slice) string {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		appendJSONValue(&b, s.At(i))
+		if !appendJSONValue(&b, s.At(i)) {
+			return "", false
+		}
 	}
 	b.WriteByte(']')
-	return b.String()
+	return b.String(), true
 }
 
-func appendJSONValue(b *strings.Builder, v pcommon.Value) {
+func appendJSONValue(b *strings.Builder, v pcommon.Value) bool {
 	switch v.Type() {
 	case pcommon.ValueTypeEmpty:
 		b.WriteString("null")
@@ -135,18 +153,30 @@ func appendJSONValue(b *strings.Builder, v pcommon.Value) {
 	case pcommon.ValueTypeBool:
 		b.WriteString(strconv.FormatBool(v.Bool()))
 	case pcommon.ValueTypeDouble:
+		if math.IsInf(v.Double(), 0) || math.IsNaN(v.Double()) {
+			return false
+		}
 		b.WriteString(float64AsJSONString(v.Double()))
 	case pcommon.ValueTypeInt:
 		b.WriteString(strconv.FormatInt(v.Int(), 10))
 	case pcommon.ValueTypeMap:
-		b.WriteString(mapToJSONString(v.Map()))
+		s, ok := mapToJSONString(v.Map())
+		if !ok {
+			return false
+		}
+		b.WriteString(s)
 	case pcommon.ValueTypeSlice:
-		b.WriteString(sliceToJSONString(v.Slice()))
+		s, ok := sliceToJSONString(v.Slice())
+		if !ok {
+			return false
+		}
+		b.WriteString(s)
 	case pcommon.ValueTypeBytes:
 		b.WriteString(mustMarshalJSONBytes(v.Bytes().AsRaw()))
 	default:
 		b.WriteString(mustMarshalJSONString(fmt.Sprintf("%v", v)))
 	}
+	return true
 }
 
 func mustMarshalJSONString(s string) string {

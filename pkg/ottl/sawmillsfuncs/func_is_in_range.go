@@ -36,48 +36,39 @@ func createIsInRangeFunction[K any](
 		return nil, fmt.Errorf("max is required")
 	}
 
-	ctx := context.Background()
-
-	target, err := args.Target.Get(ctx, *new(K))
-	if err != nil {
-		return nil, fmt.Errorf("target must be a number")
-	}
-	if target == nil {
-		return nil, fmt.Errorf("target value is nil")
-	}
-
-	min, err := args.Min.Get(ctx, *new(K))
-	if err != nil {
-		return nil, fmt.Errorf("min must be a number")
-	}
-	if min == nil {
-		return nil, fmt.Errorf("min value is nil")
-	}
-	minFloat := *min
-
-	max, err := args.Max.Get(ctx, *new(K))
-	if err != nil {
-		return nil, fmt.Errorf("max must be a number")
-	}
-	if max == nil {
-		return nil, fmt.Errorf("max value is nil")
-	}
-	maxFloat := *max
-
-	if minFloat > maxFloat {
-		return nil, fmt.Errorf("min must be less than or equal to max")
-	}
-
 	return func(ctx context.Context, tCtx K) (any, error) {
-		target, err := args.Target.Get(ctx, tCtx)
+		targetFloat, err := getRequiredRangeFloat(ctx, tCtx, args.Target, "target")
 		if err != nil {
 			return nil, err
 		}
-		if target == nil {
-			return nil, fmt.Errorf("target value is nil")
+		minFloat, err := getRequiredRangeFloat(ctx, tCtx, args.Min, "min")
+		if err != nil {
+			return nil, err
+		}
+		maxFloat, err := getRequiredRangeFloat(ctx, tCtx, args.Max, "max")
+		if err != nil {
+			return nil, err
 		}
 
-		targetFloat := *target
+		if minFloat > maxFloat {
+			return nil, fmt.Errorf("min must be less than or equal to max")
+		}
 		return targetFloat >= minFloat && targetFloat <= maxFloat, nil
 	}, nil
+}
+
+func getRequiredRangeFloat[K any](
+	ctx context.Context,
+	tCtx K,
+	getter ottl.FloatLikeGetter[K],
+	name string,
+) (float64, error) {
+	value, err := getter.Get(ctx, tCtx)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a number", name)
+	}
+	if value == nil {
+		return 0, fmt.Errorf("%s value is nil", name)
+	}
+	return *value, nil
 }

@@ -159,16 +159,60 @@ func TestIsInRange(t *testing.T) {
 				},
 			)
 
+			require.NoError(t, err)
+
+			result, err := function(context.Background(), nil)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
 				return
 			}
 			require.NoError(t, err)
-
-			result, err := function(context.Background(), nil)
-			require.NoError(t, err)
 			assert.Equal(t, tt.want, result)
 		})
 	}
+}
+
+func TestIsInRangeDefersGetterEvaluation(t *testing.T) {
+	type rangeContext struct {
+		target float64
+		min    float64
+		max    float64
+	}
+
+	getField := func(name string) ottl.FloatLikeGetter[*rangeContext] {
+		return ottl.StandardFloatLikeGetter[*rangeContext]{
+			Getter: func(_ context.Context, tCtx *rangeContext) (any, error) {
+				require.NotNil(t, tCtx)
+				switch name {
+				case "target":
+					return tCtx.target, nil
+				case "min":
+					return tCtx.min, nil
+				case "max":
+					return tCtx.max, nil
+				default:
+					return nil, nil
+				}
+			},
+		}
+	}
+
+	function, err := createIsInRangeFunction[*rangeContext](
+		ottl.FunctionContext{Set: componenttest.NewNopTelemetrySettings()},
+		&IsInRangeArguments[*rangeContext]{
+			Target: getField("target"),
+			Min:    getField("min"),
+			Max:    getField("max"),
+		},
+	)
+	require.NoError(t, err)
+
+	result, err := function(context.Background(), &rangeContext{
+		target: 5,
+		min:    1,
+		max:    10,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, true, result)
 }

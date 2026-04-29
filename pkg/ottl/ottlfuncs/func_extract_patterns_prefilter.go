@@ -76,6 +76,10 @@ func hasRegexFoldCase(re *syntax.Regexp) bool {
 }
 
 func selectRegexPrefilterLiterals(literals []string) []string {
+	return selectPrefilterLiterals(literals, maxRegexPrefilterLiterals)
+}
+
+func selectPrefilterLiterals(literals []string, maxLiterals int) []string {
 	seen := make(map[string]struct{}, len(literals))
 	selected := make([]string, 0, len(literals))
 	for _, literal := range literals {
@@ -95,8 +99,8 @@ func selectRegexPrefilterLiterals(literals []string) []string {
 		}
 		return len(selected[i]) > len(selected[j])
 	})
-	if len(selected) > maxRegexPrefilterLiterals {
-		selected = selected[:maxRegexPrefilterLiterals]
+	if len(selected) > maxLiterals {
+		selected = selected[:maxLiterals]
 	}
 	return selected
 }

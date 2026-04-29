@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	jsoniter "github.com/json-iterator/go"
 
@@ -114,6 +115,9 @@ func splitMetricByAttributes[K any](
 		currentMetric := tmCtx.GetMetric()
 		metrics := tmCtx.GetMetrics()
 		newMetricName := fmt.Sprintf("%s_%s", prefix, currentMetric.Name())
+		if isSplitMetricOutput(currentMetric.Name(), prefix) {
+			return nil, nil
+		}
 
 		switch currentMetric.Type() {
 		case pmetric.MetricTypeGauge:
@@ -218,6 +222,12 @@ func splitMetricByAttributes[K any](
 
 		return nil, nil
 	}, nil
+}
+
+func isSplitMetricOutput(metricName, prefix string) bool {
+	// Metric context statements visit metrics appended earlier in the same pass.
+	// The generated metric name is deterministic, so skip those outputs instead of recursively splitting them.
+	return strings.HasPrefix(metricName, fmt.Sprintf("%s_", prefix))
 }
 
 func metricTransformContext(tCtx any) (*ottlmetric.TransformContext, error) {
