@@ -844,6 +844,64 @@ func TestTransformContextCacheBodyStringIfNeeded(t *testing.T) {
 	}
 }
 
+func TestNewTransformContextCachesCompositeBodyString(t *testing.T) {
+	tests := []struct {
+		name        string
+		bodyType    string
+		expected    string
+		expectEntry bool
+	}{
+		{
+			name:        "map body",
+			bodyType:    "map",
+			expected:    "{\"key\":\"val\"}",
+			expectEntry: true,
+		},
+		{
+			name:        "slice body",
+			bodyType:    "slice",
+			expected:    "[\"body\"]",
+			expectEntry: true,
+		},
+		{
+			name:        "scalar body",
+			bodyType:    "int",
+			expectEntry: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"/ptr", func(t *testing.T) {
+			rLogs, sLogs, log := createTelemetry(tt.bodyType)
+			tCtx := NewTransformContextPtr(rLogs, sLogs, log)
+			defer tCtx.Close()
+
+			val, ok := tCtx.GetCache().Get("_internal.body_string")
+			require.Equal(t, tt.expectEntry, ok)
+			if !tt.expectEntry {
+				return
+			}
+
+			require.Equal(t, pcommon.ValueTypeStr, val.Type())
+			assert.Equal(t, tt.expected, val.Str())
+		})
+
+		t.Run(tt.name+"/value", func(t *testing.T) {
+			rLogs, sLogs, log := createTelemetry(tt.bodyType)
+			tCtx := NewTransformContext(log, sLogs.Scope(), rLogs.Resource(), sLogs, rLogs)
+
+			val, ok := tCtx.GetCache().Get("_internal.body_string")
+			require.Equal(t, tt.expectEntry, ok)
+			if !tt.expectEntry {
+				return
+			}
+
+			require.Equal(t, pcommon.ValueTypeStr, val.Type())
+			assert.Equal(t, tt.expected, val.Str())
+		})
+	}
+}
+
 func TestTransformContextCacheBodyStringIfNeededPreservesExistingEntry(t *testing.T) {
 	rLogs, sLogs, log := createTelemetry("map")
 	tCtx := NewTransformContextPtr(rLogs, sLogs, log)

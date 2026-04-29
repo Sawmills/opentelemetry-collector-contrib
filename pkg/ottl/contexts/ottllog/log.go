@@ -99,6 +99,7 @@ func NewTransformContext(
 	for _, opt := range options {
 		opt(&tc)
 	}
+	ctxlog.CacheBodyStringIfNeeded(&tc)
 	return tc
 }
 
@@ -112,6 +113,7 @@ func NewTransformContextPtr(resourceLogs plog.ResourceLogs, scopeLogs plog.Scope
 	for _, opt := range options {
 		opt(tCtx)
 	}
+	ctxlog.CacheBodyStringIfNeeded(tCtx)
 	return tCtx
 }
 

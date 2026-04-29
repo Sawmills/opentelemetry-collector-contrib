@@ -399,12 +399,13 @@ func handleDataPoints[S DataPointSlice[P], P DataPoint](
 ) S {
 	newDataPoints := newDataPointSliceFunc()
 
-	dataPoints.RemoveIf(func(point P) bool {
+	for i := 0; i < dataPoints.Len(); i++ {
+		point := dataPoints.At(i)
 		attrs := point.Attributes()
 
 		if attrs.Len() <= 1 {
 			copyFunc(point, newDataPoints.AppendEmpty())
-			return false
+			continue
 		}
 
 		varyingAttrs := make(map[string]pcommon.Value)
@@ -417,7 +418,7 @@ func handleDataPoints[S DataPointSlice[P], P DataPoint](
 
 		if len(varyingAttrs) <= 1 {
 			copyFunc(point, newDataPoints.AppendEmpty())
-			return false
+			continue
 		}
 
 		for varyingAttrKey := range varyingAttrs {
@@ -433,9 +434,7 @@ func handleDataPoints[S DataPointSlice[P], P DataPoint](
 
 			copyFunc(newPoint, newDataPoints.AppendEmpty())
 		}
-
-		return false
-	})
+	}
 
 	return newDataPoints
 }
