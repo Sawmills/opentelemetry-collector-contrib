@@ -49,6 +49,15 @@ func TestCompileFallsBackToStdlibWhenRE2CompileFails(t *testing.T) {
 	require.IsType(t, &stdregexp.Regexp{}, matcher)
 }
 
+func TestCompileUsesLeftmostFirstSemantics(t *testing.T) {
+	pattern := strings.Repeat("(?:x)?", patternLengthThreshold/5) + "(a|aa)"
+
+	matcher, err := Compile(pattern)
+	require.NoError(t, err)
+	require.IsType(t, &re2.Regexp{}, matcher)
+	require.Equal(t, []string{"a", "a"}, matcher.FindStringSubmatch("aa"))
+}
+
 func TestMustCompilePanicsOnEngineErrors(t *testing.T) {
 	require.Panics(t, func() {
 		MustCompile("(")

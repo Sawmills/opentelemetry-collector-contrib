@@ -10,6 +10,7 @@ import (
 )
 
 type Matcher interface {
+	String() string
 	MatchString(s string) bool
 	FindAllString(s string, n int) []string
 	ReplaceAllString(s, replacement string) string
