@@ -27,6 +27,7 @@ func TestStartsWith(t *testing.T) {
 	tests := []testCase{
 		{name: "nil value", value: nil, prefixes: []string{"this"}, caseSensitive: true, want: false},
 		{name: "empty string", value: emptyStr, prefixes: []string{"this"}, caseSensitive: true, want: false},
+		{name: "empty string with empty prefix", value: emptyStr, prefixes: []string{""}, caseSensitive: true, want: true},
 		{name: "empty prefixes", value: testStr, prefixes: []string{}, caseSensitive: true, want: false},
 		{name: "single val match", value: testStr, prefixes: []string{"this"}, caseSensitive: true, want: true},
 		{name: "single val no match", value: testStr, prefixes: []string{"xyz"}, caseSensitive: true, want: false},

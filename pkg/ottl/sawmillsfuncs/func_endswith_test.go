@@ -27,6 +27,7 @@ func TestEndsWith(t *testing.T) {
 	tests := []testCase{
 		{name: "nil value", value: nil, suffixes: []string{"string"}, caseSensitive: true, want: false},
 		{name: "empty string", value: emptyStr, suffixes: []string{"string"}, caseSensitive: true, want: false},
+		{name: "empty string with empty suffix", value: emptyStr, suffixes: []string{""}, caseSensitive: true, want: true},
 		{name: "empty suffixes", value: testStr, suffixes: []string{}, caseSensitive: true, want: false},
 		{name: "single val match", value: testStr, suffixes: []string{"string"}, caseSensitive: true, want: true},
 		{name: "single val no match", value: testStr, suffixes: []string{"xyz"}, caseSensitive: true, want: false},

@@ -29,6 +29,7 @@ func TestContains(t *testing.T) {
 	tests := []testCase{
 		{name: "nil value", value: nil, patterns: []string{"test"}, caseSensitive: true, want: false},
 		{name: "empty string", value: emptyStr, patterns: []string{"test"}, caseSensitive: true, want: false},
+		{name: "empty string with empty pattern", value: emptyStr, patterns: []string{""}, caseSensitive: true, want: true},
 		{name: "empty patterns", value: testStr, patterns: []string{}, caseSensitive: true, want: false},
 		{name: "single val match", value: testStr, patterns: []string{"test"}, caseSensitive: true, want: true},
 		{name: "single val no match", value: testStr, patterns: []string{"xyz"}, caseSensitive: true, want: false},
