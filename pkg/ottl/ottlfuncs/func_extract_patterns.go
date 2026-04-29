@@ -50,6 +50,9 @@ func extractPatterns[K any](target, pattern ottl.StringGetter[K]) (ottl.ExprFunc
 				literalNamedCaptureGroups++
 			}
 		}
+		if literalNamedCaptureGroups == 0 {
+			return nil, errors.New("at least 1 named capture group must be supplied in the given regex")
+		}
 	}
 
 	return func(ctx context.Context, tCtx K) (any, error) {

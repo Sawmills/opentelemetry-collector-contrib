@@ -119,6 +119,28 @@ func Test_extractPatterns_validation(t *testing.T) {
 	}
 }
 
+func Test_extractPatternsLiteralPatternWithoutNamedCaptureFailsAtParse(t *testing.T) {
+	parser, err := ottl.NewParser[any](
+		StandardConverters[any](),
+		func(path ottl.Path[any]) (ottl.GetSetter[any], error) {
+			require.Equal(t, "body", path.Name())
+			return &ottl.StandardGetSetter[any]{
+				Getter: func(context.Context, any) (any, error) {
+					return "foobar", nil
+				},
+				Setter: func(context.Context, any, any) error {
+					return nil
+				},
+			}, nil
+		},
+		componenttest.NewNopTelemetrySettings(),
+	)
+	require.NoError(t, err)
+
+	_, err = parser.ParseValueExpression(`ExtractPatterns(body, "(.*)")`)
+	require.ErrorContains(t, err, "at least 1 named capture group must be supplied in the given regex")
+}
+
 func Test_extractPatterns_bad_input(t *testing.T) {
 	tests := []struct {
 		name    string
