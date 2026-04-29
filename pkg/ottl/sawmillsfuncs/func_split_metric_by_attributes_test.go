@@ -95,6 +95,36 @@ func Test_splitMetricByAttributes(t *testing.T) {
 			want:       func(pmetric.MetricSlice) {},
 		},
 		{
+			name:   "splits source metric that already starts with prefix",
+			prefix: "prefix",
+			input: func() pmetric.Metric {
+				metricInput := pmetric.NewMetric()
+				metricInput.SetEmptySum()
+				metricInput.SetName("prefix_sum_metric")
+
+				input := metricInput.Sum().DataPoints().AppendEmpty()
+				input.SetDoubleValue(100)
+				input.Attributes().PutStr("key1", "val1")
+				input.Attributes().PutStr("key2", "val2")
+
+				return metricInput
+			},
+			attributes: emptyAttr,
+			want: func(metrics pmetric.MetricSlice) {
+				sumMetric := metrics.AppendEmpty()
+				sumMetric.SetEmptySum()
+				sumMetric.SetName("prefix_prefix_sum_metric")
+
+				input := sumMetric.Sum().DataPoints().AppendEmpty()
+				input.SetDoubleValue(100)
+				input.Attributes().PutStr("key1", "val1")
+
+				input = sumMetric.Sum().DataPoints().AppendEmpty()
+				input.SetDoubleValue(100)
+				input.Attributes().PutStr("key2", "val2")
+			},
+		},
+		{
 			name: "gauge metric keeps unsupported double attribute values distinct",
 			input: func() pmetric.Metric {
 				metricInput := pmetric.NewMetric()

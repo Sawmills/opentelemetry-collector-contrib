@@ -124,7 +124,7 @@ func statusRemapper[K any](target ottl.Getter[K]) ottl.ExprFunc[K] {
 			return "info", nil
 		case strings.HasPrefix(levelLower, "d") || strings.HasPrefix(levelLower, "trace") || strings.HasPrefix(levelLower, "verbose"):
 			return "debug", nil
-		case strings.HasPrefix(levelLower, "o") || strings.HasPrefix(levelLower, "s") || levelLower == "ok" || levelLower == "success":
+		case strings.HasPrefix(levelLower, "o") || strings.HasPrefix(levelLower, "s"):
 			return "ok", nil
 		default:
 			return "info", nil

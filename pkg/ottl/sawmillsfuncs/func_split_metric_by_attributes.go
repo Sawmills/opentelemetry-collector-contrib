@@ -206,7 +206,7 @@ func splitMetricByAttributes[K any](
 		currentMetric := tmCtx.GetMetric()
 		metrics := tmCtx.GetMetrics()
 		newMetricName := fmt.Sprintf("%s_%s", prefix, currentMetric.Name())
-		if isSplitMetricOutput(currentMetric.Name(), prefix) {
+		if isSplitMetricOutput(currentMetric, prefix, preservedKeysMap) {
 			return nil, nil
 		}
 
@@ -315,10 +315,58 @@ func splitMetricByAttributes[K any](
 	}
 }
 
-func isSplitMetricOutput(metricName, prefix string) bool {
+func isSplitMetricOutput(
+	metric pmetric.Metric,
+	prefix string,
+	preservedKeysMap map[string]bool,
+) bool {
 	// Metric context statements visit metrics appended earlier in the same pass.
-	// The generated metric name is deterministic, so skip those outputs instead of recursively splitting them.
-	return strings.HasPrefix(metricName, fmt.Sprintf("%s_", prefix))
+	// Split outputs have deterministic names and at most one non-preserved attribute per point.
+	if !strings.HasPrefix(metric.Name(), fmt.Sprintf("%s_", prefix)) {
+		return false
+	}
+	return !hasSplittableDataPoint(metric, preservedKeysMap)
+}
+
+func hasSplittableDataPoint(metric pmetric.Metric, preservedKeysMap map[string]bool) bool {
+	switch metric.Type() {
+	case pmetric.MetricTypeGauge:
+		return hasSplittableDataPointInSlice(metric.Gauge().DataPoints(), preservedKeysMap)
+	case pmetric.MetricTypeSum:
+		return hasSplittableDataPointInSlice(metric.Sum().DataPoints(), preservedKeysMap)
+	case pmetric.MetricTypeHistogram:
+		return hasSplittableDataPointInSlice(metric.Histogram().DataPoints(), preservedKeysMap)
+	case pmetric.MetricTypeExponentialHistogram:
+		return hasSplittableDataPointInSlice(metric.ExponentialHistogram().DataPoints(), preservedKeysMap)
+	case pmetric.MetricTypeSummary:
+		return hasSplittableDataPointInSlice(metric.Summary().DataPoints(), preservedKeysMap)
+	default:
+		return false
+	}
+}
+
+func hasSplittableDataPointInSlice[S DataPointSlice[P], P DataPoint](
+	dataPoints S,
+	preservedKeysMap map[string]bool,
+) bool {
+	for i := 0; i < dataPoints.Len(); i++ {
+		if hasMultipleVaryingAttributes(dataPoints.At(i).Attributes(), preservedKeysMap) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasMultipleVaryingAttributes(attrs pcommon.Map, preservedKeysMap map[string]bool) bool {
+	varying := 0
+	attrs.Range(func(k string, _ pcommon.Value) bool {
+		if preservedKeysMap[k] {
+			return true
+		}
+		varying++
+		return varying <= 1
+	})
+	return varying > 1
 }
 
 func metricTransformContext(tCtx any) (*ottlmetric.TransformContext, error) {
