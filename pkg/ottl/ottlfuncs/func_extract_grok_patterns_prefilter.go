@@ -90,7 +90,7 @@ func extractRequiredGrokLiterals(pattern string) []string {
 	if literals, ok := extractRequiredGrokRegexLiterals(pattern); ok {
 		return literals
 	}
-	if strings.Contains(pattern, "(?i)") {
+	if hasGrokInlineCaseInsensitiveFlag(pattern) {
 		return nil
 	}
 
@@ -214,6 +214,34 @@ func extractRequiredGrokLiterals(pattern string) []string {
 		return nil
 	}
 	return literals
+}
+
+func hasGrokInlineCaseInsensitiveFlag(pattern string) bool {
+	for i := 0; i+2 < len(pattern); i++ {
+		if pattern[i] != '(' || pattern[i+1] != '?' {
+			continue
+		}
+
+		negated := false
+		for j := i + 2; j < len(pattern); j++ {
+			ch := pattern[j]
+			switch {
+			case ch >= 'a' && ch <= 'z':
+				if ch == 'i' && !negated {
+					return true
+				}
+			case ch == '-':
+				negated = true
+			case ch == ')' || ch == ':':
+				i = j
+				goto next
+			default:
+				goto next
+			}
+		}
+	next:
+	}
+	return false
 }
 
 func findClosingGrokGroup(pattern string, open int) int {

@@ -324,6 +324,16 @@ func Test_newGrokLiteralPrefilter(t *testing.T) {
 			wantNil: true,
 		},
 		{
+			name:    "skips fallback combined case-insensitive patterns",
+			pattern: `(?im)health(?<=done)%{WORD:value}`,
+			wantNil: true,
+		},
+		{
+			name:    "skips fallback enabled case-insensitive reset patterns",
+			pattern: `(?i-m)health(?<=done)%{WORD:value}`,
+			wantNil: true,
+		},
+		{
 			name:    "skips literals inside character classes in lookaheads",
 			pattern: `(?=[^)]foo)%{GREEDYDATA:value}`,
 			wantNil: true,
