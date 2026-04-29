@@ -37,46 +37,52 @@ type splitMetricArguments struct {
 }
 
 type generatedMetricTracker struct {
-	mu      sync.Mutex
-	metrics pmetric.MetricSlice
-	pending map[pmetric.Metric]int
+	mu        sync.Mutex
+	iteration *ottlmetric.MetricIteration
+	pending   map[int]int
 }
 
 func newGeneratedMetricTracker() *generatedMetricTracker {
 	return &generatedMetricTracker{
-		pending: make(map[pmetric.Metric]int),
+		pending: make(map[int]int),
 	}
 }
 
-func (t *generatedMetricTracker) mark(metrics pmetric.MetricSlice, metric pmetric.Metric) {
+func (t *generatedMetricTracker) mark(iteration *ottlmetric.MetricIteration, metricIndex int) {
+	if iteration == nil || metricIndex < 0 {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.resetIfNewMetricSlice(metrics)
-	t.pending[metric]++
+	t.resetIfNewIteration(iteration)
+	t.pending[metricIndex]++
 }
 
-func (t *generatedMetricTracker) consume(metrics pmetric.MetricSlice, metric pmetric.Metric) bool {
+func (t *generatedMetricTracker) consume(iteration *ottlmetric.MetricIteration, metricIndex int) bool {
+	if iteration == nil || metricIndex < 0 {
+		return false
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.resetIfNewMetricSlice(metrics)
-	count := t.pending[metric]
+	t.resetIfNewIteration(iteration)
+	count := t.pending[metricIndex]
 	if count == 0 {
 		return false
 	}
 	if count == 1 {
-		delete(t.pending, metric)
+		delete(t.pending, metricIndex)
 	} else {
-		t.pending[metric] = count - 1
+		t.pending[metricIndex] = count - 1
 	}
 	return true
 }
 
-func (t *generatedMetricTracker) resetIfNewMetricSlice(metrics pmetric.MetricSlice) {
-	if t.metrics == metrics {
+func (t *generatedMetricTracker) resetIfNewIteration(iteration *ottlmetric.MetricIteration) {
+	if t.iteration == iteration {
 		return
 	}
 	clear(t.pending)
-	t.metrics = metrics
+	t.iteration = iteration
 }
 
 func (t *generatedMetricTracker) pendingLen() int {
@@ -259,8 +265,9 @@ func splitMetricByAttributes[K any](
 
 		currentMetric := tmCtx.GetMetric()
 		metrics := tmCtx.GetMetrics()
+		iteration, currentMetricIndex, _ := tmCtx.GetMetricIteration()
 		newMetricName := fmt.Sprintf("%s_%s", prefix, currentMetric.Name())
-		if generatedMetrics.consume(metrics, currentMetric) {
+		if generatedMetrics.consume(iteration, currentMetricIndex) {
 			return nil, nil
 		}
 
@@ -279,7 +286,7 @@ func splitMetricByAttributes[K any](
 			if newDataPoints.Len() > 0 {
 				grouped := groupNumberDataPoints(newDataPoints, false)
 				newMetric := metrics.AppendEmpty()
-				generatedMetrics.mark(metrics, newMetric)
+				generatedMetrics.mark(iteration, metrics.Len()-1)
 				currentMetric.CopyTo(newMetric)
 
 				newGaugeMetric := newMetric.Gauge()
@@ -301,7 +308,7 @@ func splitMetricByAttributes[K any](
 				groupByStartTime := sum.AggregationTemporality() == pmetric.AggregationTemporalityDelta
 				grouped := groupNumberDataPoints(newDataPoints, groupByStartTime)
 				newMetric := metrics.AppendEmpty()
-				generatedMetrics.mark(metrics, newMetric)
+				generatedMetrics.mark(iteration, metrics.Len()-1)
 				currentMetric.CopyTo(newMetric)
 
 				newSumMetric := newMetric.Sum()
@@ -321,7 +328,7 @@ func splitMetricByAttributes[K any](
 				})
 			if newDataPoints.Len() > 0 {
 				newMetric := metrics.AppendEmpty()
-				generatedMetrics.mark(metrics, newMetric)
+				generatedMetrics.mark(iteration, metrics.Len()-1)
 				currentMetric.CopyTo(newMetric)
 
 				newHistogramMetric := newMetric.Histogram()
@@ -341,7 +348,7 @@ func splitMetricByAttributes[K any](
 				})
 			if newDataPoints.Len() > 0 {
 				newMetric := metrics.AppendEmpty()
-				generatedMetrics.mark(metrics, newMetric)
+				generatedMetrics.mark(iteration, metrics.Len()-1)
 				currentMetric.CopyTo(newMetric)
 
 				newHistogramMetric := newMetric.ExponentialHistogram()
@@ -361,7 +368,7 @@ func splitMetricByAttributes[K any](
 				})
 			if newDataPoints.Len() > 0 {
 				newMetric := metrics.AppendEmpty()
-				generatedMetrics.mark(metrics, newMetric)
+				generatedMetrics.mark(iteration, metrics.Len()-1)
 				currentMetric.CopyTo(newMetric)
 
 				newSummaryMetric := newMetric.Summary()

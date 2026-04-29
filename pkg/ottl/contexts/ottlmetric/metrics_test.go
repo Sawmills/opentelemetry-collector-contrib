@@ -50,6 +50,23 @@ func TestNewTransformContextInitializesValue(t *testing.T) {
 	require.Equal(t, 0, emptyCtx.cache.Len())
 }
 
+func TestMetricIterationOption(t *testing.T) {
+	iteration := NewMetricIteration()
+
+	ctx := NewTransformContextPtr(
+		pmetric.NewResourceMetrics(),
+		pmetric.NewScopeMetrics(),
+		pmetric.NewMetric(),
+		WithMetricIteration(iteration, 3),
+	)
+	defer ctx.Close()
+
+	gotIteration, gotIndex, ok := ctx.GetMetricIteration()
+	require.True(t, ok)
+	require.Same(t, iteration, gotIteration)
+	require.Equal(t, 3, gotIndex)
+}
+
 func Test_newPathGetSetter(t *testing.T) {
 	refMetric := createTelemetry()
 

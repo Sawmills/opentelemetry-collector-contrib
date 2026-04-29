@@ -716,6 +716,7 @@ func Test_splitMetricByAttributesSkipsTrackedGeneratedMetric(t *testing.T) {
 	rm := pmetric.NewResourceMetrics()
 	sm := rm.ScopeMetrics().AppendEmpty()
 	metrics := sm.Metrics()
+	iteration := ottlmetric.NewMetricIteration()
 
 	metricInput := metrics.AppendEmpty()
 	metricInput.SetEmptySum()
@@ -726,7 +727,7 @@ func Test_splitMetricByAttributesSkipsTrackedGeneratedMetric(t *testing.T) {
 	input.Attributes().PutStr("key1", "val1")
 	input.Attributes().PutStr("key2", "val2")
 
-	ctx := ottlmetric.NewTransformContextPtr(rm, sm, metrics.At(0))
+	ctx := ottlmetric.NewTransformContextPtr(rm, sm, metrics.At(0), ottlmetric.WithMetricIteration(iteration, 0))
 	_, err := evaluate(t.Context(), ctx)
 	ctx.Close()
 
@@ -734,7 +735,7 @@ func Test_splitMetricByAttributesSkipsTrackedGeneratedMetric(t *testing.T) {
 	require.Equal(t, 2, metrics.Len())
 	require.Equal(t, "prefix_sum_metric", metrics.At(1).Name())
 
-	ctx = ottlmetric.NewTransformContextPtr(rm, sm, metrics.At(1))
+	ctx = ottlmetric.NewTransformContextPtr(rm, sm, metrics.At(1), ottlmetric.WithMetricIteration(iteration, 1))
 	_, err = evaluate(t.Context(), ctx)
 	ctx.Close()
 
@@ -751,6 +752,7 @@ func Test_splitMetricByAttributesDoesNotSkipSameNameSourceBeforeGeneratedOutput(
 	rm := pmetric.NewResourceMetrics()
 	sm := rm.ScopeMetrics().AppendEmpty()
 	metrics := sm.Metrics()
+	iteration := ottlmetric.NewMetricIteration()
 
 	metricInput := metrics.AppendEmpty()
 	metricInput.SetEmptySum()
@@ -768,7 +770,7 @@ func Test_splitMetricByAttributesDoesNotSkipSameNameSourceBeforeGeneratedOutput(
 	prefixedInput.Attributes().PutStr("key3", "val3")
 	prefixedInput.Attributes().PutStr("key4", "val4")
 
-	ctx := ottlmetric.NewTransformContextPtr(rm, sm, metrics.At(0))
+	ctx := ottlmetric.NewTransformContextPtr(rm, sm, metrics.At(0), ottlmetric.WithMetricIteration(iteration, 0))
 	_, err := evaluate(t.Context(), ctx)
 	ctx.Close()
 
@@ -776,7 +778,7 @@ func Test_splitMetricByAttributesDoesNotSkipSameNameSourceBeforeGeneratedOutput(
 	require.Equal(t, 3, metrics.Len())
 	require.Equal(t, "prefix_sum_metric", metrics.At(2).Name())
 
-	ctx = ottlmetric.NewTransformContextPtr(rm, sm, metrics.At(1))
+	ctx = ottlmetric.NewTransformContextPtr(rm, sm, metrics.At(1), ottlmetric.WithMetricIteration(iteration, 1))
 	_, err = evaluate(t.Context(), ctx)
 	ctx.Close()
 
@@ -784,7 +786,7 @@ func Test_splitMetricByAttributesDoesNotSkipSameNameSourceBeforeGeneratedOutput(
 	require.Equal(t, 4, metrics.Len())
 	require.Equal(t, "prefix_prefix_sum_metric", metrics.At(3).Name())
 
-	ctx = ottlmetric.NewTransformContextPtr(rm, sm, metrics.At(2))
+	ctx = ottlmetric.NewTransformContextPtr(rm, sm, metrics.At(2), ottlmetric.WithMetricIteration(iteration, 2))
 	_, err = evaluate(t.Context(), ctx)
 	ctx.Close()
 
@@ -813,13 +815,11 @@ func Test_groupNumberDataPointsDoesNotMutateInputSlice(t *testing.T) {
 func Test_generatedMetricTrackerClearsWhenMetricSliceChanges(t *testing.T) {
 	tracker := newGeneratedMetricTracker()
 
-	firstMetrics := pmetric.NewMetricSlice()
-	firstGenerated := firstMetrics.AppendEmpty()
-	tracker.mark(firstMetrics, firstGenerated)
+	firstIteration := ottlmetric.NewMetricIteration()
+	tracker.mark(firstIteration, 1)
 	require.Equal(t, 1, tracker.pendingLen())
 
-	secondMetrics := pmetric.NewMetricSlice()
-	secondMetric := secondMetrics.AppendEmpty()
-	require.False(t, tracker.consume(secondMetrics, secondMetric))
+	secondIteration := ottlmetric.NewMetricIteration()
+	require.False(t, tracker.consume(secondIteration, 1))
 	require.Equal(t, 0, tracker.pendingLen())
 }
