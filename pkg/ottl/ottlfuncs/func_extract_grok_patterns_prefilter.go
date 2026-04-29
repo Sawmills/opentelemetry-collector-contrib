@@ -1,0 +1,227 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package ottlfuncs
+
+import (
+	"regexp/syntax"
+	sortpkg "sort"
+	"strings"
+)
+
+const maxGrokPrefilterLiterals = 4
+
+func newGrokLiteralPrefilter(pattern string, patternDefinitions ...string) func(string) bool {
+	defs := grokPrefilterPatternDefinitions(patternDefinitions)
+	expanded := expandGrokPrefilterPattern(pattern, defs, 0)
+	literals := selectGrokPrefilterLiterals(extractRequiredGrokLiterals(expanded))
+	if len(literals) == 0 {
+		return nil
+	}
+	return func(s string) bool {
+		for _, literal := range literals {
+			if !strings.Contains(s, literal) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+func grokPrefilterPatternDefinitions(patternDefinitions []string) map[string]string {
+	if len(patternDefinitions) == 0 {
+		return nil
+	}
+	defs := make(map[string]string, len(patternDefinitions))
+	for _, patternDefinition := range patternDefinitions {
+		name, pattern, ok := strings.Cut(patternDefinition, "=")
+		if !ok || name == "" {
+			continue
+		}
+		defs[name] = pattern
+	}
+	return defs
+}
+
+func expandGrokPrefilterPattern(pattern string, defs map[string]string, depth int) string {
+	if depth > 8 {
+		return pattern
+	}
+
+	var expanded strings.Builder
+	for i := 0; i < len(pattern); i++ {
+		ch := pattern[i]
+		if ch != '%' || i+1 >= len(pattern) || pattern[i+1] != '{' {
+			expanded.WriteByte(ch)
+			continue
+		}
+
+		start := i + 2
+		i = start
+		for i < len(pattern) && pattern[i] != '}' {
+			i++
+		}
+		if i >= len(pattern) {
+			expanded.WriteByte(ch)
+			continue
+		}
+
+		name := grokPrefilterPatternName(pattern[start:i])
+		if definition, ok := defs[name]; ok {
+			expanded.WriteString(expandGrokPrefilterPattern(definition, defs, depth+1))
+			continue
+		}
+
+		// Preserve a delimiter so literals on both sides of an unknown grok
+		// placeholder are not merged into a single required literal.
+		expanded.WriteByte('.')
+	}
+	return expanded.String()
+}
+
+func grokPrefilterPatternName(expr string) string {
+	if idx := strings.IndexByte(expr, ':'); idx >= 0 {
+		return expr[:idx]
+	}
+	return expr
+}
+
+func extractRequiredGrokLiterals(pattern string) []string {
+	if literals, ok := extractRequiredGrokRegexLiterals(pattern); ok {
+		return literals
+	}
+	if strings.Contains(pattern, "(?i)") {
+		return nil
+	}
+
+	var literals []string
+	var current strings.Builder
+	parenDepth := 0
+	inClass := false
+	topLevelAlternation := false
+
+	flush := func() {
+		literal := strings.TrimSpace(current.String())
+		current.Reset()
+		if len(literal) >= 3 {
+			literals = append(literals, literal)
+		}
+	}
+
+	for i := 0; i < len(pattern); i++ {
+		ch := pattern[i]
+		if ch == '%' && i+1 < len(pattern) && pattern[i+1] == '{' {
+			flush()
+			i += 2
+			for i < len(pattern) && pattern[i] != '}' {
+				i++
+			}
+			continue
+		}
+
+		if ch == '\\' {
+			if i+1 >= len(pattern) {
+				flush()
+				continue
+			}
+			next := pattern[i+1]
+			i++
+			if parenDepth == 0 && !inClass && isEscapedGrokLiteral(next) {
+				current.WriteByte(next)
+				continue
+			}
+			flush()
+			continue
+		}
+
+		if inClass {
+			if ch == ']' {
+				inClass = false
+			}
+			continue
+		}
+
+		if parenDepth > 0 {
+			switch ch {
+			case '(':
+				parenDepth++
+			case ')':
+				parenDepth--
+			}
+			continue
+		}
+
+		switch ch {
+		case '(':
+			flush()
+			parenDepth++
+		case '[':
+			flush()
+			inClass = true
+		case '|':
+			flush()
+			topLevelAlternation = true
+		case '.', '*', '+', '?', '^', '$', '{', '}':
+			flush()
+		default:
+			if ch < 0x20 || ch >= 0x7f {
+				flush()
+				continue
+			}
+			current.WriteByte(ch)
+		}
+	}
+	flush()
+
+	if topLevelAlternation {
+		return nil
+	}
+	return literals
+}
+
+func extractRequiredGrokRegexLiterals(pattern string) ([]string, bool) {
+	re, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return nil, false
+	}
+	re = re.Simplify()
+	if hasRegexFoldCase(re) || re.Op == syntax.OpAlternate {
+		return nil, true
+	}
+	return requiredRegexLiterals(re), true
+}
+
+func isEscapedGrokLiteral(ch byte) bool {
+	switch ch {
+	case '\\', '"', '\'', '[', ']', '(', ')', '{', '}', '.', '*', '+', '?', '^', '$', '|', ':', '-', ',', '/', ' ':
+		return true
+	default:
+		return false
+	}
+}
+
+func selectGrokPrefilterLiterals(literals []string) []string {
+	seen := make(map[string]struct{}, len(literals))
+	selected := make([]string, 0, len(literals))
+	for _, literal := range literals {
+		literal = strings.TrimSpace(literal)
+		if len(literal) < 3 {
+			continue
+		}
+		if _, ok := seen[literal]; ok {
+			continue
+		}
+		seen[literal] = struct{}{}
+		selected = append(selected, literal)
+	}
+	sortpkg.Slice(selected, func(i, j int) bool {
+		if len(selected[i]) == len(selected[j]) {
+			return selected[i] < selected[j]
+		}
+		return len(selected[i]) > len(selected[j])
+	})
+	if len(selected) > maxGrokPrefilterLiterals {
+		selected = selected[:maxGrokPrefilterLiterals]
+	}
+	return selected
+}

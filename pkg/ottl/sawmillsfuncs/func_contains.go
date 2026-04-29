@@ -72,6 +72,9 @@ func contains[K any](
 			return false, nil
 		}
 		if !caseSensitive {
+			if containsAny(val, patterns) {
+				return true, nil
+			}
 			val = strings.ToLower(val)
 		}
 		return containsAny(val, patterns), nil

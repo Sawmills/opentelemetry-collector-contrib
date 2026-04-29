@@ -163,3 +163,51 @@ func Test_extractPatterns_bad_input(t *testing.T) {
 		})
 	}
 }
+
+func Test_newRegexLiteralPrefilter(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		pattern     string
+		wantNil     bool
+		matching    string
+		nonMatching string
+	}{
+		{
+			name:        "static literal before named capture",
+			pattern:     `GIT_SHA=(?P<git_sha>\w+)`,
+			matching:    "GIT_SHA=abc123",
+			nonMatching: "OTHER=abc123",
+		},
+		{
+			name:        "keeps required literal after optional atom",
+			pattern:     `foo?bar(?P<value>\w+)`,
+			matching:    "fobar123",
+			nonMatching: "fooqux123",
+		},
+		{
+			name:    "skips top level alternation",
+			pattern: `foo(?P<a>\w+)|bar(?P<b>\w+)`,
+			wantNil: true,
+		},
+		{
+			name:    "skips case insensitive patterns",
+			pattern: `(?i)git_sha=(?P<git_sha>\w+)`,
+			wantNil: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefilter := newRegexLiteralPrefilter(tt.pattern)
+			if tt.wantNil {
+				require.Nil(t, prefilter)
+				return
+			}
+			require.NotNil(t, prefilter)
+			require.True(t, prefilter(tt.matching))
+			require.False(t, prefilter(tt.nonMatching))
+		})
+	}
+}

@@ -268,3 +268,83 @@ func Test_extractGrokPatterns_bad_input(t *testing.T) {
 		})
 	}
 }
+
+func Test_newGrokLiteralPrefilter(t *testing.T) {
+	tests := []struct {
+		name      string
+		pattern   string
+		wantNil   bool
+		match     string
+		mismatch  string
+		mismatch2 string
+	}{
+		{
+			name:     "required literals around grok placeholders",
+			pattern:  `HealthProducer - sending health message: %{word:status}`,
+			match:    `INFO HealthProducer - sending health message: green`,
+			mismatch: `INFO unrelated message`,
+		},
+		{
+			name:      "keeps literals around nested alternation",
+			pattern:   `prefix (foo|bar) required suffix %{word:value}`,
+			match:     `prefix foo required suffix ok`,
+			mismatch:  `prefix foo missing suffix ok`,
+			mismatch2: `required suffix only`,
+		},
+		{
+			name:     "keeps literals inside mandatory groups",
+			pattern:  `prefix (?:required marker) suffix %{word:value}`,
+			match:    `prefix required marker suffix ok`,
+			mismatch: `prefix other marker suffix ok`,
+		},
+		{
+			name:     "does not require literals inside optional groups",
+			pattern:  `prefix (?:optional marker)? suffix %{word:value}`,
+			match:    `prefix suffix ok`,
+			mismatch: `prefix optional marker ok`,
+		},
+		{
+			name:    "skips unsafe top-level alternation",
+			pattern: `foo|bar`,
+			wantNil: true,
+		},
+		{
+			name:    "skips case-insensitive patterns",
+			pattern: `(?i)health.*check`,
+			wantNil: true,
+		},
+		{
+			name:     "keeps escaped punctuation literals",
+			pattern:  `\\[tenantId: %{notSpace:tenant_id}\\] completed`,
+			match:    `[tenantId: tenant-a] completed`,
+			mismatch: `[tenantId: tenant-a] started`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefilter := newGrokLiteralPrefilter(tt.pattern)
+			if tt.wantNil {
+				require.Nil(t, prefilter)
+				return
+			}
+			require.NotNil(t, prefilter)
+			require.True(t, prefilter(tt.match))
+			require.False(t, prefilter(tt.mismatch))
+			if tt.mismatch2 != "" {
+				require.False(t, prefilter(tt.mismatch2))
+			}
+		})
+	}
+}
+
+func Test_newGrokLiteralPrefilterUsesPatternDefinitions(t *testing.T) {
+	prefilter := newGrokLiteralPrefilter(
+		`%{LOGLINE}`,
+		`LOGLINE=%{DATESTAMP:timestamp} fixed marker %{WORD:value}`,
+	)
+
+	require.NotNil(t, prefilter)
+	require.True(t, prefilter(`2024-06-18 12:34:56 fixed marker ok`))
+	require.False(t, prefilter(`2024-06-18 12:34:56 other marker ok`))
+}

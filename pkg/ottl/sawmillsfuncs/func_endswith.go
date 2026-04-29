@@ -72,6 +72,9 @@ func endsWith[K any](
 			return false, nil
 		}
 		if !caseSensitive {
+			if endsWithAny(val, suffixes) {
+				return true, nil
+			}
 			val = strings.ToLower(val)
 		}
 		return endsWithAny(val, suffixes), nil

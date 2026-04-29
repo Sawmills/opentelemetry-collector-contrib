@@ -72,6 +72,9 @@ func startsWith[K any](
 			return false, nil
 		}
 		if !caseSensitive {
+			if startsWithAny(val, prefixes) {
+				return true, nil
+			}
 			val = strings.ToLower(val)
 		}
 		return startsWithAny(val, prefixes), nil
