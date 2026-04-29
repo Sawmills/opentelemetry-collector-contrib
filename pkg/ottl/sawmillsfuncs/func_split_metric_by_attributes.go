@@ -49,17 +49,22 @@ func (t *generatedMetricTracker) mark(iteration *ottlmetric.MetricIteration, met
 	if iteration == nil || metricIndex < 0 {
 		return
 	}
+	registerCleanup := false
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	pending := t.pending[iteration]
 	if pending == nil {
 		pending = make(map[int]int)
 		t.pending[iteration] = pending
+		registerCleanup = true
+	}
+	pending[metricIndex]++
+	t.mu.Unlock()
+
+	if registerCleanup {
 		iteration.RegisterCleanup(func() {
 			t.clearIteration(iteration)
 		})
 	}
-	pending[metricIndex]++
 }
 
 func (t *generatedMetricTracker) consume(iteration *ottlmetric.MetricIteration, metricIndex int) bool {

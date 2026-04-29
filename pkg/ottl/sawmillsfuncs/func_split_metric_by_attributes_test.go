@@ -6,6 +6,7 @@ package sawmillsfuncs
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -840,5 +841,24 @@ func Test_generatedMetricTrackerClearsIterationOnClose(t *testing.T) {
 	require.Equal(t, 2, tracker.pendingLen())
 
 	iteration.Close()
+	require.Equal(t, 0, tracker.pendingLen())
+}
+
+func Test_generatedMetricTrackerMarkClosedIterationDoesNotDeadlock(t *testing.T) {
+	tracker := newGeneratedMetricTracker()
+	iteration := ottlmetric.NewMetricIteration()
+	iteration.Close()
+
+	done := make(chan struct{})
+	go func() {
+		tracker.mark(iteration, 1)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.Fail(t, "mark deadlocked registering cleanup for a closed iteration")
+	}
 	require.Equal(t, 0, tracker.pendingLen())
 }
