@@ -154,6 +154,8 @@ func extractRequiredGrokLiterals(pattern string) []string {
 
 		if parenDepth > 0 {
 			switch ch {
+			case '[':
+				inClass = true
 			case '(':
 				parenDepth++
 			case ')':

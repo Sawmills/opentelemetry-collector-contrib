@@ -314,6 +314,21 @@ func Test_newGrokLiteralPrefilter(t *testing.T) {
 			wantNil: true,
 		},
 		{
+			name:    "skips scoped case-insensitive patterns",
+			pattern: `(?i:health).*check`,
+			wantNil: true,
+		},
+		{
+			name:    "skips scoped mixed-flag case-insensitive patterns",
+			pattern: `(?mi:health).*check`,
+			wantNil: true,
+		},
+		{
+			name:    "skips literals inside character classes in lookaheads",
+			pattern: `(?=[^)]foo)%{GREEDYDATA:value}`,
+			wantNil: true,
+		},
+		{
 			name:     "keeps escaped punctuation literals",
 			pattern:  `\\[tenantId: %{notSpace:tenant_id}\\] completed`,
 			match:    `[tenantId: tenant-a] completed`,

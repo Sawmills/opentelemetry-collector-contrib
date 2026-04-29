@@ -44,12 +44,19 @@ func TestASTExportsAreUsable(t *testing.T) {
 		_ MathOp
 	)
 
-	require.Equal(t, Eq, CompareOpTable["=="])
-	require.Equal(t, Ne, CompareOpTable["!="])
-	require.Equal(t, Lt, CompareOpTable["<"])
-	require.Equal(t, Lte, CompareOpTable["<="])
-	require.Equal(t, Gt, CompareOpTable[">"])
-	require.Equal(t, Gte, CompareOpTable[">="])
+	tests := map[string]CompareOp{
+		"==": Eq,
+		"!=": Ne,
+		"<":  Lt,
+		"<=": Lte,
+		">":  Gt,
+		">=": Gte,
+	}
+	for token, expected := range tests {
+		got, ok := CompareOpTable[token]
+		require.True(t, ok, "missing CompareOpTable entry for %q", token)
+		require.Equal(t, expected, got)
+	}
 	require.Equal(t, []MathOp{Add, Sub, Mult, Div}, []MathOp{add, sub, mult, div})
 
 	condition, err := ParseCondition("true")

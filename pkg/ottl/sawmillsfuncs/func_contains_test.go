@@ -5,6 +5,7 @@ package sawmillsfuncs
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -16,6 +17,7 @@ func TestContains(t *testing.T) {
 	type testCase struct {
 		name          string
 		value         any
+		getterErr     error
 		patterns      []string
 		caseSensitive bool
 		want          bool
@@ -50,6 +52,7 @@ func TestContains(t *testing.T) {
 		{name: "case insensitive middle match", value: testStr, patterns: []string{"IS A"}, caseSensitive: false, want: true},
 		{name: "case insensitive end match", value: testStr, patterns: []string{"STRING"}, caseSensitive: false, want: true},
 		{name: "uppercase string with lowercase patterns", value: "THIS IS A TEST STRING", patterns: []string{"test"}, caseSensitive: false, want: true},
+		{name: "getter error bubbles up", getterErr: errors.New("boom"), patterns: []string{"test"}, caseSensitive: true, expectErr: true},
 	}
 
 	for _, tt := range tests {
@@ -59,7 +62,7 @@ func TestContains(t *testing.T) {
 				&ContainsArguments[any]{
 					Target: &ottl.StandardStringGetter[any]{
 						Getter: func(context.Context, any) (any, error) {
-							return tt.value, nil
+							return tt.value, tt.getterErr
 						},
 					},
 					Patterns:      tt.patterns,
