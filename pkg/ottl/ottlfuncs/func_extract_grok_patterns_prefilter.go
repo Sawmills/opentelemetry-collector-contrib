@@ -107,6 +107,17 @@ func extractRequiredGrokLiterals(pattern string) []string {
 			literals = append(literals, literal)
 		}
 	}
+	flushQuantifiedOptionalLiteral := func() {
+		literal := current.String()
+		if literal != "" {
+			_, size := utf8.DecodeLastRuneInString(literal)
+			if size > 0 {
+				current.Reset()
+				current.WriteString(literal[:len(literal)-size])
+			}
+		}
+		flush()
+	}
 
 	for i := 0; i < len(pattern); i++ {
 		ch := pattern[i]
@@ -171,7 +182,9 @@ func extractRequiredGrokLiterals(pattern string) []string {
 		case '|':
 			flush()
 			topLevelAlternation = true
-		case '.', '*', '+', '?', '^', '$', '{', '}':
+		case '*', '?':
+			flushQuantifiedOptionalLiteral()
+		case '.', '+', '^', '$', '{', '}':
 			flush()
 		default:
 			if ch < 0x20 {

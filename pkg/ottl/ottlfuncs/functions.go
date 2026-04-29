@@ -25,6 +25,7 @@ func StandardFuncs[K any]() map[string]ottl.Factory[K] {
 		NewReplacePatternFactory[K](),
 		NewSetFactory[K](),
 		NewTruncateAllFactory[K](),
+		sawmillsfuncs.NewSplitMetricFactory[K](),
 	}
 	f = append(f, converters[K]()...)
 
@@ -142,7 +143,6 @@ func converters[K any]() []ottl.Factory[K] {
 		sawmillsfuncs.NewEndsWithFactory[K](),
 		sawmillsfuncs.NewStartsWithFactory[K](),
 		sawmillsfuncs.NewIsInRangeFactory[K](),
-		sawmillsfuncs.NewSplitMetricFactory[K](),
 		sawmillsfuncs.NewFromContextFactory[K](),
 	}
 }

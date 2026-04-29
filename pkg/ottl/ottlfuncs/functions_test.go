@@ -16,7 +16,6 @@ func TestStandardRegistriesIncludeSawmillsFactories(t *testing.T) {
 		"EndsWith",
 		"StartsWith",
 		"IsInRange",
-		"split_metric_by_attributes",
 		"FromContext",
 	}
 
@@ -33,4 +32,11 @@ func TestStandardRegistriesIncludeSawmillsFactories(t *testing.T) {
 			require.Equal(t, name, function.Name())
 		})
 	}
+
+	_, ok := converters["split_metric_by_attributes"]
+	require.False(t, ok)
+
+	splitMetric, ok := functions["split_metric_by_attributes"]
+	require.True(t, ok)
+	require.Equal(t, "split_metric_by_attributes", splitMetric.Name())
 }

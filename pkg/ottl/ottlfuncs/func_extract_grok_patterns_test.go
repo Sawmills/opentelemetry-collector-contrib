@@ -366,3 +366,34 @@ func Test_extractRequiredGrokLiteralsFallbackSkipsOptionalNonCapturingGroup(t *t
 
 	require.NotContains(t, literals, "optional marker")
 }
+
+func Test_extractRequiredGrokLiteralsFallbackSkipsOptionalQuantifiedByte(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		input   string
+	}{
+		{
+			name:    "question mark",
+			pattern: `foo?bar(?<=unsupported)`,
+			input:   "fobar unsupported",
+		},
+		{
+			name:    "asterisk",
+			pattern: `foo*bar(?<=unsupported)`,
+			input:   "fbar unsupported",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			literals := extractRequiredGrokLiterals(tt.pattern)
+			require.NotContains(t, literals, "foo")
+			require.Contains(t, literals, "bar")
+
+			prefilter := newGrokLiteralPrefilter(tt.pattern)
+			require.NotNil(t, prefilter)
+			require.True(t, prefilter(tt.input))
+		})
+	}
+}
