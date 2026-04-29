@@ -55,9 +55,11 @@ func contains[K any](
 	caseSensitive bool,
 ) ottl.ExprFunc[K] {
 	if !caseSensitive {
+		lowerPatterns := make([]string, len(patterns))
 		for i, pattern := range patterns {
-			patterns[i] = strings.ToLower(pattern)
+			lowerPatterns[i] = strings.ToLower(pattern)
 		}
+		patterns = lowerPatterns
 	}
 	return func(ctx context.Context, tCtx K) (any, error) {
 		val, err := target.Get(ctx, tCtx)

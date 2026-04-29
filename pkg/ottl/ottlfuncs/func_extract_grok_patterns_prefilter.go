@@ -6,6 +6,7 @@ package ottlfuncs // import "github.com/open-telemetry/opentelemetry-collector-c
 import (
 	"regexp/syntax"
 	"strings"
+	"unicode/utf8"
 )
 
 const maxGrokPrefilterLiterals = 4
@@ -173,11 +174,21 @@ func extractRequiredGrokLiterals(pattern string) []string {
 		case '.', '*', '+', '?', '^', '$', '{', '}':
 			flush()
 		default:
-			if ch < 0x20 || ch >= 0x7f {
+			if ch < 0x20 {
 				flush()
 				continue
 			}
-			current.WriteByte(ch)
+			if ch < 0x7f {
+				current.WriteByte(ch)
+				continue
+			}
+			r, size := utf8.DecodeRuneInString(pattern[i:])
+			if r == utf8.RuneError && size == 1 {
+				flush()
+				continue
+			}
+			current.WriteString(pattern[i : i+size])
+			i += size - 1
 		}
 	}
 	flush()

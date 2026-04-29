@@ -79,3 +79,23 @@ func TestContains(t *testing.T) {
 		})
 	}
 }
+
+func TestContainsDoesNotMutatePatterns(t *testing.T) {
+	patterns := []string{"TEST"}
+
+	_, err := createContainsFunction[any](
+		ottl.FunctionContext{},
+		&ContainsArguments[any]{
+			Target: &ottl.StandardStringGetter[any]{
+				Getter: func(context.Context, any) (any, error) {
+					return "test", nil
+				},
+			},
+			Patterns:      patterns,
+			CaseSensitive: false,
+		},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"TEST"}, patterns)
+}

@@ -72,3 +72,23 @@ func TestStartsWith(t *testing.T) {
 		})
 	}
 }
+
+func TestStartsWithDoesNotMutatePrefixes(t *testing.T) {
+	prefixes := []string{"THIS"}
+
+	_, err := createStartsWithFunction[any](
+		ottl.FunctionContext{},
+		&StartsWithArguments[any]{
+			Target: &ottl.StandardStringGetter[any]{
+				Getter: func(context.Context, any) (any, error) {
+					return "this", nil
+				},
+			},
+			Prefixes:      prefixes,
+			CaseSensitive: false,
+		},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"THIS"}, prefixes)
+}

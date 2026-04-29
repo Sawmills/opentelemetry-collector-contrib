@@ -72,3 +72,23 @@ func TestEndsWith(t *testing.T) {
 		})
 	}
 }
+
+func TestEndsWithDoesNotMutateSuffixes(t *testing.T) {
+	suffixes := []string{"STRING"}
+
+	_, err := createEndsWithFunction[any](
+		ottl.FunctionContext{},
+		&EndsWithArguments[any]{
+			Target: &ottl.StandardStringGetter[any]{
+				Getter: func(context.Context, any) (any, error) {
+					return "string", nil
+				},
+			},
+			Suffixes:      suffixes,
+			CaseSensitive: false,
+		},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"STRING"}, suffixes)
+}

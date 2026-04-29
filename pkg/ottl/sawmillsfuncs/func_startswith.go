@@ -55,9 +55,11 @@ func startsWith[K any](
 	caseSensitive bool,
 ) ottl.ExprFunc[K] {
 	if !caseSensitive {
+		lowerPrefixes := make([]string, len(prefixes))
 		for i, prefix := range prefixes {
-			prefixes[i] = strings.ToLower(prefix)
+			lowerPrefixes[i] = strings.ToLower(prefix)
 		}
+		prefixes = lowerPrefixes
 	}
 	return func(ctx context.Context, tCtx K) (any, error) {
 		val, err := target.Get(ctx, tCtx)

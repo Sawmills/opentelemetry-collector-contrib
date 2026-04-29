@@ -319,6 +319,12 @@ func Test_newGrokLiteralPrefilter(t *testing.T) {
 			match:    `[tenantId: tenant-a] completed`,
 			mismatch: `[tenantId: tenant-a] started`,
 		},
+		{
+			name:     "keeps utf8 required literals",
+			pattern:  `你好 %{word:value}(?= 完成)`,
+			match:    `INFO 你好 green 完成`,
+			mismatch: `INFO hello green done`,
+		},
 	}
 
 	for _, tt := range tests {
