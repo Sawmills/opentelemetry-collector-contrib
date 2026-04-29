@@ -21,16 +21,22 @@ type Matcher interface {
 
 const patternLengthThreshold = 200
 
+var compileRE2 = re2.Compile
+
 func Compile(pattern string) (Matcher, error) {
 	if len(pattern) >= patternLengthThreshold {
-		return re2.Compile(pattern)
+		matcher, err := compileRE2(pattern)
+		if err == nil {
+			return matcher, nil
+		}
 	}
 	return regexp.Compile(pattern)
 }
 
 func MustCompile(pattern string) Matcher {
-	if len(pattern) >= patternLengthThreshold {
-		return re2.MustCompile(pattern)
+	matcher, err := Compile(pattern)
+	if err != nil {
+		panic(err)
 	}
-	return regexp.MustCompile(pattern)
+	return matcher
 }

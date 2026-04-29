@@ -4,6 +4,7 @@
 package regexp
 
 import (
+	"errors"
 	stdregexp "regexp"
 	"strings"
 	"testing"
@@ -32,6 +33,20 @@ func TestCompileReturnsEngineErrors(t *testing.T) {
 	longMatcher, err := Compile(strings.Repeat("a", patternLengthThreshold) + "(")
 	require.Error(t, err)
 	require.Nil(t, longMatcher)
+}
+
+func TestCompileFallsBackToStdlibWhenRE2CompileFails(t *testing.T) {
+	originalCompileRE2 := compileRE2
+	t.Cleanup(func() {
+		compileRE2 = originalCompileRE2
+	})
+	compileRE2 = func(string) (*re2.Regexp, error) {
+		return nil, errors.New("forced re2 compile error")
+	}
+
+	matcher, err := Compile(strings.Repeat("a", patternLengthThreshold))
+	require.NoError(t, err)
+	require.IsType(t, &stdregexp.Regexp{}, matcher)
 }
 
 func TestMustCompilePanicsOnEngineErrors(t *testing.T) {
