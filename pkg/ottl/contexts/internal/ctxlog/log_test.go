@@ -510,14 +510,42 @@ func TestPathGetSetterBodyStringCacheMatchesPdataForInvalidCompositeFloat(t *tes
 	stringAccessor, err := ctxlog.PathGetSetter(stringPath)
 	require.NoError(t, err)
 
-	log := plog.NewLogRecord()
-	log.Body().SetEmptyMap().PutDouble("bad", math.NaN())
-	tCtx := newTestContext(log)
-	ctxlog.CacheBodyStringIfNeeded(tCtx)
+	tests := []struct {
+		name string
+		body func(pcommon.Value)
+	}{
+		{
+			name: "map_nan",
+			body: func(v pcommon.Value) {
+				v.SetEmptyMap().PutDouble("bad", math.NaN())
+			},
+		},
+		{
+			name: "map_inf",
+			body: func(v pcommon.Value) {
+				v.SetEmptyMap().PutDouble("bad", math.Inf(1))
+			},
+		},
+		{
+			name: "slice_negative_inf",
+			body: func(v pcommon.Value) {
+				v.SetEmptySlice().AppendEmpty().SetDouble(math.Inf(-1))
+			},
+		},
+	}
 
-	got, err := stringAccessor.Get(t.Context(), tCtx)
-	require.NoError(t, err)
-	assert.Equal(t, log.Body().AsString(), got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := plog.NewLogRecord()
+			tt.body(log.Body())
+			tCtx := newTestContext(log)
+			ctxlog.CacheBodyStringIfNeeded(tCtx)
+
+			got, err := stringAccessor.Get(t.Context(), tCtx)
+			require.NoError(t, err)
+			assert.Equal(t, log.Body().AsString(), got)
+		})
+	}
 }
 
 func TestPathGetSetterBodyIndexIgnoresCachedCompositeBody(t *testing.T) {

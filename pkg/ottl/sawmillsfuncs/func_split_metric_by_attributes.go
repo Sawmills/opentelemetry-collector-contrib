@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
-
-	jsoniter "github.com/json-iterator/go"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottlmetric"
@@ -89,10 +89,97 @@ func groupNumberDataPoints(
 }
 
 func dataPointHashKey(atts pcommon.Map, ts pcommon.Timestamp, other ...any) string {
-	hashParts := []any{atts.AsRaw(), ts.String()}
-	json := jsoniter.ConfigCompatibleWithStandardLibrary
-	jsonStr, _ := json.Marshal(append(hashParts, other...))
-	return string(jsonStr)
+	var b strings.Builder
+	appendMapHash(&b, atts)
+	b.WriteByte('|')
+	writeHashString(&b, ts.String())
+	for _, part := range other {
+		b.WriteByte('|')
+		writeHashAny(&b, part)
+	}
+	return b.String()
+}
+
+func appendMapHash(b *strings.Builder, atts pcommon.Map) {
+	keys := make([]string, 0, atts.Len())
+	atts.Range(func(k string, _ pcommon.Value) bool {
+		keys = append(keys, k)
+		return true
+	})
+	sort.Strings(keys)
+
+	b.WriteByte('{')
+	for _, key := range keys {
+		writeHashString(b, key)
+		if val, ok := atts.Get(key); ok {
+			appendValueHash(b, val)
+		}
+		b.WriteByte(';')
+	}
+	b.WriteByte('}')
+}
+
+func appendSliceHash(b *strings.Builder, slice pcommon.Slice) {
+	b.WriteByte('[')
+	for i := 0; i < slice.Len(); i++ {
+		appendValueHash(b, slice.At(i))
+		b.WriteByte(';')
+	}
+	b.WriteByte(']')
+}
+
+func appendValueHash(b *strings.Builder, val pcommon.Value) {
+	switch val.Type() {
+	case pcommon.ValueTypeEmpty:
+		b.WriteByte('e')
+	case pcommon.ValueTypeStr:
+		b.WriteByte('s')
+		writeHashString(b, val.Str())
+	case pcommon.ValueTypeBool:
+		b.WriteByte('b')
+		writeHashString(b, strconv.FormatBool(val.Bool()))
+	case pcommon.ValueTypeDouble:
+		b.WriteByte('d')
+		writeHashString(b, strconv.FormatFloat(val.Double(), 'g', -1, 64))
+	case pcommon.ValueTypeInt:
+		b.WriteByte('i')
+		writeHashString(b, strconv.FormatInt(val.Int(), 10))
+	case pcommon.ValueTypeMap:
+		b.WriteByte('m')
+		appendMapHash(b, val.Map())
+	case pcommon.ValueTypeSlice:
+		b.WriteByte('l')
+		appendSliceHash(b, val.Slice())
+	case pcommon.ValueTypeBytes:
+		b.WriteByte('x')
+		writeHashBytes(b, val.Bytes().AsRaw())
+	default:
+		b.WriteByte('u')
+		writeHashString(b, fmt.Sprintf("%v", val))
+	}
+}
+
+func writeHashAny(b *strings.Builder, val any) {
+	switch v := val.(type) {
+	case string:
+		b.WriteByte('s')
+		writeHashString(b, v)
+	default:
+		b.WriteByte('u')
+		writeHashString(b, fmt.Sprintf("%#v", v))
+	}
+}
+
+func writeHashString(b *strings.Builder, s string) {
+	b.WriteString(strconv.Itoa(len(s)))
+	b.WriteByte(':')
+	b.WriteString(s)
+}
+
+func writeHashBytes(b *strings.Builder, bs []byte) {
+	b.WriteString(strconv.Itoa(len(bs)))
+	b.WriteByte(':')
+	_, _ = b.Write(bs)
 }
 
 func splitMetricByAttributes[K any](

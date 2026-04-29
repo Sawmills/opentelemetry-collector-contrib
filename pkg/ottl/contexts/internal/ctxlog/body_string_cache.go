@@ -89,14 +89,14 @@ func bodyAsStringOptimized(v pcommon.Value) string {
 		if s, ok := mapToJSONString(v.Map()); ok {
 			return s
 		}
-		return ""
+		return v.AsString()
 	case pcommon.ValueTypeBytes:
 		return base64.StdEncoding.EncodeToString(v.Bytes().AsRaw())
 	case pcommon.ValueTypeSlice:
 		if s, ok := sliceToJSONString(v.Slice()); ok {
 			return s
 		}
-		return ""
+		return v.AsString()
 	default:
 		return fmt.Sprintf("<Unknown OpenTelemetry attribute value type %q>", v.Type())
 	}

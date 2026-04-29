@@ -1,6 +1,7 @@
 package sawmillsfuncs
 
 import (
+	"math"
 	"testing"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
@@ -89,6 +90,38 @@ func Test_splitMetricByAttributes(t *testing.T) {
 			},
 			attributes: emptyAttr,
 			want:       func(pmetric.MetricSlice) {},
+		},
+		{
+			name: "gauge metric keeps unsupported double attribute values distinct",
+			input: func() pmetric.Metric {
+				metricInput := pmetric.NewMetric()
+				metricInput.SetEmptyGauge()
+				metricInput.SetName("gauge_metric")
+
+				input := metricInput.Gauge().DataPoints().AppendEmpty()
+				input.SetDoubleValue(100)
+				input.Attributes().PutDouble("bad", math.Inf(1))
+
+				input2 := metricInput.Gauge().DataPoints().AppendEmpty()
+				input2.SetDoubleValue(50)
+				input2.Attributes().PutDouble("bad", math.Inf(-1))
+
+				return metricInput
+			},
+			attributes: emptyAttr,
+			want: func(metrics pmetric.MetricSlice) {
+				gaugeMetric := metrics.AppendEmpty()
+				gaugeMetric.SetEmptyGauge()
+				gaugeMetric.SetName("_gauge_metric")
+
+				input := gaugeMetric.Gauge().DataPoints().AppendEmpty()
+				input.SetDoubleValue(100)
+				input.Attributes().PutDouble("bad", math.Inf(1))
+
+				input = gaugeMetric.Gauge().DataPoints().AppendEmpty()
+				input.SetDoubleValue(50)
+				input.Attributes().PutDouble("bad", math.Inf(-1))
+			},
 		},
 		{
 			name: "sum metric with marching processor attribute",
