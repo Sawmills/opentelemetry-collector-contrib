@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/wasilibs/go-re2"
+	re2 "github.com/wasilibs/go-re2"
 )
 
 func TestCompileSelectsEngineByPatternLength(t *testing.T) {

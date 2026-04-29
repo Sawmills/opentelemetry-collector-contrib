@@ -6,7 +6,7 @@ package regexp // import "github.com/open-telemetry/opentelemetry-collector-cont
 import (
 	"regexp"
 
-	"github.com/wasilibs/go-re2"
+	re2 "github.com/wasilibs/go-re2"
 )
 
 type Matcher interface {

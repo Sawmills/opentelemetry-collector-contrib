@@ -748,7 +748,7 @@ func Test_splitMetricByAttributesSkipsTrackedGeneratedMetric(t *testing.T) {
 	require.Equal(t, 2, metrics.Len())
 }
 
-func Test_splitMetricByAttributesSkipsPrefixedMetricWithoutIteration(t *testing.T) {
+func Test_splitMetricByAttributesDoesNotRetainFallbackStateWithoutIteration(t *testing.T) {
 	evaluate := splitMetricByAttributes[*ottlmetric.TransformContext](
 		"prefix",
 		ottl.Optional[[]string]{},
@@ -775,12 +775,27 @@ func Test_splitMetricByAttributesSkipsPrefixedMetricWithoutIteration(t *testing.
 	require.Equal(t, 2, metrics.Len())
 	require.Equal(t, "prefix_sum_metric", metrics.At(1).Name())
 
-	ctx = ottlmetric.NewTransformContextPtr(rm, sm, metrics.At(1))
+	secondRM := pmetric.NewResourceMetrics()
+	secondSM := secondRM.ScopeMetrics().AppendEmpty()
+	secondMetrics := secondSM.Metrics()
+
+	secondMetrics.AppendEmpty().SetName("unrelated_metric")
+	secondMetricInput := secondMetrics.AppendEmpty()
+	secondMetricInput.SetEmptySum()
+	secondMetricInput.SetName("second_sum_metric")
+
+	secondInput := secondMetricInput.Sum().DataPoints().AppendEmpty()
+	secondInput.SetDoubleValue(100)
+	secondInput.Attributes().PutStr("key1", "val1")
+	secondInput.Attributes().PutStr("key2", "val2")
+
+	ctx = ottlmetric.NewTransformContextPtr(secondRM, secondSM, secondMetrics.At(1))
 	_, err = evaluate(t.Context(), ctx)
 	ctx.Close()
 
 	require.NoError(t, err)
-	require.Equal(t, 2, metrics.Len())
+	require.Equal(t, 3, secondMetrics.Len())
+	require.Equal(t, "prefix_second_sum_metric", secondMetrics.At(2).Name())
 }
 
 func Test_splitMetricByAttributesDoesNotSkipSameNameSourceBeforeGeneratedOutput(t *testing.T) {
@@ -850,6 +865,33 @@ func Test_groupNumberDataPointsDoesNotMutateInputSlice(t *testing.T) {
 	require.Equal(t, 150.0, grouped.At(0).DoubleValue())
 	require.Equal(t, 100.0, dps.At(0).DoubleValue())
 	require.Equal(t, 50.0, dps.At(1).DoubleValue())
+}
+
+func Test_groupNumberDataPointsPreservesFirstOccurrenceOrder(t *testing.T) {
+	dps := pmetric.NewNumberDataPointSlice()
+	first := dps.AppendEmpty()
+	first.SetIntValue(1)
+	first.Attributes().PutStr("key", "first")
+
+	second := dps.AppendEmpty()
+	second.SetIntValue(2)
+	second.Attributes().PutStr("key", "second")
+
+	duplicateFirst := dps.AppendEmpty()
+	duplicateFirst.SetIntValue(3)
+	duplicateFirst.Attributes().PutStr("key", "first")
+
+	grouped := groupNumberDataPoints(dps, false)
+
+	require.Equal(t, 2, grouped.Len())
+	value, ok := grouped.At(0).Attributes().Get("key")
+	require.True(t, ok)
+	require.Equal(t, "first", value.Str())
+	require.Equal(t, int64(4), grouped.At(0).IntValue())
+	value, ok = grouped.At(1).Attributes().Get("key")
+	require.True(t, ok)
+	require.Equal(t, "second", value.Str())
+	require.Equal(t, int64(2), grouped.At(1).IntValue())
 }
 
 func Test_generatedMetricTrackerKeepsInterleavedIterationsIndependent(t *testing.T) {
