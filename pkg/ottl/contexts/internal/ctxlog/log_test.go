@@ -430,9 +430,14 @@ func TestPathGetSetterBodyStringFallsBackWithoutCache(t *testing.T) {
 	require.NoError(t, err)
 
 	log := createTelemetry("map")
-	got, err := accessor.Get(t.Context(), newTestContext(log))
+	tCtx := newTestContext(log)
+	got, err := accessor.Get(t.Context(), tCtx)
 	require.NoError(t, err)
-	assert.Equal(t, log.Body().AsString(), got)
+	assert.Equal(t, "{\"key\":\"val\"}", got)
+	val, ok := tCtx.GetCache().Get("_internal.body_string")
+	require.True(t, ok)
+	require.Equal(t, pcommon.ValueTypeStr, val.Type())
+	assert.Equal(t, "{\"key\":\"val\"}", val.Str())
 }
 
 func TestPathGetSetterBodySetInvalidatesCachedCompositeBodyString(t *testing.T) {

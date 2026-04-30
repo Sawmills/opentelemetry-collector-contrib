@@ -193,7 +193,7 @@ func (bodyGetSetter[K]) Set(_ context.Context, tCtx K, val any) error {
 }
 
 func (bodyGetSetter[K]) GetStringLike(_ context.Context, tCtx K) (*string, bool, error) {
-	if bodyString, ok := getCachedCompositeBodyString(tCtx); ok {
+	if bodyString, ok := getOrCacheCompositeBodyString(tCtx); ok {
 		return &bodyString, true, nil
 	}
 
@@ -243,7 +243,7 @@ func accessBodyKey[K Context](key []ottl.Key[K]) ottl.StandardGetSetter[K] {
 func accessStringBody[K Context]() ottl.StandardGetSetter[K] {
 	return ottl.StandardGetSetter[K]{
 		Getter: func(_ context.Context, tCtx K) (any, error) {
-			if bodyString, ok := getCachedCompositeBodyString(tCtx); ok {
+			if bodyString, ok := getOrCacheCompositeBodyString(tCtx); ok {
 				return bodyString, nil
 			}
 			return tCtx.GetLogRecord().Body().AsString(), nil
@@ -260,13 +260,23 @@ func accessStringBody[K Context]() ottl.StandardGetSetter[K] {
 	}
 }
 
-func getCachedCompositeBodyString[K Context](tCtx K) (string, bool) {
+func getOrCacheCompositeBodyString[K Context](tCtx K) (string, bool) {
 	body := tCtx.GetLogRecord().Body()
 	if !bodySupportsCachedString(body) {
 		return "", false
 	}
 
-	return getCachedBodyString(tCtx)
+	cacheCtx, ok := any(tCtx).(cacheCarrier)
+	if !ok {
+		return "", false
+	}
+	cache := cacheCtx.GetCache()
+	if bodyString, ok := getCachedBodyStringFromMap(cache); ok {
+		return bodyString, true
+	}
+
+	cache.PutStr(bodyStringCacheKey, bodyAsStringOptimized(body))
+	return getCachedBodyStringFromMap(cache)
 }
 
 func accessAttributes[K Context]() ottl.StandardGetSetter[K] {
