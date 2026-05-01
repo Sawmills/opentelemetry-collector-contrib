@@ -57,8 +57,13 @@ Create an isolated Sawmills staging canary namespace/deployment that mimics the 
 
 Canary shape:
 
-- LB collector pods with current `endpoint_health` enabled.
-- Multiple backend endpoints behind the same resolver shape used by the LB exporter.
+- LB collector pods replaying the Gate 1 generated BigID LB config/version as the canary baseline.
+- Preserve the generated exporter shape from Gate 1, including `protocol.otlp`
+  timeout, `retry_on_failure`, `sending_queue`, log/metric batcher settings,
+  routing settings, resolver settings, `endpoint_health`, and
+  `forwarding_health.backend_usability`.
+- Change only isolated-resource details: namespace/resource names, backend endpoint targets, fault-injection targets, credentials/secrets needed for canary traffic, and labels/metadata.
+- Multiple backend endpoints behind the same resolver type and timing settings used by the BigID LB exporter.
 - A controlled subset of backend endpoints that times out from the LB pod while at least one other backend remains reachable.
 - Traffic directed only at the canary LB.
 
@@ -66,6 +71,7 @@ Validate current reactive `endpoint_health` before writing active-probe code.
 
 Pass/fail evidence must include:
 
+- A config diff/checksum showing the canary replayed the Gate 1 LB config with only the expected isolated-resource deltas.
 - `otelcol_loadbalancer_backend_quarantine_total` increments for the known-bad endpoint.
 - `otelcol_loadbalancer_backend_state{state="quarantined"}` is emitted for the bad endpoint.
 - Eligible backend count drops after quarantine trips / after the first endpoint-local failure.
@@ -78,6 +84,7 @@ Gate 2 outcomes:
 
 - If reactive quarantine is sufficient, close SAW-7374 with evidence and no exporter code.
 - If reactive quarantine is not sufficient because customer data must fail first and causes rejects/refusals before quarantine stabilizes routing, implement active local probing.
+- If the canary cannot replay the Gate 1 LB config/version with only isolated-resource deltas, Gate 2 is inconclusive and cannot close SAW-7374 without either replay parity or a documented config/rollout fix.
 
 Clean up the canary namespace and any temporary resources after the test.
 
@@ -117,6 +124,18 @@ The active probe state should feed the existing endpoint-health eligibility mode
 - If zero locally healthy backends remain, endpoint health should preserve fail-open behavior rather than blackholing telemetry.
 - `forwarding_health.backend_usability` remains the mechanism that drains a bad LB pod when locally eligible backends are below threshold.
 
+Config validation:
+
+- `type` must be a known probe type. Initially, only `tcp_connect` is valid.
+- `interval` and `timeout` must be positive durations.
+- `timeout` must be shorter than `interval`.
+- `jitter` must parse as a percentage from `0%` through `100%`.
+- `max_concurrency` must be positive.
+- `fall` and `rise` must be positive integers.
+- Both exporter config validation and collectors-service LaunchDarkly/generator
+  validation must reject invalid active-probe values before rendering a
+  collector config.
+
 Probe load controls:
 
 - Add jitter so LB pods do not probe endpoints in lockstep.
@@ -148,7 +167,7 @@ Config propagation repo: `collectors-service`.
 Likely generator changes:
 
 - Extend `LBEndpointHealthConfig` with `ActiveProbe`.
-- Validate durations, jitter, and concurrency.
+- Validate every active-probe field before rendering, including probe `type`, durations, jitter, concurrency, `fall`, and `rise`.
 - Version-gate active-probe rendering to the first collector version that contains the exporter change.
 - Add LaunchDarkly parsing/generator tests.
 
@@ -166,19 +185,27 @@ Use TDD for implementation.
 Exporter tests should prove:
 
 - active probe config loads and validates,
+- invalid probe `type`, `fall`, and `rise` values fail validation,
 - unhealthy local endpoints are excluded from routing when healthy alternatives exist,
+- after `rise` successful probes, a recovered endpoint is re-added to the eligible routing ring,
 - normal consistent hashing is preserved when all endpoints are healthy,
 - zero locally healthy endpoints fail open by default,
 - resolver-change and exporter-stopping reroute behavior remains intact,
 - probe loops stop cleanly on shutdown.
 
-Integration-style test should simulate multiple resolver backends where one endpoint times out from the LB pod. After active-probe `fall`, no customer telemetry should be sent to the unhealthy endpoint while another healthy backend exists.
+Integration-style test should simulate multiple resolver backends where one
+endpoint times out from the LB pod. After active-probe `fall`, no customer
+telemetry should be sent to the unhealthy endpoint while another healthy backend
+exists. After the endpoint becomes reachable again and reaches `rise` successful
+probes, the test must prove the endpoint is eligible again and the routing ring
+is rebuilt so traffic can return to it.
 
 Collectors-service tests should prove:
 
 - LaunchDarkly JSON parses into the new active-probe config,
 - rendered LB exporter config includes active-probe fields only for supported collector versions,
-- invalid intervals, timeouts, jitter, and concurrency fail generation clearly,
+- invalid intervals, timeouts, jitter, concurrency, `type`, `fall`, and `rise` fail generation clearly,
+- negative cases include at least `fall: 0`, `rise: -1`, and an unknown probe `type`,
 - omitted active-probe config preserves current output.
 
 ## Operational Safety
