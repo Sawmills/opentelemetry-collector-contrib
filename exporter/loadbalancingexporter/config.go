@@ -99,6 +99,8 @@ type LogBatcherConfig struct {
 
 type LogRoutingConfig struct {
 	IgnoreTraceID bool `mapstructure:"ignore_trace_id"`
+	// prevent unkeyed literal initialization
+	_ struct{}
 }
 
 type MetricBatcherConfig struct {
