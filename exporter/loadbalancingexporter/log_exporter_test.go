@@ -657,7 +657,7 @@ func TestGroupLogsByEndpointIgnoreTraceIDUsesRandomRoutingKey(t *testing.T) {
 	require.NoError(t, groupErr)
 	require.Len(t, batches, 1)
 	require.Contains(t, batches, "endpoint-2:4317")
-	assert.Equal(t, second, batches["endpoint-2:4317"].exp)
+	assert.Equal(t, batches["endpoint-2:4317"].exp, second)
 	assert.Equal(t, 1, batches["endpoint-2:4317"].logs.LogRecordCount())
 }
 
