@@ -800,20 +800,21 @@ func (lb *loadBalancer) stopEndpointHealthActiveProbeLoop(ctx context.Context) e
 
 func (lb *loadBalancer) runEndpointHealthActiveProbeLoop(ctx context.Context) {
 	for {
-		lb.runEndpointHealthActiveProbeCycle(ctx)
-
-		timer := time.NewTimer(lb.nextEndpointHealthActiveProbeInterval())
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
+		if !lb.waitForNextEndpointHealthActiveProbeInterval(ctx) {
 			return
-		case <-timer.C:
 		}
+		lb.runEndpointHealthActiveProbeCycle(ctx)
+	}
+}
+
+func (lb *loadBalancer) waitForNextEndpointHealthActiveProbeInterval(ctx context.Context) bool {
+	timer := time.NewTimer(lb.nextEndpointHealthActiveProbeInterval())
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 

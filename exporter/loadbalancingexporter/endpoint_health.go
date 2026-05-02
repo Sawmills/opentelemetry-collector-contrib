@@ -266,11 +266,13 @@ func (m *endpointHealthManager) markSuccessDecision(endpoint string) endpointHea
 	if !ok || !state.present {
 		return endpointHealthSuccessDecision{}
 	}
-	if !state.quarantinedUntil.IsZero() || state.failureReason != "" || state.probeUnhealthy {
+	if state.probeUnhealthy {
+		return endpointHealthSuccessDecision{}
+	}
+	if !state.quarantinedUntil.IsZero() || state.failureReason != "" {
 		reason := state.failureReason
 		state.quarantinedUntil = time.Time{}
 		state.failureReason = ""
-		state.probeUnhealthy = false
 		state.probeFailures = 0
 		state.probeSuccesses = 0
 		state.lastStateChangeAt = m.settings.now()
@@ -400,6 +402,10 @@ func (m *endpointHealthManager) refreshExpiredQuarantines() endpointHealthRefres
 		if !state.present || state.quarantinedUntil.IsZero() || state.quarantinedUntil.After(now) {
 			continue
 		}
+		if state.probeUnhealthy {
+			state.quarantinedUntil = time.Time{}
+			continue
+		}
 		recovered = append(recovered, endpointHealthRecovered{endpoint: state.endpoint, reason: state.failureReason})
 		state.quarantinedUntil = time.Time{}
 		state.failureReason = ""
@@ -451,12 +457,17 @@ func (m *endpointHealthManager) eligibleEndpointsLockedWithRefresh(now time.Time
 			continue
 		}
 		present = append(present, state.endpoint)
-		if !state.probeUnhealthy && !state.quarantinedUntil.IsZero() && !state.quarantinedUntil.After(now) && refreshExpired {
-			state.quarantinedUntil = time.Time{}
-			state.failureReason = ""
-			state.lastStateChangeAt = now
-		} else if !state.quarantinedUntil.IsZero() && (nextExpiry.IsZero() || state.quarantinedUntil.Before(nextExpiry)) {
-			nextExpiry = state.quarantinedUntil
+		if !state.quarantinedUntil.IsZero() {
+			if !state.quarantinedUntil.After(now) && refreshExpired {
+				state.quarantinedUntil = time.Time{}
+				if !state.probeUnhealthy {
+					state.failureReason = ""
+					state.lastStateChangeAt = now
+				}
+			}
+			if !state.quarantinedUntil.IsZero() && state.quarantinedUntil.After(now) && (nextExpiry.IsZero() || state.quarantinedUntil.Before(nextExpiry)) {
+				nextExpiry = state.quarantinedUntil
+			}
 		}
 		if state.quarantinedUntil.IsZero() && !state.probeUnhealthy {
 			eligible = append(eligible, state.endpoint)

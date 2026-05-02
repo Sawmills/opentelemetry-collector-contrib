@@ -99,6 +99,39 @@ func TestEndpointHealthProbeFailureBelowFallDoesNotRecoverOnExportSuccess(t *tes
 	require.Equal(t, []string{"endpoint-1", "endpoint-2"}, manager.eligibleEndpoints())
 }
 
+func TestEndpointHealthProbeUnhealthyRequiresRiseSuccessesForRecovery(t *testing.T) {
+	now := time.Unix(100, 0)
+	manager := newEndpointHealthManager(endpointHealthSettings{
+		enabled:            true,
+		quarantineDuration: 30 * time.Second,
+		activeProbe: endpointHealthActiveProbeSettings{
+			enabled: true,
+			fall:    2,
+			rise:    2,
+		},
+		now: func() time.Time { return now },
+	})
+	manager.reconcile([]string{"endpoint-1", "endpoint-2"})
+
+	manager.markProbeFailure("endpoint-1")
+	decision := manager.markProbeFailure("endpoint-1")
+	require.True(t, decision.quarantined)
+	require.Equal(t, []string{"endpoint-2"}, decision.eligible)
+
+	success := manager.markSuccessDecision("endpoint-1")
+	require.False(t, success.recovered)
+	require.Equal(t, []string{"endpoint-2"}, manager.eligibleEndpoints())
+
+	probeSuccess := manager.markProbeSuccess("endpoint-1")
+	require.False(t, probeSuccess.recovered)
+	require.Equal(t, []string{"endpoint-2"}, manager.eligibleEndpoints())
+
+	probeSuccess = manager.markProbeSuccess("endpoint-1")
+	require.True(t, probeSuccess.recovered)
+	require.Equal(t, endpointFailureActiveProbe, probeSuccess.reason)
+	require.Equal(t, []string{"endpoint-1", "endpoint-2"}, manager.eligibleEndpoints())
+}
+
 func TestEndpointHealthQuarantineRefreshDueTracksNextExpiry(t *testing.T) {
 	now := time.Unix(100, 0)
 	manager := newEndpointHealthManager(endpointHealthSettings{
@@ -118,6 +151,40 @@ func TestEndpointHealthQuarantineRefreshDueTracksNextExpiry(t *testing.T) {
 	require.Equal(t, []endpointHealthRecovered{{endpoint: "endpoint-1", reason: endpointFailureUnavailable}}, refresh.recovered)
 	require.Equal(t, []string{"endpoint-1", "endpoint-2"}, refresh.eligible)
 	require.False(t, manager.quarantineRefreshDue())
+}
+
+func TestEndpointHealthExpiredProbeQuarantineDoesNotRefreshForever(t *testing.T) {
+	now := time.Unix(100, 0)
+	manager := newEndpointHealthManager(endpointHealthSettings{
+		enabled:            true,
+		quarantineDuration: 30 * time.Second,
+		activeProbe: endpointHealthActiveProbeSettings{
+			enabled: true,
+			fall:    1,
+			rise:    2,
+		},
+		now: func() time.Time { return now },
+	})
+	manager.reconcile([]string{"endpoint-1", "endpoint-2"})
+	manager.markFailure("endpoint-1", status.Error(codes.Unavailable, "backend unavailable"))
+	manager.markProbeFailure("endpoint-1")
+
+	now = now.Add(31 * time.Second)
+	require.Equal(t, []string{"endpoint-2"}, manager.eligibleEndpoints())
+	require.False(t, manager.quarantineRefreshDue())
+
+	refresh := manager.refreshExpiredQuarantines()
+	require.Empty(t, refresh.recovered)
+	require.False(t, refresh.failOpenStarted)
+	require.Equal(t, []string{"endpoint-2"}, manager.eligibleEndpoints())
+
+	probeSuccess := manager.markProbeSuccess("endpoint-1")
+	require.False(t, probeSuccess.recovered)
+	require.Equal(t, []string{"endpoint-2"}, manager.eligibleEndpoints())
+
+	probeSuccess = manager.markProbeSuccess("endpoint-1")
+	require.True(t, probeSuccess.recovered)
+	require.Equal(t, []string{"endpoint-1", "endpoint-2"}, manager.eligibleEndpoints())
 }
 
 func TestShouldRerouteDirectFailureAllowsAlreadyQuarantinedEndpoint(t *testing.T) {

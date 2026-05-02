@@ -708,7 +708,7 @@ func TestLoadBalancerEndpointHealthActiveProbeLoopStopsOnShutdown(t *testing.T) 
 	cfg.EndpointHealth.ActiveProbe = EndpointHealthActiveProbeConfig{
 		Enabled:        true,
 		Type:           EndpointHealthActiveProbeTypeTCPConnect,
-		Interval:       time.Hour,
+		Interval:       10 * time.Millisecond,
 		Timeout:        time.Minute,
 		Jitter:         "0%",
 		MaxConcurrency: 1,
@@ -724,8 +724,9 @@ func TestLoadBalancerEndpointHealthActiveProbeLoopStopsOnShutdown(t *testing.T) 
 	p.onBackendChanges([]string{"endpoint-1"})
 
 	probeStarted := make(chan struct{})
+	var startedOnce sync.Once
 	p.activeProbeFunc = func(ctx context.Context, _ string) error {
-		close(probeStarted)
+		startedOnce.Do(func() { close(probeStarted) })
 		<-ctx.Done()
 		return ctx.Err()
 	}
@@ -740,6 +741,57 @@ func TestLoadBalancerEndpointHealthActiveProbeLoopStopsOnShutdown(t *testing.T) 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	require.NoError(t, p.Shutdown(shutdownCtx))
+}
+
+func TestLoadBalancerEndpointHealthActiveProbeLoopWaitsBeforeFirstCycle(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	cfg.EndpointHealth.ActiveProbe = EndpointHealthActiveProbeConfig{
+		Enabled:        true,
+		Type:           EndpointHealthActiveProbeTypeTCPConnect,
+		Interval:       200 * time.Millisecond,
+		Timeout:        50 * time.Millisecond,
+		Jitter:         "0%",
+		MaxConcurrency: 1,
+		Fall:           1,
+		Rise:           1,
+	}
+	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		return mockComponent{}, nil
+	}
+
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	p.onBackendChanges([]string{"endpoint-1"})
+
+	probeStarted := make(chan struct{}, 1)
+	p.activeProbeFunc = func(context.Context, string) error {
+		probeStarted <- struct{}{}
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		p.runEndpointHealthActiveProbeLoop(ctx)
+	}()
+
+	select {
+	case <-probeStarted:
+		cancel()
+		<-done
+		t.Fatal("active probe loop started before the first interval elapsed")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("active probe loop did not stop after cancellation")
+	}
 }
 
 func TestLoadBalancerEndpointHealthRemovesDNSStaleEndpoint(t *testing.T) {
