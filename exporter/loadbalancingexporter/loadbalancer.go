@@ -784,11 +784,9 @@ func (lb *loadBalancer) startEndpointHealthActiveProbeLoop() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	lb.probeStop = cancel
-	lb.probeWG.Add(1)
-	go func() {
-		defer lb.probeWG.Done()
+	lb.probeWG.Go(func() {
 		lb.runEndpointHealthActiveProbeLoop(ctx)
-	}()
+	})
 }
 
 func (lb *loadBalancer) stopEndpointHealthActiveProbeLoop(ctx context.Context) error {

@@ -665,8 +665,8 @@ func TestLoadBalancerEndpointHealthActiveProbeCycleHonorsMaxConcurrency(t *testi
 	p.activeProbeFunc = func(ctx context.Context, _ string) error {
 		current := active.Add(1)
 		for {
-			max := maxActive.Load()
-			if current <= max || maxActive.CompareAndSwap(max, current) {
+			observedMax := maxActive.Load()
+			if current <= observedMax || maxActive.CompareAndSwap(observedMax, current) {
 				break
 			}
 		}
@@ -738,7 +738,7 @@ func TestLoadBalancerEndpointHealthActiveProbeLoopStopsOnShutdown(t *testing.T) 
 		t.Fatal("expected active probe loop to start")
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	shutdownCtx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	require.NoError(t, p.Shutdown(shutdownCtx))
 }
@@ -771,7 +771,7 @@ func TestLoadBalancerEndpointHealthActiveProbeLoopWaitsBeforeFirstCycle(t *testi
 		return nil
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
