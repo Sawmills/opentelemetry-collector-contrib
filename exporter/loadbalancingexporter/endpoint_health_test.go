@@ -75,6 +75,30 @@ func TestEndpointHealthQuarantinesOnFirstEndpointLocalFailure(t *testing.T) {
 	require.Equal(t, []string{"endpoint-1", "endpoint-2"}, manager.eligibleEndpoints())
 }
 
+func TestEndpointHealthProbeFailureBelowFallDoesNotRecoverOnExportSuccess(t *testing.T) {
+	now := time.Unix(100, 0)
+	manager := newEndpointHealthManager(endpointHealthSettings{
+		enabled:            true,
+		quarantineDuration: 30 * time.Second,
+		activeProbe: endpointHealthActiveProbeSettings{
+			enabled: true,
+			fall:    2,
+			rise:    2,
+		},
+		now: func() time.Time { return now },
+	})
+	manager.reconcile([]string{"endpoint-1", "endpoint-2"})
+
+	decision := manager.markProbeFailure("endpoint-1")
+	require.True(t, decision.endpointLocal)
+	require.False(t, decision.quarantined)
+	require.Equal(t, []string{"endpoint-1", "endpoint-2"}, decision.eligible)
+
+	success := manager.markSuccessDecision("endpoint-1")
+	require.False(t, success.recovered)
+	require.Equal(t, []string{"endpoint-1", "endpoint-2"}, manager.eligibleEndpoints())
+}
+
 func TestEndpointHealthQuarantineRefreshDueTracksNextExpiry(t *testing.T) {
 	now := time.Unix(100, 0)
 	manager := newEndpointHealthManager(endpointHealthSettings{
