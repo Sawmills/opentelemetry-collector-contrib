@@ -77,13 +77,21 @@ Pass/fail evidence must include:
 - Eligible backend count drops after quarantine trips / after the first endpoint-local failure.
 - `otelcol_loadbalancer_backend_reroute_total{result="success"}` increases while a reachable backend exists.
 - `otelcol_loadbalancer_backend_reroute_total{result="failure"}` does not keep growing while a reachable backend exists.
-- After quarantine, there are no sustained reject logs or receiver refusals for the same locally unreachable endpoint.
+- The persistent partition remains in place for at least two
+  `endpoint_health.quarantine_duration` expiry cycles, plus resolver poll and
+  `forwarding_health.backend_usability` poll intervals.
+- Across those captured expiry cycles, there are no recurring reject logs or
+  receiver refusals when the exporter re-admits the same locally unreachable
+  endpoint.
 - `otelcol_loadbalancer_backend_fail_open_total` increments only when every candidate backend is bad or no eligible backend remains.
 
 Gate 2 outcomes:
 
 - If reactive quarantine is sufficient, close SAW-7374 with evidence and no exporter code.
 - If reactive quarantine is not sufficient because customer data must fail first and causes rejects/refusals before quarantine stabilizes routing, implement active local probing.
+- If persistent partial partition rejects/refusals recur after quarantine expiry
+  re-admits the bad endpoint, reactive quarantine is insufficient and active
+  local probing is required.
 - If the canary cannot replay the Gate 1 LB config/version with only isolated-resource deltas, Gate 2 is inconclusive and cannot close SAW-7374 without either replay parity or a documented config/rollout fix.
 
 Clean up the canary namespace and any temporary resources after the test.
@@ -121,6 +129,13 @@ The active probe state should feed the existing endpoint-health eligibility mode
 - A backend becomes locally unhealthy after `fall` failed probes.
 - A backend becomes locally healthy again after `rise` successful probes.
 - Healthy/unhealthy probe state must update the same eligible routing ring used by reactive quarantine.
+- Probe unhealthy/healthy transitions must update the existing
+  `otelcol_loadbalancer_backend_state` series so
+  `forwarding_health.backend_usability` sees the same eligible/quarantined
+  counts that routing uses.
+- Probe-driven exclusion and recovery must also use the existing
+  quarantine/unquarantine/fail-open signal family, with reason labels if needed,
+  rather than only emitting probe-specific metrics.
 - If zero locally healthy backends remain, endpoint health should preserve fail-open behavior rather than blackholing telemetry.
 - `forwarding_health.backend_usability` remains the mechanism that drains a bad LB pod when locally eligible backends are below threshold.
 
@@ -145,8 +160,13 @@ Probe load controls:
 
 Metrics:
 
-- Reuse existing backend state/quarantine/reroute/fail-open metrics where possible.
-- Add probe-specific metrics only if needed to debug probe behavior, such as probe failures and latency by low-cardinality reason/state.
+- Probe state changes must feed existing backend state/quarantine/unquarantine
+  and fail-open metrics used by routing and `forwarding_health`.
+- Add probe-specific metrics only as supplemental debugging signals, such as
+  probe failures and latency by low-cardinality reason/state.
+- If implementation cannot reuse those existing metrics directly, update
+  `forwarding_health.backend_usability` parsing in the same change so readiness
+  still derives from the active-probe-aware eligible backend set.
 
 ## Code Boundaries If Active Probe Is Needed
 
@@ -185,9 +205,13 @@ Use TDD for implementation.
 Exporter tests should prove:
 
 - active probe config loads and validates,
-- invalid probe `type`, `fall`, and `rise` values fail validation,
+- invalid probe `type`, `interval`, `timeout`, `timeout >= interval`,
+  `jitter`, `max_concurrency`, `fall`, and `rise` values fail exporter
+  validation,
 - unhealthy local endpoints are excluded from routing when healthy alternatives exist,
 - after `rise` successful probes, a recovered endpoint is re-added to the eligible routing ring,
+- probe state transitions update existing backend state/quarantine/unquarantine
+  and fail-open signals used by forwarding-health readiness,
 - normal consistent hashing is preserved when all endpoints are healthy,
 - zero locally healthy endpoints fail open by default,
 - resolver-change and exporter-stopping reroute behavior remains intact,
