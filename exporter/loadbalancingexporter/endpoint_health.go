@@ -309,12 +309,17 @@ func (m *endpointHealthManager) markProbeSuccess(endpoint string) endpointHealth
 		return endpointHealthSuccessDecision{}
 	}
 
+	now := m.settings.now()
 	reason := state.failureReason
 	state.probeUnhealthy = false
 	state.probeSuccesses = 0
+	state.lastStateChangeAt = now
+	if !state.quarantinedUntil.IsZero() && state.quarantinedUntil.After(now) {
+		_, _, _ = m.eligibleEndpointsLocked(now)
+		return endpointHealthSuccessDecision{}
+	}
 	state.failureReason = ""
-	state.lastStateChangeAt = m.settings.now()
-	eligible, _, _ := m.eligibleEndpointsLocked(state.lastStateChangeAt)
+	eligible, _, _ := m.eligibleEndpointsLocked(now)
 	return endpointHealthSuccessDecision{
 		recovered: true,
 		reason:    reason,

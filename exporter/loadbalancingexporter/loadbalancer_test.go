@@ -591,6 +591,68 @@ func TestLoadBalancerEndpointHealthActiveProbeUpdatesExistingHealthMetrics(t *te
 	}, metricdatatest.IgnoreTimestamp())
 }
 
+func TestLoadBalancerEndpointHealthProbeRecoveryKeepsActiveTransportQuarantineMetrics(t *testing.T) {
+	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	cfg.EndpointHealth.ActiveProbe = EndpointHealthActiveProbeConfig{
+		Enabled:        true,
+		Type:           EndpointHealthActiveProbeTypeTCPConnect,
+		Interval:       time.Second,
+		Timeout:        100 * time.Millisecond,
+		Jitter:         "0%",
+		MaxConcurrency: 2,
+		Fall:           1,
+		Rise:           1,
+	}
+	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		return mockComponent{}, nil
+	}
+	now := time.Unix(100, 0)
+
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	p.endpointHealth.settings.now = func() time.Time { return now }
+	p.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+
+	transportFailure := p.handleBackendFailure(t.Context(), "endpoint-1:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, transportFailure.quarantined)
+	probeFailure := p.handleBackendProbeFailure(t.Context(), "endpoint-1:4317", errors.New("probe failed"))
+	require.True(t, probeFailure.quarantined)
+
+	probeSuccess := p.handleBackendProbeSuccess(t.Context(), "endpoint-1:4317")
+	require.False(t, probeSuccess.recovered)
+	require.NotContains(t, p.exporters, "endpoint-1:4317")
+	_, err = telemetry.GetMetric("otelcol_loadbalancer_backend_unquarantine_total")
+	require.Error(t, err)
+	metadatatest.AssertEqualLoadbalancerBackendState(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "eligible")),
+			Value:      0,
+		},
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "quarantined")),
+			Value:      1,
+		},
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "stale")),
+			Value:      0,
+		},
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "eligible")),
+			Value:      1,
+		},
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "quarantined")),
+			Value:      0,
+		},
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "stale")),
+			Value:      0,
+		},
+	}, metricdatatest.IgnoreTimestamp(), metricdatatest.IgnoreExemplars())
+}
+
 func TestLoadBalancerEndpointHealthActiveProbeCycleUsesTCPConnectAndRecoversEndpoint(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	cfg := simpleConfig()
