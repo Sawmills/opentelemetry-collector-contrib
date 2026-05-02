@@ -212,6 +212,11 @@ func TestConfigValidateEndpointHealthActiveProbe(t *testing.T) {
 			expectedErr: "endpoint_health.active_probe.jitter",
 		},
 		{
+			name:        "infinite jitter",
+			mutate:      func(c *EndpointHealthActiveProbeConfig) { c.Jitter = "Inf%" },
+			expectedErr: "endpoint_health.active_probe.jitter",
+		},
+		{
 			name:        "zero max concurrency",
 			mutate:      func(c *EndpointHealthActiveProbeConfig) { c.MaxConcurrency = 0 },
 			expectedErr: "endpoint_health.active_probe.max_concurrency",

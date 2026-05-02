@@ -184,6 +184,7 @@ func TestEndpointHealthExpiredProbeQuarantineDoesNotRefreshForever(t *testing.T)
 
 	probeSuccess = manager.markProbeSuccess("endpoint-1")
 	require.True(t, probeSuccess.recovered)
+	require.Equal(t, endpointFailureActiveProbe, probeSuccess.reason)
 	require.Equal(t, []string{"endpoint-1", "endpoint-2"}, manager.eligibleEndpoints())
 }
 
@@ -215,7 +216,7 @@ func TestEndpointHealthProbeRecoveryWaitsForActiveTransportQuarantine(t *testing
 	manager.mu.RUnlock()
 	require.False(t, probeUnhealthy)
 	require.True(t, quarantinedUntil.After(now))
-	require.NotEmpty(t, failureReason)
+	require.Equal(t, endpointFailureUnavailable, failureReason)
 
 	now = now.Add(31 * time.Second)
 	refresh := manager.refreshExpiredQuarantines()

@@ -651,6 +651,24 @@ func TestLoadBalancerEndpointHealthProbeRecoveryKeepsActiveTransportQuarantineMe
 			Value:      0,
 		},
 	}, metricdatatest.IgnoreTimestamp(), metricdatatest.IgnoreExemplars())
+
+	p.endpointHealth.mu.RLock()
+	state := p.endpointHealth.endpoints["endpoint-1:4317"]
+	quarantinedUntil := state.quarantinedUntil
+	failureReason := state.failureReason
+	p.endpointHealth.mu.RUnlock()
+	require.Equal(t, endpointFailureUnavailable, failureReason)
+
+	now = quarantinedUntil.Add(time.Nanosecond)
+	require.True(t, p.endpointHealth.quarantineRefreshDue())
+	p.refreshExpiredEndpointHealth(t.Context())
+	require.Contains(t, p.exporters, "endpoint-1:4317")
+	metadatatest.AssertEqualLoadbalancerBackendUnquarantineTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("reason", string(endpointFailureUnavailable))),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
 }
 
 func TestLoadBalancerEndpointHealthActiveProbeCycleUsesTCPConnectAndRecoversEndpoint(t *testing.T) {
