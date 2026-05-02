@@ -6,6 +6,7 @@ package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -346,7 +347,7 @@ func parseEndpointHealthActiveProbeJitter(jitter string) (float64, error) {
 		return 0, errors.New("endpoint_health.active_probe.jitter must be a percentage from 0% through 100%")
 	}
 	percentage, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(value, "%")), 64)
-	if err != nil || percentage < 0 || percentage > 100 {
+	if err != nil || math.IsNaN(percentage) || math.IsInf(percentage, 0) || percentage < 0 || percentage > 100 {
 		return 0, errors.New("endpoint_health.active_probe.jitter must be a percentage from 0% through 100%")
 	}
 	return percentage / 100, nil
