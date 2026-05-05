@@ -38,7 +38,7 @@ func compressibleMetrics(points int) pmetric.Metrics {
 	metric := sm.Metrics().AppendEmpty()
 	metric.SetName("central.queue.test")
 	metric.SetEmptyGauge()
-	for i := 0; i < points; i++ {
+	for range points {
 		dp := metric.Gauge().DataPoints().AppendEmpty()
 		dp.SetIntValue(42)
 		dp.Attributes().PutStr("host.name", "same-host")

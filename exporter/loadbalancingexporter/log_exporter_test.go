@@ -195,7 +195,7 @@ func TestConsumeLogsCentralQueueEnqueuesCompressedByRoutingKey(t *testing.T) {
 	logs := simpleLogs()
 	require.NoError(t, p.ConsumeLogs(t.Context(), logs))
 	require.Equal(t, 1, p.centralQueue.len())
-	require.Greater(t, p.centralQueue.compressedBytes(), int64(0))
+	require.Positive(t, p.centralQueue.compressedBytes())
 
 	lease, err := p.centralQueue.lease(t.Context())
 	require.NoError(t, err)

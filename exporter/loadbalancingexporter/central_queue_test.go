@@ -5,7 +5,6 @@ package loadbalancingexporter
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -66,7 +65,7 @@ func TestCentralQueueLeaseReturnsContextErrorWhenEmpty(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, err := q.lease(ctx)
-	require.True(t, errors.Is(err, ctx.Err()))
+	require.ErrorIs(t, err, ctx.Err())
 }
 
 func TestCentralQueueStopAllowsDrainingExistingItems(t *testing.T) {

@@ -70,9 +70,9 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 	}
 	if cfg.(*Config).CentralQueue.Enabled {
 		centralCfg := cfg.(*Config).CentralQueue
-		centralTelemetry, err := newCentralQueueTelemetry(params.TelemetrySettings, signalKindLogs)
-		if err != nil {
-			return nil, err
+		centralTelemetry, telemetryErr := newCentralQueueTelemetry(params.TelemetrySettings, signalKindLogs)
+		if telemetryErr != nil {
+			return nil, telemetryErr
 		}
 		logExporter.centralQueue = newCentralQueue(centralQueueSettings{
 			maxCompressedBytes:           centralCfg.MaxCompressedBytes,

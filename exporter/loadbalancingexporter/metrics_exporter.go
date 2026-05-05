@@ -73,9 +73,9 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 	}
 	if cfg.(*Config).CentralQueue.Enabled {
 		centralCfg := cfg.(*Config).CentralQueue
-		centralTelemetry, err := newCentralQueueTelemetry(params.TelemetrySettings, signalKindMetrics)
-		if err != nil {
-			return nil, err
+		centralTelemetry, telemetryErr := newCentralQueueTelemetry(params.TelemetrySettings, signalKindMetrics)
+		if telemetryErr != nil {
+			return nil, telemetryErr
 		}
 		metricExporter.centralQueue = newCentralQueue(centralQueueSettings{
 			maxCompressedBytes:           centralCfg.MaxCompressedBytes,

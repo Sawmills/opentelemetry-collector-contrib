@@ -189,7 +189,7 @@ func TestConsumeMetricsCentralQueueEnqueuesCompressedByRoutingKey(t *testing.T) 
 	md := simpleMetricsWithServiceName()
 	require.NoError(t, p.ConsumeMetrics(t.Context(), md))
 	require.Equal(t, 1, p.centralQueue.len())
-	require.Greater(t, p.centralQueue.compressedBytes(), int64(0))
+	require.Positive(t, p.centralQueue.compressedBytes())
 
 	lease, err := p.centralQueue.lease(t.Context())
 	require.NoError(t, err)
