@@ -202,6 +202,47 @@ func TestConsumeMetricsCentralQueueEnqueuesCompressedByRoutingKey(t *testing.T) 
 	require.Equal(t, md.DataPointCount(), decoded.DataPointCount())
 }
 
+func TestMetricsCentralQueueDropsPermanentExportError(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+
+	endpoint := "endpoint-1:4317"
+	var calls atomic.Int64
+	p := &metricExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    1 << 20,
+		}),
+		centralCodec: codec,
+		loadBalancer: &loadBalancer{
+			ring: newHashRing([]string{endpoint}),
+			exporters: map[string]*wrappedExporter{endpoint: newWrappedExporter(newMockMetricsExporter(func(context.Context, pmetric.Metrics) error {
+				calls.Add(1)
+				return consumererror.NewPermanent(errors.New("bad metrics"))
+			}), endpoint)},
+			endpointHealth: newEndpointHealthManager(endpointHealthSettings{}),
+		},
+		telemetry: tb,
+		logger:    ts.Logger,
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	p.centralWG.Add(1)
+	go p.runCentralQueue(ctx)
+	item, err := newCentralQueueMetricsItem([]byte("route-a"), singleDataPointMetric("permanent"), codec, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, p.centralQueue.enqueue(item))
+
+	require.Eventually(t, func() bool {
+		return calls.Load() == 1 && p.centralQueue.len() == 0
+	}, 2*time.Second, 20*time.Millisecond)
+	cancel()
+	waitErr := waitForInflight(t.Context(), &p.centralWG)
+	require.NoError(t, waitErr)
+}
+
 // loadMetricsMap will parse the given yaml file into a map[string]pmetric.Metrics
 func loadMetricsMap(t *testing.T, path string) map[string]pmetric.Metrics {
 	b, err := os.ReadFile(path)

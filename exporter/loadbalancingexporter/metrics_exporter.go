@@ -233,6 +233,10 @@ func (e *metricExporterImp) runCentralQueue(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		if consumererror.IsPermanent(err) {
+			e.logger.Warn("dropping central metric queue item after permanent export error", zap.Error(err))
+			continue
+		}
 		item := lease.item
 		item.attempt++
 		if requeueErr := e.centralQueue.requeue(item, time.Now().Add(centralQueueRetryDelay(item.attempt))); requeueErr != nil {

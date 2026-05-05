@@ -55,6 +55,18 @@ func TestCentralQueueRejectsOversizedUncompressedItem(t *testing.T) {
 	require.Zero(t, q.compressedBytes())
 }
 
+func TestCentralQueueRejectsItemLargerThanInflightBudget(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 50,
+		maxUncompressedBatchBytes:    100,
+	})
+
+	err := q.enqueue(centralQueueItem{signal: signalKindLogs, compressedBytes: 10, uncompressedBytes: 51, count: 1})
+	require.ErrorIs(t, err, errCentralQueueItemTooLarge)
+	require.Zero(t, q.compressedBytes())
+}
+
 func TestCentralQueueLeaseReturnsContextErrorWhenEmpty(t *testing.T) {
 	q := newCentralQueue(centralQueueSettings{
 		maxCompressedBytes:           100,

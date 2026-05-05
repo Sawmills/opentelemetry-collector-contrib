@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/consumer"
+	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
@@ -206,6 +207,47 @@ func TestConsumeLogsCentralQueueEnqueuesCompressedByRoutingKey(t *testing.T) {
 	decoded, err := decodeCentralQueueLogsItem(lease.item, codec)
 	require.NoError(t, err)
 	require.Equal(t, logs.LogRecordCount(), decoded.LogRecordCount())
+}
+
+func TestLogsCentralQueueDropsPermanentExportError(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+
+	endpoint := "endpoint-1:4317"
+	var calls atomic.Int64
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    1 << 20,
+		}),
+		centralCodec: codec,
+		loadBalancer: &loadBalancer{
+			ring: newHashRing([]string{endpoint}),
+			exporters: map[string]*wrappedExporter{endpoint: newWrappedExporter(newMockLogsExporter(func(context.Context, plog.Logs) error {
+				calls.Add(1)
+				return consumererror.NewPermanent(errors.New("bad logs"))
+			}), endpoint)},
+			endpointHealth: newEndpointHealthManager(endpointHealthSettings{}),
+		},
+		telemetry: tb,
+		logger:    ts.Logger,
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	p.centralWG.Add(1)
+	go p.runCentralQueue(ctx)
+	item, err := newCentralQueueLogsItem([]byte("route-a"), simpleLogs(), codec, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, p.centralQueue.enqueue(item))
+
+	require.Eventually(t, func() bool {
+		return calls.Load() == 1 && p.centralQueue.len() == 0
+	}, 2*time.Second, 20*time.Millisecond)
+	cancel()
+	waitErr := waitForInflight(t.Context(), &p.centralWG)
+	require.NoError(t, waitErr)
 }
 
 func TestConsumeLogsEmitsOnlyParentExporterMetrics(t *testing.T) {

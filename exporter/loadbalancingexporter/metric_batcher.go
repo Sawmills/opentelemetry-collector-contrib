@@ -591,12 +591,13 @@ func (b *backendMetricBatcher) runCompressed() {
 	pendingDataPoints := 0
 	unmarshaler := &pmetric.ProtoUnmarshaler{}
 	var nextReq *metricBatcherRequest
+	retryingSince := time.Time{}
 
 	for {
 		if nextReq != nil {
 			req := *nextReq
 			nextReq = nil
-			if b.handleCompressedRequest(req, unmarshaler, &pending, &pendingDataPoints, &pendingBytes, &pendingCompressedBytes, &nextReq, timer, &timerC) {
+			if b.handleCompressedRequest(req, unmarshaler, &pending, &pendingDataPoints, &pendingBytes, &pendingCompressedBytes, &nextReq, timer, &timerC, &retryingSince) {
 				return
 			}
 			continue
@@ -604,11 +605,11 @@ func (b *backendMetricBatcher) runCompressed() {
 
 		select {
 		case req := <-b.requests:
-			if b.handleCompressedRequest(req, unmarshaler, &pending, &pendingDataPoints, &pendingBytes, &pendingCompressedBytes, &nextReq, timer, &timerC) {
+			if b.handleCompressedRequest(req, unmarshaler, &pending, &pendingDataPoints, &pendingBytes, &pendingCompressedBytes, &nextReq, timer, &timerC, &retryingSince) {
 				return
 			}
 		case <-timerC:
-			if err := b.flushCompressed(context.Background(), unmarshaler, &pending, &pendingDataPoints, &pendingBytes, &pendingCompressedBytes, metricFlushReasonTimeout, timer, &timerC); err != nil {
+			if err := b.flushCompressed(context.Background(), unmarshaler, &pending, &pendingDataPoints, &pendingBytes, &pendingCompressedBytes, metricFlushReasonTimeout, timer, &timerC, &retryingSince); err != nil {
 				b.logger.Warn("failed to flush compressed metric batch", zap.String("reason", metricFlushReasonTimeout), zap.Error(err))
 			}
 		}
@@ -625,6 +626,7 @@ func (b *backendMetricBatcher) handleCompressedRequest(
 	nextReq **metricBatcherRequest,
 	timer *time.Timer,
 	timerC *<-chan time.Time,
+	retryingSince *time.Time,
 ) bool {
 	switch req.kind {
 	case metricBatcherRequestEnqueue:
@@ -645,12 +647,12 @@ func (b *backendMetricBatcher) handleCompressedRequest(
 		if *pendingDataPoints >= b.settings.maxDataPoints || *pendingBytes >= b.settings.maxBytes {
 			attrs := metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint)))
 			b.telemetry.overflowTotal.Add(context.Background(), 1, attrs)
-			if err := b.flushCompressed(context.Background(), unmarshaler, pending, pendingDataPoints, pendingBytes, pendingCompressedBytes, metricFlushReasonSize, timer, timerC); err != nil {
+			if err := b.flushCompressed(context.Background(), unmarshaler, pending, pendingDataPoints, pendingBytes, pendingCompressedBytes, metricFlushReasonSize, timer, timerC, retryingSince); err != nil {
 				b.logger.Warn("failed to flush compressed metric batch", zap.String("reason", metricFlushReasonSize), zap.Error(err))
 			}
 		}
 	case metricBatcherRequestFlushAndStop:
-		err := b.flushCompressed(req.ctx, unmarshaler, pending, pendingDataPoints, pendingBytes, pendingCompressedBytes, req.reason, timer, timerC)
+		err := b.flushCompressed(req.ctx, unmarshaler, pending, pendingDataPoints, pendingBytes, pendingCompressedBytes, req.reason, timer, timerC, retryingSince)
 		req.done <- err
 		return true
 	}
@@ -709,6 +711,7 @@ func (b *backendMetricBatcher) flushCompressed(
 	reason string,
 	timer *time.Timer,
 	timerC *<-chan time.Time,
+	retryingSince *time.Time,
 ) error {
 	if !timer.Stop() && *timerC != nil {
 		select {
@@ -764,6 +767,11 @@ func (b *backendMetricBatcher) flushCompressed(
 	}
 	if err != nil {
 		b.telemetry.flushErrors.Add(ctx, 1, attrs)
+		retryChunks := drainedChunks
+		retryUsesDrainedChunks := true
+		retryDataPoints := datapoints
+		retryBytes := bytes
+		retryCompressedBytes := compressedMetricBatcherChunksCompressedBytes(drainedChunks)
 		if b.drainErr != nil && reason != metricFlushReasonShutdown {
 			var rerouteable metricBatcherRerouteableError
 			if errors.As(err, &rerouteable) {
@@ -774,20 +782,56 @@ func (b *backendMetricBatcher) flushCompressed(
 					clearCompressedMetricBatcherChunks(drainedChunks)
 					return nil
 				}
+				retryMetrics := rerouteMetrics
+				var rerouteMetricsErr consumererror.Metrics
+				if errors.As(rerouteErr, &rerouteMetricsErr) {
+					retryMetrics = rerouteMetricsErr.Data()
+				}
+				var retryErr error
+				retryChunks, retryDataPoints, retryBytes, retryCompressedBytes, retryErr = b.compressedMetricBatcherRetryChunks(retryMetrics, oldestUnixNano)
+				if retryErr != nil {
+					b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
+					b.telemetry.droppedDataPoints.Add(ctx, int64(datapoints), attrs)
+					clearCompressedMetricBatcherChunks(drainedChunks)
+					return errors.Join(err, rerouteErr, retryErr)
+				}
+				retryUsesDrainedChunks = false
 				err = errors.Join(err, rerouteErr)
 			}
 		}
 		if reason == metricFlushReasonSize || reason == metricFlushReasonTimeout {
-			*pending = append((*pending)[:0], drainedChunks...)
-			*pendingDataPoints = datapoints
-			*pendingBytes = bytes
-			*pendingCompressedBytes = compressedMetricBatcherChunksCompressedBytes(drainedChunks)
-			b.pendingDataPoints.Store(int64(datapoints))
-			b.pendingBytes.Store(int64(bytes))
+			now := time.Now()
+			if retryingSince.IsZero() {
+				*retryingSince = now
+			}
+
+			b.flushFailures++
+			overCap := isBeyondRetryCap(retryDataPoints, b.settings.maxDataPoints, b.settings.maxRetryBufferMultiplier) || isBeyondRetryCap(retryBytes, b.settings.maxBytes, b.settings.maxRetryBufferMultiplier)
+			overAge := now.Sub(*retryingSince) >= metricBatcherMaxRetryAge
+			if overCap || overAge {
+				b.logger.Error("dropping compressed metric batch after retry limits exceeded", zap.String("endpoint", b.endpoint), zap.String("reason", reason), zap.Int("failures", b.flushFailures), zap.Int("datapoints", retryDataPoints), zap.Int("bytes", retryBytes), zap.Int("compressed_bytes", retryCompressedBytes), zap.Bool("over_cap", overCap), zap.Bool("over_age", overAge), zap.Duration("retry_age", now.Sub(*retryingSince)), zap.Error(err))
+				b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
+				b.telemetry.droppedDataPoints.Add(ctx, int64(retryDataPoints), attrs)
+				*retryingSince = time.Time{}
+				b.flushFailures = 0
+				clearCompressedMetricBatcherChunks(drainedChunks)
+				if !retryUsesDrainedChunks {
+					clearCompressedMetricBatcherChunks(retryChunks)
+				}
+				return err
+			}
+			if !retryUsesDrainedChunks {
+				clearCompressedMetricBatcherChunks(drainedChunks)
+			}
+			*pending = append((*pending)[:0], retryChunks...)
+			*pendingDataPoints = retryDataPoints
+			*pendingBytes = retryBytes
+			*pendingCompressedBytes = retryCompressedBytes
+			b.pendingDataPoints.Store(int64(retryDataPoints))
+			b.pendingBytes.Store(int64(retryBytes))
 			b.pendingCompressedBytes.Store(int64(*pendingCompressedBytes))
 			b.oldestEnqueue.Store(oldestUnixNano)
 			if *timerC == nil {
-				b.flushFailures++
 				delay := b.settings.flushInterval * time.Duration(1<<min(b.flushFailures-1, 4))
 				delay = min(delay, maxMetricBatchRetryBackoff)
 				timer.Reset(delay)
@@ -800,9 +844,21 @@ func (b *backendMetricBatcher) flushCompressed(
 	} else {
 		b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
 		b.flushFailures = 0
+		*retryingSince = time.Time{}
 		clearCompressedMetricBatcherChunks(drainedChunks)
 	}
 	return err
+}
+
+func (b *backendMetricBatcher) compressedMetricBatcherRetryChunks(md pmetric.Metrics, oldestUnixNano int64) ([]compressedMetricBatcherChunk, int, int, int, error) {
+	if md.DataPointCount() == 0 {
+		return nil, 0, 0, 0, nil
+	}
+	chunk, err := b.newCompressedMetricBatcherChunk(md, oldestUnixNano)
+	if err != nil {
+		return nil, 0, 0, 0, err
+	}
+	return []compressedMetricBatcherChunk{chunk}, chunk.dataPoints, chunk.uncompressedBytes, chunk.compressedBytes, nil
 }
 
 func mergeCompressedMetricBatcherChunks(unmarshaler *pmetric.ProtoUnmarshaler, codec *queuePayloadCodec, chunks []compressedMetricBatcherChunk) (pmetric.Metrics, error) {

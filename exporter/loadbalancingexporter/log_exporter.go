@@ -13,6 +13,7 @@ import (
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
+	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/otlpexporter"
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -234,6 +235,10 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 		}
 		if ctx.Err() != nil {
 			return
+		}
+		if consumererror.IsPermanent(err) {
+			e.logger.Warn("dropping central log queue item after permanent export error", zap.Error(err))
+			continue
 		}
 		item := lease.item
 		item.attempt++

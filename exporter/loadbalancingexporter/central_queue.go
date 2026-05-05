@@ -58,6 +58,10 @@ func (q *centralQueue) enqueueAt(item centralQueueItem, now time.Time) error {
 		q.settings.telemetry.recordRejected(context.Background(), int64(item.compressedBytes))
 		return errCentralQueueItemTooLarge
 	}
+	if q.settings.maxInflightUncompressedBytes > 0 && int64(item.uncompressedBytes) > q.settings.maxInflightUncompressedBytes {
+		q.settings.telemetry.recordRejected(context.Background(), int64(item.compressedBytes))
+		return errCentralQueueItemTooLarge
+	}
 
 	q.mu.Lock()
 	if q.stopped {
