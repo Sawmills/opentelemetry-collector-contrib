@@ -749,6 +749,7 @@ func (b *backendMetricBatcher) flushCompressed(
 	b.telemetry.flushTotal.Add(ctx, 1, flushAttrs)
 	if err != nil {
 		b.telemetry.flushErrors.Add(ctx, 1, attrs)
+		b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
 		b.telemetry.droppedDataPoints.Add(ctx, int64(datapoints), attrs)
 		clearCompressedMetricBatcherChunks(drainedChunks)
 		return err
@@ -772,13 +773,17 @@ func (b *backendMetricBatcher) flushCompressed(
 		retryDataPoints := datapoints
 		retryBytes := bytes
 		retryCompressedBytes := compressedMetricBatcherChunksCompressedBytes(drainedChunks)
+		rerouteAttempted := false
 		if b.drainErr != nil && reason != metricFlushReasonShutdown {
 			var rerouteable metricBatcherRerouteableError
 			if errors.As(err, &rerouteable) {
+				rerouteAttempted = true
 				rerouteErr := b.drainErr(ctx, rerouteable.Data(), reason)
 				rerouteable.RecordReroute(ctx, rerouteErr)
 				if rerouteErr == nil {
 					b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
+					*retryingSince = time.Time{}
+					b.flushFailures = 0
 					clearCompressedMetricBatcherChunks(drainedChunks)
 					return nil
 				}
@@ -791,7 +796,7 @@ func (b *backendMetricBatcher) flushCompressed(
 				retryChunks, retryDataPoints, retryBytes, retryCompressedBytes, retryErr = b.compressedMetricBatcherRetryChunks(retryMetrics, oldestUnixNano)
 				if retryErr != nil {
 					b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
-					b.telemetry.droppedDataPoints.Add(ctx, int64(datapoints), attrs)
+					b.telemetry.droppedDataPoints.Add(ctx, int64(retryDataPoints), attrs)
 					clearCompressedMetricBatcherChunks(drainedChunks)
 					return errors.Join(err, rerouteErr, retryErr)
 				}
@@ -839,7 +844,25 @@ func (b *backendMetricBatcher) flushCompressed(
 			}
 			return err
 		}
+		if !rerouteAttempted && b.drainErr != nil && (reason == metricFlushReasonResolverChange || reason == metricFlushReasonShutdown) {
+			rerouteErr := b.drainErr(ctx, drained, reason)
+			if rerouteErr == nil {
+				b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
+				*retryingSince = time.Time{}
+				b.flushFailures = 0
+				clearCompressedMetricBatcherChunks(drainedChunks)
+				return nil
+			}
+			var rerouteMetricsErr consumererror.Metrics
+			if errors.As(rerouteErr, &rerouteMetricsErr) {
+				datapoints = rerouteMetricsErr.Data().DataPointCount()
+			}
+			err = errors.Join(err, rerouteErr)
+		}
+		b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
 		b.telemetry.droppedDataPoints.Add(ctx, int64(datapoints), attrs)
+		*retryingSince = time.Time{}
+		b.flushFailures = 0
 		clearCompressedMetricBatcherChunks(drainedChunks)
 	} else {
 		b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
@@ -851,12 +874,14 @@ func (b *backendMetricBatcher) flushCompressed(
 }
 
 func (b *backendMetricBatcher) compressedMetricBatcherRetryChunks(md pmetric.Metrics, oldestUnixNano int64) ([]compressedMetricBatcherChunk, int, int, int, error) {
-	if md.DataPointCount() == 0 {
+	dataPoints := md.DataPointCount()
+	if dataPoints == 0 {
 		return nil, 0, 0, 0, nil
 	}
+	bytes := (&pmetric.ProtoMarshaler{}).MetricsSize(md)
 	chunk, err := b.newCompressedMetricBatcherChunk(md, oldestUnixNano)
 	if err != nil {
-		return nil, 0, 0, 0, err
+		return nil, dataPoints, bytes, 0, err
 	}
 	return []compressedMetricBatcherChunk{chunk}, chunk.dataPoints, chunk.uncompressedBytes, chunk.compressedBytes, nil
 }

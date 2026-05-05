@@ -1344,6 +1344,237 @@ func TestCompressedMetricBatcherRerouteFailureRetriesOnlyFailedMetrics(t *testin
 	require.Equal(t, failedRerouteData.DataPointCount(), pendingDataPoints)
 }
 
+func TestCompressedMetricBatcherRerouteSuccessClearsRetryState(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	telemetry, err := newMetricBatcherTelemetry(ts.TelemetrySettings)
+	require.NoError(t, err)
+	t.Cleanup(telemetry.shutdown)
+
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	var reroutes atomic.Int64
+	backend := &backendMetricBatcher{
+		endpoint:     "endpoint-1:4317",
+		logger:       ts.Logger,
+		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		telemetry:    telemetry,
+		payloadCodec: codec,
+		send: func(_ context.Context, _ *wrappedExporter, md pmetric.Metrics, _ string) error {
+			return metricBatcherRerouteableError{err: status.Error(codes.Unavailable, "backend down"), data: md}
+		},
+		drainErr: func(context.Context, pmetric.Metrics, string) error {
+			reroutes.Add(1)
+			return nil
+		},
+		flushFailures: 3,
+	}
+	chunk, err := newCompressedMetricBatcherChunk(&pmetric.ProtoMarshaler{}, codec, metricBatcherRequest{
+		md:                 singleDataPointMetric("original"),
+		enqueuedAtUnixNano: time.Now().UnixNano(),
+	})
+	require.NoError(t, err)
+	pending := []compressedMetricBatcherChunk{chunk}
+	pendingDataPoints := chunk.dataPoints
+	pendingBytes := chunk.uncompressedBytes
+	pendingCompressedBytes := chunk.compressedBytes
+	timer := time.NewTimer(time.Hour)
+	require.True(t, timer.Stop())
+	var timerC <-chan time.Time
+	retryingSince := time.Now().Add(-time.Second)
+
+	err = backend.flushCompressed(
+		t.Context(),
+		&pmetric.ProtoUnmarshaler{},
+		&pending,
+		&pendingDataPoints,
+		&pendingBytes,
+		&pendingCompressedBytes,
+		metricFlushReasonSize,
+		timer,
+		&timerC,
+		&retryingSince,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1), reroutes.Load())
+	require.True(t, retryingSince.IsZero())
+	require.Zero(t, backend.flushFailures)
+	require.Empty(t, pending)
+}
+
+func TestCompressedMetricBatcherResolverChangeFallsBackToDrainErr(t *testing.T) {
+	ts, _ := getTelemetryAssets(t)
+	telemetry, err := newMetricBatcherTelemetry(ts.TelemetrySettings)
+	require.NoError(t, err)
+	t.Cleanup(telemetry.shutdown)
+
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	var reroutedDataPoints atomic.Int64
+	backend := &backendMetricBatcher{
+		endpoint:     "endpoint-1:4317",
+		logger:       ts.Logger,
+		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		telemetry:    telemetry,
+		payloadCodec: codec,
+		send: func(context.Context, *wrappedExporter, pmetric.Metrics, string) error {
+			return errors.New("resolver changed")
+		},
+		drainErr: func(_ context.Context, md pmetric.Metrics, reason string) error {
+			require.Equal(t, metricFlushReasonResolverChange, reason)
+			reroutedDataPoints.Add(int64(md.DataPointCount()))
+			return nil
+		},
+	}
+	chunk, err := newCompressedMetricBatcherChunk(&pmetric.ProtoMarshaler{}, codec, metricBatcherRequest{
+		md:                 singleDataPointMetric("original"),
+		enqueuedAtUnixNano: time.Now().UnixNano(),
+	})
+	require.NoError(t, err)
+	pending := []compressedMetricBatcherChunk{chunk}
+	pendingDataPoints := chunk.dataPoints
+	pendingBytes := chunk.uncompressedBytes
+	pendingCompressedBytes := chunk.compressedBytes
+	timer := time.NewTimer(time.Hour)
+	require.True(t, timer.Stop())
+	var timerC <-chan time.Time
+	retryingSince := time.Time{}
+
+	err = backend.flushCompressed(
+		t.Context(),
+		&pmetric.ProtoUnmarshaler{},
+		&pending,
+		&pendingDataPoints,
+		&pendingBytes,
+		&pendingCompressedBytes,
+		metricFlushReasonResolverChange,
+		timer,
+		&timerC,
+		&retryingSince,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(1), reroutedDataPoints.Load())
+	require.Empty(t, pending)
+}
+
+func TestCompressedMetricBatcherNonRetryDropRecordsOldestAge(t *testing.T) {
+	telemetryReader := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, telemetryReader.Shutdown(context.WithoutCancel(t.Context())))
+	})
+	telemetry, err := newMetricBatcherTelemetry(telemetryReader.NewTelemetrySettings())
+	require.NoError(t, err)
+	t.Cleanup(telemetry.shutdown)
+
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	backend := &backendMetricBatcher{
+		endpoint:     "endpoint-1:4317",
+		logger:       componenttest.NewNopTelemetrySettings().Logger,
+		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		telemetry:    telemetry,
+		payloadCodec: codec,
+		send: func(context.Context, *wrappedExporter, pmetric.Metrics, string) error {
+			return errors.New("resolver changed")
+		},
+	}
+	chunk, err := newCompressedMetricBatcherChunk(&pmetric.ProtoMarshaler{}, codec, metricBatcherRequest{
+		md:                 singleDataPointMetric("original"),
+		enqueuedAtUnixNano: time.Now().Add(-time.Second).UnixNano(),
+	})
+	require.NoError(t, err)
+	pending := []compressedMetricBatcherChunk{chunk}
+	pendingDataPoints := chunk.dataPoints
+	pendingBytes := chunk.uncompressedBytes
+	pendingCompressedBytes := chunk.compressedBytes
+	timer := time.NewTimer(time.Hour)
+	require.True(t, timer.Stop())
+	var timerC <-chan time.Time
+	retryingSince := time.Time{}
+
+	err = backend.flushCompressed(
+		t.Context(),
+		&pmetric.ProtoUnmarshaler{},
+		&pending,
+		&pendingDataPoints,
+		&pendingBytes,
+		&pendingCompressedBytes,
+		metricFlushReasonResolverChange,
+		timer,
+		&timerC,
+		&retryingSince,
+	)
+
+	require.ErrorContains(t, err, "resolver changed")
+	flushMetric, err := telemetryReader.GetMetric("otelcol_loadbalancer_metric_batch_flush_oldest_datapoint_age")
+	require.NoError(t, err)
+	flushHistogram, ok := flushMetric.Data.(metricdata.Histogram[int64])
+	require.True(t, ok)
+	require.Len(t, flushHistogram.DataPoints, 1)
+	require.Equal(t, uint64(1), flushHistogram.DataPoints[0].Count)
+}
+
+func TestCompressedMetricBatcherRetryRecompressFailureDropsFailedSubset(t *testing.T) {
+	telemetryReader := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, telemetryReader.Shutdown(context.WithoutCancel(t.Context())))
+	})
+	telemetry, err := newMetricBatcherTelemetry(telemetryReader.NewTelemetrySettings())
+	require.NoError(t, err)
+	t.Cleanup(telemetry.shutdown)
+
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	backend := &backendMetricBatcher{
+		endpoint:     "endpoint-1:4317",
+		logger:       componenttest.NewNopTelemetrySettings().Logger,
+		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		telemetry:    telemetry,
+		payloadCodec: codec,
+		send: func(_ context.Context, _ *wrappedExporter, md pmetric.Metrics, _ string) error {
+			return metricBatcherRerouteableError{err: status.Error(codes.Unavailable, "backend down"), data: md}
+		},
+	}
+	backend.drainErr = func(context.Context, pmetric.Metrics, string) error {
+		backend.payloadCodec = newQueuePayloadCodec(QueuePayloadCompression("invalid"))
+		return consumererror.NewMetrics(errors.New("reroute failed"), singleDataPointMetric("failed-subset"))
+	}
+	chunk, err := newCompressedMetricBatcherChunk(&pmetric.ProtoMarshaler{}, codec, metricBatcherRequest{
+		md:                 compressibleMetrics(16),
+		enqueuedAtUnixNano: time.Now().UnixNano(),
+	})
+	require.NoError(t, err)
+	pending := []compressedMetricBatcherChunk{chunk}
+	pendingDataPoints := chunk.dataPoints
+	pendingBytes := chunk.uncompressedBytes
+	pendingCompressedBytes := chunk.compressedBytes
+	timer := time.NewTimer(time.Hour)
+	require.True(t, timer.Stop())
+	var timerC <-chan time.Time
+	retryingSince := time.Time{}
+
+	err = backend.flushCompressed(
+		t.Context(),
+		&pmetric.ProtoUnmarshaler{},
+		&pending,
+		&pendingDataPoints,
+		&pendingBytes,
+		&pendingCompressedBytes,
+		metricFlushReasonSize,
+		timer,
+		&timerC,
+		&retryingSince,
+	)
+
+	require.ErrorContains(t, err, "reroute failed")
+	droppedMetric, err := telemetryReader.GetMetric("otelcol_loadbalancer_metric_batch_dropped_datapoints")
+	require.NoError(t, err)
+	droppedDataPoints, ok := sumInt64Metric(droppedMetric)
+	require.True(t, ok)
+	require.Equal(t, int64(1), droppedDataPoints)
+}
+
 func TestCompressedMetricBatcherDropsAfterRetryAge(t *testing.T) {
 	ts, _ := getTelemetryAssets(t)
 	telemetry, err := newMetricBatcherTelemetry(ts.TelemetrySettings)
