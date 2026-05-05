@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 
 	"go.opentelemetry.io/collector/component"
@@ -84,12 +85,19 @@ type TransformContextOption func(*TransformContext)
 // NewTransformContext creates a value TransformContext for backward compatibility.
 func NewTransformContext(
 	logRecord plog.LogRecord,
-	_ pcommon.InstrumentationScope,
-	_ pcommon.Resource,
+	instrumentationScope pcommon.InstrumentationScope,
+	resource pcommon.Resource,
 	scopeLogs plog.ScopeLogs,
 	resourceLogs plog.ResourceLogs,
 	options ...TransformContextOption,
 ) TransformContext {
+	if !reflect.ValueOf(instrumentationScope).IsZero() {
+		instrumentationScope.CopyTo(scopeLogs.Scope())
+	}
+	if !reflect.ValueOf(resource).IsZero() {
+		resource.CopyTo(resourceLogs.Resource())
+	}
+
 	tc := TransformContext{
 		resourceLogs: resourceLogs,
 		scopeLogs:    scopeLogs,
@@ -133,11 +141,6 @@ func (tCtx *TransformContext) GetLogRecord() plog.LogRecord {
 // GetCache returns the cache from the TransformContext.
 func (tCtx *TransformContext) GetCache() pcommon.Map {
 	return tCtx.cache
-}
-
-// CacheBodyStringIfNeeded stores a serialized body string for composite log bodies.
-func (tCtx *TransformContext) CacheBodyStringIfNeeded() {
-	ctxlog.CacheBodyStringIfNeeded(tCtx)
 }
 
 // GetInstrumentationScope returns the instrumentation scope from the TransformContext.

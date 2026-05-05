@@ -798,52 +798,6 @@ func Test_InvalidBodyIndexing(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestTransformContextCacheBodyStringIfNeeded(t *testing.T) {
-	tests := []struct {
-		name        string
-		bodyType    string
-		expected    string
-		expectEntry bool
-	}{
-		{
-			name:        "map body",
-			bodyType:    "map",
-			expected:    "{\"key\":\"val\"}",
-			expectEntry: true,
-		},
-		{
-			name:        "slice body",
-			bodyType:    "slice",
-			expected:    "[\"body\"]",
-			expectEntry: true,
-		},
-		{
-			name:        "scalar body",
-			bodyType:    "int",
-			expectEntry: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rLogs, sLogs, log := createTelemetry(tt.bodyType)
-			tCtx := NewTransformContextPtr(rLogs, sLogs, log)
-			defer tCtx.Close()
-
-			tCtx.CacheBodyStringIfNeeded()
-
-			val, ok := tCtx.GetCache().Get("_internal.body_string")
-			assert.Equal(t, tt.expectEntry, ok)
-			if !tt.expectEntry {
-				return
-			}
-
-			require.Equal(t, pcommon.ValueTypeStr, val.Type())
-			assert.Equal(t, tt.expected, val.Str())
-		})
-	}
-}
-
 func TestNewTransformContextDoesNotEagerlyCacheCompositeBodyString(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -883,18 +837,28 @@ func TestNewTransformContextDoesNotEagerlyCacheCompositeBodyString(t *testing.T)
 	}
 }
 
-func TestTransformContextCacheBodyStringIfNeededPreservesExistingEntry(t *testing.T) {
-	rLogs, sLogs, log := createTelemetry("map")
-	tCtx := NewTransformContextPtr(rLogs, sLogs, log)
-	defer tCtx.Close()
+func TestNewTransformContextUsesLegacyScopeAndResource(t *testing.T) {
+	log := plog.NewLogRecord()
 
-	tCtx.GetCache().PutStr("_internal.body_string", `{"prefilled":true}`)
-	tCtx.CacheBodyStringIfNeeded()
+	scope := pcommon.NewInstrumentationScope()
+	scope.SetName("legacy-scope")
+	scope.SetVersion("legacy-version")
+	scope.Attributes().PutStr("scope-key", "scope-value")
 
-	val, ok := tCtx.GetCache().Get("_internal.body_string")
+	resource := pcommon.NewResource()
+	resource.Attributes().PutStr("resource-key", "resource-value")
+
+	tCtx := NewTransformContext(log, scope, resource, plog.NewScopeLogs(), plog.NewResourceLogs())
+
+	assert.Equal(t, "legacy-scope", tCtx.GetInstrumentationScope().Name())
+	assert.Equal(t, "legacy-version", tCtx.GetInstrumentationScope().Version())
+	scopeValue, ok := tCtx.GetInstrumentationScope().Attributes().Get("scope-key")
 	require.True(t, ok)
-	require.Equal(t, pcommon.ValueTypeStr, val.Type())
-	assert.Equal(t, `{"prefilled":true}`, val.Str())
+	assert.Equal(t, "scope-value", scopeValue.Str())
+
+	resourceValue, ok := tCtx.GetResource().Attributes().Get("resource-key")
+	require.True(t, ok)
+	assert.Equal(t, "resource-value", resourceValue.Str())
 }
 
 func Test_ParseEnum(t *testing.T) {

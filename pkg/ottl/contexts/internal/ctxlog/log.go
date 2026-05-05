@@ -181,7 +181,9 @@ func accessSeverityText[K Context]() ottl.StandardGetSetter[K] {
 type bodyGetSetter[K Context] struct{}
 
 func (bodyGetSetter[K]) Get(_ context.Context, tCtx K) (any, error) {
-	return ottlcommon.GetValue(tCtx.GetLogRecord().Body()), nil
+	val := ottlcommon.GetValue(tCtx.GetLogRecord().Body())
+	invalidateCachedBodyStringIfMutable(tCtx, val)
+	return val, nil
 }
 
 func (bodyGetSetter[K]) Set(_ context.Context, tCtx K, val any) error {
@@ -210,9 +212,17 @@ func accessBodyKey[K Context](key []ottl.Key[K]) ottl.StandardGetSetter[K] {
 			body := tCtx.GetLogRecord().Body()
 			switch body.Type() {
 			case pcommon.ValueTypeMap:
-				return ctxutil.GetMapValue[K](ctx, tCtx, tCtx.GetLogRecord().Body().Map(), key)
+				val, err := ctxutil.GetMapValue[K](ctx, tCtx, tCtx.GetLogRecord().Body().Map(), key)
+				if err == nil {
+					invalidateCachedBodyStringIfMutable(tCtx, val)
+				}
+				return val, err
 			case pcommon.ValueTypeSlice:
-				return ctxutil.GetSliceValue[K](ctx, tCtx, tCtx.GetLogRecord().Body().Slice(), key)
+				val, err := ctxutil.GetSliceValue[K](ctx, tCtx, tCtx.GetLogRecord().Body().Slice(), key)
+				if err == nil {
+					invalidateCachedBodyStringIfMutable(tCtx, val)
+				}
+				return val, err
 			default:
 				return nil, fmt.Errorf("log bodies of type %s cannot be indexed", body.Type().String())
 			}
@@ -277,6 +287,13 @@ func getOrCacheCompositeBodyString[K Context](tCtx K) (string, bool) {
 
 	cache.PutStr(bodyStringCacheKey, bodyAsStringOptimized(body))
 	return getCachedBodyStringFromMap(cache)
+}
+
+func invalidateCachedBodyStringIfMutable[K any](tCtx K, val any) {
+	switch val.(type) {
+	case pcommon.Map, pcommon.Slice:
+		invalidateCachedBodyString(tCtx)
+	}
 }
 
 func accessAttributes[K Context]() ottl.StandardGetSetter[K] {

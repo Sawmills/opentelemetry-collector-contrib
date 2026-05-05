@@ -469,6 +469,36 @@ func TestPathGetSetterBodySetInvalidatesCachedCompositeBodyString(t *testing.T) 
 	assert.Equal(t, "updated", got)
 }
 
+func TestPathGetSetterBodyGetInvalidatesCachedCompositeBodyString(t *testing.T) {
+	bodyPath := &pathtest.Path[*testContext]{N: "body"}
+	bodyAccessor, err := ctxlog.PathGetSetter(bodyPath)
+	require.NoError(t, err)
+
+	stringPath := &pathtest.Path[*testContext]{
+		N: "body",
+		NextPath: &pathtest.Path[*testContext]{
+			N: "string",
+		},
+	}
+	stringAccessor, err := ctxlog.PathGetSetter(stringPath)
+	require.NoError(t, err)
+
+	log := createTelemetry("map")
+	tCtx := newTestContext(log)
+
+	got, err := stringAccessor.Get(t.Context(), tCtx)
+	require.NoError(t, err)
+	require.Equal(t, `{"key":"val"}`, got)
+
+	body, err := bodyAccessor.Get(t.Context(), tCtx)
+	require.NoError(t, err)
+	body.(pcommon.Map).PutStr("key", "updated")
+
+	got, err = stringAccessor.Get(t.Context(), tCtx)
+	require.NoError(t, err)
+	assert.Equal(t, `{"key":"updated"}`, got)
+}
+
 func TestPathGetSetterBodyKeySetInvalidatesCachedCompositeBodyString(t *testing.T) {
 	keyPath := &pathtest.Path[*testContext]{
 		N: "body",

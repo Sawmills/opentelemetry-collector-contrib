@@ -38,15 +38,6 @@ func CacheBodyStringIfNeeded[K interface {
 	tCtx.GetCache().PutStr(bodyStringCacheKey, bodyAsStringOptimized(body))
 }
 
-func getCachedBodyString[K any](tCtx K) (string, bool) {
-	cacheCtx, ok := any(tCtx).(cacheCarrier)
-	if !ok {
-		return "", false
-	}
-
-	return getCachedBodyStringFromMap(cacheCtx.GetCache())
-}
-
 func getCachedBodyStringFromMap(cache pcommon.Map) (string, bool) {
 	val, ok := cache.Get(bodyStringCacheKey)
 	if !ok || val.Type() != pcommon.ValueTypeStr {
