@@ -137,8 +137,10 @@ func (e *logExporterImp) Shutdown(ctx context.Context) error {
 	if e.centralQueue != nil {
 		e.centralQueue.stop()
 		waitErr := waitForInflight(ctx, &e.centralWG)
-		if waitErr != nil && e.centralCancel != nil {
+		if e.centralCancel != nil {
 			e.centralCancel()
+		}
+		if waitErr != nil {
 			cancelCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 			waitErr = errors.Join(waitErr, waitForInflight(cancelCtx, &e.centralWG))
 			cancel()

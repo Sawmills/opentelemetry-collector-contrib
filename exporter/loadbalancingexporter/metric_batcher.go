@@ -801,6 +801,7 @@ func (b *backendMetricBatcher) flushCompressed(
 					return errors.Join(err, rerouteErr, retryErr)
 				}
 				retryUsesDrainedChunks = false
+				datapoints = retryDataPoints
 				err = errors.Join(err, rerouteErr)
 			}
 		}
