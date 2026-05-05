@@ -53,6 +53,15 @@ loadbalancing/6:
     quarantine_duration: 30s
     reroute_on_failure: true
     max_reroute_attempts: 1
+    active_probe:
+      enabled: true
+      type: tcp_connect
+      interval: 5s
+      timeout: 250ms
+      jitter: 20%
+      max_concurrency: 4
+      fall: 2
+      rise: 2
   protocol:
     otlp:
       timeout: 3s
@@ -61,3 +70,14 @@ loadbalancing/6:
       hostname: service-1
       interval: 1s
       timeout: 1s
+loadbalancing/7:
+  log_routing:
+    ignore_trace_id: true
+  protocol:
+    otlp:
+      timeout: 1s
+  resolver:
+    static:
+      hostnames:
+        - endpoint-1
+        - endpoint-2:55678
