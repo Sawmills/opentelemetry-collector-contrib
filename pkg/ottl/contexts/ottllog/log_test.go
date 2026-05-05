@@ -823,7 +823,7 @@ func TestNewTransformContextDoesNotEagerlyCacheCompositeBodyString(t *testing.T)
 			tCtx := NewTransformContextPtr(rLogs, sLogs, log)
 			defer tCtx.Close()
 
-			_, ok := tCtx.GetCache().Get("_internal.body_string")
+			_, ok := tCtx.GetCachedBodyString()
 			require.False(t, ok)
 		})
 
@@ -831,7 +831,7 @@ func TestNewTransformContextDoesNotEagerlyCacheCompositeBodyString(t *testing.T)
 			rLogs, sLogs, log := createTelemetry(tt.bodyType)
 			tCtx := NewTransformContext(log, sLogs.Scope(), rLogs.Resource(), sLogs, rLogs)
 
-			_, ok := tCtx.GetCache().Get("_internal.body_string")
+			_, ok := tCtx.GetCachedBodyString()
 			require.False(t, ok)
 		})
 	}

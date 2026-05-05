@@ -276,17 +276,15 @@ func getOrCacheCompositeBodyString[K Context](tCtx K) (string, bool) {
 		return "", false
 	}
 
-	cacheCtx, ok := any(tCtx).(cacheCarrier)
-	if !ok {
-		return "", false
-	}
-	cache := cacheCtx.GetCache()
-	if bodyString, ok := getCachedBodyStringFromMap(cache); ok {
+	if bodyString, ok := getCachedBodyString(tCtx); ok {
 		return bodyString, true
 	}
 
-	cache.PutStr(bodyStringCacheKey, bodyAsStringOptimized(body))
-	return getCachedBodyStringFromMap(cache)
+	bodyString := bodyAsStringOptimized(body)
+	if !cacheBodyString(tCtx, bodyString) {
+		return "", false
+	}
+	return bodyString, true
 }
 
 func invalidateCachedBodyStringIfMutable[K any](tCtx K, val any) {

@@ -43,10 +43,12 @@ var (
 
 // TransformContext represents a log and its associated hierarchy.
 type TransformContext struct {
-	resourceLogs plog.ResourceLogs
-	scopeLogs    plog.ScopeLogs
-	logRecord    plog.LogRecord
-	cache        pcommon.Map
+	resourceLogs          plog.ResourceLogs
+	scopeLogs             plog.ScopeLogs
+	logRecord             plog.LogRecord
+	cache                 pcommon.Map
+	cachedBodyString      string
+	cachedBodyStringValid bool
 }
 
 type logRecord plog.LogRecord
@@ -130,6 +132,8 @@ func (tCtx *TransformContext) Close() {
 	tCtx.scopeLogs = plog.ScopeLogs{}
 	tCtx.logRecord = plog.LogRecord{}
 	tCtx.cache.Clear()
+	tCtx.cachedBodyString = ""
+	tCtx.cachedBodyStringValid = false
 	tcPool.Put(tCtx)
 }
 
@@ -141,6 +145,23 @@ func (tCtx *TransformContext) GetLogRecord() plog.LogRecord {
 // GetCache returns the cache from the TransformContext.
 func (tCtx *TransformContext) GetCache() pcommon.Map {
 	return tCtx.cache
+}
+
+// GetCachedBodyString returns the cached string representation of a composite log body.
+func (tCtx *TransformContext) GetCachedBodyString() (string, bool) {
+	return tCtx.cachedBodyString, tCtx.cachedBodyStringValid
+}
+
+// SetCachedBodyString caches the string representation of a composite log body.
+func (tCtx *TransformContext) SetCachedBodyString(bodyString string) {
+	tCtx.cachedBodyString = bodyString
+	tCtx.cachedBodyStringValid = true
+}
+
+// InvalidateCachedBodyString clears the cached string representation of a composite log body.
+func (tCtx *TransformContext) InvalidateCachedBodyString() {
+	tCtx.cachedBodyString = ""
+	tCtx.cachedBodyStringValid = false
 }
 
 // GetInstrumentationScope returns the instrumentation scope from the TransformContext.

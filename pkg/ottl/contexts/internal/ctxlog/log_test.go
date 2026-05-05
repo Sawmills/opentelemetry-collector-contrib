@@ -434,10 +434,32 @@ func TestPathGetSetterBodyStringFallsBackWithoutCache(t *testing.T) {
 	got, err := accessor.Get(t.Context(), tCtx)
 	require.NoError(t, err)
 	assert.Equal(t, "{\"key\":\"val\"}", got)
+	bodyString, ok := tCtx.GetCachedBodyString()
+	require.True(t, ok)
+	assert.Equal(t, "{\"key\":\"val\"}", bodyString)
+}
+
+func TestPathGetSetterBodyStringIgnoresUserCacheKey(t *testing.T) {
+	path := &pathtest.Path[*testContext]{
+		N: "body",
+		NextPath: &pathtest.Path[*testContext]{
+			N: "string",
+		},
+	}
+
+	accessor, err := ctxlog.PathGetSetter(path)
+	require.NoError(t, err)
+
+	log := createTelemetry("map")
+	tCtx := newTestContext(log)
+	tCtx.GetCache().PutStr("_internal.body_string", "spoofed")
+
+	got, err := accessor.Get(t.Context(), tCtx)
+	require.NoError(t, err)
+	assert.Equal(t, "{\"key\":\"val\"}", got)
 	val, ok := tCtx.GetCache().Get("_internal.body_string")
 	require.True(t, ok)
-	require.Equal(t, pcommon.ValueTypeStr, val.Type())
-	assert.Equal(t, "{\"key\":\"val\"}", val.Str())
+	assert.Equal(t, "spoofed", val.Str())
 }
 
 func TestPathGetSetterBodySetInvalidatesCachedCompositeBodyString(t *testing.T) {
@@ -461,7 +483,7 @@ func TestPathGetSetterBodySetInvalidatesCachedCompositeBodyString(t *testing.T) 
 	err = bodyAccessor.Set(t.Context(), tCtx, "updated")
 	require.NoError(t, err)
 
-	_, ok := tCtx.GetCache().Get("_internal.body_string")
+	_, ok := tCtx.GetCachedBodyString()
 	assert.False(t, ok)
 
 	got, err := stringAccessor.Get(t.Context(), tCtx)
@@ -527,7 +549,7 @@ func TestPathGetSetterBodyKeySetInvalidatesCachedCompositeBodyString(t *testing.
 	err = keyAccessor.Set(t.Context(), tCtx, "updated")
 	require.NoError(t, err)
 
-	_, ok := tCtx.GetCache().Get("_internal.body_string")
+	_, ok := tCtx.GetCachedBodyString()
 	assert.False(t, ok)
 
 	got, err := stringAccessor.Get(t.Context(), tCtx)
@@ -554,7 +576,7 @@ func TestPathGetSetterBodyKeySetInvalidatesCachedCompositeBodyStringOnError(t *t
 	err = keyAccessor.Set(t.Context(), tCtx, "updated")
 	require.Error(t, err)
 
-	_, ok := tCtx.GetCache().Get("_internal.body_string")
+	_, ok := tCtx.GetCachedBodyString()
 	assert.False(t, ok)
 }
 
@@ -691,8 +713,10 @@ func createTelemetry(bodyType string) plog.LogRecord {
 }
 
 type testContext struct {
-	log   plog.LogRecord
-	cache pcommon.Map
+	log                   plog.LogRecord
+	cache                 pcommon.Map
+	cachedBodyString      string
+	cachedBodyStringValid bool
 }
 
 func (l *testContext) GetLogRecord() plog.LogRecord {
@@ -701,6 +725,20 @@ func (l *testContext) GetLogRecord() plog.LogRecord {
 
 func (l *testContext) GetCache() pcommon.Map {
 	return l.cache
+}
+
+func (l *testContext) GetCachedBodyString() (string, bool) {
+	return l.cachedBodyString, l.cachedBodyStringValid
+}
+
+func (l *testContext) SetCachedBodyString(bodyString string) {
+	l.cachedBodyString = bodyString
+	l.cachedBodyStringValid = true
+}
+
+func (l *testContext) InvalidateCachedBodyString() {
+	l.cachedBodyString = ""
+	l.cachedBodyStringValid = false
 }
 
 func newTestContext(log plog.LogRecord) *testContext {

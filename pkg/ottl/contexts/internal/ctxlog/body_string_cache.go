@@ -13,46 +13,52 @@ import (
 	"strings"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
-	"go.opentelemetry.io/collector/pdata/plog"
 )
 
-const bodyStringCacheKey = "_internal.body_string"
-
-type cacheCarrier interface {
-	GetCache() pcommon.Map
+type bodyStringCacheCarrier interface {
+	GetCachedBodyString() (string, bool)
+	SetCachedBodyString(string)
+	InvalidateCachedBodyString()
 }
 
-func CacheBodyStringIfNeeded[K interface {
-	GetLogRecord() plog.LogRecord
-	GetCache() pcommon.Map
-}](tCtx K) {
+func CacheBodyStringIfNeeded[K Context](tCtx K) {
 	body := tCtx.GetLogRecord().Body()
 	if !bodySupportsCachedString(body) {
 		return
 	}
 
-	if _, ok := getCachedBodyStringFromMap(tCtx.GetCache()); ok {
-		return
-	}
-
-	tCtx.GetCache().PutStr(bodyStringCacheKey, bodyAsStringOptimized(body))
-}
-
-func getCachedBodyStringFromMap(cache pcommon.Map) (string, bool) {
-	val, ok := cache.Get(bodyStringCacheKey)
-	if !ok || val.Type() != pcommon.ValueTypeStr {
-		return "", false
-	}
-
-	return val.Str(), true
-}
-
-func invalidateCachedBodyString[K any](tCtx K) {
-	cacheCtx, ok := any(tCtx).(cacheCarrier)
+	cacheCtx, ok := any(tCtx).(bodyStringCacheCarrier)
 	if !ok {
 		return
 	}
-	cacheCtx.GetCache().Remove(bodyStringCacheKey)
+	if _, ok := cacheCtx.GetCachedBodyString(); ok {
+		return
+	}
+
+	cacheCtx.SetCachedBodyString(bodyAsStringOptimized(body))
+}
+
+func invalidateCachedBodyString[K any](tCtx K) {
+	if cacheCtx, ok := any(tCtx).(bodyStringCacheCarrier); ok {
+		cacheCtx.InvalidateCachedBodyString()
+	}
+}
+
+func getCachedBodyString[K any](tCtx K) (string, bool) {
+	cacheCtx, ok := any(tCtx).(bodyStringCacheCarrier)
+	if !ok {
+		return "", false
+	}
+	return cacheCtx.GetCachedBodyString()
+}
+
+func cacheBodyString[K any](tCtx K, bodyString string) bool {
+	cacheCtx, ok := any(tCtx).(bodyStringCacheCarrier)
+	if !ok {
+		return false
+	}
+	cacheCtx.SetCachedBodyString(bodyString)
+	return true
 }
 
 func bodySupportsCachedString(body pcommon.Value) bool {
