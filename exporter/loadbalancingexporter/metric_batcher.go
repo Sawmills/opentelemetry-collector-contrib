@@ -44,6 +44,7 @@ type metricBatcherSettings struct {
 	maxBytes                 int
 	flushInterval            time.Duration
 	maxRetryBufferMultiplier int
+	payloadCompression       QueuePayloadCompression
 }
 
 type (
@@ -67,6 +68,7 @@ type metricBatcher struct {
 type metricBatcherRequest struct {
 	kind               metricBatcherRequestKind
 	md                 pmetric.Metrics
+	compressedChunk    compressedMetricBatcherChunk
 	ctx                context.Context
 	reason             string
 	done               chan error
@@ -96,27 +98,32 @@ type backendMetricBatcher struct {
 	done     chan struct{}
 	inflight sync.WaitGroup
 
-	pendingDataPoints atomic.Int64
-	pendingBytes      atomic.Int64
-	oldestEnqueue     atomic.Int64
+	pendingDataPoints      atomic.Int64
+	pendingBytes           atomic.Int64
+	pendingCompressedBytes atomic.Int64
+	oldestEnqueue          atomic.Int64
 
 	flushFailures int
+
+	payloadCodecMu sync.Mutex
+	payloadCodec   *queuePayloadCodec
 }
 
 type metricBatcherTelemetry struct {
-	logger                *zap.Logger
-	meter                 metric.Meter
-	batchDataPoints       metric.Int64Histogram
-	batchBytes            metric.Int64Histogram
-	flushTotal            metric.Int64Counter
-	flushErrors           metric.Int64Counter
-	flushOldestPointAge   metric.Int64Histogram
-	droppedDataPoints     metric.Int64Counter
-	overflowTotal         metric.Int64Counter
-	pendingDataPoints     metric.Int64ObservableGauge
-	pendingBytes          metric.Int64ObservableGauge
-	pendingOldestPointAge metric.Int64ObservableGauge
-	pendingOldestPointMax metric.Int64ObservableGauge
+	logger                 *zap.Logger
+	meter                  metric.Meter
+	batchDataPoints        metric.Int64Histogram
+	batchBytes             metric.Int64Histogram
+	flushTotal             metric.Int64Counter
+	flushErrors            metric.Int64Counter
+	flushOldestPointAge    metric.Int64Histogram
+	droppedDataPoints      metric.Int64Counter
+	overflowTotal          metric.Int64Counter
+	pendingDataPoints      metric.Int64ObservableGauge
+	pendingBytes           metric.Int64ObservableGauge
+	pendingCompressedBytes metric.Int64ObservableGauge
+	pendingOldestPointAge  metric.Int64ObservableGauge
+	pendingOldestPointMax  metric.Int64ObservableGauge
 
 	mu            sync.Mutex
 	registrations []metric.Registration
@@ -170,8 +177,17 @@ func (b *metricBatcher) TryEnqueue(endpoint string, exp *wrappedExporter, md pme
 	}
 
 	enqueuedAtUnixNano := time.Now().UnixNano()
+	req := metricBatcherRequest{kind: metricBatcherRequestEnqueue, md: md, enqueuedAtUnixNano: enqueuedAtUnixNano}
+	if backend.payloadCodec != nil {
+		compressedChunk, err := backend.newCompressedMetricBatcherChunk(md, enqueuedAtUnixNano)
+		if err != nil {
+			return false, err
+		}
+		req.md = pmetric.NewMetrics()
+		req.compressedChunk = compressedChunk
+	}
 	select {
-	case backend.requests <- metricBatcherRequest{kind: metricBatcherRequestEnqueue, md: md, enqueuedAtUnixNano: enqueuedAtUnixNano}:
+	case backend.requests <- req:
 		return true, nil
 	case <-backend.done:
 		return false, errMetricBatcherExporterStopping
@@ -240,6 +256,7 @@ type metricBatcherPending struct {
 	endpoint        string
 	datapoints      int64
 	bytes           int64
+	compressedBytes int64
 	oldestAgeMillis int64
 }
 
@@ -258,6 +275,7 @@ func (b *metricBatcher) snapshotPending() metricBatcherSnapshot {
 	for endpoint, backend := range b.backends {
 		datapoints := backend.pendingDataPoints.Load()
 		bytes := backend.pendingBytes.Load()
+		compressedBytes := backend.pendingCompressedBytes.Load()
 		var oldestAgeMillis int64
 		if datapoints > 0 {
 			oldestAgeMillis = ageMillisFromUnixNano(now, backend.oldestEnqueue.Load())
@@ -269,6 +287,7 @@ func (b *metricBatcher) snapshotPending() metricBatcherSnapshot {
 			endpoint:        endpoint,
 			datapoints:      datapoints,
 			bytes:           bytes,
+			compressedBytes: compressedBytes,
 			oldestAgeMillis: oldestAgeMillis,
 		})
 	}
@@ -328,19 +347,27 @@ func newBackendMetricBatcher(
 	drainErr metricBatcherDrainFailureFunc,
 ) *backendMetricBatcher {
 	backend := &backendMetricBatcher{
-		endpoint:  endpoint,
-		exp:       exp,
-		logger:    logger.With(zap.String("endpoint", endpoint)),
-		settings:  settings,
-		telemetry: telemetry,
-		send:      send,
-		drainErr:  drainErr,
-		requests:  make(chan metricBatcherRequest, 16),
-		done:      make(chan struct{}),
+		endpoint:     endpoint,
+		exp:          exp,
+		logger:       logger.With(zap.String("endpoint", endpoint)),
+		settings:     settings,
+		telemetry:    telemetry,
+		send:         send,
+		drainErr:     drainErr,
+		requests:     make(chan metricBatcherRequest, 16),
+		done:         make(chan struct{}),
+		payloadCodec: newMetricBatcherPayloadCodec(settings.payloadCompression),
 	}
 
 	go backend.run()
 	return backend
+}
+
+func newMetricBatcherPayloadCodec(compression QueuePayloadCompression) *queuePayloadCodec {
+	if compression == "" || compression == QueuePayloadCompressionNone {
+		return nil
+	}
+	return newQueuePayloadCodec(compression)
 }
 
 func (b *backendMetricBatcher) stopAndFlush(ctx context.Context, reason string) error {
@@ -374,6 +401,15 @@ func (b *backendMetricBatcher) exporter() *wrappedExporter {
 
 func (b *backendMetricBatcher) run() {
 	defer close(b.done)
+	if b.payloadCodec != nil {
+		defer func() {
+			if err := b.payloadCodec.Close(); err != nil {
+				b.logger.Warn("failed to close metric batcher payload codec", zap.Error(err))
+			}
+		}()
+		b.runCompressed()
+		return
+	}
 
 	timer := time.NewTimer(time.Hour)
 	if !timer.Stop() {
@@ -495,6 +531,311 @@ func (b *backendMetricBatcher) drainEnqueueRequestsIntoPending(
 	}
 
 	return dataPointCount, bytes, oldestEnqueue
+}
+
+type compressedMetricBatcherChunk struct {
+	payload               []byte
+	dataPoints            int
+	uncompressedBytes     int
+	compressedBytes       int
+	oldestEnqueueUnixNano int64
+}
+
+func newCompressedMetricBatcherChunk(marshaler *pmetric.ProtoMarshaler, codec *queuePayloadCodec, req metricBatcherRequest) (compressedMetricBatcherChunk, error) {
+	payload, err := marshaler.MarshalMetrics(req.md)
+	if err != nil {
+		return compressedMetricBatcherChunk{}, err
+	}
+	encoded, err := codec.Encode(payload)
+	if err != nil {
+		return compressedMetricBatcherChunk{}, err
+	}
+	encoded = append([]byte(nil), encoded...)
+	encoded = encoded[:len(encoded):len(encoded)]
+	return compressedMetricBatcherChunk{
+		payload:               encoded,
+		dataPoints:            req.md.DataPointCount(),
+		uncompressedBytes:     len(payload),
+		compressedBytes:       len(encoded),
+		oldestEnqueueUnixNano: req.enqueuedAtUnixNano,
+	}, nil
+}
+
+func (b *backendMetricBatcher) newCompressedMetricBatcherChunk(md pmetric.Metrics, enqueuedAtUnixNano int64) (compressedMetricBatcherChunk, error) {
+	b.payloadCodecMu.Lock()
+	defer b.payloadCodecMu.Unlock()
+	return newCompressedMetricBatcherChunk(&pmetric.ProtoMarshaler{}, b.payloadCodec, metricBatcherRequest{
+		md:                 md,
+		enqueuedAtUnixNano: enqueuedAtUnixNano,
+	})
+}
+
+func decodeCompressedMetricBatcherChunk(unmarshaler *pmetric.ProtoUnmarshaler, codec *queuePayloadCodec, chunk compressedMetricBatcherChunk) (pmetric.Metrics, error) {
+	payload, err := codec.Decode(chunk.payload)
+	if err != nil {
+		return pmetric.Metrics{}, err
+	}
+	return unmarshaler.UnmarshalMetrics(payload)
+}
+
+func (b *backendMetricBatcher) runCompressed() {
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	var timerC <-chan time.Time
+
+	pending := make([]compressedMetricBatcherChunk, 0, cap(b.requests))
+	pendingBytes := 0
+	pendingCompressedBytes := 0
+	pendingDataPoints := 0
+	unmarshaler := &pmetric.ProtoUnmarshaler{}
+	var nextReq *metricBatcherRequest
+
+	for {
+		if nextReq != nil {
+			req := *nextReq
+			nextReq = nil
+			if b.handleCompressedRequest(req, unmarshaler, &pending, &pendingDataPoints, &pendingBytes, &pendingCompressedBytes, &nextReq, timer, &timerC) {
+				return
+			}
+			continue
+		}
+
+		select {
+		case req := <-b.requests:
+			if b.handleCompressedRequest(req, unmarshaler, &pending, &pendingDataPoints, &pendingBytes, &pendingCompressedBytes, &nextReq, timer, &timerC) {
+				return
+			}
+		case <-timerC:
+			if err := b.flushCompressed(context.Background(), unmarshaler, &pending, &pendingDataPoints, &pendingBytes, &pendingCompressedBytes, metricFlushReasonTimeout, timer, &timerC); err != nil {
+				b.logger.Warn("failed to flush compressed metric batch", zap.String("reason", metricFlushReasonTimeout), zap.Error(err))
+			}
+		}
+	}
+}
+
+func (b *backendMetricBatcher) handleCompressedRequest(
+	req metricBatcherRequest,
+	unmarshaler *pmetric.ProtoUnmarshaler,
+	pending *[]compressedMetricBatcherChunk,
+	pendingDataPoints *int,
+	pendingBytes *int,
+	pendingCompressedBytes *int,
+	nextReq **metricBatcherRequest,
+	timer *time.Timer,
+	timerC *<-chan time.Time,
+) bool {
+	switch req.kind {
+	case metricBatcherRequestEnqueue:
+		dps, bytes, compressedBytes, oldestEnqueue := b.drainEnqueueRequestsIntoCompressedChunks(pending, req, nextReq)
+		*pendingDataPoints += dps
+		*pendingBytes += bytes
+		*pendingCompressedBytes += compressedBytes
+		if *pendingDataPoints > 0 && b.oldestEnqueue.Load() == 0 {
+			b.oldestEnqueue.Store(oldestEnqueue)
+		}
+		b.pendingDataPoints.Store(int64(*pendingDataPoints))
+		b.pendingBytes.Store(int64(*pendingBytes))
+		b.pendingCompressedBytes.Store(int64(*pendingCompressedBytes))
+		if *pendingDataPoints > 0 && *timerC == nil {
+			timer.Reset(b.settings.flushInterval)
+			*timerC = timer.C
+		}
+		if *pendingDataPoints >= b.settings.maxDataPoints || *pendingBytes >= b.settings.maxBytes {
+			attrs := metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint)))
+			b.telemetry.overflowTotal.Add(context.Background(), 1, attrs)
+			if err := b.flushCompressed(context.Background(), unmarshaler, pending, pendingDataPoints, pendingBytes, pendingCompressedBytes, metricFlushReasonSize, timer, timerC); err != nil {
+				b.logger.Warn("failed to flush compressed metric batch", zap.String("reason", metricFlushReasonSize), zap.Error(err))
+			}
+		}
+	case metricBatcherRequestFlushAndStop:
+		err := b.flushCompressed(req.ctx, unmarshaler, pending, pendingDataPoints, pendingBytes, pendingCompressedBytes, req.reason, timer, timerC)
+		req.done <- err
+		return true
+	}
+	return false
+}
+
+func (b *backendMetricBatcher) drainEnqueueRequestsIntoCompressedChunks(
+	pending *[]compressedMetricBatcherChunk,
+	first metricBatcherRequest,
+	nextReq **metricBatcherRequest,
+) (int, int, int, int64) {
+	dataPointCount := 0
+	bytes := 0
+	compressedBytes := 0
+	var oldestEnqueue int64
+
+	appendRequest := func(req metricBatcherRequest) {
+		count := req.compressedChunk.dataPoints
+		if count == 0 {
+			return
+		}
+		dataPointCount += count
+		bytes += req.compressedChunk.uncompressedBytes
+		compressedBytes += req.compressedChunk.compressedBytes
+		if oldestEnqueue == 0 || req.enqueuedAtUnixNano < oldestEnqueue {
+			oldestEnqueue = req.enqueuedAtUnixNano
+		}
+		*pending = append(*pending, req.compressedChunk)
+	}
+
+	appendRequest(first)
+
+	for i := 0; i < cap(b.requests); i++ {
+		select {
+		case req := <-b.requests:
+			if req.kind != metricBatcherRequestEnqueue {
+				*nextReq = &req
+				return dataPointCount, bytes, compressedBytes, oldestEnqueue
+			}
+			appendRequest(req)
+		default:
+			return dataPointCount, bytes, compressedBytes, oldestEnqueue
+		}
+	}
+
+	return dataPointCount, bytes, compressedBytes, oldestEnqueue
+}
+
+func (b *backendMetricBatcher) flushCompressed(
+	ctx context.Context,
+	unmarshaler *pmetric.ProtoUnmarshaler,
+	pending *[]compressedMetricBatcherChunk,
+	pendingDataPoints *int,
+	pendingBytes *int,
+	pendingCompressedBytes *int,
+	reason string,
+	timer *time.Timer,
+	timerC *<-chan time.Time,
+) error {
+	if !timer.Stop() && *timerC != nil {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	*timerC = nil
+
+	if *pendingDataPoints == 0 {
+		return nil
+	}
+
+	drainedChunks := *pending
+	datapoints := *pendingDataPoints
+	bytes := *pendingBytes
+	oldestUnixNano := b.oldestEnqueue.Load()
+	oldestAgeMillis := ageMillisFromUnixNano(time.Now(), oldestUnixNano)
+	*pending = (*pending)[:0]
+	*pendingDataPoints = 0
+	*pendingBytes = 0
+	*pendingCompressedBytes = 0
+	b.pendingDataPoints.Store(0)
+	b.pendingBytes.Store(0)
+	b.pendingCompressedBytes.Store(0)
+	b.oldestEnqueue.Store(0)
+
+	b.payloadCodecMu.Lock()
+	drained, err := mergeCompressedMetricBatcherChunks(unmarshaler, b.payloadCodec, drainedChunks)
+	b.payloadCodecMu.Unlock()
+	attrs := metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint)))
+	flushAttrs := metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", b.endpoint), attribute.String("reason", reason)))
+	b.telemetry.batchDataPoints.Record(ctx, int64(datapoints), attrs)
+	b.telemetry.batchBytes.Record(ctx, int64(bytes), attrs)
+	b.telemetry.flushTotal.Add(ctx, 1, flushAttrs)
+	if err != nil {
+		b.telemetry.flushErrors.Add(ctx, 1, attrs)
+		b.telemetry.droppedDataPoints.Add(ctx, int64(datapoints), attrs)
+		clearCompressedMetricBatcherChunks(drainedChunks)
+		return err
+	}
+
+	var rerouteMetrics pmetric.Metrics
+	if b.drainErr != nil && reason != metricFlushReasonShutdown {
+		rerouteMetrics = pmetric.NewMetrics()
+		drained.CopyTo(rerouteMetrics)
+	}
+	exp := b.exporter()
+	if exp != nil && exp.isStopping() && b.drainErr != nil && reason != metricFlushReasonShutdown {
+		err = metricBatcherRerouteableError{err: errMetricBatcherExporterStopping, data: rerouteMetrics}
+	} else {
+		err = b.send(ctx, exp, drained, reason)
+	}
+	if err != nil {
+		b.telemetry.flushErrors.Add(ctx, 1, attrs)
+		if b.drainErr != nil && reason != metricFlushReasonShutdown {
+			var rerouteable metricBatcherRerouteableError
+			if errors.As(err, &rerouteable) {
+				rerouteErr := b.drainErr(ctx, rerouteable.Data(), reason)
+				rerouteable.RecordReroute(ctx, rerouteErr)
+				if rerouteErr == nil {
+					b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
+					clearCompressedMetricBatcherChunks(drainedChunks)
+					return nil
+				}
+				err = errors.Join(err, rerouteErr)
+			}
+		}
+		if reason == metricFlushReasonSize || reason == metricFlushReasonTimeout {
+			*pending = append((*pending)[:0], drainedChunks...)
+			*pendingDataPoints = datapoints
+			*pendingBytes = bytes
+			*pendingCompressedBytes = compressedMetricBatcherChunksCompressedBytes(drainedChunks)
+			b.pendingDataPoints.Store(int64(datapoints))
+			b.pendingBytes.Store(int64(bytes))
+			b.pendingCompressedBytes.Store(int64(*pendingCompressedBytes))
+			b.oldestEnqueue.Store(oldestUnixNano)
+			if *timerC == nil {
+				b.flushFailures++
+				delay := b.settings.flushInterval * time.Duration(1<<min(b.flushFailures-1, 4))
+				delay = min(delay, maxMetricBatchRetryBackoff)
+				timer.Reset(delay)
+				*timerC = timer.C
+			}
+			return err
+		}
+		b.telemetry.droppedDataPoints.Add(ctx, int64(datapoints), attrs)
+		clearCompressedMetricBatcherChunks(drainedChunks)
+	} else {
+		b.telemetry.flushOldestPointAge.Record(ctx, oldestAgeMillis, flushAttrs)
+		b.flushFailures = 0
+		clearCompressedMetricBatcherChunks(drainedChunks)
+	}
+	return err
+}
+
+func mergeCompressedMetricBatcherChunks(unmarshaler *pmetric.ProtoUnmarshaler, codec *queuePayloadCodec, chunks []compressedMetricBatcherChunk) (pmetric.Metrics, error) {
+	if len(chunks) == 0 {
+		return pmetric.NewMetrics(), nil
+	}
+
+	merged, err := decodeCompressedMetricBatcherChunk(unmarshaler, codec, chunks[0])
+	if err != nil {
+		return pmetric.Metrics{}, err
+	}
+	for i := 1; i < len(chunks); i++ {
+		md, err := decodeCompressedMetricBatcherChunk(unmarshaler, codec, chunks[i])
+		if err != nil {
+			return pmetric.Metrics{}, err
+		}
+		mergeMetricChunksByMove(merged, md)
+	}
+	return merged, nil
+}
+
+func clearCompressedMetricBatcherChunks(chunks []compressedMetricBatcherChunk) {
+	for i := range chunks {
+		chunks[i] = compressedMetricBatcherChunk{}
+	}
+}
+
+func compressedMetricBatcherChunksCompressedBytes(chunks []compressedMetricBatcherChunk) int {
+	compressedBytes := 0
+	for _, chunk := range chunks {
+		compressedBytes += chunk.compressedBytes
+	}
+	return compressedBytes
 }
 
 func (b *backendMetricBatcher) flush(
@@ -815,6 +1156,12 @@ func newMetricBatcherTelemetry(settings component.TelemetrySettings) (*metricBat
 		metric.WithUnit("By"),
 	)
 	errs = errors.Join(errs, err)
+	t.pendingCompressedBytes, err = meter.Int64ObservableGauge(
+		"otelcol_loadbalancer_metric_batch_pending_compressed_bytes",
+		metric.WithDescription("Current compressed OTLP bytes per pending metric backend batch."),
+		metric.WithUnit("By"),
+	)
+	errs = errors.Join(errs, err)
 	t.pendingOldestPointAge, err = meter.Int64ObservableGauge(
 		"otelcol_loadbalancer_metric_batch_pending_oldest_datapoint_age",
 		metric.WithDescription("Age in ms of the oldest pending metric datapoint per backend batch."),
@@ -838,11 +1185,12 @@ func (t *metricBatcherTelemetry) start(snapshot func() metricBatcherSnapshot) er
 			attrs := metric.WithAttributeSet(attribute.NewSet(attribute.String("endpoint", pending.endpoint)))
 			observer.ObserveInt64(t.pendingDataPoints, pending.datapoints, attrs)
 			observer.ObserveInt64(t.pendingBytes, pending.bytes, attrs)
+			observer.ObserveInt64(t.pendingCompressedBytes, pending.compressedBytes, attrs)
 			observer.ObserveInt64(t.pendingOldestPointAge, pending.oldestAgeMillis, attrs)
 		}
 		observer.ObserveInt64(t.pendingOldestPointMax, state.maxOldestAgeMillis)
 		return nil
-	}, t.pendingDataPoints, t.pendingBytes, t.pendingOldestPointAge, t.pendingOldestPointMax)
+	}, t.pendingDataPoints, t.pendingBytes, t.pendingCompressedBytes, t.pendingOldestPointAge, t.pendingOldestPointMax)
 	if err != nil {
 		return err
 	}

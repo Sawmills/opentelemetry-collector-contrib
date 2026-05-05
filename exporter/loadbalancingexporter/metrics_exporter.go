@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -35,11 +36,15 @@ const metricBatcherEnqueueBackoff = 2 * time.Millisecond
 type metricExporterImp struct {
 	loadBalancer *loadBalancer
 	batcher      *metricBatcher
+	centralQueue *centralQueue
+	centralCodec *queuePayloadCodec
 	routingKey   routingKey
 
-	logger    *zap.Logger
-	started   atomic.Bool
-	telemetry *metadata.TelemetryBuilder
+	logger        *zap.Logger
+	started       atomic.Bool
+	telemetry     *metadata.TelemetryBuilder
+	centralCancel context.CancelFunc
+	centralWG     sync.WaitGroup
 }
 
 func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metricExporterImp, error) {
@@ -66,6 +71,20 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 		telemetry:    telemetry,
 		logger:       params.Logger,
 	}
+	if cfg.(*Config).CentralQueue.Enabled {
+		centralCfg := cfg.(*Config).CentralQueue
+		centralTelemetry, err := newCentralQueueTelemetry(params.TelemetrySettings, signalKindMetrics)
+		if err != nil {
+			return nil, err
+		}
+		metricExporter.centralQueue = newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           centralCfg.MaxCompressedBytes,
+			maxInflightUncompressedBytes: centralCfg.MaxInflightUncompressedBytes,
+			maxUncompressedBatchBytes:    centralCfg.MaxUncompressedBatchBytes,
+			telemetry:                    centralTelemetry,
+		})
+		metricExporter.centralCodec = newQueuePayloadCodec(centralCfg.PayloadCompression)
+	}
 
 	switch cfg.(*Config).RoutingKey {
 	case svcRoutingStr, "":
@@ -90,6 +109,7 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 				maxBytes:                 cfg.(*Config).MetricBatcher.MaxBytes,
 				flushInterval:            cfg.(*Config).MetricBatcher.FlushInterval,
 				maxRetryBufferMultiplier: cfg.(*Config).MetricBatcher.MaxRetryBufferMultiplier,
+				payloadCompression:       cfg.(*Config).MetricBatcher.PayloadCompression,
 			},
 			metricExporter.consumeBatch,
 			metricExporter.rerouteDrainBatch,
@@ -114,6 +134,12 @@ func (e *metricExporterImp) Start(ctx context.Context, host component.Host) erro
 		return err
 	}
 	e.started.Store(true)
+	if e.centralQueue != nil {
+		dispatchCtx, cancel := context.WithCancel(context.Background())
+		e.centralCancel = cancel
+		e.centralWG.Add(1)
+		go e.runCentralQueue(dispatchCtx)
+	}
 	return nil
 }
 
@@ -124,6 +150,17 @@ func (e *metricExporterImp) Shutdown(ctx context.Context) error {
 	var err error
 	if e.batcher != nil {
 		err = e.batcher.Shutdown(ctx)
+	}
+	if e.centralQueue != nil {
+		e.centralQueue.stop()
+		waitErr := waitForInflight(ctx, &e.centralWG)
+		if waitErr != nil && e.centralCancel != nil {
+			e.centralCancel()
+			cancelCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			waitErr = errors.Join(waitErr, waitForInflight(cancelCtx, &e.centralWG))
+			cancel()
+		}
+		err = errors.Join(err, waitErr, e.centralCodec.Close())
 	}
 	err = errors.Join(err, e.loadBalancer.Shutdown(ctx))
 	return err
@@ -139,6 +176,10 @@ func (e *metricExporterImp) ConsumeMetrics(ctx context.Context, md pmetric.Metri
 		return err
 	}
 
+	if e.centralQueue != nil {
+		return e.consumeMetricsCentralQueue(batches)
+	}
+
 	if e.batcher != nil {
 		endpointBatches, err := e.groupRoutedMetricsByEndpoint(batches)
 		if err != nil {
@@ -148,6 +189,65 @@ func (e *metricExporterImp) ConsumeMetrics(ctx context.Context, md pmetric.Metri
 	}
 
 	return e.consumeMetricsByExporter(ctx, batches)
+}
+
+func (e *metricExporterImp) consumeMetricsCentralQueue(batches map[string]pmetric.Metrics) error {
+	var errs error
+	now := time.Now()
+	for routingKey, md := range batches {
+		item, err := newCentralQueueMetricsItem([]byte(routingKey), md, e.centralCodec, now)
+		if err != nil {
+			errs = multierr.Append(errs, err)
+			continue
+		}
+		errs = multierr.Append(errs, e.centralQueue.enqueue(item))
+	}
+	return errs
+}
+
+func (e *metricExporterImp) runCentralQueue(ctx context.Context) {
+	defer e.centralWG.Done()
+	for {
+		lease, err := e.centralQueue.lease(ctx)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, errCentralQueueStopped) {
+				return
+			}
+			if errors.Is(err, errCentralQueueInflightFull) {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(centralQueueLeasePollInterval):
+					continue
+				}
+			}
+			e.logger.Warn("failed to lease central metric queue item", zap.Error(err))
+			continue
+		}
+
+		err = e.consumeCentralQueueMetricItem(ctx, lease.item)
+		lease.done()
+		if err == nil {
+			continue
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		item := lease.item
+		item.attempt++
+		if requeueErr := e.centralQueue.requeue(item, time.Now().Add(centralQueueRetryDelay(item.attempt))); requeueErr != nil {
+			e.logger.Warn("failed to requeue central metric queue item", zap.Error(requeueErr), zap.Error(err))
+		}
+	}
+}
+
+func (e *metricExporterImp) consumeCentralQueueMetricItem(ctx context.Context, item centralQueueItem) error {
+	md, err := decodeCentralQueueMetricsItem(item, e.centralCodec)
+	if err != nil {
+		e.logger.Warn("dropping invalid central metric queue payload", zap.Error(err))
+		return nil
+	}
+	return e.consumeMetricsByExporter(ctx, map[string]pmetric.Metrics{string(item.routingKey): md})
 }
 
 type endpointMetricsBatch struct {

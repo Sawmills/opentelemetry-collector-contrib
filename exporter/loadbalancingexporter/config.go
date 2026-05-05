@@ -44,6 +44,7 @@ type Config struct {
 	TimeoutSettings           exporterhelper.TimeoutConfig `mapstructure:",squash"`
 	configretry.BackOffConfig `mapstructure:"retry_on_failure"`
 	QueueSettings             QueueSettings        `mapstructure:"sending_queue"`
+	CentralQueue              CentralQueueConfig   `mapstructure:"central_queue"`
 	LogBatcher                LogBatcherConfig     `mapstructure:"log_batcher"`
 	LogRouting                LogRoutingConfig     `mapstructure:"log_routing"`
 	MetricBatcher             MetricBatcherConfig  `mapstructure:"metric_batcher"`
@@ -60,6 +61,8 @@ type Config struct {
 	// Supports all attributes available (both resource and span), as well as the pseudo attributes "span.kind" and
 	// "span.name".
 	RoutingAttributes []string `mapstructure:"routing_attributes"`
+
+	protocolOTLPSendingQueueConfigured bool
 }
 
 func (cfg *Config) Unmarshal(conf *confmap.Conf) error {
@@ -78,8 +81,11 @@ func (cfg *Config) Unmarshal(conf *confmap.Conf) error {
 		return nil
 	}
 
-	if rawQueue, ok := otlpRaw["sending_queue"]; ok && rawQueue == nil {
-		cfg.Protocol.OTLP.QueueConfig = configoptional.None[exporterhelper.QueueBatchConfig]()
+	if rawQueue, ok := otlpRaw["sending_queue"]; ok {
+		cfg.protocolOTLPSendingQueueConfigured = rawQueue != nil
+		if rawQueue == nil {
+			cfg.Protocol.OTLP.QueueConfig = configoptional.None[exporterhelper.QueueBatchConfig]()
+		}
 	}
 
 	return nil
@@ -107,11 +113,12 @@ type LogRoutingConfig struct {
 }
 
 type MetricBatcherConfig struct {
-	Enabled                  bool          `mapstructure:"enabled"`
-	MaxDataPoints            int           `mapstructure:"max_datapoints"`
-	MaxBytes                 int           `mapstructure:"max_bytes"`
-	FlushInterval            time.Duration `mapstructure:"flush_interval"`
-	MaxRetryBufferMultiplier int           `mapstructure:"max_retry_buffer_multiplier"`
+	Enabled                  bool                    `mapstructure:"enabled"`
+	MaxDataPoints            int                     `mapstructure:"max_datapoints"`
+	MaxBytes                 int                     `mapstructure:"max_bytes"`
+	FlushInterval            time.Duration           `mapstructure:"flush_interval"`
+	MaxRetryBufferMultiplier int                     `mapstructure:"max_retry_buffer_multiplier"`
+	PayloadCompression       QueuePayloadCompression `mapstructure:"payload_compression"`
 }
 
 const defaultEndpointHealthQuarantineDuration = 30 * time.Second
@@ -213,6 +220,19 @@ const (
 	QueuePayloadCompressionZstd   QueuePayloadCompression = "zstd"
 )
 
+const (
+	defaultCentralQueueMaxUncompressedBatchBytes = 16 << 20
+	defaultCentralQueueMaxInflightBytes          = int64(512 << 20)
+)
+
+type CentralQueueConfig struct {
+	Enabled                      bool                    `mapstructure:"enabled"`
+	MaxCompressedBytes           int64                   `mapstructure:"max_compressed_bytes"`
+	PayloadCompression           QueuePayloadCompression `mapstructure:"payload_compression"`
+	MaxUncompressedBatchBytes    int                     `mapstructure:"max_uncompressed_batch_bytes"`
+	MaxInflightUncompressedBytes int64                   `mapstructure:"max_inflight_uncompressed_bytes"`
+}
+
 func (q QueueSettings) Validate() error {
 	if q.QueueConfig.HasValue() {
 		queueCfg := *q.QueueConfig.Get()
@@ -241,6 +261,21 @@ func (cfg *Config) Validate() error {
 	if err := cfg.QueueSettings.Validate(); err != nil {
 		return err
 	}
+	if err := cfg.CentralQueue.Validate(); err != nil {
+		return err
+	}
+	if cfg.CentralQueue.Enabled && cfg.QueueSettings.QueueConfig.HasValue() {
+		return errors.New("central_queue.enabled=true is incompatible with sending_queue.enabled=true")
+	}
+	if cfg.CentralQueue.Enabled && cfg.protocolOTLPSendingQueueConfigured {
+		return errors.New("central_queue.enabled=true is incompatible with protocol.otlp.sending_queue")
+	}
+	if cfg.CentralQueue.Enabled && cfg.LogBatcher.Enabled {
+		return errors.New("central_queue.enabled=true is incompatible with log_batcher.enabled=true")
+	}
+	if cfg.CentralQueue.Enabled && cfg.MetricBatcher.Enabled {
+		return errors.New("central_queue.enabled=true is incompatible with metric_batcher.enabled=true")
+	}
 	if err := cfg.LogBatcher.Validate(); err != nil {
 		return err
 	}
@@ -248,6 +283,30 @@ func (cfg *Config) Validate() error {
 		return err
 	}
 	return cfg.EndpointHealth.Validate()
+}
+
+func (c CentralQueueConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if c.MaxCompressedBytes <= 0 {
+		return errors.New("central_queue.max_compressed_bytes must be greater than 0 when central_queue.enabled=true")
+	}
+	switch c.PayloadCompression {
+	case QueuePayloadCompressionSnappy, QueuePayloadCompressionZstd:
+		// Valid central queue payload compression value.
+	case "", QueuePayloadCompressionNone:
+		return errors.New("central_queue.payload_compression must be set to snappy or zstd when central_queue.enabled=true")
+	default:
+		return fmt.Errorf("central_queue.payload_compression must be one of [snappy, zstd], found %q", c.PayloadCompression)
+	}
+	if c.MaxUncompressedBatchBytes <= 0 {
+		return errors.New("central_queue.max_uncompressed_batch_bytes must be greater than 0 when central_queue.enabled=true")
+	}
+	if c.MaxInflightUncompressedBytes <= 0 {
+		return errors.New("central_queue.max_inflight_uncompressed_bytes must be greater than 0 when central_queue.enabled=true")
+	}
+	return nil
 }
 
 func (c LogBatcherConfig) Validate() error {
@@ -287,6 +346,12 @@ func (c MetricBatcherConfig) Validate() error {
 	}
 	if c.MaxRetryBufferMultiplier <= 0 {
 		return errors.New("metric_batcher.max_retry_buffer_multiplier must be greater than 0 when metric_batcher.enabled=true")
+	}
+	switch c.PayloadCompression {
+	case "", QueuePayloadCompressionNone, QueuePayloadCompressionSnappy, QueuePayloadCompressionZstd:
+		// Valid payload compression value.
+	default:
+		return fmt.Errorf("metric_batcher.payload_compression must be one of [none, snappy, zstd], found %q", c.PayloadCompression)
 	}
 	return nil
 }

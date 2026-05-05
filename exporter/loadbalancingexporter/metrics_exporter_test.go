@@ -172,6 +172,36 @@ func TestMetricsExporterShutdown(t *testing.T) {
 	assert.NoError(t, res)
 }
 
+func TestConsumeMetricsCentralQueueEnqueuesCompressedByRoutingKey(t *testing.T) {
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	p := &metricExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    1 << 20,
+		}),
+		centralCodec: codec,
+		routingKey:   svcRouting,
+	}
+	p.started.Store(true)
+
+	md := simpleMetricsWithServiceName()
+	require.NoError(t, p.ConsumeMetrics(t.Context(), md))
+	require.Equal(t, 1, p.centralQueue.len())
+	require.Greater(t, p.centralQueue.compressedBytes(), int64(0))
+
+	lease, err := p.centralQueue.lease(t.Context())
+	require.NoError(t, err)
+	defer lease.done()
+	require.Equal(t, signalKindMetrics, lease.item.signal)
+	require.Equal(t, len(lease.item.payload), cap(lease.item.payload))
+
+	decoded, err := decodeCentralQueueMetricsItem(lease.item, codec)
+	require.NoError(t, err)
+	require.Equal(t, md.DataPointCount(), decoded.DataPointCount())
+}
+
 // loadMetricsMap will parse the given yaml file into a map[string]pmetric.Metrics
 func loadMetricsMap(t *testing.T, path string) map[string]pmetric.Metrics {
 	b, err := os.ReadFile(path)

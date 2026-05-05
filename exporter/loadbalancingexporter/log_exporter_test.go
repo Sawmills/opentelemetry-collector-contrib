@@ -176,6 +176,38 @@ func TestConsumeLogs(t *testing.T) {
 	assert.NoError(t, res)
 }
 
+func TestConsumeLogsCentralQueueEnqueuesCompressedByRoutingKey(t *testing.T) {
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    1 << 20,
+		}),
+		centralCodec: codec,
+		randomTraceID: func() pcommon.TraceID {
+			return pcommon.TraceID{1}
+		},
+	}
+	p.started.Store(true)
+
+	logs := simpleLogs()
+	require.NoError(t, p.ConsumeLogs(t.Context(), logs))
+	require.Equal(t, 1, p.centralQueue.len())
+	require.Greater(t, p.centralQueue.compressedBytes(), int64(0))
+
+	lease, err := p.centralQueue.lease(t.Context())
+	require.NoError(t, err)
+	defer lease.done()
+	require.Equal(t, signalKindLogs, lease.item.signal)
+	require.Equal(t, len(lease.item.payload), cap(lease.item.payload))
+
+	decoded, err := decodeCentralQueueLogsItem(lease.item, codec)
+	require.NoError(t, err)
+	require.Equal(t, logs.LogRecordCount(), decoded.LogRecordCount())
+}
+
 func TestConsumeLogsEmitsOnlyParentExporterMetrics(t *testing.T) {
 	ctx := t.Context()
 	shutdownCtx := context.Background() //nolint:usetesting // Context must outlive test for cleanup
