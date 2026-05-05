@@ -177,6 +177,14 @@ func TestCentralQueueValidation(t *testing.T) {
 			mutate:      func(c *CentralQueueConfig) { c.MaxInflightUncompressedBytes = 0 },
 			expectedErr: "central_queue.max_inflight_uncompressed_bytes",
 		},
+		{
+			name: "batch budget exceeds inflight budget",
+			mutate: func(c *CentralQueueConfig) {
+				c.MaxUncompressedBatchBytes = 2048
+				c.MaxInflightUncompressedBytes = 1024
+			},
+			expectedErr: "central_queue.max_uncompressed_batch_bytes",
+		},
 	}
 
 	for _, tt := range tests {

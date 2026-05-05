@@ -306,6 +306,9 @@ func (c CentralQueueConfig) Validate() error {
 	if c.MaxInflightUncompressedBytes <= 0 {
 		return errors.New("central_queue.max_inflight_uncompressed_bytes must be greater than 0 when central_queue.enabled=true")
 	}
+	if int64(c.MaxUncompressedBatchBytes) > c.MaxInflightUncompressedBytes {
+		return errors.New("central_queue.max_uncompressed_batch_bytes must be less than or equal to central_queue.max_inflight_uncompressed_bytes")
+	}
 	return nil
 }
 

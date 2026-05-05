@@ -47,12 +47,6 @@ func (q *centralQueue) enqueue(item centralQueueItem) error {
 	return q.enqueueAt(item, time.Now())
 }
 
-func (q *centralQueue) requeue(item centralQueueItem, nextAttempt time.Time) error {
-	item.nextAttemptUnixNano = nextAttempt.UnixNano()
-	q.settings.telemetry.recordRetry(context.Background())
-	return q.enqueueAt(item, time.Now())
-}
-
 func (q *centralQueue) enqueueAt(item centralQueueItem, now time.Time) error {
 	if q.settings.maxUncompressedBatchBytes > 0 && item.uncompressedBytes > q.settings.maxUncompressedBatchBytes {
 		q.settings.telemetry.recordRejected(context.Background(), int64(item.compressedBytes))
@@ -128,7 +122,6 @@ func (q *centralQueue) tryLease(now time.Time) (*centralQueueLease, error) {
 		}
 
 		q.items = removeCentralQueueItem(q.items, i)
-		q.currentCompressedBytes -= int64(item.compressedBytes)
 		q.currentInflightBytes += int64(item.uncompressedBytes)
 		snapshot := q.snapshotLocked()
 		q.settings.telemetry.record(context.Background(), snapshot)
@@ -150,10 +143,33 @@ func (l *centralQueueLease) done() {
 	l.once.Do(func() {
 		l.queue.mu.Lock()
 		l.queue.currentInflightBytes -= int64(l.item.uncompressedBytes)
+		l.queue.currentCompressedBytes -= int64(l.item.compressedBytes)
 		snapshot := l.queue.snapshotLocked()
 		l.queue.mu.Unlock()
 		l.queue.settings.telemetry.record(context.Background(), snapshot)
 	})
+}
+
+func (l *centralQueueLease) requeue(nextAttempt time.Time) error {
+	var err error
+	l.once.Do(func() {
+		item := l.item
+		item.nextAttemptUnixNano = nextAttempt.UnixNano()
+		l.queue.settings.telemetry.recordRetry(context.Background())
+
+		l.queue.mu.Lock()
+		l.queue.currentInflightBytes -= int64(item.uncompressedBytes)
+		if l.queue.stopped {
+			l.queue.currentCompressedBytes -= int64(item.compressedBytes)
+			err = errCentralQueueStopped
+		} else {
+			l.queue.items = append(l.queue.items, item)
+		}
+		snapshot := l.queue.snapshotLocked()
+		l.queue.mu.Unlock()
+		l.queue.settings.telemetry.record(context.Background(), snapshot)
+	})
+	return err
 }
 
 func (q *centralQueue) stop() {

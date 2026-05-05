@@ -6,6 +6,7 @@ package loadbalancingexporter
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -41,6 +42,29 @@ func TestCentralQueueLeaseReservesInflightUncompressedBytes(t *testing.T) {
 
 	lease.done()
 	require.EqualValues(t, 0, q.inflightUncompressedBytes())
+}
+
+func TestCentralQueueLeaseReservesCompressedBytesUntilDoneOrRequeue(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           10,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    100,
+	})
+	require.NoError(t, q.enqueue(centralQueueItem{signal: signalKindLogs, compressedBytes: 10, uncompressedBytes: 40, count: 1}))
+
+	lease, err := q.lease(t.Context())
+	require.NoError(t, err)
+	require.EqualValues(t, 10, q.compressedBytes())
+	require.ErrorIs(t, q.enqueue(centralQueueItem{signal: signalKindLogs, compressedBytes: 1, uncompressedBytes: 1, count: 1}), errCentralQueueFull)
+
+	require.NoError(t, lease.requeue(time.Now()))
+	require.Equal(t, 1, q.len())
+	require.EqualValues(t, 10, q.compressedBytes())
+
+	retryLease, err := q.lease(t.Context())
+	require.NoError(t, err)
+	retryLease.done()
+	require.Zero(t, q.compressedBytes())
 }
 
 func TestCentralQueueRejectsOversizedUncompressedItem(t *testing.T) {
