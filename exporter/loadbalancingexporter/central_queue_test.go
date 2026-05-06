@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 func TestCentralQueueAdmitsByCompressedBytes(t *testing.T) {
@@ -106,6 +108,35 @@ func TestCentralQueueSnapshotReportsOldestQueuedItemAge(t *testing.T) {
 	require.NotNil(t, retryLease)
 	retryLease.done()
 	require.Zero(t, snapshotAt(base.Add(time.Second)).oldestItemAgeMillis)
+}
+
+func TestCentralQueueTelemetryOldestItemAgeAdvancesWithoutQueueMutation(t *testing.T) {
+	reader := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, reader.Shutdown(context.WithoutCancel(t.Context())))
+	})
+	telemetry, err := newCentralQueueTelemetry(reader.NewTelemetrySettings(), signalKindLogs)
+	require.NoError(t, err)
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    100,
+		telemetry:                    telemetry,
+	})
+
+	require.NoError(t, q.enqueue(centralQueueItem{signal: signalKindLogs, compressedBytes: 10, uncompressedBytes: 10, count: 1}))
+
+	require.Eventually(t, func() bool {
+		metric, err := reader.GetMetric("otelcol_loadbalancer_central_queue_oldest_item_age")
+		if err != nil {
+			return false
+		}
+		gauge, ok := metric.Data.(metricdata.Gauge[int64])
+		if !ok || len(gauge.DataPoints) != 1 {
+			return false
+		}
+		return gauge.DataPoints[0].Value >= 10
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestCentralQueueRejectsOversizedUncompressedItem(t *testing.T) {

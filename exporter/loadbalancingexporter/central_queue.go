@@ -31,6 +31,7 @@ type centralQueue struct {
 
 	currentCompressedBytes int64
 	currentInflightBytes   int64
+	oldestEnqueuedAt       int64
 }
 
 type centralQueueLease struct {
@@ -40,7 +41,9 @@ type centralQueueLease struct {
 }
 
 func newCentralQueue(settings centralQueueSettings) *centralQueue {
-	return &centralQueue{settings: settings}
+	q := &centralQueue{settings: settings}
+	q.settings.telemetry.observeOldestItemAge(q.oldestItemAgeMillis)
+	return q
 }
 
 func (q *centralQueue) enqueue(item centralQueueItem) error {
@@ -72,6 +75,7 @@ func (q *centralQueue) enqueueAt(item centralQueueItem, now time.Time) error {
 	}
 	q.items = append(q.items, item)
 	q.currentCompressedBytes += int64(item.compressedBytes)
+	q.trackOldestEnqueuedAtLocked(item)
 	snapshot := q.snapshotLockedAt(now)
 	q.mu.Unlock()
 	q.settings.telemetry.record(context.Background(), snapshot)
@@ -117,7 +121,7 @@ func (q *centralQueue) tryLease(now time.Time) (*centralQueueLease, error) {
 			continue
 		}
 
-		q.items = removeCentralQueueItem(q.items, i)
+		q.removeItemLocked(i)
 		q.currentInflightBytes += int64(item.uncompressedBytes)
 		snapshot := q.snapshotLocked()
 		q.settings.telemetry.record(context.Background(), snapshot)
@@ -127,6 +131,14 @@ func (q *centralQueue) tryLease(now time.Time) (*centralQueueLease, error) {
 		return nil, errCentralQueueInflightFull
 	}
 	return nil, nil
+}
+
+func (q *centralQueue) removeItemLocked(index int) {
+	removed := q.items[index]
+	q.items = removeCentralQueueItem(q.items, index)
+	if removed.enqueuedAtUnixNano == q.oldestEnqueuedAt {
+		q.refreshOldestEnqueuedAtLocked()
+	}
 }
 
 func removeCentralQueueItem(items []centralQueueItem, index int) []centralQueueItem {
@@ -160,6 +172,7 @@ func (l *centralQueueLease) requeue(nextAttempt time.Time) error {
 			err = errCentralQueueStopped
 		} else {
 			l.queue.items = append(l.queue.items, item)
+			l.queue.trackOldestEnqueuedAtLocked(item)
 		}
 		snapshot := l.queue.snapshotLocked()
 		l.queue.mu.Unlock()
@@ -206,24 +219,42 @@ func (q *centralQueue) snapshotLockedAt(now time.Time) centralQueueSnapshot {
 	}
 }
 
+func (q *centralQueue) oldestItemAgeMillis() int64 {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.oldestItemAgeMillisLocked(time.Now())
+}
+
 func (q *centralQueue) oldestItemAgeMillisLocked(now time.Time) int64 {
-	var oldestUnixNano int64
-	for _, item := range q.items {
-		if item.enqueuedAtUnixNano == 0 {
-			continue
-		}
-		if oldestUnixNano == 0 || item.enqueuedAtUnixNano < oldestUnixNano {
-			oldestUnixNano = item.enqueuedAtUnixNano
-		}
-	}
-	if oldestUnixNano == 0 {
+	if q.oldestEnqueuedAt == 0 {
 		return 0
 	}
-	age := now.Sub(time.Unix(0, oldestUnixNano))
+	age := now.Sub(time.Unix(0, q.oldestEnqueuedAt))
 	if age <= 0 {
 		return 0
 	}
 	return age.Milliseconds()
+}
+
+func (q *centralQueue) trackOldestEnqueuedAtLocked(item centralQueueItem) {
+	if item.enqueuedAtUnixNano == 0 {
+		return
+	}
+	if q.oldestEnqueuedAt == 0 || item.enqueuedAtUnixNano < q.oldestEnqueuedAt {
+		q.oldestEnqueuedAt = item.enqueuedAtUnixNano
+	}
+}
+
+func (q *centralQueue) refreshOldestEnqueuedAtLocked() {
+	q.oldestEnqueuedAt = 0
+	for _, item := range q.items {
+		if item.enqueuedAtUnixNano == 0 {
+			continue
+		}
+		if q.oldestEnqueuedAt == 0 || item.enqueuedAtUnixNano < q.oldestEnqueuedAt {
+			q.oldestEnqueuedAt = item.enqueuedAtUnixNano
+		}
+	}
 }
 
 func centralQueueRetryDelay(attempt int) time.Duration {

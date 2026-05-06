@@ -20,6 +20,7 @@ func TestCentralQueueTelemetryRecordsInstruments(t *testing.T) {
 	})
 	telemetry, err := newCentralQueueTelemetry(reader.NewTelemetrySettings(), signalKindLogs)
 	require.NoError(t, err)
+	telemetry.observeOldestItemAge(func() int64 { return 125 })
 
 	telemetry.record(t.Context(), centralQueueSnapshot{
 		compressedBytes:      50,
