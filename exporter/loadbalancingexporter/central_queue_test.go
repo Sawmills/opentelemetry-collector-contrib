@@ -120,3 +120,21 @@ func TestCentralQueueStopAllowsDrainingExistingItems(t *testing.T) {
 	_, err = q.lease(t.Context())
 	require.ErrorIs(t, err, errCentralQueueStopped)
 }
+
+func requireCentralQueueFirstRetryDelay(t *testing.T, q *centralQueue) {
+	t.Helper()
+
+	var item centralQueueItem
+	require.Eventually(t, func() bool {
+		q.mu.Lock()
+		defer q.mu.Unlock()
+		if len(q.items) != 1 || q.items[0].attempt != 1 || q.items[0].nextAttemptUnixNano == 0 {
+			return false
+		}
+		item = q.items[0]
+		return true
+	}, time.Second, time.Millisecond)
+
+	retryAfterEnqueue := time.Unix(0, item.nextAttemptUnixNano).Sub(time.Unix(0, item.enqueuedAtUnixNano))
+	require.LessOrEqual(t, retryAfterEnqueue, centralQueueInitialRetryDelay+50*time.Millisecond)
+}

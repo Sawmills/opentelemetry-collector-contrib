@@ -242,9 +242,10 @@ func (e *metricExporterImp) runCentralQueue(ctx context.Context) {
 			continue
 		}
 		item := lease.item
+		nextAttempt := time.Now().Add(centralQueueRetryDelay(item.attempt))
 		item.attempt++
 		lease.item = item
-		if requeueErr := lease.requeue(time.Now().Add(centralQueueRetryDelay(item.attempt))); requeueErr != nil {
+		if requeueErr := lease.requeue(nextAttempt); requeueErr != nil {
 			e.logger.Warn("failed to requeue central metric queue item", zap.Error(requeueErr), zap.Error(err))
 		}
 	}

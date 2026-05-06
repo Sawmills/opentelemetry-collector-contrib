@@ -298,6 +298,43 @@ func TestLogsCentralQueueDropsPermanentExportError(t *testing.T) {
 	require.NoError(t, waitErr)
 }
 
+func TestLogsCentralQueueFirstRetryUsesInitialDelay(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+
+	endpoint := "endpoint-1:4317"
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    1 << 20,
+		}),
+		centralCodec: codec,
+		loadBalancer: &loadBalancer{
+			ring: newHashRing([]string{endpoint}),
+			exporters: map[string]*wrappedExporter{endpoint: newWrappedExporter(newMockLogsExporter(func(context.Context, plog.Logs) error {
+				return status.Error(codes.Unavailable, "backend unavailable")
+			}), endpoint)},
+			endpointHealth: newEndpointHealthManager(endpointHealthSettings{}),
+			res:            &mockResolver{},
+		},
+		telemetry: tb,
+		logger:    ts.Logger,
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	p.centralWG.Add(1)
+	go p.runCentralQueue(ctx)
+	item, err := newCentralQueueLogsItem([]byte("route-a"), simpleLogs(), codec, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, p.centralQueue.enqueue(item))
+
+	requireCentralQueueFirstRetryDelay(t, p.centralQueue)
+	cancel()
+	require.NoError(t, waitForInflight(t.Context(), &p.centralWG))
+}
+
 func TestLogsCentralQueueDoesNotDrainSynchronously(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	cfg := endpoint2Config()
