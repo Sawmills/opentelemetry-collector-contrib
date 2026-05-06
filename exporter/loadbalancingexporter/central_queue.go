@@ -72,7 +72,7 @@ func (q *centralQueue) enqueueAt(item centralQueueItem, now time.Time) error {
 	}
 	q.items = append(q.items, item)
 	q.currentCompressedBytes += int64(item.compressedBytes)
-	snapshot := q.snapshotLocked()
+	snapshot := q.snapshotLockedAt(now)
 	q.mu.Unlock()
 	q.settings.telemetry.record(context.Background(), snapshot)
 	return nil
