@@ -244,6 +244,34 @@ func TestMetricsCentralQueueDropsPermanentExportError(t *testing.T) {
 	require.NoError(t, waitErr)
 }
 
+func TestMetricsCentralQueueShutdownTimeoutSkipsLoadBalancerShutdown(t *testing.T) {
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	var resolverShutdown atomic.Bool
+	p := &metricExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    1 << 20,
+		}),
+		centralCodec: codec,
+		loadBalancer: &loadBalancer{
+			res: &mockResolver{onShutdown: func(context.Context) error {
+				resolverShutdown.Store(true)
+				return nil
+			}},
+		},
+	}
+	p.started.Store(true)
+	p.centralWG.Add(1)
+	t.Cleanup(p.centralWG.Done)
+
+	shutdownCtx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	require.Error(t, p.Shutdown(shutdownCtx))
+	require.False(t, resolverShutdown.Load())
+}
+
 func TestMetricsCentralQueueFirstRetryUsesInitialDelay(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
