@@ -23,6 +23,7 @@ type centralQueueTelemetry struct {
 	rejectedBytes        metric.Int64Counter
 	retries              metric.Int64Counter
 	inflightUncompressed metric.Int64Gauge
+	oldestItemAge        metric.Int64Gauge
 }
 
 type centralQueueSnapshot struct {
@@ -30,6 +31,7 @@ type centralQueueSnapshot struct {
 	compressedCapacity   int64
 	items                int64
 	inflightUncompressed int64
+	oldestItemAgeMillis  int64
 }
 
 func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signalKind) (*centralQueueTelemetry, error) {
@@ -80,6 +82,12 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 		metric.WithUnit("By"),
 	)
 	errs = errors.Join(errs, err)
+	t.oldestItemAge, err = meter.Int64Gauge(
+		"otelcol_loadbalancer_central_queue_oldest_item_age",
+		metric.WithDescription("Age in ms of the oldest queued central load-balancing item."),
+		metric.WithUnit("ms"),
+	)
+	errs = errors.Join(errs, err)
 	return t, errs
 }
 
@@ -94,6 +102,7 @@ func (t *centralQueueTelemetry) record(ctx context.Context, snapshot centralQueu
 	}
 	t.items.Record(ctx, snapshot.items, t.signalAttrs)
 	t.inflightUncompressed.Record(ctx, snapshot.inflightUncompressed, t.signalAttrs)
+	t.oldestItemAge.Record(ctx, snapshot.oldestItemAgeMillis, t.signalAttrs)
 }
 
 func (t *centralQueueTelemetry) recordRejected(ctx context.Context, compressedBytes int64) {

@@ -26,6 +26,7 @@ func TestCentralQueueTelemetryRecordsInstruments(t *testing.T) {
 		compressedCapacity:   100,
 		items:                3,
 		inflightUncompressed: 80,
+		oldestItemAgeMillis:  125,
 	})
 	telemetry.recordRejected(t.Context(), 7)
 	telemetry.recordRetry(t.Context())
@@ -36,6 +37,7 @@ func TestCentralQueueTelemetryRecordsInstruments(t *testing.T) {
 	requireCentralQueueFloatGauge(t, reader, "otelcol_loadbalancer_central_queue_saturation", "1", attrs, 0.5)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_items", "{items}", attrs, 3)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_inflight_uncompressed_bytes", "By", attrs, 80)
+	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_oldest_item_age", "ms", attrs, 125)
 	requireCentralQueueIntSum(t, reader, "otelcol_loadbalancer_central_queue_rejected_compressed_bytes", "By", attrs, 7)
 	requireCentralQueueIntSum(t, reader, "otelcol_loadbalancer_central_queue_retries", "{retries}", attrs, 1)
 }

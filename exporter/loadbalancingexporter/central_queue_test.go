@@ -67,6 +67,47 @@ func TestCentralQueueLeaseReservesCompressedBytesUntilDoneOrRequeue(t *testing.T
 	require.Zero(t, q.compressedBytes())
 }
 
+func TestCentralQueueSnapshotReportsOldestQueuedItemAge(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    100,
+	})
+	base := time.Unix(10, 0)
+	snapshotAt := func(now time.Time) centralQueueSnapshot {
+		q.mu.Lock()
+		defer q.mu.Unlock()
+		return q.snapshotLockedAt(now)
+	}
+
+	require.Zero(t, snapshotAt(base).oldestItemAgeMillis)
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, compressedBytes: 10, uncompressedBytes: 10, count: 1}, base))
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, compressedBytes: 10, uncompressedBytes: 10, count: 1}, base.Add(100*time.Millisecond)))
+
+	require.EqualValues(t, 250, snapshotAt(base.Add(250*time.Millisecond)).oldestItemAgeMillis)
+
+	lease, err := q.tryLease(base.Add(250 * time.Millisecond))
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+
+	require.EqualValues(t, 150, snapshotAt(base.Add(250*time.Millisecond)).oldestItemAgeMillis)
+
+	require.NoError(t, lease.requeue(base.Add(time.Second)))
+	require.EqualValues(t, 300, snapshotAt(base.Add(300*time.Millisecond)).oldestItemAgeMillis)
+
+	secondLease, err := q.tryLease(base.Add(300 * time.Millisecond))
+	require.NoError(t, err)
+	require.NotNil(t, secondLease)
+	secondLease.done()
+	require.EqualValues(t, 300, snapshotAt(base.Add(300*time.Millisecond)).oldestItemAgeMillis)
+
+	retryLease, err := q.tryLease(base.Add(time.Second))
+	require.NoError(t, err)
+	require.NotNil(t, retryLease)
+	retryLease.done()
+	require.Zero(t, snapshotAt(base.Add(time.Second)).oldestItemAgeMillis)
+}
+
 func TestCentralQueueRejectsOversizedUncompressedItem(t *testing.T) {
 	q := newCentralQueue(centralQueueSettings{
 		maxCompressedBytes:           100,

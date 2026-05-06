@@ -193,12 +193,37 @@ func (q *centralQueue) len() int {
 }
 
 func (q *centralQueue) snapshotLocked() centralQueueSnapshot {
+	return q.snapshotLockedAt(time.Now())
+}
+
+func (q *centralQueue) snapshotLockedAt(now time.Time) centralQueueSnapshot {
 	return centralQueueSnapshot{
 		compressedBytes:      q.currentCompressedBytes,
 		compressedCapacity:   q.settings.maxCompressedBytes,
 		items:                int64(len(q.items)),
 		inflightUncompressed: q.currentInflightBytes,
+		oldestItemAgeMillis:  q.oldestItemAgeMillisLocked(now),
 	}
+}
+
+func (q *centralQueue) oldestItemAgeMillisLocked(now time.Time) int64 {
+	var oldestUnixNano int64
+	for _, item := range q.items {
+		if item.enqueuedAtUnixNano == 0 {
+			continue
+		}
+		if oldestUnixNano == 0 || item.enqueuedAtUnixNano < oldestUnixNano {
+			oldestUnixNano = item.enqueuedAtUnixNano
+		}
+	}
+	if oldestUnixNano == 0 {
+		return 0
+	}
+	age := now.Sub(time.Unix(0, oldestUnixNano))
+	if age <= 0 {
+		return 0
+	}
+	return age.Milliseconds()
 }
 
 func centralQueueRetryDelay(attempt int) time.Duration {
