@@ -262,7 +262,7 @@ func (e *logExporterImp) consumeCentralQueueLogItem(ctx context.Context, item ce
 	if err != nil {
 		return err
 	}
-	_, err = e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect, true, true, false)
+	_, err = e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect, true, false, false)
 	return err
 }
 

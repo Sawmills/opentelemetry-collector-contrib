@@ -298,6 +298,61 @@ func TestLogsCentralQueueDropsPermanentExportError(t *testing.T) {
 	require.NoError(t, waitErr)
 }
 
+func TestLogsCentralQueueDoesNotDrainSynchronously(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := endpoint2Config()
+	enableEndpointHealth(cfg)
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockLogsExporter(func(context.Context, plog.Logs) error {
+			if endpoint == "endpoint-1:4317" {
+				return status.Error(codes.Unavailable, "backend unavailable")
+			}
+			return nil
+		}), nil
+	}
+	lb, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1:4317", "endpoint-2:4317"})
+
+	releaseDrain := make(chan struct{})
+	var releaseDrainOnce sync.Once
+	t.Cleanup(func() { releaseDrainOnce.Do(func() { close(releaseDrain) }) })
+	lb.onExporterRemove = func(context.Context, string, *wrappedExporter) error {
+		<-releaseDrain
+		return nil
+	}
+
+	routeForEndpoint1 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1:4317")
+	item, err := newCentralQueueLogsItem([]byte(routeForEndpoint1), simpleLogs(), codec, time.Now())
+	require.NoError(t, err)
+
+	p := &logExporterImp{
+		centralCodec: codec,
+		loadBalancer: lb,
+		logger:       ts.Logger,
+		telemetry:    tb,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- p.consumeCentralQueueLogItem(t.Context(), item)
+	}()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		releaseDrainOnce.Do(func() { close(releaseDrain) })
+	case <-time.After(200 * time.Millisecond):
+		releaseDrainOnce.Do(func() { close(releaseDrain) })
+		t.Fatal("central log queue consume blocked on removed exporter drain")
+	}
+}
+
 func TestConsumeLogsEmitsOnlyParentExporterMetrics(t *testing.T) {
 	ctx := t.Context()
 	shutdownCtx := context.Background() //nolint:usetesting // Context must outlive test for cleanup
