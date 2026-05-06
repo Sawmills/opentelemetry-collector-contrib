@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/pmetric"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/pmetrictest"
 )
 
 func TestCentralQueueMetricsItemDoesNotRetainUncompressedPayload(t *testing.T) {
@@ -26,7 +28,7 @@ func TestCentralQueueMetricsItemDoesNotRetainUncompressedPayload(t *testing.T) {
 
 	decoded, err := decodeCentralQueueMetricsItem(item, codec)
 	require.NoError(t, err)
-	require.Equal(t, md.DataPointCount(), decoded.DataPointCount())
+	require.NoError(t, pmetrictest.CompareMetrics(md, decoded))
 }
 
 func compressibleMetrics(points int) pmetric.Metrics {

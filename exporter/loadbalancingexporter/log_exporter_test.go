@@ -202,11 +202,59 @@ func TestConsumeLogsCentralQueueEnqueuesCompressedByRoutingKey(t *testing.T) {
 	require.NoError(t, err)
 	defer lease.done()
 	require.Equal(t, signalKindLogs, lease.item.signal)
+	expectedRoutingKey := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).TraceID()
+	require.Equal(t, expectedRoutingKey[:], lease.item.routingKey)
 	require.Equal(t, len(lease.item.payload), cap(lease.item.payload))
 
 	decoded, err := decodeCentralQueueLogsItem(lease.item, codec)
 	require.NoError(t, err)
-	require.Equal(t, logs.LogRecordCount(), decoded.LogRecordCount())
+	require.NoError(t, plogtest.CompareLogs(logs, decoded))
+}
+
+func TestLogsCentralQueueShutdownCancelsBeforeWaiting(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+
+	endpoint := "endpoint-1:4317"
+	consumeStarted := make(chan struct{})
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    1 << 20,
+		}),
+		centralCodec: codec,
+		loadBalancer: &loadBalancer{
+			ring: newHashRing([]string{endpoint}),
+			exporters: map[string]*wrappedExporter{endpoint: newWrappedExporter(newMockLogsExporter(func(ctx context.Context, _ plog.Logs) error {
+				close(consumeStarted)
+				<-ctx.Done()
+				return ctx.Err()
+			}), endpoint)},
+			endpointHealth: newEndpointHealthManager(endpointHealthSettings{}),
+			res:            &mockResolver{},
+		},
+		telemetry: tb,
+		logger:    ts.Logger,
+	}
+	p.started.Store(true)
+	dispatchCtx, cancel := context.WithCancel(t.Context())
+	p.centralCancel = cancel
+	p.centralWG.Add(1)
+	go p.runCentralQueue(dispatchCtx)
+
+	item, err := newCentralQueueLogsItem([]byte("route-a"), simpleLogs(), codec, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, p.centralQueue.enqueue(item))
+	select {
+	case <-consumeStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected central queue consume to start")
+	}
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer shutdownCancel()
+	require.NoError(t, p.Shutdown(shutdownCtx))
 }
 
 func TestLogsCentralQueueDropsPermanentExportError(t *testing.T) {

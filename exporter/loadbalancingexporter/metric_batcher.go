@@ -175,6 +175,9 @@ func (b *metricBatcher) TryEnqueue(endpoint string, exp *wrappedExporter, md pme
 		return false, errMetricBatcherExporterStopping
 	default:
 	}
+	if cap(backend.requests) > 0 && len(backend.requests) >= cap(backend.requests) {
+		return false, nil
+	}
 
 	enqueuedAtUnixNano := time.Now().UnixNano()
 	req := metricBatcherRequest{kind: metricBatcherRequestEnqueue, md: md, enqueuedAtUnixNano: enqueuedAtUnixNano}
@@ -541,6 +544,8 @@ type compressedMetricBatcherChunk struct {
 	oldestEnqueueUnixNano int64
 }
 
+// newCompressedMetricBatcherChunk requires callers to serialize concurrent use of codec.
+// Production callers use backendMetricBatcher.payloadCodecMu; tests use private codecs.
 func newCompressedMetricBatcherChunk(marshaler *pmetric.ProtoMarshaler, codec *queuePayloadCodec, req metricBatcherRequest) (compressedMetricBatcherChunk, error) {
 	payload, err := marshaler.MarshalMetrics(req.md)
 	if err != nil {
@@ -570,6 +575,8 @@ func (b *backendMetricBatcher) newCompressedMetricBatcherChunk(md pmetric.Metric
 	})
 }
 
+// decodeCompressedMetricBatcherChunk requires callers to serialize concurrent use of codec.
+// Production callers hold backendMetricBatcher.payloadCodecMu around merge/decode paths.
 func decodeCompressedMetricBatcherChunk(unmarshaler *pmetric.ProtoUnmarshaler, codec *queuePayloadCodec, chunk compressedMetricBatcherChunk) (pmetric.Metrics, error) {
 	payload, err := codec.Decode(chunk.payload)
 	if err != nil {
@@ -828,14 +835,16 @@ func (b *backendMetricBatcher) flushCompressed(
 			}
 			if !retryUsesDrainedChunks {
 				clearCompressedMetricBatcherChunks(drainedChunks)
+				*pending = append((*pending)[:0], retryChunks...)
+			} else {
+				*pending = retryChunks
 			}
-			*pending = append((*pending)[:0], retryChunks...)
 			*pendingDataPoints = retryDataPoints
 			*pendingBytes = retryBytes
 			*pendingCompressedBytes = retryCompressedBytes
 			b.pendingDataPoints.Store(int64(retryDataPoints))
 			b.pendingBytes.Store(int64(retryBytes))
-			b.pendingCompressedBytes.Store(int64(*pendingCompressedBytes))
+			b.pendingCompressedBytes.Store(int64(retryCompressedBytes))
 			b.oldestEnqueue.Store(oldestUnixNano)
 			if *timerC == nil {
 				delay := b.settings.flushInterval * time.Duration(1<<min(b.flushFailures-1, 4))

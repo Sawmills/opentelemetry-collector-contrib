@@ -67,10 +67,6 @@ func (q *centralQueue) enqueueAt(item centralQueueItem, now time.Time) error {
 		q.settings.telemetry.recordRejected(context.Background(), int64(item.compressedBytes))
 		return errCentralQueueFull
 	}
-	item.routingKey = append([]byte(nil), item.routingKey...)
-	item.routingKey = item.routingKey[:len(item.routingKey):len(item.routingKey)]
-	item.payload = append([]byte(nil), item.payload...)
-	item.payload = item.payload[:len(item.payload):len(item.payload)]
 	if item.enqueuedAtUnixNano == 0 {
 		item.enqueuedAtUnixNano = now.UnixNano()
 	}

@@ -136,16 +136,16 @@ func (e *logExporterImp) Shutdown(ctx context.Context) error {
 	}
 	if e.centralQueue != nil {
 		e.centralQueue.stop()
-		waitErr := waitForInflight(ctx, &e.centralWG)
 		if e.centralCancel != nil {
 			e.centralCancel()
 		}
-		if waitErr != nil {
-			cancelCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-			waitErr = errors.Join(waitErr, waitForInflight(cancelCtx, &e.centralWG))
-			cancel()
+		waitCtx, cancel := context.WithTimeout(ctx, time.Second)
+		waitErr := waitForInflight(waitCtx, &e.centralWG)
+		cancel()
+		err = errors.Join(err, waitErr)
+		if waitErr == nil {
+			err = errors.Join(err, e.centralCodec.Close())
 		}
-		err = errors.Join(err, waitErr, e.centralCodec.Close())
 	}
 	err = errors.Join(err, e.loadBalancer.Shutdown(ctx))
 	return err
@@ -175,7 +175,7 @@ func (e *logExporterImp) consumeLogsCentralQueue(_ context.Context, ld plog.Logs
 	var errs error
 	now := time.Now()
 	for routingKey, logs := range batches {
-		item, err := newCentralQueueLogsItem([]byte(routingKey), logs, e.centralCodec, now)
+		item, err := newCentralQueueLogsItem(routingKey[:], logs, e.centralCodec, now)
 		if err != nil {
 			errs = multierr.Append(errs, err)
 			continue
@@ -185,8 +185,8 @@ func (e *logExporterImp) consumeLogsCentralQueue(_ context.Context, ld plog.Logs
 	return errs
 }
 
-func (e *logExporterImp) groupLogsByRoutingKey(ld plog.Logs) map[string]plog.Logs {
-	batches := make(map[string]plog.Logs)
+func (e *logExporterImp) groupLogsByRoutingKey(ld plog.Logs) map[pcommon.TraceID]plog.Logs {
+	batches := make(map[pcommon.TraceID]plog.Logs)
 	emptyTraceFallbackKeys := make(map[[2]int]pcommon.TraceID)
 
 	for i := 0; i < ld.ResourceLogs().Len(); i++ {
@@ -196,11 +196,10 @@ func (e *logExporterImp) groupLogsByRoutingKey(ld plog.Logs) map[string]plog.Log
 			for k := 0; k < sl.LogRecords().Len(); k++ {
 				rec := sl.LogRecords().At(k)
 				balancingKey := e.routingKeyForLogRecord(rec, [2]int{i, j}, emptyTraceFallbackKeys)
-				route := string(balancingKey[:])
-				batch, ok := batches[route]
+				batch, ok := batches[balancingKey]
 				if !ok {
 					batch = plog.NewLogs()
-					batches[route] = batch
+					batches[balancingKey] = batch
 				}
 				insertLogRecord(batch, rl, sl, rec)
 			}

@@ -153,16 +153,16 @@ func (e *metricExporterImp) Shutdown(ctx context.Context) error {
 	}
 	if e.centralQueue != nil {
 		e.centralQueue.stop()
-		waitErr := waitForInflight(ctx, &e.centralWG)
 		if e.centralCancel != nil {
 			e.centralCancel()
 		}
-		if waitErr != nil {
-			cancelCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-			waitErr = errors.Join(waitErr, waitForInflight(cancelCtx, &e.centralWG))
-			cancel()
+		waitCtx, cancel := context.WithTimeout(ctx, time.Second)
+		waitErr := waitForInflight(waitCtx, &e.centralWG)
+		cancel()
+		err = errors.Join(err, waitErr)
+		if waitErr == nil {
+			err = errors.Join(err, e.centralCodec.Close())
 		}
-		err = errors.Join(err, waitErr, e.centralCodec.Close())
 	}
 	err = errors.Join(err, e.loadBalancer.Shutdown(ctx))
 	return err
@@ -256,7 +256,19 @@ func (e *metricExporterImp) consumeCentralQueueMetricItem(ctx context.Context, i
 		e.logger.Warn("dropping invalid central metric queue payload", zap.Error(err))
 		return nil
 	}
-	return e.consumeMetricsByExporter(ctx, map[string]pmetric.Metrics{string(item.routingKey): md})
+	exp, _, err := e.loadBalancer.exporterAndEndpoint(item.routingKey)
+	if err != nil {
+		return err
+	}
+
+	exp.forceStartConsume()
+	defer exp.doneConsume()
+
+	start := time.Now()
+	err = exp.ConsumeMetrics(ctx, md)
+	duration := time.Since(start)
+	e.recordBackendResultWithoutDrain(ctx, exp, duration, err, true)
+	return err
 }
 
 type endpointMetricsBatch struct {
@@ -630,6 +642,14 @@ func (e *metricExporterImp) rerouteDrainBatch(ctx context.Context, md pmetric.Me
 }
 
 func (e *metricExporterImp) recordBackendResult(ctx context.Context, we *wrappedExporter, duration time.Duration, err error, updateEndpointHealth bool) endpointHealthFailureDecision {
+	return e.recordBackendResultWithDrain(ctx, we, duration, err, updateEndpointHealth, true)
+}
+
+func (e *metricExporterImp) recordBackendResultWithoutDrain(ctx context.Context, we *wrappedExporter, duration time.Duration, err error, updateEndpointHealth bool) endpointHealthFailureDecision {
+	return e.recordBackendResultWithDrain(ctx, we, duration, err, updateEndpointHealth, false)
+}
+
+func (e *metricExporterImp) recordBackendResultWithDrain(ctx context.Context, we *wrappedExporter, duration time.Duration, err error, updateEndpointHealth, drainRemoved bool) endpointHealthFailureDecision {
 	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(we.endpointAttr))
 	if err == nil {
 		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(we.successAttr))
@@ -644,7 +664,10 @@ func (e *metricExporterImp) recordBackendResult(ctx context.Context, we *wrapped
 	if !updateEndpointHealth {
 		return endpointHealthFailureDecision{}
 	}
-	return e.loadBalancer.handleBackendFailure(ctx, we.endpoint, err)
+	if drainRemoved {
+		return e.loadBalancer.handleBackendFailure(ctx, we.endpoint, err)
+	}
+	return e.loadBalancer.handleBackendFailureWithoutDrain(ctx, we.endpoint, err)
 }
 
 func (e *metricExporterImp) recordBackendResultHealthOnly(ctx context.Context, we *wrappedExporter, duration time.Duration, err error, updateEndpointHealth bool) endpointHealthFailureDecision {

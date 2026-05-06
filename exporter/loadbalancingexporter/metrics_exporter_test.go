@@ -195,6 +195,7 @@ func TestConsumeMetricsCentralQueueEnqueuesCompressedByRoutingKey(t *testing.T) 
 	require.NoError(t, err)
 	defer lease.done()
 	require.Equal(t, signalKindMetrics, lease.item.signal)
+	require.Equal(t, []byte(serviceName1), lease.item.routingKey)
 	require.Equal(t, len(lease.item.payload), cap(lease.item.payload))
 
 	decoded, err := decodeCentralQueueMetricsItem(lease.item, codec)
@@ -241,6 +242,51 @@ func TestMetricsCentralQueueDropsPermanentExportError(t *testing.T) {
 	cancel()
 	waitErr := waitForInflight(t.Context(), &p.centralWG)
 	require.NoError(t, waitErr)
+}
+
+func TestMetricsCentralQueueDoesNotDirectReroute(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := endpoint2Config()
+	enableEndpointHealth(cfg)
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+
+	calls := map[string]int{}
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockMetricsExporter(func(context.Context, pmetric.Metrics) error {
+			calls[endpoint]++
+			if endpoint == "endpoint-1:4317" {
+				return status.Error(codes.Unavailable, "backend unavailable")
+			}
+			return nil
+		}), nil
+	}
+	lb, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1:4317", "endpoint-2:4317"})
+
+	serviceForEndpoint1 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1:4317")
+	item, err := newCentralQueueMetricsItem(
+		[]byte(serviceForEndpoint1),
+		metricsWithServiceNames(serviceForEndpoint1),
+		codec,
+		time.Now(),
+	)
+	require.NoError(t, err)
+
+	p := &metricExporterImp{
+		centralCodec: codec,
+		loadBalancer: lb,
+		logger:       ts.Logger,
+		telemetry:    tb,
+	}
+
+	err = p.consumeCentralQueueMetricItem(t.Context(), item)
+	require.Error(t, err)
+	assert.Equal(t, 1, calls["endpoint-1:4317"])
+	assert.Zero(t, calls["endpoint-2:4317"])
 }
 
 // loadMetricsMap will parse the given yaml file into a map[string]pmetric.Metrics

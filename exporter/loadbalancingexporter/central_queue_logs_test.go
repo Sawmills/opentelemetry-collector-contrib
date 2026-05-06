@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest/plogtest"
 )
 
 func TestCentralQueueLogsItemDoesNotRetainUncompressedPayload(t *testing.T) {
@@ -25,5 +27,5 @@ func TestCentralQueueLogsItemDoesNotRetainUncompressedPayload(t *testing.T) {
 
 	decoded, err := decodeCentralQueueLogsItem(item, codec)
 	require.NoError(t, err)
-	require.Equal(t, logs.LogRecordCount(), decoded.LogRecordCount())
+	require.NoError(t, plogtest.CompareLogs(logs, decoded))
 }

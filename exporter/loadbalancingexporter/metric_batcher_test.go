@@ -1244,7 +1244,7 @@ func TestCompressedMetricBatcherRetriesRemainCompressed(t *testing.T) {
 	backend := &backendMetricBatcher{
 		endpoint:     "endpoint-1:4317",
 		logger:       ts.Logger,
-		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour, maxRetryBufferMultiplier: defaultMetricBatchRetryBufferMultiplier},
 		telemetry:    telemetry,
 		payloadCodec: codec,
 		send: func(context.Context, *wrappedExporter, pmetric.Metrics, string) error {
@@ -1297,7 +1297,7 @@ func TestCompressedMetricBatcherRerouteFailureRetriesOnlyFailedMetrics(t *testin
 	backend := &backendMetricBatcher{
 		endpoint:     "endpoint-1:4317",
 		logger:       ts.Logger,
-		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour, maxRetryBufferMultiplier: defaultMetricBatchRetryBufferMultiplier},
 		telemetry:    telemetry,
 		payloadCodec: codec,
 		send: func(_ context.Context, _ *wrappedExporter, md pmetric.Metrics, _ string) error {
@@ -1356,7 +1356,7 @@ func TestCompressedMetricBatcherRerouteSuccessClearsRetryState(t *testing.T) {
 	backend := &backendMetricBatcher{
 		endpoint:     "endpoint-1:4317",
 		logger:       ts.Logger,
-		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour, maxRetryBufferMultiplier: defaultMetricBatchRetryBufferMultiplier},
 		telemetry:    telemetry,
 		payloadCodec: codec,
 		send: func(_ context.Context, _ *wrappedExporter, md pmetric.Metrics, _ string) error {
@@ -1414,7 +1414,7 @@ func TestCompressedMetricBatcherResolverChangeFallsBackToDrainErr(t *testing.T) 
 	backend := &backendMetricBatcher{
 		endpoint:     "endpoint-1:4317",
 		logger:       ts.Logger,
-		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour, maxRetryBufferMultiplier: defaultMetricBatchRetryBufferMultiplier},
 		telemetry:    telemetry,
 		payloadCodec: codec,
 		send: func(context.Context, *wrappedExporter, pmetric.Metrics, string) error {
@@ -1472,7 +1472,7 @@ func TestCompressedMetricBatcherNonRetryDropRecordsOldestAge(t *testing.T) {
 	backend := &backendMetricBatcher{
 		endpoint:     "endpoint-1:4317",
 		logger:       componenttest.NewNopTelemetrySettings().Logger,
-		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour, maxRetryBufferMultiplier: defaultMetricBatchRetryBufferMultiplier},
 		telemetry:    telemetry,
 		payloadCodec: codec,
 		send: func(context.Context, *wrappedExporter, pmetric.Metrics, string) error {
@@ -1529,7 +1529,7 @@ func TestCompressedMetricBatcherNonRetryRerouteFailureDropsFailedSubset(t *testi
 	backend := &backendMetricBatcher{
 		endpoint:     "endpoint-1:4317",
 		logger:       componenttest.NewNopTelemetrySettings().Logger,
-		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour, maxRetryBufferMultiplier: defaultMetricBatchRetryBufferMultiplier},
 		telemetry:    telemetry,
 		payloadCodec: codec,
 		send: func(_ context.Context, _ *wrappedExporter, md pmetric.Metrics, _ string) error {
@@ -1588,7 +1588,7 @@ func TestCompressedMetricBatcherRetryRecompressFailureDropsFailedSubset(t *testi
 	backend := &backendMetricBatcher{
 		endpoint:     "endpoint-1:4317",
 		logger:       componenttest.NewNopTelemetrySettings().Logger,
-		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour, maxRetryBufferMultiplier: defaultMetricBatchRetryBufferMultiplier},
 		telemetry:    telemetry,
 		payloadCodec: codec,
 		send: func(_ context.Context, _ *wrappedExporter, md pmetric.Metrics, _ string) error {
@@ -1649,7 +1649,7 @@ func TestCompressedMetricBatcherDropsAfterRetryAge(t *testing.T) {
 	backend := &backendMetricBatcher{
 		endpoint:     "endpoint-1:4317",
 		logger:       ts.Logger,
-		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour},
+		settings:     metricBatcherSettings{maxDataPoints: 1000, maxBytes: 1 << 20, flushInterval: time.Hour, maxRetryBufferMultiplier: defaultMetricBatchRetryBufferMultiplier},
 		telemetry:    telemetry,
 		payloadCodec: codec,
 		send: func(context.Context, *wrappedExporter, pmetric.Metrics, string) error {

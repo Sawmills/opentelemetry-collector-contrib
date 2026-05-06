@@ -241,6 +241,58 @@ func TestCentralQueueRejectsChildOTLPQueue(t *testing.T) {
 	require.ErrorContains(t, cfg.Validate(), "central_queue.enabled=true is incompatible with protocol.otlp.sending_queue")
 }
 
+func TestCentralQueueAllowsChildOTLPQueueRemovalAcrossUnmarshal(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	withChildQueue := confmap.NewFromStringMap(map[string]any{
+		"protocol": map[string]any{
+			"otlp": map[string]any{
+				"endpoint": "localhost:4317",
+				"tls": map[string]any{
+					"insecure": true,
+				},
+				"sending_queue": map[string]any{
+					"enabled":    true,
+					"queue_size": 1000,
+				},
+			},
+		},
+		"resolver": map[string]any{
+			"static": map[string]any{
+				"hostnames": []string{"localhost:4317"},
+			},
+		},
+	})
+	withoutChildQueue := confmap.NewFromStringMap(map[string]any{
+		"central_queue": map[string]any{
+			"enabled":                         true,
+			"max_compressed_bytes":            1024,
+			"payload_compression":             "zstd",
+			"max_uncompressed_batch_bytes":    1024,
+			"max_inflight_uncompressed_bytes": 2048,
+		},
+		"protocol": map[string]any{
+			"otlp": map[string]any{
+				"endpoint": "localhost:4317",
+				"tls": map[string]any{
+					"insecure": true,
+				},
+			},
+		},
+		"resolver": map[string]any{
+			"static": map[string]any{
+				"hostnames": []string{"localhost:4317"},
+			},
+		},
+	})
+
+	require.NoError(t, withChildQueue.Unmarshal(cfg))
+	require.True(t, cfg.protocolOTLPSendingQueueConfigured)
+
+	require.NoError(t, withoutChildQueue.Unmarshal(cfg))
+	require.False(t, cfg.protocolOTLPSendingQueueConfigured)
+	require.NoError(t, cfg.Validate())
+}
+
 func TestCentralQueueRejectsIndependentBuffering(t *testing.T) {
 	tests := []struct {
 		name        string

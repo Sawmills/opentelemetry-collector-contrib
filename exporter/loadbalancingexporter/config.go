@@ -66,9 +66,18 @@ type Config struct {
 }
 
 func (cfg *Config) Unmarshal(conf *confmap.Conf) error {
+	cfg.protocolOTLPSendingQueueConfigured = false
+
 	type rawConfig Config
 	if err := conf.Unmarshal((*rawConfig)(cfg)); err != nil {
 		return err
+	}
+
+	if !conf.IsSet("protocol::otlp::sending_queue") {
+		if cfg.CentralQueue.Enabled {
+			cfg.Protocol.OTLP.QueueConfig = configoptional.None[exporterhelper.QueueBatchConfig]()
+		}
+		return nil
 	}
 
 	protocolRaw, ok := conf.ToStringMap()["protocol"].(map[string]any)
