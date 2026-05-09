@@ -44,6 +44,7 @@ type Config struct {
 	TimeoutSettings           exporterhelper.TimeoutConfig `mapstructure:",squash"`
 	configretry.BackOffConfig `mapstructure:"retry_on_failure"`
 	QueueSettings             QueueSettings        `mapstructure:"sending_queue"`
+	CentralQueue              CentralQueueConfig   `mapstructure:"central_queue"`
 	LogBatcher                LogBatcherConfig     `mapstructure:"log_batcher"`
 	LogRouting                LogRoutingConfig     `mapstructure:"log_routing"`
 	MetricBatcher             MetricBatcherConfig  `mapstructure:"metric_batcher"`
@@ -241,6 +242,13 @@ func (cfg *Config) Validate() error {
 	if err := cfg.QueueSettings.Validate(); err != nil {
 		return err
 	}
+	cfg.CentralQueue.ApplyDefaults()
+	if err := cfg.CentralQueue.Validate(); err != nil {
+		return err
+	}
+	if err := cfg.validateSingleBacklogOwner(); err != nil {
+		return err
+	}
 	if err := cfg.LogBatcher.Validate(); err != nil {
 		return err
 	}
@@ -248,6 +256,30 @@ func (cfg *Config) Validate() error {
 		return err
 	}
 	return cfg.EndpointHealth.Validate()
+}
+
+func (cfg *Config) validateSingleBacklogOwner() error {
+	if cfg.CentralQueue.Enabled {
+		if cfg.QueueSettings.QueueConfig.HasValue() {
+			return errors.New("central_queue.enabled cannot be combined with sending_queue.enabled because central queue mode must be the only backlog owner")
+		}
+		if cfg.LogBatcher.Enabled {
+			return errors.New("central_queue.enabled cannot be combined with log_batcher.enabled because central queue mode must be the only backlog owner")
+		}
+		if cfg.MetricBatcher.Enabled {
+			return errors.New("central_queue.enabled cannot be combined with metric_batcher.enabled because central queue mode must be the only backlog owner")
+		}
+	}
+	if !cfg.QueueSettings.QueueConfig.HasValue() {
+		return nil
+	}
+	if cfg.LogBatcher.Enabled {
+		return errors.New("sending_queue cannot be enabled with log_batcher because central queue mode must be the only backlog owner")
+	}
+	if cfg.MetricBatcher.Enabled {
+		return errors.New("sending_queue cannot be enabled with metric_batcher because central queue mode must be the only backlog owner")
+	}
+	return nil
 }
 
 func (c LogBatcherConfig) Validate() error {

@@ -7,9 +7,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata/metricdatatest"
+
+	"go.opentelemetry.io/collector/component/componenttest"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
 )
@@ -23,10 +24,22 @@ func TestSetupTelemetry(t *testing.T) {
 	tb.LoadbalancerBackendLatency.Record(context.Background(), 1)
 	tb.LoadbalancerBackendOutcome.Add(context.Background(), 1)
 	tb.LoadbalancerBackendQuarantineTotal.Add(context.Background(), 1)
+	tb.LoadbalancerBackendRequestBytes.Record(context.Background(), 1)
+	tb.LoadbalancerBackendRequestItems.Record(context.Background(), 1)
+	tb.LoadbalancerBackendRequestTotal.Add(context.Background(), 1)
 	tb.LoadbalancerBackendRerouteTotal.Add(context.Background(), 1)
 	tb.LoadbalancerBackendStaleTotal.Add(context.Background(), 1)
 	tb.LoadbalancerBackendState.Record(context.Background(), 1)
 	tb.LoadbalancerBackendUnquarantineTotal.Add(context.Background(), 1)
+	tb.LoadbalancerCentralQueueActiveLanes.Record(context.Background(), 1)
+	tb.LoadbalancerCentralQueueCapacityBytes.Record(context.Background(), 1)
+	tb.LoadbalancerCentralQueueEnqueueTotal.Add(context.Background(), 1)
+	tb.LoadbalancerCentralQueueOldestItemAge.Record(context.Background(), 1)
+	tb.LoadbalancerCentralQueueSizeBytes.Record(context.Background(), 1)
+	tb.LoadbalancerCentralQueueWindowCompressedBytes.Record(context.Background(), 1)
+	tb.LoadbalancerCentralQueueWindowItems.Record(context.Background(), 1)
+	tb.LoadbalancerCentralQueueWindowPayloads.Record(context.Background(), 1)
+	tb.LoadbalancerCentralQueueWindowUncompressedBytes.Record(context.Background(), 1)
 	tb.LoadbalancerNumBackendUpdates.Add(context.Background(), 1)
 	tb.LoadbalancerNumBackends.Record(context.Background(), 1)
 	tb.LoadbalancerNumResolutions.Add(context.Background(), 1)
@@ -42,6 +55,15 @@ func TestSetupTelemetry(t *testing.T) {
 	AssertEqualLoadbalancerBackendQuarantineTotal(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerBackendRequestBytes(t, testTel,
+		[]metricdata.HistogramDataPoint[int64]{{}}, metricdatatest.IgnoreValue(),
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerBackendRequestItems(t, testTel,
+		[]metricdata.HistogramDataPoint[int64]{{}}, metricdatatest.IgnoreValue(),
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerBackendRequestTotal(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
 	AssertEqualLoadbalancerBackendRerouteTotal(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
@@ -53,6 +75,33 @@ func TestSetupTelemetry(t *testing.T) {
 		metricdatatest.IgnoreTimestamp())
 	AssertEqualLoadbalancerBackendUnquarantineTotal(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerCentralQueueActiveLanes(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerCentralQueueCapacityBytes(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerCentralQueueEnqueueTotal(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerCentralQueueOldestItemAge(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerCentralQueueSizeBytes(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerCentralQueueWindowCompressedBytes(t, testTel,
+		[]metricdata.HistogramDataPoint[int64]{{}}, metricdatatest.IgnoreValue(),
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerCentralQueueWindowItems(t, testTel,
+		[]metricdata.HistogramDataPoint[int64]{{}}, metricdatatest.IgnoreValue(),
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerCentralQueueWindowPayloads(t, testTel,
+		[]metricdata.HistogramDataPoint[int64]{{}}, metricdatatest.IgnoreValue(),
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerCentralQueueWindowUncompressedBytes(t, testTel,
+		[]metricdata.HistogramDataPoint[int64]{{}}, metricdatatest.IgnoreValue(),
 		metricdatatest.IgnoreTimestamp())
 	AssertEqualLoadbalancerNumBackendUpdates(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},

@@ -151,6 +151,7 @@ func (e *traceExporterImp) consumeTraces(ctx context.Context, td ptrace.Traces, 
 			retryTraces = ptrace.NewTraces()
 			td.CopyTo(retryTraces)
 		}
+		recordBackendRequest(ctx, e.telemetry, exp.endpoint, backendRequestSignalTraces, td.SpanCount(), (&ptrace.ProtoMarshaler{}).TracesSize(td))
 		start := time.Now()
 		err := exp.ConsumeTraces(ctx, td)
 		exp.doneConsume()

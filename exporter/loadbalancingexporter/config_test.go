@@ -121,6 +121,125 @@ func TestConfigValidateMetricBatcher(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 }
 
+func TestConfigValidateSingleBacklogOwner(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
+	require.NoError(t, cfg.Validate())
+
+	cfg.LogBatcher.Enabled = true
+	require.ErrorContains(t, cfg.Validate(), "sending_queue cannot be enabled with log_batcher because central queue mode must be the only backlog owner")
+
+	cfg.LogBatcher.Enabled = false
+	cfg.MetricBatcher.Enabled = true
+	require.ErrorContains(t, cfg.Validate(), "sending_queue cannot be enabled with metric_batcher because central queue mode must be the only backlog owner")
+
+	cfg.QueueSettings.QueueConfig = configoptional.None[exporterhelper.QueueBatchConfig]()
+	require.NoError(t, cfg.Validate())
+}
+
+func TestCentralQueueDefaultConfig(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	require.False(t, cfg.CentralQueue.Enabled)
+
+	cfg.CentralQueue.Enabled = true
+	require.NoError(t, cfg.Validate())
+
+	require.Equal(t, QueuePayloadCompressionZstd, cfg.CentralQueue.PayloadCompression)
+	require.Equal(t, int64(16<<30), cfg.CentralQueue.CapacityBytes)
+	require.Equal(t, 60, cfg.CentralQueue.NumConsumers)
+	require.Equal(t, int64(256<<10), cfg.CentralQueue.RequestBatching.TargetCompressedBytes)
+	require.Equal(t, int64(1<<20), cfg.CentralQueue.RequestBatching.MaxCompressedBytes)
+	require.Equal(t, int64(4<<20), cfg.CentralQueue.RequestBatching.MaxUncompressedBytes)
+	require.Equal(t, 10000, cfg.CentralQueue.RequestBatching.MaxMergedItems)
+	require.Equal(t, 250*time.Millisecond, cfg.CentralQueue.RequestBatching.MaxDelay)
+	require.Equal(t, 64, cfg.CentralQueue.RequestBatching.LaneCount)
+}
+
+func TestCentralQueueValidate(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(*CentralQueueConfig)
+		errString string
+	}{
+		{
+			name:      "invalid compression",
+			mutate:    func(c *CentralQueueConfig) { c.PayloadCompression = QueuePayloadCompression("brotli") },
+			errString: "central_queue.payload_compression",
+		},
+		{
+			name:      "zero capacity",
+			mutate:    func(c *CentralQueueConfig) { c.CapacityBytes = -1 },
+			errString: "central_queue.capacity_bytes",
+		},
+		{
+			name:      "zero consumers",
+			mutate:    func(c *CentralQueueConfig) { c.NumConsumers = -1 },
+			errString: "central_queue.num_consumers",
+		},
+		{
+			name:      "zero target bytes",
+			mutate:    func(c *CentralQueueConfig) { c.RequestBatching.TargetCompressedBytes = -1 },
+			errString: "central_queue.request_batching.target_compressed_bytes",
+		},
+		{
+			name: "max below target",
+			mutate: func(c *CentralQueueConfig) {
+				c.RequestBatching.TargetCompressedBytes = 100
+				c.RequestBatching.MaxCompressedBytes = 99
+			},
+			errString: "central_queue.request_batching.max_compressed_bytes",
+		},
+		{
+			name:      "zero uncompressed cap",
+			mutate:    func(c *CentralQueueConfig) { c.RequestBatching.MaxUncompressedBytes = -1 },
+			errString: "central_queue.request_batching.max_uncompressed_bytes",
+		},
+		{
+			name:      "zero merged items",
+			mutate:    func(c *CentralQueueConfig) { c.RequestBatching.MaxMergedItems = -1 },
+			errString: "central_queue.request_batching.max_merged_items",
+		},
+		{
+			name:      "zero delay",
+			mutate:    func(c *CentralQueueConfig) { c.RequestBatching.MaxDelay = -time.Millisecond },
+			errString: "central_queue.request_batching.max_delay",
+		},
+		{
+			name:      "zero lanes",
+			mutate:    func(c *CentralQueueConfig) { c.RequestBatching.LaneCount = -1 },
+			errString: "central_queue.request_batching.lane_count",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := createDefaultConfig().(*Config)
+			cfg.CentralQueue.Enabled = true
+			cfg.CentralQueue.ApplyDefaults()
+			tt.mutate(&cfg.CentralQueue)
+
+			require.ErrorContains(t, cfg.Validate(), tt.errString)
+		})
+	}
+}
+
+func TestCentralQueueRejectsMultipleBacklogOwners(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	cfg.CentralQueue.Enabled = true
+	cfg.QueueSettings.QueueConfig = configoptional.Some(exporterhelper.NewDefaultQueueConfig())
+	require.ErrorContains(t, cfg.Validate(), "central_queue.enabled cannot be combined with sending_queue.enabled")
+
+	cfg = createDefaultConfig().(*Config)
+	cfg.CentralQueue.Enabled = true
+	cfg.LogBatcher.Enabled = true
+	require.ErrorContains(t, cfg.Validate(), "central_queue.enabled cannot be combined with log_batcher.enabled")
+
+	cfg = createDefaultConfig().(*Config)
+	cfg.CentralQueue.Enabled = true
+	cfg.MetricBatcher.Enabled = true
+	require.ErrorContains(t, cfg.Validate(), "central_queue.enabled cannot be combined with metric_batcher.enabled")
+}
+
 func TestConfigValidateEndpointHealth(t *testing.T) {
 	cfg := createDefaultConfig().(*Config)
 	require.False(t, cfg.EndpointHealth.Enabled)
@@ -429,6 +548,52 @@ func TestLoadConfigWithLogRouting(t *testing.T) {
 
 	require.NoError(t, conf.Unmarshal(cfg))
 	require.True(t, cfg.LogRouting.IgnoreTraceID)
+}
+
+func TestLoadConfigWithCentralQueue(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	conf := confmap.NewFromStringMap(map[string]any{
+		"protocol": map[string]any{
+			"otlp": map[string]any{
+				"endpoint": "localhost:4317",
+				"tls": map[string]any{
+					"insecure": true,
+				},
+			},
+		},
+		"resolver": map[string]any{
+			"static": map[string]any{
+				"hostnames": []string{"localhost:4317"},
+			},
+		},
+		"central_queue": map[string]any{
+			"enabled":             true,
+			"payload_compression": "zstd",
+			"capacity_bytes":      4096,
+			"num_consumers":       3,
+			"request_batching": map[string]any{
+				"target_compressed_bytes": 512,
+				"max_compressed_bytes":    1024,
+				"max_uncompressed_bytes":  2048,
+				"max_merged_items":        11,
+				"max_delay":               "150ms",
+				"lane_count":              7,
+			},
+		},
+	})
+
+	require.NoError(t, conf.Unmarshal(cfg))
+	require.NoError(t, cfg.Validate())
+	require.True(t, cfg.CentralQueue.Enabled)
+	require.Equal(t, QueuePayloadCompressionZstd, cfg.CentralQueue.PayloadCompression)
+	require.Equal(t, int64(4096), cfg.CentralQueue.CapacityBytes)
+	require.Equal(t, 3, cfg.CentralQueue.NumConsumers)
+	require.Equal(t, int64(512), cfg.CentralQueue.RequestBatching.TargetCompressedBytes)
+	require.Equal(t, int64(1024), cfg.CentralQueue.RequestBatching.MaxCompressedBytes)
+	require.Equal(t, int64(2048), cfg.CentralQueue.RequestBatching.MaxUncompressedBytes)
+	require.Equal(t, 11, cfg.CentralQueue.RequestBatching.MaxMergedItems)
+	require.Equal(t, 150*time.Millisecond, cfg.CentralQueue.RequestBatching.MaxDelay)
+	require.Equal(t, 7, cfg.CentralQueue.RequestBatching.LaneCount)
 }
 
 func TestLoadConfigWithMetricBatcher(t *testing.T) {

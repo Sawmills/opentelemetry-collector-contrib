@@ -29,6 +29,7 @@ var _ exporter.Logs = (*logExporterImp)(nil)
 type logExporterImp struct {
 	loadBalancer *loadBalancer
 	batcher      *logBatcher
+	centralQueue *centralQueueRuntime
 
 	logger        *zap.Logger
 	started       atomic.Bool
@@ -63,6 +64,7 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 		ignoreTraceID: cfg.(*Config).LogRouting.IgnoreTraceID,
 		randomTraceID: random,
 	}
+	logExporter.centralQueue = newLogCentralQueueRuntime(cfg.(*Config).CentralQueue, logExporter.ignoreTraceID, telemetry)
 	if cfg.(*Config).LogBatcher.Enabled {
 		logBatcherCfg := cfg.(*Config).LogBatcher
 		logExporter.batcher, err = newLogBatcher(
@@ -96,6 +98,9 @@ func (e *logExporterImp) Start(ctx context.Context, host component.Host) error {
 	if err := e.loadBalancer.Start(ctx, host); err != nil {
 		return err
 	}
+	if e.centralQueue != nil {
+		e.centralQueue.start(e.consumeLogCentralQueueWindow, e.logger)
+	}
 	e.started.Store(true)
 	return nil
 }
@@ -108,6 +113,9 @@ func (e *logExporterImp) Shutdown(ctx context.Context) error {
 	if e.batcher != nil {
 		err = e.batcher.Shutdown(ctx)
 	}
+	if e.centralQueue != nil {
+		err = errors.Join(err, e.centralQueue.shutdown(ctx))
+	}
 	err = errors.Join(err, e.loadBalancer.Shutdown(ctx))
 	return err
 }
@@ -115,6 +123,9 @@ func (e *logExporterImp) Shutdown(ctx context.Context) error {
 func (e *logExporterImp) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
 	if !e.started.Load() {
 		return errExporterIsStopping
+	}
+	if e.centralQueue != nil {
+		return e.consumeLogsCentralQueue(ctx, ld)
 	}
 	if e.batcher == nil {
 		var errs error
@@ -292,6 +303,7 @@ func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrapp
 	}
 	defer le.doneConsume()
 
+	recordBackendRequest(ctx, e.telemetry, le.endpoint, backendRequestSignalLogs, ld.LogRecordCount(), (&plog.ProtoMarshaler{}).LogsSize(ld))
 	start := time.Now()
 	err := le.ConsumeLogs(ctx, ld)
 	duration := time.Since(start)

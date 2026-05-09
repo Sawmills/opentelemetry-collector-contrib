@@ -57,6 +57,51 @@ Number of times a backend endpoint was quarantined.
 | endpoint | The endpoint of the backend | Any Str | - |
 | reason | Low-cardinality endpoint health reason | Any Str | - |
 
+### otelcol_loadbalancer_backend_request_bytes
+
+Backend request payload size in bytes.
+
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| By | Histogram | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| endpoint | The endpoint of the backend | Any Str | - |
+| signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
+
+### otelcol_loadbalancer_backend_request_items
+
+Number of signal items in each backend request.
+
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| {items} | Histogram | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| endpoint | The endpoint of the backend | Any Str | - |
+| signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
+
+### otelcol_loadbalancer_backend_request_total
+
+Number of backend requests sent by signal.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| {requests} | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| endpoint | The endpoint of the backend | Any Str | - |
+| signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
+
 ### otelcol_loadbalancer_backend_reroute_total
 
 Number of endpoint-failure reroute attempts.
@@ -116,6 +161,133 @@ Number of times a backend endpoint was admitted after quarantine.
 | ---- | ----------- | ------ | ------------------- |
 | endpoint | The endpoint of the backend | Any Str | - |
 | reason | Low-cardinality endpoint health reason | Any Str | - |
+
+### otelcol_loadbalancer_central_queue_active_lanes
+
+Number of central queue lanes with queued telemetry.
+
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| {lanes} | Gauge | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
+
+### otelcol_loadbalancer_central_queue_capacity_bytes
+
+Configured central queue capacity in compressed bytes.
+
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| By | Gauge | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
+
+### otelcol_loadbalancer_central_queue_enqueue_total
+
+Number of central queue enqueue attempts by result.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| {items} | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
+| result | Reroute result | Str: ``success``, ``failure``, ``skipped`` | - |
+
+### otelcol_loadbalancer_central_queue_oldest_item_age
+
+Age in milliseconds of the oldest item waiting in the central queue.
+
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| ms | Gauge | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
+
+### otelcol_loadbalancer_central_queue_size_bytes
+
+Current central queue size in compressed bytes.
+
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| By | Gauge | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
+
+### otelcol_loadbalancer_central_queue_window_compressed_bytes
+
+Compressed bytes drained from the central queue for each backend request window.
+
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| By | Histogram | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
+
+### otelcol_loadbalancer_central_queue_window_items
+
+Number of signal items coalesced in each central queue backend request window.
+
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| {items} | Histogram | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
+
+### otelcol_loadbalancer_central_queue_window_payloads
+
+Number of queued payloads merged into each central queue backend request window.
+
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| {payloads} | Histogram | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
+
+### otelcol_loadbalancer_central_queue_window_uncompressed_bytes
+
+Uncompressed bytes represented by each central queue backend request window.
+
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| By | Histogram | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
 
 ### otelcol_loadbalancer_num_backend_updates
 

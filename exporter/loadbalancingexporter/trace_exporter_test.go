@@ -163,6 +163,28 @@ func TestConsumeTraces(t *testing.T) {
 	assert.NoError(t, res)
 }
 
+func TestConsumeTracesRecordsBackendRequestMetrics(t *testing.T) {
+	ts, _, telemetry := getTelemetryAssetsWithReader(t)
+	p, err := newTracesExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer.componentFactory = func(_ context.Context, _ string) (component.Component, error) {
+		return newNopMockTracesExporter(), nil
+	}
+
+	require.NoError(t, p.Start(t.Context(), componenttest.NewNopHost()))
+	defer func() {
+		require.NoError(t, p.Shutdown(t.Context()))
+	}()
+
+	td := simpleTraces()
+	require.NoError(t, p.ConsumeTraces(t.Context(), td))
+
+	attrs := attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("signal", "traces"))
+	assertInt64CounterDataPoint(t, telemetry, "otelcol_loadbalancer_backend_request_total", attrs, 1)
+	assertInt64HistogramDataPoint(t, telemetry, "otelcol_loadbalancer_backend_request_items", attrs, int64(td.SpanCount()))
+	assertInt64HistogramDataPoint(t, telemetry, "otelcol_loadbalancer_backend_request_bytes", attrs, int64((&ptrace.ProtoMarshaler{}).TracesSize(td)))
+}
+
 // This test validates that exporter is can concurrently change the endpoints while consuming traces.
 func TestConsumeTraces_ConcurrentResolverChange(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)

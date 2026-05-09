@@ -1,0 +1,7 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Add optional compressed central queue coalescing for loadbalanced logs and metrics.
+issues: []
+subtext: |-
+  The `central_queue` option stores queued OTLP payloads compressed, enforces capacity by compressed bytes, coalesces small payloads by backend lane, and selects backend endpoints when a coalesced window is sent.
+change_logs: [user]
