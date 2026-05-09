@@ -278,7 +278,16 @@ func (e *logExporterImp) consumeCentralQueueLogWindow(ctx context.Context, windo
 	for _, item := range window.items {
 		itemLogs, err := decodeCentralQueueLogsItem(item, e.centralCodec)
 		if err != nil {
-			e.logger.Warn("dropping invalid central log queue payload", zap.Error(err))
+			e.logger.Error(
+				"dropping invalid central log queue payload",
+				zap.Int("dropped_items", item.count),
+				zap.Int("window_items", window.count),
+				zap.Int("window_payloads", len(window.items)),
+				zap.Error(err),
+			)
+			if e.centralQueue != nil {
+				e.centralQueue.settings.telemetry.recordDecodeFailure(ctx, int64(item.count))
+			}
 			continue
 		}
 		mergeLogChunksByMove(ld, itemLogs)

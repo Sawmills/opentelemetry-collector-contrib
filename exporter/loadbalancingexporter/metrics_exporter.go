@@ -267,7 +267,16 @@ func (e *metricExporterImp) consumeCentralQueueMetricWindow(ctx context.Context,
 	for _, item := range window.items {
 		itemMetrics, err := decodeCentralQueueMetricsItem(item, e.centralCodec)
 		if err != nil {
-			e.logger.Warn("dropping invalid central metric queue payload", zap.Error(err))
+			e.logger.Error(
+				"dropping invalid central metric queue payload",
+				zap.Int("dropped_items", item.count),
+				zap.Int("window_items", window.count),
+				zap.Int("window_payloads", len(window.items)),
+				zap.Error(err),
+			)
+			if e.centralQueue != nil {
+				e.centralQueue.settings.telemetry.recordDecodeFailure(ctx, int64(item.count))
+			}
 			continue
 		}
 		mergeMetricChunksByMove(md, itemMetrics)

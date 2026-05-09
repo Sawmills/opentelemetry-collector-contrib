@@ -23,6 +23,7 @@ type centralQueueTelemetry struct {
 	items                metric.Int64Gauge
 	rejectedBytes        metric.Int64Counter
 	retries              metric.Int64Counter
+	decodeFailures       metric.Int64Counter
 	inflightUncompressed metric.Int64Gauge
 	windowCompressed     metric.Int64Histogram
 	windowUncompressed   metric.Int64Histogram
@@ -82,6 +83,12 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 		"otelcol_loadbalancer_central_queue_retries",
 		metric.WithDescription("Central load-balancing queue item retries."),
 		metric.WithUnit("{retries}"),
+	)
+	errs = errors.Join(errs, err)
+	t.decodeFailures, err = meter.Int64Counter(
+		"otelcol_loadbalancer_central_queue_decode_failures",
+		metric.WithDescription("Log records or metric datapoints dropped after central queue payload decode failures."),
+		metric.WithUnit("{items}"),
 	)
 	errs = errors.Join(errs, err)
 	t.inflightUncompressed, err = meter.Int64Gauge(
@@ -164,6 +171,13 @@ func (t *centralQueueTelemetry) recordRetry(ctx context.Context) {
 		return
 	}
 	t.retries.Add(ctx, 1, t.signalAttrs)
+}
+
+func (t *centralQueueTelemetry) recordDecodeFailure(ctx context.Context, droppedItems int64) {
+	if t == nil || droppedItems <= 0 {
+		return
+	}
+	t.decodeFailures.Add(ctx, droppedItems, t.signalAttrs)
 }
 
 func (t *centralQueueTelemetry) recordWindow(ctx context.Context, window centralQueueWindow) {
