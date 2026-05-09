@@ -584,11 +584,12 @@ func TestMetricsCentralQueueConsumersSendWindowsConcurrently(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	p.startCentralQueueConsumers(ctx)
+	cleanupCtx := context.WithoutCancel(t.Context())
 	t.Cleanup(func() {
 		releaseOnce.Do(func() { close(release) })
 		p.centralQueue.stop()
 		cancel()
-		waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
+		waitCtx, waitCancel := context.WithTimeout(cleanupCtx, time.Second)
 		defer waitCancel()
 		require.NoError(t, waitForInflight(waitCtx, &p.centralWG))
 	})

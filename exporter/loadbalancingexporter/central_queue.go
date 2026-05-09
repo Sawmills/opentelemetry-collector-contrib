@@ -178,12 +178,13 @@ func (q *centralQueue) tryLease(now time.Time) (*centralQueueLease, error) {
 		return nil, errCentralQueueInflightFull
 	}
 	readyInflightBlocked := false
-	for _, candidate := range fallbackCandidates {
+	for i := range fallbackCandidates {
+		candidate := &fallbackCandidates[i]
 		if q.windowInflightBlockedLocked(candidate.window) {
 			readyInflightBlocked = true
 			continue
 		}
-		return q.leaseWindowCandidateLocked(candidate), nil
+		return q.leaseWindowCandidateLocked(*candidate), nil
 	}
 	if readyInflightBlocked {
 		return nil, errCentralQueueInflightFull
