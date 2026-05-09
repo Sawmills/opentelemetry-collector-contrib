@@ -17,7 +17,7 @@ attributes:
     description: The endpoint of the backend
     type: string
   reason:
-    description: Low-cardinality endpoint health reason
+    description: Low-cardinality reason
     type: string
   resolver:
     description: Resolver used
@@ -198,6 +198,15 @@ telemetry:
       unit: By
       histogram:
         value_type: int
+    loadbalancer_central_queue_window_flush_total:
+      attributes: [signal, reason]
+      enabled: true
+      stability: development
+      description: Number of central queue windows flushed by bounded reason.
+      unit: "{windows}"
+      sum:
+        value_type: int
+        monotonic: true
     loadbalancer_central_queue_window_items:
       attributes: [signal]
       enabled: true
@@ -222,6 +231,15 @@ telemetry:
       unit: By
       histogram:
         value_type: int
+    loadbalancer_central_queue_window_underfilled_total:
+      attributes: [signal, reason]
+      enabled: true
+      stability: development
+      description: Number of central queue windows sent below target compressed bytes by bounded reason.
+      unit: "{windows}"
+      sum:
+        value_type: int
+        monotonic: true
 
     loadbalancer_num_backend_updates:
       attributes: [resolver]

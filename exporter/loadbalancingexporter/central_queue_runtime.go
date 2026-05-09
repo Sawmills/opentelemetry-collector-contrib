@@ -31,6 +31,7 @@ type centralQueueRuntime struct {
 	signalAttrs         attribute.Set
 	enqueueSuccessAttrs attribute.Set
 	enqueueFailureAttrs attribute.Set
+	flushReasonAttrs    map[centralQueueFlushReason]attribute.Set
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -53,6 +54,12 @@ func newCentralQueueRuntime(cfg CentralQueueConfig, signal centralQueueSignal, t
 		signalAttrs:         attribute.NewSet(signalAttr),
 		enqueueSuccessAttrs: attribute.NewSet(signalAttr, attribute.String("result", "success")),
 		enqueueFailureAttrs: attribute.NewSet(signalAttr, attribute.String("result", "failure")),
+		flushReasonAttrs: map[centralQueueFlushReason]attribute.Set{
+			centralQueueFlushReasonTargetReached:      attribute.NewSet(signalAttr, attribute.String("reason", string(centralQueueFlushReasonTargetReached))),
+			centralQueueFlushReasonHardCap:            attribute.NewSet(signalAttr, attribute.String("reason", string(centralQueueFlushReasonHardCap))),
+			centralQueueFlushReasonMaxDelayLowTraffic: attribute.NewSet(signalAttr, attribute.String("reason", string(centralQueueFlushReasonMaxDelayLowTraffic))),
+			centralQueueFlushReasonShutdown:           attribute.NewSet(signalAttr, attribute.String("reason", string(centralQueueFlushReasonShutdown))),
+		},
 	}
 }
 
@@ -136,7 +143,19 @@ func (r *centralQueueRuntime) recordWindow(ctx context.Context, window centralQu
 	r.telemetry.LoadbalancerCentralQueueWindowUncompressedBytes.Record(ctx, int64(window.uncompressedBytes), attrs)
 	r.telemetry.LoadbalancerCentralQueueWindowItems.Record(ctx, int64(window.itemCount), attrs)
 	r.telemetry.LoadbalancerCentralQueueWindowPayloads.Record(ctx, int64(len(window.items)), attrs)
+	reasonAttrs := metric.WithAttributeSet(r.flushAttrs(window.flushReason))
+	r.telemetry.LoadbalancerCentralQueueWindowFlushTotal.Add(ctx, 1, reasonAttrs)
+	if window.compressedBytes < int(r.queue.settings.batching.TargetCompressedBytes) {
+		r.telemetry.LoadbalancerCentralQueueWindowUnderfilledTotal.Add(ctx, 1, reasonAttrs)
+	}
 	r.recordState(ctx)
+}
+
+func (r *centralQueueRuntime) flushAttrs(reason centralQueueFlushReason) attribute.Set {
+	if attrs, ok := r.flushReasonAttrs[reason]; ok {
+		return attrs
+	}
+	return attribute.NewSet(attribute.String("signal", string(r.signal)), attribute.String("reason", string(reason)))
 }
 
 func (r *centralQueueRuntime) recordState(ctx context.Context) {

@@ -43,9 +43,11 @@ type TelemetryBuilder struct {
 	LoadbalancerCentralQueueOldestItemAge           metric.Int64Gauge
 	LoadbalancerCentralQueueSizeBytes               metric.Int64Gauge
 	LoadbalancerCentralQueueWindowCompressedBytes   metric.Int64Histogram
+	LoadbalancerCentralQueueWindowFlushTotal        metric.Int64Counter
 	LoadbalancerCentralQueueWindowItems             metric.Int64Histogram
 	LoadbalancerCentralQueueWindowPayloads          metric.Int64Histogram
 	LoadbalancerCentralQueueWindowUncompressedBytes metric.Int64Histogram
+	LoadbalancerCentralQueueWindowUnderfilledTotal  metric.Int64Counter
 	LoadbalancerNumBackendUpdates                   metric.Int64Counter
 	LoadbalancerNumBackends                         metric.Int64Gauge
 	LoadbalancerNumResolutions                      metric.Int64Counter
@@ -183,6 +185,12 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 		metric.WithUnit("By"),
 	)
 	errs = errors.Join(errs, err)
+	builder.LoadbalancerCentralQueueWindowFlushTotal, err = builder.meter.Int64Counter(
+		"otelcol_loadbalancer_central_queue_window_flush_total",
+		metric.WithDescription("Number of central queue windows flushed by bounded reason. [Development]"),
+		metric.WithUnit("{windows}"),
+	)
+	errs = errors.Join(errs, err)
 	builder.LoadbalancerCentralQueueWindowItems, err = builder.meter.Int64Histogram(
 		"otelcol_loadbalancer_central_queue_window_items",
 		metric.WithDescription("Number of signal items coalesced in each central queue backend request window. [Development]"),
@@ -199,6 +207,12 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 		"otelcol_loadbalancer_central_queue_window_uncompressed_bytes",
 		metric.WithDescription("Uncompressed bytes represented by each central queue backend request window. [Development]"),
 		metric.WithUnit("By"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerCentralQueueWindowUnderfilledTotal, err = builder.meter.Int64Counter(
+		"otelcol_loadbalancer_central_queue_window_underfilled_total",
+		metric.WithDescription("Number of central queue windows sent below target compressed bytes by bounded reason. [Development]"),
+		metric.WithUnit("{windows}"),
 	)
 	errs = errors.Join(errs, err)
 	builder.LoadbalancerNumBackendUpdates, err = builder.meter.Int64Counter(

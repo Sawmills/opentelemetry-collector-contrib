@@ -145,7 +145,7 @@ Refer to [config.yaml](./testdata/config.yaml) for detailed examples on using th
 * The `central_queue` property enables a single compressed-byte backlog for load-balanced logs and metrics before selecting a backend endpoint. It is `disabled` by default for backward compatibility and cannot be combined with `sending_queue`, `log_batcher`, or `metric_batcher`.
   * `enabled` turns the central queue on or off.
   * Logs use the central queue only when `log_routing.ignore_trace_id` is `true`; trace-aware log routing keeps the existing direct path to preserve trace affinity.
-  * `payload_compression` compresses queued OTLP payloads while they are pending in memory. Supported values: `none`, `snappy`, `zstd`. Default when enabled: `zstd`.
+  * `payload_compression` compresses queued OTLP payloads while they are pending in memory. Supported values: `snappy`, `zstd`. Default when enabled: `zstd`.
   * `capacity_bytes` limits the queue by compressed bytes. Default: `17179869184` (`16 GiB`).
   * `num_consumers` controls the number of central queue send workers. Default: `60`.
   * `request_batching.target_compressed_bytes` coalesces queued payloads for the same backend lane until the compressed window reaches this target. Default: `262144` (`256 KiB`).

@@ -85,10 +85,10 @@ func (c CentralQueueConfig) Validate() error {
 		return nil
 	}
 	switch c.PayloadCompression {
-	case QueuePayloadCompressionNone, QueuePayloadCompressionSnappy, QueuePayloadCompressionZstd:
+	case QueuePayloadCompressionSnappy, QueuePayloadCompressionZstd:
 		// Valid payload compression value.
 	default:
-		return fmt.Errorf("central_queue.payload_compression must be one of [none, snappy, zstd], found %q", c.PayloadCompression)
+		return fmt.Errorf("central_queue.payload_compression must be one of [snappy, zstd], found %q", c.PayloadCompression)
 	}
 	if c.CapacityBytes <= 0 {
 		return errors.New("central_queue.capacity_bytes must be greater than 0")

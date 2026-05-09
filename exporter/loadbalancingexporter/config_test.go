@@ -167,6 +167,11 @@ func TestCentralQueueValidate(t *testing.T) {
 			errString: "central_queue.payload_compression",
 		},
 		{
+			name:      "none compression",
+			mutate:    func(c *CentralQueueConfig) { c.PayloadCompression = QueuePayloadCompressionNone },
+			errString: "central_queue.payload_compression",
+		},
+		{
 			name:      "zero capacity",
 			mutate:    func(c *CentralQueueConfig) { c.CapacityBytes = -1 },
 			errString: "central_queue.capacity_bytes",
