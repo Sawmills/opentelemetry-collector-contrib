@@ -256,7 +256,8 @@ func (q *centralQueue) windowWouldExceedLimit(window centralQueueWindow, item ce
 }
 
 func (q *centralQueue) windowInflightBlockedLocked(window centralQueueWindow) bool {
-	return q.currentInflightBytes+int64(window.uncompressedBytes) > q.settings.maxInflightUncompressedBytes
+	return q.settings.maxInflightUncompressedBytes > 0 &&
+		q.currentInflightBytes+int64(window.uncompressedBytes) > q.settings.maxInflightUncompressedBytes
 }
 
 func (q *centralQueue) leaseWindowCandidateLocked(candidate centralQueueWindowCandidate) *centralQueueLease {

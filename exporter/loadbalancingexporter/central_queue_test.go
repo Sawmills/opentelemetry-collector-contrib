@@ -46,6 +46,30 @@ func TestCentralQueueLeaseReservesInflightUncompressedBytes(t *testing.T) {
 	require.EqualValues(t, 0, q.inflightUncompressedBytes())
 }
 
+func TestCentralQueueLeaseTreatsZeroInflightBudgetAsUnlimited(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:        100,
+		maxUncompressedBatchBytes: 100,
+		targetCompressedBytes:     10,
+		maxBatchDelay:             time.Second,
+	})
+	require.NoError(t, q.enqueue(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), compressedBytes: 10, uncompressedBytes: 40, count: 1}))
+	require.NoError(t, q.enqueue(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-b"), compressedBytes: 10, uncompressedBytes: 40, count: 1}))
+
+	first, err := q.tryLease(time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	require.EqualValues(t, 40, q.inflightUncompressedBytes())
+
+	second, err := q.tryLease(time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	require.EqualValues(t, 80, q.inflightUncompressedBytes())
+
+	first.done()
+	second.done()
+}
+
 func TestCentralQueueLeaseReservesCompressedBytesUntilDoneOrRequeue(t *testing.T) {
 	q := newCentralQueue(centralQueueSettings{
 		maxCompressedBytes:           10,

@@ -235,7 +235,9 @@ const (
 	defaultCentralQueueTargetCompressedBytes     = int64(256 << 10)
 	defaultCentralQueueMaxBatchDelay             = 250 * time.Millisecond
 	defaultCentralQueueLaneCount                 = 64
-	defaultCentralQueueNumConsumers              = 20
+	// Keep default drain parallelism high enough for hot LB pods while avoiding
+	// the goroutine and in-flight memory footprint of the BigID hot profile.
+	defaultCentralQueueNumConsumers = 20
 )
 
 type CentralQueueConfig struct {
