@@ -236,7 +236,7 @@ const (
 	defaultCentralQueueMaxBatchDelay             = 250 * time.Millisecond
 	defaultCentralQueueLaneCount                 = 64
 	// Keep default drain parallelism high enough for hot LB pods while avoiding
-	// the goroutine and in-flight memory footprint of the BigID hot profile.
+	// the goroutine and in-flight memory footprint of larger tuned deployments.
 	defaultCentralQueueNumConsumers = 20
 )
 
