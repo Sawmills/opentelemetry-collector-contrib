@@ -50,14 +50,13 @@ type centralQueueLease struct {
 }
 
 type centralQueueWindow struct {
-	routingKey          []byte
-	items               []centralQueueItem
-	compressedBytes     int
-	uncompressedBytes   int
-	count               int
-	oldestEnqueuedAt    int64
-	maxAttempt          int
-	nextAttemptUnixNano int64
+	routingKey        []byte
+	items             []centralQueueItem
+	compressedBytes   int
+	uncompressedBytes int
+	count             int
+	oldestEnqueuedAt  int64
+	maxAttempt        int
 }
 
 type centralQueueWindowCandidate struct {
@@ -202,9 +201,6 @@ func (q *centralQueue) buildWindowCandidateLocked(routingKey []byte, now time.Ti
 		}
 		if candidate.window.oldestEnqueuedAt == 0 || item.enqueuedAtUnixNano < candidate.window.oldestEnqueuedAt {
 			candidate.window.oldestEnqueuedAt = item.enqueuedAtUnixNano
-		}
-		if item.nextAttemptUnixNano > candidate.window.nextAttemptUnixNano {
-			candidate.window.nextAttemptUnixNano = item.nextAttemptUnixNano
 		}
 		if int64(candidate.window.compressedBytes) >= q.settings.targetCompressedBytes {
 			return candidate, true
