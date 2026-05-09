@@ -204,6 +204,41 @@ func TestConsumeMetricsCentralQueueEnqueuesCompressedByRoutingKey(t *testing.T) 
 	require.Equal(t, md.DataPointCount(), decoded.DataPointCount())
 }
 
+func TestConsumeMetricsCentralQueueCoalescesByLane(t *testing.T) {
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	p := &metricExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    1 << 20,
+			targetCompressedBytes:        1 << 20,
+		}),
+		centralCodec:          codec,
+		routingKey:            svcRouting,
+		centralQueueLaneCount: 1,
+	}
+	p.started.Store(true)
+
+	md := metricsWithServiceNames("service-a", "service-b")
+	require.NoError(t, p.ConsumeMetrics(t.Context(), md))
+	require.Equal(t, 2, p.centralQueue.len())
+
+	lease, err := p.centralQueue.lease(t.Context())
+	require.NoError(t, err)
+	defer lease.done()
+	require.Equal(t, centralQueueLaneRoutingKey(signalKindMetrics, []byte("service-a"), 1), lease.window.routingKey)
+	require.Len(t, lease.window.items, 2)
+
+	merged := pmetric.NewMetrics()
+	for _, item := range lease.window.items {
+		decoded, decodeErr := decodeCentralQueueMetricsItem(item, codec)
+		require.NoError(t, decodeErr)
+		mergeMetricChunksByMove(merged, decoded)
+	}
+	require.ElementsMatch(t, []string{"service-a", "service-b"}, serviceNamesFromMetrics(merged))
+}
+
 func TestMetricsCentralQueueDropsPermanentExportError(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)

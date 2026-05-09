@@ -40,11 +40,12 @@ type metricExporterImp struct {
 	centralCodec *queuePayloadCodec
 	routingKey   routingKey
 
-	logger        *zap.Logger
-	started       atomic.Bool
-	telemetry     *metadata.TelemetryBuilder
-	centralCancel context.CancelFunc
-	centralWG     sync.WaitGroup
+	logger                *zap.Logger
+	started               atomic.Bool
+	telemetry             *metadata.TelemetryBuilder
+	centralQueueLaneCount int
+	centralCancel         context.CancelFunc
+	centralWG             sync.WaitGroup
 }
 
 func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metricExporterImp, error) {
@@ -66,10 +67,11 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 	}
 
 	metricExporter := metricExporterImp{
-		loadBalancer: lb,
-		routingKey:   svcRouting,
-		telemetry:    telemetry,
-		logger:       params.Logger,
+		loadBalancer:          lb,
+		routingKey:            svcRouting,
+		telemetry:             telemetry,
+		logger:                params.Logger,
+		centralQueueLaneCount: cfg.(*Config).CentralQueue.LaneCount,
 	}
 	if cfg.(*Config).CentralQueue.Enabled {
 		centralCfg := cfg.(*Config).CentralQueue
@@ -81,6 +83,8 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 			maxCompressedBytes:           centralCfg.MaxCompressedBytes,
 			maxInflightUncompressedBytes: centralCfg.MaxInflightUncompressedBytes,
 			maxUncompressedBatchBytes:    centralCfg.MaxUncompressedBatchBytes,
+			targetCompressedBytes:        centralCfg.TargetCompressedBytes,
+			maxBatchDelay:                centralCfg.MaxBatchDelay,
 			telemetry:                    centralTelemetry,
 		})
 		metricExporter.centralCodec = newQueuePayloadCodec(centralCfg.PayloadCompression)
@@ -195,7 +199,8 @@ func (e *metricExporterImp) consumeMetricsCentralQueue(batches map[string]pmetri
 	var errs error
 	now := time.Now()
 	for routingKey, md := range batches {
-		item, err := newCentralQueueMetricsItem([]byte(routingKey), md, e.centralCodec, now)
+		queueRoutingKey := centralQueueLaneRoutingKey(signalKindMetrics, []byte(routingKey), e.centralQueueLaneCount)
+		item, err := newCentralQueueMetricsItem(queueRoutingKey, md, e.centralCodec, now)
 		if err != nil {
 			errs = multierr.Append(errs, err)
 			continue
@@ -225,7 +230,7 @@ func (e *metricExporterImp) runCentralQueue(ctx context.Context) {
 			continue
 		}
 
-		err = e.consumeCentralQueueMetricItem(ctx, lease.item)
+		err = e.consumeCentralQueueMetricWindow(ctx, lease.window)
 		if err == nil {
 			lease.done()
 			continue
@@ -239,10 +244,7 @@ func (e *metricExporterImp) runCentralQueue(ctx context.Context) {
 			lease.done()
 			continue
 		}
-		item := lease.item
-		nextAttempt := time.Now().Add(centralQueueRetryDelay(item.attempt))
-		item.attempt++
-		lease.item = item
+		nextAttempt := time.Now().Add(lease.retryDelay())
 		if requeueErr := lease.requeue(nextAttempt); requeueErr != nil {
 			e.logger.Warn("failed to requeue central metric queue item", zap.Error(requeueErr), zap.Error(err))
 		}
@@ -250,12 +252,26 @@ func (e *metricExporterImp) runCentralQueue(ctx context.Context) {
 }
 
 func (e *metricExporterImp) consumeCentralQueueMetricItem(ctx context.Context, item centralQueueItem) error {
-	md, err := decodeCentralQueueMetricsItem(item, e.centralCodec)
-	if err != nil {
-		e.logger.Warn("dropping invalid central metric queue payload", zap.Error(err))
-		return nil
+	return e.consumeCentralQueueMetricWindow(ctx, centralQueueWindow{
+		routingKey:        item.routingKey,
+		items:             []centralQueueItem{item},
+		compressedBytes:   item.compressedBytes,
+		uncompressedBytes: item.uncompressedBytes,
+		count:             item.count,
+	})
+}
+
+func (e *metricExporterImp) consumeCentralQueueMetricWindow(ctx context.Context, window centralQueueWindow) error {
+	md := pmetric.NewMetrics()
+	for _, item := range window.items {
+		itemMetrics, err := decodeCentralQueueMetricsItem(item, e.centralCodec)
+		if err != nil {
+			e.logger.Warn("dropping invalid central metric queue payload", zap.Error(err))
+			return nil
+		}
+		mergeMetricChunksByMove(md, itemMetrics)
 	}
-	exp, _, err := e.loadBalancer.exporterAndEndpoint(item.routingKey)
+	exp, _, err := e.loadBalancer.exporterAndEndpoint(window.routingKey)
 	if err != nil {
 		return err
 	}

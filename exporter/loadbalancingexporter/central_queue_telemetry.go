@@ -24,6 +24,10 @@ type centralQueueTelemetry struct {
 	rejectedBytes        metric.Int64Counter
 	retries              metric.Int64Counter
 	inflightUncompressed metric.Int64Gauge
+	windowCompressed     metric.Int64Histogram
+	windowUncompressed   metric.Int64Histogram
+	windowItems          metric.Int64Histogram
+	windowPayloads       metric.Int64Histogram
 	oldestItemAge        metric.Int64ObservableGauge
 	oldestItemAgeReg     metric.Registration
 	oldestItemAgeMu      sync.RWMutex
@@ -86,6 +90,34 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 		metric.WithUnit("By"),
 	)
 	errs = errors.Join(errs, err)
+	t.windowCompressed, err = meter.Int64Histogram(
+		"otelcol_loadbalancer_central_queue_window_compressed_bytes",
+		metric.WithDescription("Compressed bytes in each central load-balancing queue window before decode and send."),
+		metric.WithUnit("By"),
+		metric.WithExplicitBucketBoundaries(1024, 4096, 16384, 65536, 262144, 1048576, 4194304),
+	)
+	errs = errors.Join(errs, err)
+	t.windowUncompressed, err = meter.Int64Histogram(
+		"otelcol_loadbalancer_central_queue_window_uncompressed_bytes",
+		metric.WithDescription("Uncompressed OTLP bytes in each central load-balancing queue window after decode and merge."),
+		metric.WithUnit("By"),
+		metric.WithExplicitBucketBoundaries(1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216),
+	)
+	errs = errors.Join(errs, err)
+	t.windowItems, err = meter.Int64Histogram(
+		"otelcol_loadbalancer_central_queue_window_items",
+		metric.WithDescription("Log records or metric datapoints in each central load-balancing queue window."),
+		metric.WithUnit("{items}"),
+		metric.WithExplicitBucketBoundaries(1, 10, 50, 100, 500, 1000, 5000, 10000, 50000),
+	)
+	errs = errors.Join(errs, err)
+	t.windowPayloads, err = meter.Int64Histogram(
+		"otelcol_loadbalancer_central_queue_window_payloads",
+		metric.WithDescription("Compressed queue payloads merged into each central load-balancing queue window."),
+		metric.WithUnit("{payloads}"),
+		metric.WithExplicitBucketBoundaries(1, 2, 4, 8, 16, 32, 64, 128),
+	)
+	errs = errors.Join(errs, err)
 	t.oldestItemAge, err = meter.Int64ObservableGauge(
 		"otelcol_loadbalancer_central_queue_oldest_item_age",
 		metric.WithDescription("Age in ms of the oldest queued central load-balancing item."),
@@ -132,6 +164,16 @@ func (t *centralQueueTelemetry) recordRetry(ctx context.Context) {
 		return
 	}
 	t.retries.Add(ctx, 1, t.signalAttrs)
+}
+
+func (t *centralQueueTelemetry) recordWindow(ctx context.Context, window centralQueueWindow) {
+	if t == nil {
+		return
+	}
+	t.windowCompressed.Record(ctx, int64(window.compressedBytes), t.signalAttrs)
+	t.windowUncompressed.Record(ctx, int64(window.uncompressedBytes), t.signalAttrs)
+	t.windowItems.Record(ctx, int64(window.count), t.signalAttrs)
+	t.windowPayloads.Record(ctx, int64(len(window.items)), t.signalAttrs)
 }
 
 func (t *centralQueueTelemetry) observeOldestItemAge(oldestItemAgeMillis func() int64) {
