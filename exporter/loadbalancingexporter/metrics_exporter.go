@@ -264,23 +264,34 @@ func (e *metricExporterImp) consumeCentralQueueMetricItem(ctx context.Context, i
 func (e *metricExporterImp) consumeCentralQueueMetricWindow(ctx context.Context, window centralQueueWindow) error {
 	md := pmetric.NewMetrics()
 	decodedAny := false
+	corruptPayloads := 0
+	droppedItems := 0
+	var firstDecodeErr error
 	for _, item := range window.items {
 		itemMetrics, err := decodeCentralQueueMetricsItem(item, e.centralCodec)
 		if err != nil {
-			e.logger.Error(
-				"dropping invalid central metric queue payload",
-				zap.Int("dropped_items", item.count),
-				zap.Int("window_items", window.count),
-				zap.Int("window_payloads", len(window.items)),
-				zap.Error(err),
-			)
-			if e.centralQueue != nil {
-				e.centralQueue.settings.telemetry.recordDecodeFailure(ctx, int64(item.count))
+			corruptPayloads++
+			droppedItems += item.count
+			if firstDecodeErr == nil {
+				firstDecodeErr = err
 			}
 			continue
 		}
 		mergeMetricChunksByMove(md, itemMetrics)
 		decodedAny = true
+	}
+	if corruptPayloads > 0 {
+		e.logger.Error(
+			"dropping invalid central metric queue payloads",
+			zap.Int("dropped_items", droppedItems),
+			zap.Int("corrupt_payloads", corruptPayloads),
+			zap.Int("window_items", window.count),
+			zap.Int("window_payloads", len(window.items)),
+			zap.Error(firstDecodeErr),
+		)
+		if e.centralQueue != nil {
+			e.centralQueue.settings.telemetry.recordDecodeFailure(ctx, int64(droppedItems))
+		}
 	}
 	if !decodedAny {
 		return nil

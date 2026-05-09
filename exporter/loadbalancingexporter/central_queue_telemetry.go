@@ -106,7 +106,7 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 	errs = errors.Join(errs, err)
 	t.windowUncompressed, err = meter.Int64Histogram(
 		"otelcol_loadbalancer_central_queue_window_uncompressed_bytes",
-		metric.WithDescription("Uncompressed OTLP bytes in each central load-balancing queue window after decode and merge."),
+		metric.WithDescription("Estimated uncompressed OTLP bytes in each central load-balancing queue window before decode and send."),
 		metric.WithUnit("By"),
 		metric.WithExplicitBucketBoundaries(1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216),
 	)
