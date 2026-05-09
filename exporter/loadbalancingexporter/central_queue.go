@@ -139,10 +139,16 @@ func (q *centralQueue) tryLease(now time.Time) (*centralQueueLease, error) {
 
 	nowUnixNano := now.UnixNano()
 	readyInflightBlocked := false
+	evaluatedRoutingKeys := make(map[string]struct{})
 	for _, item := range q.items {
 		if item.nextAttemptUnixNano > nowUnixNano {
 			continue
 		}
+		routingKey := string(item.routingKey)
+		if _, ok := evaluatedRoutingKeys[routingKey]; ok {
+			continue
+		}
+		evaluatedRoutingKeys[routingKey] = struct{}{}
 		candidate, ok := q.buildWindowCandidateLocked(item.routingKey, now)
 		if !ok {
 			continue

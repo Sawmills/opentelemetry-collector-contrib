@@ -274,13 +274,18 @@ func (e *logExporterImp) consumeCentralQueueLogItem(ctx context.Context, item ce
 
 func (e *logExporterImp) consumeCentralQueueLogWindow(ctx context.Context, window centralQueueWindow) error {
 	ld := plog.NewLogs()
+	decodedAny := false
 	for _, item := range window.items {
 		itemLogs, err := decodeCentralQueueLogsItem(item, e.centralCodec)
 		if err != nil {
 			e.logger.Warn("dropping invalid central log queue payload", zap.Error(err))
-			return nil
+			continue
 		}
 		mergeLogChunksByMove(ld, itemLogs)
+		decodedAny = true
+	}
+	if !decodedAny {
+		return nil
 	}
 	le, _, err := e.loadBalancer.exporterAndEndpoint(window.routingKey)
 	if err != nil {

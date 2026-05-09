@@ -263,13 +263,18 @@ func (e *metricExporterImp) consumeCentralQueueMetricItem(ctx context.Context, i
 
 func (e *metricExporterImp) consumeCentralQueueMetricWindow(ctx context.Context, window centralQueueWindow) error {
 	md := pmetric.NewMetrics()
+	decodedAny := false
 	for _, item := range window.items {
 		itemMetrics, err := decodeCentralQueueMetricsItem(item, e.centralCodec)
 		if err != nil {
 			e.logger.Warn("dropping invalid central metric queue payload", zap.Error(err))
-			return nil
+			continue
 		}
 		mergeMetricChunksByMove(md, itemMetrics)
+		decodedAny = true
+	}
+	if !decodedAny {
+		return nil
 	}
 	exp, _, err := e.loadBalancer.exporterAndEndpoint(window.routingKey)
 	if err != nil {

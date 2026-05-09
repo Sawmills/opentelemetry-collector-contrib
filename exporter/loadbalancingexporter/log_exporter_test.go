@@ -367,6 +367,41 @@ func TestLogsCentralQueueDropsPermanentExportError(t *testing.T) {
 	require.NoError(t, waitErr)
 }
 
+func TestLogsCentralQueueWindowSkipsInvalidPayload(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+
+	endpoint := "endpoint-1:4317"
+	var gotCount int
+	p := &logExporterImp{
+		centralCodec: codec,
+		loadBalancer: &loadBalancer{
+			ring: newHashRing([]string{endpoint}),
+			exporters: map[string]*wrappedExporter{endpoint: newWrappedExporter(newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+				gotCount = ld.LogRecordCount()
+				return nil
+			}), endpoint)},
+			endpointHealth: newEndpointHealthManager(endpointHealthSettings{}),
+		},
+		telemetry: tb,
+		logger:    ts.Logger,
+	}
+
+	valid, err := newCentralQueueLogsItem([]byte("lane-a"), simpleLogs(), codec, time.Now())
+	require.NoError(t, err)
+	invalid := valid
+	invalid.payload = []byte("not-valid-zstd")
+	invalid.compressedBytes = len(invalid.payload)
+
+	err = p.consumeCentralQueueLogWindow(t.Context(), centralQueueWindow{
+		routingKey: []byte("lane-a"),
+		items:      []centralQueueItem{invalid, valid},
+	})
+	require.NoError(t, err)
+	require.Equal(t, valid.count, gotCount)
+}
+
 func TestLogsCentralQueueFirstRetryUsesInitialDelay(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
