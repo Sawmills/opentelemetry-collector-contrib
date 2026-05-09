@@ -39,6 +39,15 @@ type centralQueueKey struct {
 	laneID    uint32
 }
 
+type centralQueueFlushReason string
+
+const (
+	centralQueueFlushReasonTargetReached      centralQueueFlushReason = "target_reached"
+	centralQueueFlushReasonHardCap            centralQueueFlushReason = "hard_cap"
+	centralQueueFlushReasonMaxDelayLowTraffic centralQueueFlushReason = "max_delay_low_traffic"
+	centralQueueFlushReasonShutdown           centralQueueFlushReason = "shutdown"
+)
+
 type centralQueueItem struct {
 	key               centralQueueKey
 	payload           []byte
@@ -55,6 +64,7 @@ type centralQueueWindow struct {
 	uncompressedBytes int
 	itemCount         int
 	oldestEnqueuedAt  time.Time
+	flushReason       centralQueueFlushReason
 }
 
 type centralQueueSettings struct {
@@ -179,6 +189,7 @@ func (q *centralQueue) buildWindowLocked(key centralQueueKey, items []centralQue
 	for len(items) > 0 {
 		item := items[0]
 		if len(window.items) > 0 && exceedsWindowLimits(window, item, batching) {
+			window.flushReason = centralQueueFlushReasonHardCap
 			break
 		}
 		items = items[1:]
@@ -190,8 +201,12 @@ func (q *centralQueue) buildWindowLocked(key centralQueueKey, items []centralQue
 			window.oldestEnqueuedAt = item.enqueuedAt
 		}
 		if window.compressedBytes >= int(batching.TargetCompressedBytes) {
+			window.flushReason = centralQueueFlushReasonTargetReached
 			break
 		}
+	}
+	if window.flushReason == "" {
+		window.flushReason = centralQueueFlushReasonMaxDelayLowTraffic
 	}
 
 	return window, items
@@ -246,6 +261,9 @@ func (q *centralQueue) popWindowLocked(index int) centralQueueWindow {
 	key := q.activeKeys[index]
 	items := q.queues[key]
 	window, remaining := q.buildWindowLocked(key, items)
+	if q.stopped && window.compressedBytes < int(q.settings.batching.TargetCompressedBytes) {
+		window.flushReason = centralQueueFlushReasonShutdown
+	}
 	q.queues[key] = remaining
 	if len(remaining) == 0 {
 		delete(q.queues, key)

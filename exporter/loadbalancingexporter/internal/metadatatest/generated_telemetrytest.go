@@ -279,6 +279,22 @@ func AssertEqualLoadbalancerCentralQueueWindowCompressedBytes(t *testing.T, tt *
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }
 
+func AssertEqualLoadbalancerCentralQueueWindowFlushTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_central_queue_window_flush_total",
+		Description: "Number of central queue windows flushed by bounded reason. [Development]",
+		Unit:        "{windows}",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_central_queue_window_flush_total")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
 func AssertEqualLoadbalancerCentralQueueWindowItems(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.HistogramDataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_loadbalancer_central_queue_window_items",
@@ -320,6 +336,22 @@ func AssertEqualLoadbalancerCentralQueueWindowUncompressedBytes(t *testing.T, tt
 		},
 	}
 	got, err := tt.GetMetric("otelcol_loadbalancer_central_queue_window_uncompressed_bytes")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerCentralQueueWindowUnderfilledTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_central_queue_window_underfilled_total",
+		Description: "Number of central queue windows sent below target compressed bytes by bounded reason. [Development]",
+		Unit:        "{windows}",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_central_queue_window_underfilled_total")
 	require.NoError(t, err)
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }

@@ -940,30 +940,24 @@ func (lb *loadBalancer) randomExporterAndEndpoint() (*wrappedExporter, string, e
 	lb.updateLock.RLock()
 	defer lb.updateLock.RUnlock()
 
-	if len(lb.exporters) == 0 {
+	if lb.ring == nil || len(lb.ring.items) == 0 {
 		return nil, "", errExporterIsStopping
 	}
-	start := rand.IntN(len(lb.exporters))
-	index := 0
-	for endpoint, exp := range lb.exporters {
-		if index < start {
-			index++
+	var missingExporterErr error
+	start := rand.IntN(len(lb.ring.items))
+	for offset := range len(lb.ring.items) {
+		endpoint := endpointWithPort(lb.ring.items[(start+offset)%len(lb.ring.items)].endpoint)
+		exp, found := lb.exporters[endpoint]
+		if !found {
+			missingExporterErr = fmt.Errorf("couldn't find the exporter for the endpoint %q", endpoint)
 			continue
 		}
 		if !exp.isStopping() {
-			return exp, endpointWithPort(endpoint), nil
+			return exp, endpoint, nil
 		}
-		index++
 	}
-	index = 0
-	for endpoint, exp := range lb.exporters {
-		if index >= start {
-			break
-		}
-		if !exp.isStopping() {
-			return exp, endpointWithPort(endpoint), nil
-		}
-		index++
+	if missingExporterErr != nil {
+		return nil, "", missingExporterErr
 	}
 	return nil, "", errExporterIsStopping
 }

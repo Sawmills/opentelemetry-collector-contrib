@@ -54,7 +54,6 @@ $defs:
       payload_compression:
         type: string
         enum:
-          - none
           - snappy
           - zstd
       request_batching:

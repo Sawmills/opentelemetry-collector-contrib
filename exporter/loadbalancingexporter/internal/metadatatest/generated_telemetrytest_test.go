@@ -10,9 +10,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata/metricdatatest"
 
-	"go.opentelemetry.io/collector/component/componenttest"
-
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
+	"go.opentelemetry.io/collector/component/componenttest"
 )
 
 func TestSetupTelemetry(t *testing.T) {
@@ -37,9 +36,11 @@ func TestSetupTelemetry(t *testing.T) {
 	tb.LoadbalancerCentralQueueOldestItemAge.Record(context.Background(), 1)
 	tb.LoadbalancerCentralQueueSizeBytes.Record(context.Background(), 1)
 	tb.LoadbalancerCentralQueueWindowCompressedBytes.Record(context.Background(), 1)
+	tb.LoadbalancerCentralQueueWindowFlushTotal.Add(context.Background(), 1)
 	tb.LoadbalancerCentralQueueWindowItems.Record(context.Background(), 1)
 	tb.LoadbalancerCentralQueueWindowPayloads.Record(context.Background(), 1)
 	tb.LoadbalancerCentralQueueWindowUncompressedBytes.Record(context.Background(), 1)
+	tb.LoadbalancerCentralQueueWindowUnderfilledTotal.Add(context.Background(), 1)
 	tb.LoadbalancerNumBackendUpdates.Add(context.Background(), 1)
 	tb.LoadbalancerNumBackends.Record(context.Background(), 1)
 	tb.LoadbalancerNumResolutions.Add(context.Background(), 1)
@@ -94,6 +95,9 @@ func TestSetupTelemetry(t *testing.T) {
 	AssertEqualLoadbalancerCentralQueueWindowCompressedBytes(t, testTel,
 		[]metricdata.HistogramDataPoint[int64]{{}}, metricdatatest.IgnoreValue(),
 		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerCentralQueueWindowFlushTotal(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
 	AssertEqualLoadbalancerCentralQueueWindowItems(t, testTel,
 		[]metricdata.HistogramDataPoint[int64]{{}}, metricdatatest.IgnoreValue(),
 		metricdatatest.IgnoreTimestamp())
@@ -102,6 +106,9 @@ func TestSetupTelemetry(t *testing.T) {
 		metricdatatest.IgnoreTimestamp())
 	AssertEqualLoadbalancerCentralQueueWindowUncompressedBytes(t, testTel,
 		[]metricdata.HistogramDataPoint[int64]{{}}, metricdatatest.IgnoreValue(),
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerCentralQueueWindowUnderfilledTotal(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
 	AssertEqualLoadbalancerNumBackendUpdates(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},

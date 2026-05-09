@@ -34,12 +34,10 @@ func (e *logExporterImp) consumeLogsCentralQueue(ctx context.Context, ld plog.Lo
 		return err
 	}
 
-	routingKey := e.routingKeyForLogs(ld)
 	item := centralQueueItem{
 		key: centralQueueKey{
 			signal:    centralQueueSignalLogs,
 			backendID: defaultCentralQueueBackendID,
-			laneID:    centralQueueLaneID(routingKey[:], e.centralQueue.queue.settings.batching.LaneCount),
 		},
 		payload:           encoded,
 		compressedBytes:   len(encoded),

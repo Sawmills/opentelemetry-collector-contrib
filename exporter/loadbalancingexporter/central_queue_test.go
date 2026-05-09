@@ -59,6 +59,7 @@ func TestCentralQueueWindowStopsAtTargetCompressedBytes(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, window.items, 3)
 	require.Equal(t, 300, window.compressedBytes)
+	require.Equal(t, centralQueueFlushReasonTargetReached, window.flushReason)
 	require.Equal(t, int64(100), q.currentBytes())
 }
 
@@ -78,6 +79,7 @@ func TestCentralQueueWindowHonorsHardCaps(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, window.items, 2)
 	require.Equal(t, 200, window.compressedBytes)
+	require.Equal(t, centralQueueFlushReasonHardCap, window.flushReason)
 	require.Equal(t, int64(100), q.currentBytes())
 }
 
@@ -141,6 +143,7 @@ func TestCentralQueueWaitsForMaxDelayBeforeSmallWindow(t *testing.T) {
 	select {
 	case window := <-done:
 		require.Len(t, window.items, 1)
+		require.Equal(t, centralQueueFlushReasonMaxDelayLowTraffic, window.flushReason)
 	case <-time.After(250 * time.Millisecond):
 		require.Fail(t, "window did not flush after max delay")
 	}
@@ -156,6 +159,7 @@ func TestCentralQueueStopDrainsThenStops(t *testing.T) {
 	window, ok := q.nextWindow(t.Context())
 	require.True(t, ok)
 	require.Len(t, window.items, 1)
+	require.Equal(t, centralQueueFlushReasonShutdown, window.flushReason)
 
 	_, ok = q.nextWindow(t.Context())
 	require.False(t, ok)

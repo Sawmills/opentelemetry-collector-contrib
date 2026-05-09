@@ -55,7 +55,7 @@ Number of times a backend endpoint was quarantined.
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
 | endpoint | The endpoint of the backend | Any Str | - |
-| reason | Low-cardinality endpoint health reason | Any Str | - |
+| reason | Low-cardinality reason | Any Str | - |
 
 ### otelcol_loadbalancer_backend_request_bytes
 
@@ -116,7 +116,7 @@ Number of endpoint-failure reroute attempts.
 | ---- | ----------- | ------ | ------------------- |
 | signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
 | result | Reroute result | Str: ``success``, ``failure``, ``skipped`` | - |
-| reason | Low-cardinality endpoint health reason | Any Str | - |
+| reason | Low-cardinality reason | Any Str | - |
 
 ### otelcol_loadbalancer_backend_stale_total
 
@@ -160,7 +160,7 @@ Number of times a backend endpoint was admitted after quarantine.
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
 | endpoint | The endpoint of the backend | Any Str | - |
-| reason | Low-cardinality endpoint health reason | Any Str | - |
+| reason | Low-cardinality reason | Any Str | - |
 
 ### otelcol_loadbalancer_central_queue_active_lanes
 
@@ -247,6 +247,21 @@ Compressed bytes drained from the central queue for each backend request window.
 | ---- | ----------- | ------ | ------------------- |
 | signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
 
+### otelcol_loadbalancer_central_queue_window_flush_total
+
+Number of central queue windows flushed by bounded reason.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| {windows} | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
+| reason | Low-cardinality reason | Any Str | - |
+
 ### otelcol_loadbalancer_central_queue_window_items
 
 Number of signal items coalesced in each central queue backend request window.
@@ -288,6 +303,21 @@ Uncompressed bytes represented by each central queue backend request window.
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
 | signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
+
+### otelcol_loadbalancer_central_queue_window_underfilled_total
+
+Number of central queue windows sent below target compressed bytes by bounded reason.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| {windows} | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
+| reason | Low-cardinality reason | Any Str | - |
 
 ### otelcol_loadbalancer_num_backend_updates
 
