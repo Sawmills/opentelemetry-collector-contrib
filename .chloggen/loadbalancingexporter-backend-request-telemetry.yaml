@@ -1,0 +1,7 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Add backend request bytes, item count, and request count metrics to the loadbalancing exporter.
+issues: [58]
+subtext: |-
+  The new metrics expose the final LB-to-backend send boundary by signal and endpoint so operators can measure request amplification and effective payload size.
+change_logs: [user]

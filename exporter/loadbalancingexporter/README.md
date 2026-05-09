@@ -142,6 +142,18 @@ Refer to [config.yaml](./testdata/config.yaml) for detailed examples on using th
     * `rise` is the number of consecutive successful probes required before a backend is readmitted. Default: `2`.
 * The `log_routing` property controls log-specific routing behavior.
   * `ignore_trace_id` routes logs using an auto-generated `traceID` even when each log record has a `traceID`. Default: `false`.
+* The `central_queue` property enables a single compressed-byte backlog for load-balanced logs and metrics before selecting a backend endpoint. It is `disabled` by default for backward compatibility and cannot be combined with `sending_queue`, `log_batcher`, or `metric_batcher`.
+  * `enabled` turns the central queue on or off.
+  * Logs use the central queue only when `log_routing.ignore_trace_id` is `true`; trace-aware log routing keeps the existing direct path to preserve trace affinity.
+  * `payload_compression` compresses queued OTLP payloads while they are pending in memory. Supported values: `none`, `snappy`, `zstd`. Default when enabled: `zstd`.
+  * `capacity_bytes` limits the queue by compressed bytes. Default: `17179869184` (`16 GiB`).
+  * `num_consumers` controls the number of central queue send workers. Default: `60`.
+  * `request_batching.target_compressed_bytes` coalesces queued payloads for the same backend lane until the compressed window reaches this target. Default: `262144` (`256 KiB`).
+  * `request_batching.max_compressed_bytes` caps a single coalesced request window by compressed bytes. Default: `1048576` (`1 MiB`).
+  * `request_batching.max_uncompressed_bytes` caps a single coalesced request window by uncompressed OTLP bytes. Default: `4194304` (`4 MiB`).
+  * `request_batching.max_merged_items` caps a single coalesced request window by signal items. Default: `10000`.
+  * `request_batching.max_delay` bounds how long a small queued item waits for more payloads in the same backend lane. Default: `250ms`.
+  * `request_batching.lane_count` controls how many lanes are used to coalesce routing keys before late endpoint selection. Default: `64`.
 * The `log_batcher` property enables post-routing log batching per backend. It is `disabled` by default for backward compatibility.
   * `enabled` turns post-routing log batching on or off.
   * `max_records` flushes a backend batch when it reaches this many log records. Default: `512`.

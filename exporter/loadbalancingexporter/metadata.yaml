@@ -89,6 +89,31 @@ telemetry:
       sum:
         value_type: int
         monotonic: true
+    loadbalancer_backend_request_bytes:
+      attributes: [endpoint, signal]
+      enabled: true
+      stability: development
+      description: Backend request payload size in bytes.
+      unit: By
+      histogram:
+        value_type: int
+    loadbalancer_backend_request_items:
+      attributes: [endpoint, signal]
+      enabled: true
+      stability: development
+      description: Number of signal items in each backend request.
+      unit: "{items}"
+      histogram:
+        value_type: int
+    loadbalancer_backend_request_total:
+      attributes: [endpoint, signal]
+      enabled: true
+      stability: development
+      description: Number of backend requests sent by signal.
+      unit: "{requests}"
+      sum:
+        value_type: int
+        monotonic: true
     loadbalancer_backend_reroute_total:
       attributes: [signal, result, reason]
       enabled: true
@@ -124,6 +149,79 @@ telemetry:
       sum:
         value_type: int
         monotonic: true
+    loadbalancer_central_queue_active_lanes:
+      attributes: [signal]
+      enabled: true
+      stability: development
+      description: Number of central queue lanes with queued telemetry.
+      unit: "{lanes}"
+      gauge:
+        value_type: int
+    loadbalancer_central_queue_capacity_bytes:
+      attributes: [signal]
+      enabled: true
+      stability: development
+      description: Configured central queue capacity in compressed bytes.
+      unit: By
+      gauge:
+        value_type: int
+    loadbalancer_central_queue_enqueue_total:
+      attributes: [signal, result]
+      enabled: true
+      stability: development
+      description: Number of central queue enqueue attempts by result.
+      unit: "{items}"
+      sum:
+        value_type: int
+        monotonic: true
+    loadbalancer_central_queue_oldest_item_age:
+      attributes: [signal]
+      enabled: true
+      stability: development
+      description: Age in milliseconds of the oldest item waiting in the central queue.
+      unit: ms
+      gauge:
+        value_type: int
+    loadbalancer_central_queue_size_bytes:
+      attributes: [signal]
+      enabled: true
+      stability: development
+      description: Current central queue size in compressed bytes.
+      unit: By
+      gauge:
+        value_type: int
+    loadbalancer_central_queue_window_compressed_bytes:
+      attributes: [signal]
+      enabled: true
+      stability: development
+      description: Compressed bytes drained from the central queue for each backend request window.
+      unit: By
+      histogram:
+        value_type: int
+    loadbalancer_central_queue_window_items:
+      attributes: [signal]
+      enabled: true
+      stability: development
+      description: Number of signal items coalesced in each central queue backend request window.
+      unit: "{items}"
+      histogram:
+        value_type: int
+    loadbalancer_central_queue_window_payloads:
+      attributes: [signal]
+      enabled: true
+      stability: development
+      description: Number of queued payloads merged into each central queue backend request window.
+      unit: "{payloads}"
+      histogram:
+        value_type: int
+    loadbalancer_central_queue_window_uncompressed_bytes:
+      attributes: [signal]
+      enabled: true
+      stability: development
+      description: Uncompressed bytes represented by each central queue backend request window.
+      unit: By
+      histogram:
+        value_type: int
 
     loadbalancer_num_backend_updates:
       attributes: [resolver]

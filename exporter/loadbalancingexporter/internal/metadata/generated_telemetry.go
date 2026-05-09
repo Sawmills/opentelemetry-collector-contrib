@@ -6,9 +6,10 @@ import (
 	"errors"
 	"sync"
 
-	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
+
+	"go.opentelemetry.io/collector/component"
 )
 
 func Meter(settings component.TelemetrySettings) metric.Meter {
@@ -22,20 +23,32 @@ func Tracer(settings component.TelemetrySettings) trace.Tracer {
 // TelemetryBuilder provides an interface for components to report telemetry
 // as defined in metadata and user config.
 type TelemetryBuilder struct {
-	meter                                metric.Meter
-	mu                                   sync.Mutex
-	registrations                        []metric.Registration
-	LoadbalancerBackendFailOpenTotal     metric.Int64Counter
-	LoadbalancerBackendLatency           metric.Int64Histogram
-	LoadbalancerBackendOutcome           metric.Int64Counter
-	LoadbalancerBackendQuarantineTotal   metric.Int64Counter
-	LoadbalancerBackendRerouteTotal      metric.Int64Counter
-	LoadbalancerBackendStaleTotal        metric.Int64Counter
-	LoadbalancerBackendState             metric.Int64Gauge
-	LoadbalancerBackendUnquarantineTotal metric.Int64Counter
-	LoadbalancerNumBackendUpdates        metric.Int64Counter
-	LoadbalancerNumBackends              metric.Int64Gauge
-	LoadbalancerNumResolutions           metric.Int64Counter
+	meter                                           metric.Meter
+	mu                                              sync.Mutex
+	registrations                                   []metric.Registration
+	LoadbalancerBackendFailOpenTotal                metric.Int64Counter
+	LoadbalancerBackendLatency                      metric.Int64Histogram
+	LoadbalancerBackendOutcome                      metric.Int64Counter
+	LoadbalancerBackendQuarantineTotal              metric.Int64Counter
+	LoadbalancerBackendRequestBytes                 metric.Int64Histogram
+	LoadbalancerBackendRequestItems                 metric.Int64Histogram
+	LoadbalancerBackendRequestTotal                 metric.Int64Counter
+	LoadbalancerBackendRerouteTotal                 metric.Int64Counter
+	LoadbalancerBackendStaleTotal                   metric.Int64Counter
+	LoadbalancerBackendState                        metric.Int64Gauge
+	LoadbalancerBackendUnquarantineTotal            metric.Int64Counter
+	LoadbalancerCentralQueueActiveLanes             metric.Int64Gauge
+	LoadbalancerCentralQueueCapacityBytes           metric.Int64Gauge
+	LoadbalancerCentralQueueEnqueueTotal            metric.Int64Counter
+	LoadbalancerCentralQueueOldestItemAge           metric.Int64Gauge
+	LoadbalancerCentralQueueSizeBytes               metric.Int64Gauge
+	LoadbalancerCentralQueueWindowCompressedBytes   metric.Int64Histogram
+	LoadbalancerCentralQueueWindowItems             metric.Int64Histogram
+	LoadbalancerCentralQueueWindowPayloads          metric.Int64Histogram
+	LoadbalancerCentralQueueWindowUncompressedBytes metric.Int64Histogram
+	LoadbalancerNumBackendUpdates                   metric.Int64Counter
+	LoadbalancerNumBackends                         metric.Int64Gauge
+	LoadbalancerNumResolutions                      metric.Int64Counter
 }
 
 // TelemetryBuilderOption applies changes to default builder.
@@ -92,6 +105,24 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 		metric.WithUnit("{quarantines}"),
 	)
 	errs = errors.Join(errs, err)
+	builder.LoadbalancerBackendRequestBytes, err = builder.meter.Int64Histogram(
+		"otelcol_loadbalancer_backend_request_bytes",
+		metric.WithDescription("Backend request payload size in bytes. [Development]"),
+		metric.WithUnit("By"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerBackendRequestItems, err = builder.meter.Int64Histogram(
+		"otelcol_loadbalancer_backend_request_items",
+		metric.WithDescription("Number of signal items in each backend request. [Development]"),
+		metric.WithUnit("{items}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerBackendRequestTotal, err = builder.meter.Int64Counter(
+		"otelcol_loadbalancer_backend_request_total",
+		metric.WithDescription("Number of backend requests sent by signal. [Development]"),
+		metric.WithUnit("{requests}"),
+	)
+	errs = errors.Join(errs, err)
 	builder.LoadbalancerBackendRerouteTotal, err = builder.meter.Int64Counter(
 		"otelcol_loadbalancer_backend_reroute_total",
 		metric.WithDescription("Number of endpoint-failure reroute attempts. [Development]"),
@@ -114,6 +145,60 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 		"otelcol_loadbalancer_backend_unquarantine_total",
 		metric.WithDescription("Number of times a backend endpoint was admitted after quarantine. [Development]"),
 		metric.WithUnit("{unquarantines}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerCentralQueueActiveLanes, err = builder.meter.Int64Gauge(
+		"otelcol_loadbalancer_central_queue_active_lanes",
+		metric.WithDescription("Number of central queue lanes with queued telemetry. [Development]"),
+		metric.WithUnit("{lanes}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerCentralQueueCapacityBytes, err = builder.meter.Int64Gauge(
+		"otelcol_loadbalancer_central_queue_capacity_bytes",
+		metric.WithDescription("Configured central queue capacity in compressed bytes. [Development]"),
+		metric.WithUnit("By"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerCentralQueueEnqueueTotal, err = builder.meter.Int64Counter(
+		"otelcol_loadbalancer_central_queue_enqueue_total",
+		metric.WithDescription("Number of central queue enqueue attempts by result. [Development]"),
+		metric.WithUnit("{items}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerCentralQueueOldestItemAge, err = builder.meter.Int64Gauge(
+		"otelcol_loadbalancer_central_queue_oldest_item_age",
+		metric.WithDescription("Age in milliseconds of the oldest item waiting in the central queue. [Development]"),
+		metric.WithUnit("ms"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerCentralQueueSizeBytes, err = builder.meter.Int64Gauge(
+		"otelcol_loadbalancer_central_queue_size_bytes",
+		metric.WithDescription("Current central queue size in compressed bytes. [Development]"),
+		metric.WithUnit("By"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerCentralQueueWindowCompressedBytes, err = builder.meter.Int64Histogram(
+		"otelcol_loadbalancer_central_queue_window_compressed_bytes",
+		metric.WithDescription("Compressed bytes drained from the central queue for each backend request window. [Development]"),
+		metric.WithUnit("By"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerCentralQueueWindowItems, err = builder.meter.Int64Histogram(
+		"otelcol_loadbalancer_central_queue_window_items",
+		metric.WithDescription("Number of signal items coalesced in each central queue backend request window. [Development]"),
+		metric.WithUnit("{items}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerCentralQueueWindowPayloads, err = builder.meter.Int64Histogram(
+		"otelcol_loadbalancer_central_queue_window_payloads",
+		metric.WithDescription("Number of queued payloads merged into each central queue backend request window. [Development]"),
+		metric.WithUnit("{payloads}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerCentralQueueWindowUncompressedBytes, err = builder.meter.Int64Histogram(
+		"otelcol_loadbalancer_central_queue_window_uncompressed_bytes",
+		metric.WithDescription("Uncompressed bytes represented by each central queue backend request window. [Development]"),
+		metric.WithUnit("By"),
 	)
 	errs = errors.Join(errs, err)
 	builder.LoadbalancerNumBackendUpdates, err = builder.meter.Int64Counter(

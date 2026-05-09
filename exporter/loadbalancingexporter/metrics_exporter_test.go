@@ -723,6 +723,29 @@ func TestConsumeMetrics_SingleEndpoint(t *testing.T) {
 	}
 }
 
+func TestConsumeMetricsRecordsBackendRequestMetrics(t *testing.T) {
+	ts, _, telemetry := getTelemetryAssetsWithReader(t)
+	p, err := newMetricsExporter(ts, serviceBasedRoutingConfig())
+	require.NoError(t, err)
+	p.loadBalancer.componentFactory = func(_ context.Context, _ string) (component.Component, error) {
+		return newNopMockMetricsExporter(), nil
+	}
+
+	require.NoError(t, p.Start(t.Context(), componenttest.NewNopHost()))
+	defer func() {
+		require.NoError(t, p.Shutdown(t.Context()))
+	}()
+
+	md := singleDataPointMetric("request-metric")
+	md.ResourceMetrics().At(0).Resource().Attributes().PutStr(serviceNameKey, serviceName1)
+	require.NoError(t, p.ConsumeMetrics(t.Context(), md))
+
+	attrs := attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("signal", "metrics"))
+	assertInt64CounterDataPoint(t, telemetry, "otelcol_loadbalancer_backend_request_total", attrs, 1)
+	assertInt64HistogramDataPoint(t, telemetry, "otelcol_loadbalancer_backend_request_items", attrs, int64(md.DataPointCount()))
+	assertInt64HistogramDataPoint(t, telemetry, "otelcol_loadbalancer_backend_request_bytes", attrs, int64((&pmetric.ProtoMarshaler{}).MetricsSize(md)))
+}
+
 func TestConsumeMetricsReroutesEndpointLocalFailure(t *testing.T) {
 	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
 	cfg := endpoint2Config()

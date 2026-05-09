@@ -18,6 +18,47 @@ $defs:
       timeout:
         type: string
         format: duration
+  central_queue_batching_config:
+    type: object
+    properties:
+      lane_count:
+        type: integer
+        minimum: 1
+      max_compressed_bytes:
+        type: integer
+        minimum: 1
+      max_delay:
+        type: string
+        format: duration
+        description: Must be greater than 0 when central_queue.enabled is true.
+      max_merged_items:
+        type: integer
+        minimum: 1
+      max_uncompressed_bytes:
+        type: integer
+        minimum: 1
+      target_compressed_bytes:
+        type: integer
+        minimum: 1
+  central_queue_config:
+    type: object
+    properties:
+      capacity_bytes:
+        type: integer
+        minimum: 1
+      enabled:
+        type: boolean
+      num_consumers:
+        type: integer
+        minimum: 1
+      payload_compression:
+        type: string
+        enum:
+          - none
+          - snappy
+          - zstd
+      request_batching:
+        $ref: central_queue_batching_config
   dns_resolver:
     description: DNSResolver defines the configuration for the DNS resolver
     type: object
@@ -131,6 +172,8 @@ $defs:
 description: Config defines configuration for the exporter.
 type: object
 properties:
+  central_queue:
+    $ref: central_queue_config
   endpoint_health:
     $ref: endpoint_health_config
   log_routing:

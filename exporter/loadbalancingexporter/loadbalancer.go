@@ -933,3 +933,37 @@ func (lb *loadBalancer) exporterAndEndpoint(identifier []byte) (*wrappedExporter
 
 	return exp, endpointWithPort(endpoint), nil
 }
+
+func (lb *loadBalancer) randomExporterAndEndpoint() (*wrappedExporter, string, error) {
+	lb.refreshExpiredEndpointHealth(context.Background())
+
+	lb.updateLock.RLock()
+	defer lb.updateLock.RUnlock()
+
+	if len(lb.exporters) == 0 {
+		return nil, "", errExporterIsStopping
+	}
+	start := rand.IntN(len(lb.exporters))
+	index := 0
+	for endpoint, exp := range lb.exporters {
+		if index < start {
+			index++
+			continue
+		}
+		if !exp.isStopping() {
+			return exp, endpointWithPort(endpoint), nil
+		}
+		index++
+	}
+	index = 0
+	for endpoint, exp := range lb.exporters {
+		if index >= start {
+			break
+		}
+		if !exp.isStopping() {
+			return exp, endpointWithPort(endpoint), nil
+		}
+		index++
+	}
+	return nil, "", errExporterIsStopping
+}

@@ -84,6 +84,52 @@ func AssertEqualLoadbalancerBackendQuarantineTotal(t *testing.T, tt *componentte
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }
 
+func AssertEqualLoadbalancerBackendRequestBytes(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.HistogramDataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_backend_request_bytes",
+		Description: "Backend request payload size in bytes. [Development]",
+		Unit:        "By",
+		Data: metricdata.Histogram[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_backend_request_bytes")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerBackendRequestItems(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.HistogramDataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_backend_request_items",
+		Description: "Number of signal items in each backend request. [Development]",
+		Unit:        "{items}",
+		Data: metricdata.Histogram[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_backend_request_items")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerBackendRequestTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_backend_request_total",
+		Description: "Number of backend requests sent by signal. [Development]",
+		Unit:        "{requests}",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_backend_request_total")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
 func AssertEqualLoadbalancerBackendRerouteTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_loadbalancer_backend_reroute_total",
@@ -142,6 +188,138 @@ func AssertEqualLoadbalancerBackendUnquarantineTotal(t *testing.T, tt *component
 		},
 	}
 	got, err := tt.GetMetric("otelcol_loadbalancer_backend_unquarantine_total")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerCentralQueueActiveLanes(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_central_queue_active_lanes",
+		Description: "Number of central queue lanes with queued telemetry. [Development]",
+		Unit:        "{lanes}",
+		Data: metricdata.Gauge[int64]{
+			DataPoints: dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_central_queue_active_lanes")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerCentralQueueCapacityBytes(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_central_queue_capacity_bytes",
+		Description: "Configured central queue capacity in compressed bytes. [Development]",
+		Unit:        "By",
+		Data: metricdata.Gauge[int64]{
+			DataPoints: dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_central_queue_capacity_bytes")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerCentralQueueEnqueueTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_central_queue_enqueue_total",
+		Description: "Number of central queue enqueue attempts by result. [Development]",
+		Unit:        "{items}",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_central_queue_enqueue_total")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerCentralQueueOldestItemAge(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_central_queue_oldest_item_age",
+		Description: "Age in milliseconds of the oldest item waiting in the central queue. [Development]",
+		Unit:        "ms",
+		Data: metricdata.Gauge[int64]{
+			DataPoints: dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_central_queue_oldest_item_age")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerCentralQueueSizeBytes(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_central_queue_size_bytes",
+		Description: "Current central queue size in compressed bytes. [Development]",
+		Unit:        "By",
+		Data: metricdata.Gauge[int64]{
+			DataPoints: dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_central_queue_size_bytes")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerCentralQueueWindowCompressedBytes(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.HistogramDataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_central_queue_window_compressed_bytes",
+		Description: "Compressed bytes drained from the central queue for each backend request window. [Development]",
+		Unit:        "By",
+		Data: metricdata.Histogram[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_central_queue_window_compressed_bytes")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerCentralQueueWindowItems(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.HistogramDataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_central_queue_window_items",
+		Description: "Number of signal items coalesced in each central queue backend request window. [Development]",
+		Unit:        "{items}",
+		Data: metricdata.Histogram[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_central_queue_window_items")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerCentralQueueWindowPayloads(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.HistogramDataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_central_queue_window_payloads",
+		Description: "Number of queued payloads merged into each central queue backend request window. [Development]",
+		Unit:        "{payloads}",
+		Data: metricdata.Histogram[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_central_queue_window_payloads")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerCentralQueueWindowUncompressedBytes(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.HistogramDataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_central_queue_window_uncompressed_bytes",
+		Description: "Uncompressed bytes represented by each central queue backend request window. [Development]",
+		Unit:        "By",
+		Data: metricdata.Histogram[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_central_queue_window_uncompressed_bytes")
 	require.NoError(t, err)
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }

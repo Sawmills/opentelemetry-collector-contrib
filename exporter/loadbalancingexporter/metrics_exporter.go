@@ -35,6 +35,7 @@ const metricBatcherEnqueueBackoff = 2 * time.Millisecond
 type metricExporterImp struct {
 	loadBalancer *loadBalancer
 	batcher      *metricBatcher
+	centralQueue *centralQueueRuntime
 	routingKey   routingKey
 
 	logger    *zap.Logger
@@ -66,6 +67,7 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 		telemetry:    telemetry,
 		logger:       params.Logger,
 	}
+	metricExporter.centralQueue = newMetricCentralQueueRuntime(cfg.(*Config).CentralQueue, telemetry)
 
 	switch cfg.(*Config).RoutingKey {
 	case svcRoutingStr, "":
@@ -113,6 +115,9 @@ func (e *metricExporterImp) Start(ctx context.Context, host component.Host) erro
 	if err := e.loadBalancer.Start(ctx, host); err != nil {
 		return err
 	}
+	if e.centralQueue != nil {
+		e.centralQueue.start(e.consumeMetricCentralQueueWindow, e.logger)
+	}
 	e.started.Store(true)
 	return nil
 }
@@ -124,6 +129,9 @@ func (e *metricExporterImp) Shutdown(ctx context.Context) error {
 	var err error
 	if e.batcher != nil {
 		err = e.batcher.Shutdown(ctx)
+	}
+	if e.centralQueue != nil {
+		err = errors.Join(err, e.centralQueue.shutdown(ctx))
 	}
 	err = errors.Join(err, e.loadBalancer.Shutdown(ctx))
 	return err
@@ -137,6 +145,10 @@ func (e *metricExporterImp) ConsumeMetrics(ctx context.Context, md pmetric.Metri
 	batches, err := e.splitMetricsByRouting(md)
 	if err != nil {
 		return err
+	}
+
+	if e.centralQueue != nil {
+		return e.consumeMetricsCentralQueue(ctx, batches)
 	}
 
 	if e.batcher != nil {
@@ -362,6 +374,7 @@ func (e *metricExporterImp) consumeMetricsByExporterAttempt(
 			failedMetrics = pmetric.NewMetrics()
 			mds.CopyTo(failedMetrics)
 		}
+		recordBackendRequest(ctx, e.telemetry, exp.endpoint, backendRequestSignalMetrics, mds.DataPointCount(), (&pmetric.ProtoMarshaler{}).MetricsSize(mds))
 		start := time.Now()
 		err := exp.ConsumeMetrics(ctx, mds)
 		duration := time.Since(start)
@@ -408,6 +421,7 @@ func (e *metricExporterImp) consumeBatch(ctx context.Context, we *wrappedExporte
 	}
 	defer we.doneConsume()
 
+	recordBackendRequest(ctx, e.telemetry, we.endpoint, backendRequestSignalMetrics, md.DataPointCount(), (&pmetric.ProtoMarshaler{}).MetricsSize(md))
 	start := time.Now()
 	err := we.ConsumeMetrics(ctx, md)
 	duration := time.Since(start)
@@ -496,6 +510,7 @@ func (e *metricExporterImp) rerouteDrainBatch(ctx context.Context, md pmetric.Me
 	var errs error
 	needsCleanup = false
 	for exp, mds := range metricsByExporter {
+		recordBackendRequest(ctx, e.telemetry, exp.endpoint, backendRequestSignalMetrics, mds.DataPointCount(), (&pmetric.ProtoMarshaler{}).MetricsSize(mds))
 		start := time.Now()
 		err = exp.ConsumeMetrics(ctx, mds)
 		duration := time.Since(start)

@@ -226,6 +226,9 @@ func shutdownWithCodec(shutdown component.ShutdownFunc, codec *queuePayloadCodec
 }
 
 func queueConfigForExport(cfg *Config) (configoptional.Optional[exporterhelper.QueueBatchConfig], bool) {
+	if cfg.CentralQueue.Enabled {
+		return configoptional.None[exporterhelper.QueueBatchConfig](), false
+	}
 	if !cfg.QueueSettings.QueueConfig.HasValue() {
 		return configoptional.None[exporterhelper.QueueBatchConfig](), false
 	}

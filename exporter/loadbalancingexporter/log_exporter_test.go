@@ -270,6 +270,28 @@ func TestConsumeLogsEmitsOnlyParentExporterMetrics(t *testing.T) {
 	assert.IsType(t, tracenoop.NewTracerProvider(), childSettings[0].TracerProvider)
 }
 
+func TestConsumeLogsRecordsBackendRequestMetrics(t *testing.T) {
+	ts, _, telemetry := getTelemetryAssetsWithReader(t)
+	p, err := newLogsExporter(ts, simpleConfig())
+	require.NoError(t, err)
+	p.loadBalancer.componentFactory = func(_ context.Context, _ string) (component.Component, error) {
+		return newNopMockLogsExporter(), nil
+	}
+
+	require.NoError(t, p.Start(t.Context(), componenttest.NewNopHost()))
+	defer func() {
+		require.NoError(t, p.Shutdown(t.Context()))
+	}()
+
+	ld := simpleLogs()
+	require.NoError(t, p.ConsumeLogs(t.Context(), ld))
+
+	attrs := attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("signal", "logs"))
+	assertInt64CounterDataPoint(t, telemetry, "otelcol_loadbalancer_backend_request_total", attrs, 1)
+	assertInt64HistogramDataPoint(t, telemetry, "otelcol_loadbalancer_backend_request_items", attrs, int64(ld.LogRecordCount()))
+	assertInt64HistogramDataPoint(t, telemetry, "otelcol_loadbalancer_backend_request_bytes", attrs, int64((&plog.ProtoMarshaler{}).LogsSize(ld)))
+}
+
 func TestConsumeLogsWithQueueCompressionAndInMemoryQueue(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	sink := new(consumertest.LogsSink)
