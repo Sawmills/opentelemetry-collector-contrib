@@ -182,22 +182,24 @@ func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSche
 		targetCandidates, fallbackCandidates, hasReady := q.collectWindowCandidatesLocked(now)
 		if len(targetCandidates) == 0 && len(fallbackCandidates) == 0 {
 			if !hasReady {
-				return centralQueueSchedulerStateWaiting
+				return state
 			}
 			return state
 		}
 
 		scheduledTarget, blocked := q.scheduleReadyWindowCandidatesLocked(targetCandidates)
+		if !scheduledTarget && blocked {
+			return centralQueueSchedulerStateInflightBytes
+		}
 		if scheduledTarget {
 			state = centralQueueSchedulerStateReady
-			continue
-		}
-		if blocked {
-			return centralQueueSchedulerStateInflightBytes
 		}
 		if len(q.ready) >= q.settings.maxReadyWindows {
 			state = centralQueueSchedulerStateReady
 			continue
+		}
+		if scheduledTarget {
+			_, fallbackCandidates, _ = q.collectWindowCandidatesLocked(now)
 		}
 
 		scheduledFallback, blocked := q.scheduleReadyWindowCandidatesLocked(fallbackCandidates)
