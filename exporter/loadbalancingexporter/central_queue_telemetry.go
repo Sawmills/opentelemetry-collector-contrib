@@ -226,25 +226,29 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 		metric.WithUnit("{windows}"),
 	)
 	errs = errors.Join(errs, err)
+	schedulerErrs := err
 	t.readyWindowLimit, err = meter.Int64ObservableGauge(
 		"otelcol_loadbalancer_central_queue_ready_window_limit",
 		metric.WithDescription("Configured maximum central load-balancing request windows that may wait ready before workers lease them."),
 		metric.WithUnit("{windows}"),
 	)
 	errs = errors.Join(errs, err)
+	schedulerErrs = errors.Join(schedulerErrs, err)
 	t.readyUncompressed, err = meter.Int64ObservableGauge(
 		"otelcol_loadbalancer_central_queue_ready_uncompressed_bytes",
 		metric.WithDescription("Uncompressed bytes reserved by central load-balancing request windows waiting ready before workers lease them."),
 		metric.WithUnit("By"),
 	)
 	errs = errors.Join(errs, err)
+	schedulerErrs = errors.Join(schedulerErrs, err)
 	t.schedulerState, err = meter.Int64ObservableGauge(
 		"otelcol_loadbalancer_central_queue_scheduler_state",
 		metric.WithDescription("Latest central load-balancing queue scheduler state. The active state is reported as 1 and other states as 0."),
 		metric.WithUnit("1"),
 	)
 	errs = errors.Join(errs, err)
-	if errs == nil {
+	schedulerErrs = errors.Join(schedulerErrs, err)
+	if schedulerErrs == nil {
 		t.schedulerStateReg, err = meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
 			t.schedulerStateMu.RLock()
 			schedulerSnapshot := t.schedulerSnapshot
