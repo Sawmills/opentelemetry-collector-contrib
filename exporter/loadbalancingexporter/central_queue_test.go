@@ -188,6 +188,40 @@ func TestCentralQueueReadyWindowsHandleInterleavedLaneItems(t *testing.T) {
 	require.Zero(t, q.compressedBytes())
 }
 
+func TestCentralQueueReadyWindowsRecollectFallbackAfterTargetRemoval(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    100,
+		targetCompressedBytes:        20,
+		maxBatchDelay:                250 * time.Millisecond,
+		maxReadyWindows:              2,
+	})
+	now := time.Unix(10, 0)
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("target"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("target"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("fallback"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
+
+	lease, err := q.tryLease(now.Add(250 * time.Millisecond))
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.Equal(t, []byte("target"), lease.window.routingKey)
+	require.Len(t, lease.window.items, 2)
+	require.Equal(t, centralQueueFlushReasonTargetReached, lease.window.flushReason)
+
+	fallbackLease, err := q.tryLease(now.Add(250 * time.Millisecond))
+	require.NoError(t, err)
+	require.NotNil(t, fallbackLease)
+	require.Equal(t, []byte("fallback"), fallbackLease.window.routingKey)
+	require.Len(t, fallbackLease.window.items, 1)
+	require.Equal(t, centralQueueFlushReasonMaxDelayLowTraffic, fallbackLease.window.flushReason)
+
+	lease.done()
+	fallbackLease.done()
+	require.Zero(t, q.len())
+	require.Zero(t, q.compressedBytes())
+}
+
 func TestCentralQueueReadyWindowsBuildTargetSizedWindowsBeforeConsumersLease(t *testing.T) {
 	q := newCentralQueue(centralQueueSettings{
 		maxCompressedBytes:           100,

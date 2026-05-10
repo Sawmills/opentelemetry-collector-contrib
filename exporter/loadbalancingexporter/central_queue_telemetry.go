@@ -244,7 +244,7 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 		metric.WithUnit("1"),
 	)
 	errs = errors.Join(errs, err)
-	if err == nil {
+	if errs == nil {
 		t.schedulerStateReg, err = meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
 			t.schedulerStateMu.RLock()
 			schedulerSnapshot := t.schedulerSnapshot

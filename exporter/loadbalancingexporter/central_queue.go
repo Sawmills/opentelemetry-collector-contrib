@@ -188,6 +188,10 @@ func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSche
 		}
 
 		scheduledTarget, blocked := q.scheduleReadyWindowCandidatesLocked(targetCandidates)
+		if scheduledTarget {
+			state = centralQueueSchedulerStateReady
+			continue
+		}
 		if blocked {
 			return centralQueueSchedulerStateInflightBytes
 		}
