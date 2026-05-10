@@ -253,7 +253,8 @@ func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQ
 	selected := make([]centralQueueWindowCandidate, 0, len(candidates))
 	pendingInflightBytes := q.currentInflightBytes
 	blocked := false
-	for _, candidate := range candidates {
+	for i := range candidates {
+		candidate := &candidates[i]
 		if len(q.ready)+len(selected) >= q.settings.maxReadyWindows {
 			break
 		}
@@ -261,7 +262,7 @@ func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQ
 			blocked = true
 			continue
 		}
-		selected = append(selected, candidate)
+		selected = append(selected, *candidate)
 		pendingInflightBytes += int64(candidate.window.uncompressedBytes)
 	}
 
@@ -269,13 +270,15 @@ func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQ
 		return false, blocked
 	}
 
-	for _, candidate := range selected {
+	for i := range selected {
+		candidate := &selected[i]
 		q.ready = append(q.ready, candidate.window)
 		q.currentInflightBytes += int64(candidate.window.uncompressedBytes)
 	}
 
 	indexesToRemove := make([]int, 0)
-	for _, candidate := range selected {
+	for i := range selected {
+		candidate := &selected[i]
 		indexesToRemove = append(indexesToRemove, candidate.indexes...)
 	}
 	sort.Ints(indexesToRemove)
@@ -521,7 +524,8 @@ func (q *centralQueue) schedulerSnapshotLocked(now time.Time) centralQueueSchedu
 			snapshot.state = centralQueueSchedulerStateWaiting
 			return snapshot
 		}
-		for _, candidate := range targetCandidates {
+		for i := range targetCandidates {
+			candidate := &targetCandidates[i]
 			if !q.windowInflightBlockedLocked(candidate.window) {
 				snapshot.state = centralQueueSchedulerStateReady
 				return snapshot
@@ -531,7 +535,8 @@ func (q *centralQueue) schedulerSnapshotLocked(now time.Time) centralQueueSchedu
 			snapshot.state = centralQueueSchedulerStateInflightBytes
 			return snapshot
 		}
-		for _, candidate := range fallbackCandidates {
+		for i := range fallbackCandidates {
+			candidate := &fallbackCandidates[i]
 			if !q.windowInflightBlockedLocked(candidate.window) {
 				snapshot.state = centralQueueSchedulerStateReady
 				return snapshot
