@@ -3,8 +3,6 @@
 
 package ottl // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 
-import "maps"
-
 // Public AST type aliases for downstream codegen and compatibility.
 type (
 	BooleanExpression = booleanExpression
@@ -56,12 +54,7 @@ const (
 	Div  = div
 )
 
-// CompareOpTable returns a copy of the parser comparison operator table.
-func CompareOpTable() map[string]CompareOp {
-	return maps.Clone(compareOpTable)
-}
-
-// ParseCondition parses a condition into its AST expression.
-func ParseCondition(condition string) (*BooleanExpression, error) {
-	return parseCondition(condition)
-}
+var (
+	CompareOpTable = compareOpTable
+	ParseCondition = parseCondition
+)

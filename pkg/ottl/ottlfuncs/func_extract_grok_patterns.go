@@ -122,18 +122,24 @@ func extractGrokPatterns[K any](target, pattern ottl.StringGetter[K], nco ottl.O
 		result := pcommon.NewMap()
 		result.EnsureCapacity(len(matches))
 		for k, v := range matches {
-			switch val := v.(type) {
-			case bool:
-				result.PutBool(k, val)
-			case float64:
-				result.PutDouble(k, val)
-			case int:
-				result.PutInt(k, int64(val))
-			case string:
-				result.PutStr(k, val)
-			}
+			putGrokValue(result, k, v)
 		}
 
 		return result, err
 	}, nil
+}
+
+func putGrokValue(result pcommon.Map, key string, value any) {
+	switch val := value.(type) {
+	case bool:
+		result.PutBool(key, val)
+	case float64:
+		result.PutDouble(key, val)
+	case int:
+		result.PutInt(key, int64(val))
+	case int64:
+		result.PutInt(key, val)
+	case string:
+		result.PutStr(key, val)
+	}
 }

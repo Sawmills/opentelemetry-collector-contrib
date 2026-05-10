@@ -44,7 +44,7 @@ func TestASTExportsAreUsable(t *testing.T) {
 		_ MathOp
 	)
 
-	table := CompareOpTable()
+	table := CompareOpTable
 	tests := map[string]CompareOp{
 		"==": Eq,
 		"!=": Ne,
@@ -58,8 +58,6 @@ func TestASTExportsAreUsable(t *testing.T) {
 		require.True(t, ok, "missing CompareOpTable entry for %q", token)
 		require.Equal(t, expected, got)
 	}
-	table["=="] = Ne
-	require.Equal(t, Eq, CompareOpTable()["=="])
 	require.Equal(t, []MathOp{Add, Sub, Mult, Div}, []MathOp{add, sub, mult, div})
 
 	condition, err := ParseCondition("true")

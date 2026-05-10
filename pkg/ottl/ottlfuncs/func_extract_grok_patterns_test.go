@@ -87,6 +87,17 @@ func Test_extractGrokPatterns_patterns(t *testing.T) {
 			definitions: nil,
 		},
 		{
+			name:              "grok - long capture keeps int64 timestamp",
+			targetString:      `1686838825123 INFO`,
+			pattern:           `%{POSINT:timestamp:long} %{WORD:level}`,
+			namedCapturesOnly: true,
+			want: func(expectedMap pcommon.Map) {
+				expectedMap.PutInt("timestamp", 1686838825123)
+				expectedMap.PutStr("level", "INFO")
+			},
+			definitions: nil,
+		},
+		{
 			name:              "grok - custom patterns",
 			targetString:      `2024-06-18 12:34:56 otel`,
 			pattern:           `%{MYPATTERN}`,
@@ -134,6 +145,17 @@ func Test_extractGrokPatterns_patterns(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_putGrokValueKeepsInt64Captures(t *testing.T) {
+	result := pcommon.NewMap()
+
+	putGrokValue(result, "timestamp", int64(1778281254690))
+
+	got, ok := result.Get("timestamp")
+	require.True(t, ok)
+	assert.Equal(t, pcommon.ValueTypeInt, got.Type())
+	assert.Equal(t, int64(1778281254690), got.Int())
 }
 
 func Test_extractGrokPatterns_validation(t *testing.T) {

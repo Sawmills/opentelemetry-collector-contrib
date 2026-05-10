@@ -147,6 +147,11 @@ func (tCtx *TransformContext) GetCache() pcommon.Map {
 	return tCtx.cache
 }
 
+// CacheBodyStringIfNeeded stores a serialized body string for composite log bodies.
+func (tCtx *TransformContext) CacheBodyStringIfNeeded() {
+	ctxlog.CacheBodyStringIfNeeded(tCtx)
+}
+
 // GetCachedBodyString returns the cached string representation of a composite log body.
 func (tCtx *TransformContext) GetCachedBodyString() (string, bool) {
 	return tCtx.cachedBodyString, tCtx.cachedBodyStringValid
