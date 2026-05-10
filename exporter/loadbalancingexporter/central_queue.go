@@ -179,11 +179,8 @@ func (q *centralQueue) tryLease(now time.Time) (*centralQueueLease, error) {
 func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSchedulerState {
 	state := centralQueueSchedulerStateWaiting
 	for len(q.ready) < q.settings.maxReadyWindows {
-		targetCandidates, fallbackCandidates, hasReady := q.collectWindowCandidatesLocked(now)
+		targetCandidates, fallbackCandidates, _ := q.collectWindowCandidatesLocked(now)
 		if len(targetCandidates) == 0 && len(fallbackCandidates) == 0 {
-			if !hasReady {
-				return state
-			}
 			return state
 		}
 
