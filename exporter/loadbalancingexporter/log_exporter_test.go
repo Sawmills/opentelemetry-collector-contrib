@@ -255,6 +255,55 @@ func TestConsumeLogsCentralQueueUsesLaneRoutingForIgnoredTraceIDs(t *testing.T) 
 	require.Equal(t, first.LogRecordCount(), merged.LogRecordCount())
 }
 
+func TestLogsCentralQueueWindowUsesRoutingKeyWhenIgnoringTraceIDs(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+
+	endpoint1 := "endpoint-1:4317"
+	endpoint2 := "endpoint-2:4317"
+	var endpoint1Calls atomic.Int64
+	var endpoint2Calls atomic.Int64
+	endpoint1Exporter := newWrappedExporter(newMockLogsExporter(func(context.Context, plog.Logs) error {
+		endpoint1Calls.Add(1)
+		return nil
+	}), endpoint1)
+	endpoint2Exporter := newWrappedExporter(newMockLogsExporter(func(context.Context, plog.Logs) error {
+		endpoint2Calls.Add(1)
+		return nil
+	}), endpoint2)
+	endpoint2Exporter.markStopping()
+	lb := &loadBalancer{
+		ring: newHashRing([]string{endpoint1, endpoint2}),
+		exporters: map[string]*wrappedExporter{
+			endpoint1: endpoint1Exporter,
+			endpoint2: endpoint2Exporter,
+		},
+		endpointHealth: newEndpointHealthManager(endpointHealthSettings{}),
+	}
+
+	route := findRoutingIDForEndpoint(t, lb.ring, endpoint2)
+	item, err := newCentralQueueLogsItem([]byte(route), simpleLogs(), codec, time.Now())
+	require.NoError(t, err)
+	p := &logExporterImp{
+		centralCodec:  codec,
+		ignoreTraceID: true,
+		loadBalancer:  lb,
+		logger:        ts.Logger,
+		telemetry:     tb,
+	}
+
+	err = p.consumeCentralQueueLogWindow(t.Context(), centralQueueWindow{
+		routingKey: []byte(route),
+		items:      []centralQueueItem{item},
+		count:      item.count,
+	})
+
+	require.NoError(t, err)
+	assert.Zero(t, endpoint1Calls.Load())
+	assert.Equal(t, int64(1), endpoint2Calls.Load())
+}
+
 func TestLogsCentralQueueShutdownCancelsBeforeWaiting(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)

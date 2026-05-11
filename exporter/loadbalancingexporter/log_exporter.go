@@ -334,13 +334,7 @@ func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context
 	if !decodedAny {
 		return nil
 	}
-	var le *wrappedExporter
-	var err error
-	if e.ignoreTraceID {
-		le, _, err = e.loadBalancer.randomExporterAndEndpoint()
-	} else {
-		le, _, err = e.loadBalancer.exporterAndEndpoint(window.routingKey)
-	}
+	le, _, err := e.loadBalancer.exporterAndEndpoint(window.routingKey)
 	if err != nil {
 		return err
 	}
