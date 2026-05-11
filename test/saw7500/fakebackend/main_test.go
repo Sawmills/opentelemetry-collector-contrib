@@ -43,8 +43,11 @@ func assertServing(t *testing.T, s *server, want bool) {
 	if err != nil {
 		t.Fatalf("health check failed: %v", err)
 	}
-	gotServing := resp.GetStatus() == healthpb.HealthCheckResponse_SERVING
-	if gotServing != want {
-		t.Fatalf("health serving = %v, want %v", gotServing, want)
+	wantStatus := healthpb.HealthCheckResponse_NOT_SERVING
+	if want {
+		wantStatus = healthpb.HealthCheckResponse_SERVING
+	}
+	if resp.GetStatus() != wantStatus {
+		t.Fatalf("health status = %s, want %s", resp.GetStatus(), wantStatus)
 	}
 }
