@@ -29,6 +29,8 @@ LOAD_DURATION_SECONDS="720"
 WARMUP_SECONDS="120"
 SETTLE_SECONDS="180"
 SCRAPE_INTERVAL_SECONDS="10"
+SCRAPE_CURL_CONNECT_TIMEOUT_SECONDS="2"
+SCRAPE_CURL_MAX_TIME_SECONDS="5"
 LOAD_RATE="250"
 LOAD_WORKERS="8"
 BATCH_SIZE="100"
@@ -330,7 +332,10 @@ scrape_pod_metrics() {
     kubectl port-forward -n "${namespace}" "pod/${pod}" "${local_port}:${remote_port}" --address 127.0.0.1 >/dev/null 2>&1 &
     local pf_pid=$!
     sleep 0.4
-    curl -fsS "http://127.0.0.1:${local_port}/metrics" > "${out_dir}/${prefix}-${tick}-${index}-${pod}.prom" || true
+    curl -fsS \
+      --connect-timeout "${SCRAPE_CURL_CONNECT_TIMEOUT_SECONDS}" \
+      --max-time "${SCRAPE_CURL_MAX_TIME_SECONDS}" \
+      "http://127.0.0.1:${local_port}/metrics" > "${out_dir}/${prefix}-${tick}-${index}-${pod}.prom" || true
     kill "${pf_pid}" >/dev/null 2>&1 || true
     wait "${pf_pid}" >/dev/null 2>&1 || true
     index=$((index + 1))
@@ -349,7 +354,10 @@ scrape_service_metrics() {
   kubectl port-forward -n "${namespace}" "svc/${service}" "${local_port}:${remote_port}" --address 127.0.0.1 >/dev/null 2>&1 &
   local pf_pid=$!
   sleep 0.4
-  curl -fsS "http://127.0.0.1:${local_port}/metrics" > "${out_dir}/${prefix}-${tick}-0-${service}.prom" || true
+  curl -fsS \
+    --connect-timeout "${SCRAPE_CURL_CONNECT_TIMEOUT_SECONDS}" \
+    --max-time "${SCRAPE_CURL_MAX_TIME_SECONDS}" \
+    "http://127.0.0.1:${local_port}/metrics" > "${out_dir}/${prefix}-${tick}-0-${service}.prom" || true
   kill "${pf_pid}" >/dev/null 2>&1 || true
   wait "${pf_pid}" >/dev/null 2>&1 || true
 }
