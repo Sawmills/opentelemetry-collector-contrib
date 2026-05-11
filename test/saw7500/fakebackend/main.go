@@ -1,3 +1,6 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
@@ -14,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	logspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
+	logspb "go.opentelemetry.io/proto/otlp/collector/logs/v1" //nolint:depguard // The harness intentionally implements the OTLP logs gRPC service.
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	_ "google.golang.org/grpc/encoding/gzip"
@@ -92,7 +95,7 @@ func main() {
 		mux.HandleFunc("/metrics", t.handleMetrics)
 		mux.HandleFunc("/healthcheck", t.handleHealth)
 		log.Printf("serving tally http on %s", cfg.httpAddr)
-		if err := http.ListenAndServe(cfg.httpAddr, mux); err != nil {
+		if err := serveHTTP(cfg.httpAddr, mux); err != nil {
 			log.Fatalf("serve tally: %v", err)
 		}
 		return
@@ -140,7 +143,7 @@ func main() {
 	mux.HandleFunc("/debug/state", s.handleState)
 
 	log.Printf("serving http on %s", cfg.httpAddr)
-	if err := http.ListenAndServe(cfg.httpAddr, mux); err != nil {
+	if err := serveHTTP(cfg.httpAddr, mux); err != nil {
 		log.Fatalf("serve http: %v", err)
 	}
 }
@@ -182,7 +185,7 @@ func (s *server) report(kind string, records int) {
 		return
 	}
 	url := fmt.Sprintf("%s/add?kind=%s&records=%d", strings.TrimRight(s.cfg.tallyURL, "/"), kind, records)
-	req, err := http.NewRequest(http.MethodPost, url, nil)
+	req, err := http.NewRequest(http.MethodPost, url, http.NoBody)
 	if err != nil {
 		log.Printf("build tally request: %v", err)
 		return
@@ -206,11 +209,11 @@ func (s *server) Check(context.Context, *healthpb.HealthCheckRequest) (*healthpb
 	return &healthpb.HealthCheckResponse{Status: statusValue}, nil
 }
 
-func (s *server) Watch(*healthpb.HealthCheckRequest, healthpb.Health_WatchServer) error {
+func (*server) Watch(*healthpb.HealthCheckRequest, healthpb.Health_WatchServer) error {
 	return status.Error(codes.Unimplemented, "watch is not implemented")
 }
 
-func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+func (*server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok\n"))
 }
@@ -283,7 +286,7 @@ func (s *server) handleState(w http.ResponseWriter, _ *http.Request) {
 	)
 }
 
-func (t *tallyServer) handleHealth(w http.ResponseWriter, _ *http.Request) {
+func (*tallyServer) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("ok\n"))
 }
@@ -374,16 +377,25 @@ func countLogRecords(req *logspb.ExportLogsServiceRequest) int {
 	return total
 }
 
-func updateMax(max *atomic.Int64, value int64) {
+func updateMax(target *atomic.Int64, value int64) {
 	for {
-		current := max.Load()
+		current := target.Load()
 		if value <= current {
 			return
 		}
-		if max.CompareAndSwap(current, value) {
+		if target.CompareAndSwap(current, value) {
 			return
 		}
 	}
+}
+
+func serveHTTP(addr string, handler http.Handler) error {
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	return server.ListenAndServe()
 }
 
 func envString(key, fallback string) string {

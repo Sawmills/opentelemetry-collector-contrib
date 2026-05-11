@@ -19,7 +19,7 @@ SAMPLE_RE = re.compile(
 ATTR_RE = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)="([^"]*)"')
 
 QUEUE_BYTES = "otelcol_loadbalancer_central_queue_compressed_bytes"
-QUEUE_CAPACITY = "otelcol_loadbalancer_central_queue_compressed_capacity_bytes"
+QUEUE_CAPACITY = "otelcol_loadbalancer_central_queue_compressed_capacity"
 QUEUE_ITEMS = "otelcol_loadbalancer_central_queue_items"
 QUEUE_AGE = "otelcol_loadbalancer_central_queue_oldest_item_age_milliseconds"
 REJECTED = "otelcol_loadbalancer_central_queue_rejected_compressed_bytes"

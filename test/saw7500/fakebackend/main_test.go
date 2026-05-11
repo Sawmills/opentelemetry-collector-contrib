@@ -1,7 +1,9 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package main
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,14 +18,14 @@ func TestDrainTogglesReadinessAndHealth(t *testing.T) {
 	assertServing(t, s, true)
 
 	recorder := httptest.NewRecorder()
-	s.handleDrain(recorder, httptest.NewRequest(http.MethodPost, "/drain", nil))
+	s.handleDrain(recorder, httptest.NewRequest(http.MethodPost, "/drain", http.NoBody))
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("drain status = %d, want %d", recorder.Code, http.StatusNoContent)
 	}
 	assertServing(t, s, false)
 
 	recorder = httptest.NewRecorder()
-	s.handleUndrain(recorder, httptest.NewRequest(http.MethodPost, "/undrain", nil))
+	s.handleUndrain(recorder, httptest.NewRequest(http.MethodPost, "/undrain", http.NoBody))
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("undrain status = %d, want %d", recorder.Code, http.StatusNoContent)
 	}
@@ -37,7 +39,7 @@ func assertServing(t *testing.T, s *server, want bool) {
 		t.Fatalf("ready = %v, want %v", got, want)
 	}
 
-	resp, err := s.Check(context.Background(), &healthpb.HealthCheckRequest{})
+	resp, err := s.Check(t.Context(), &healthpb.HealthCheckRequest{})
 	if err != nil {
 		t.Fatalf("health check failed: %v", err)
 	}
