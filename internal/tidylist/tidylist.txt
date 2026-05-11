@@ -341,3 +341,4 @@ receiver/windowsservicereceiver
 receiver/yanggrpcreceiver
 scraper/zookeeperscraper
 receiver/zookeeperreceiver
+test/queuedrain/fakebackend

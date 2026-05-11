@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: queue-drain-loadgen
+  namespace: queue-drain
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: queue-drain-loadgen
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: telemetrygen
+          image: __TELEMETRYGEN_IMAGE__
+          imagePullPolicy: IfNotPresent
+          args:
+            - logs
+            - --duration
+            - __LOAD_DURATION__
+            - --rate
+            - "__LOAD_RATE__"
+            - --workers
+            - "__LOAD_WORKERS__"
+            - --otlp-endpoint
+            - queue-drain-lb.queue-drain.svc.cluster.local:4317
+            - --otlp-insecure
+            - --batch
+            - --batch-size
+            - "__BATCH_SIZE__"
+            - --allow-export-failures
+            - --service
+            - customer-local-queue-drain
+            - --telemetry-attributes
+            - tenant="customer"
+            - --body
+            - __LOG_BODY__
+            - --size
+            - "__LOAD_SIZE_MB__"

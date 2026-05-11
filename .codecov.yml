@@ -1029,6 +1029,10 @@ component_management:
     name: scraper_zookeeper
     paths:
     - scraper/zookeeperscraper/**
+  - component_id: test_queuedrain_fakebackend
+    name: test_queuedrain_fakebackend
+    paths:
+    - test/queuedrain/fakebackend/**
   - component_id: testbed
     name: testbed
     paths:
