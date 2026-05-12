@@ -13,6 +13,8 @@ import (
 
 var queuePayloadCodecBenchmarkSink []byte
 
+const benchmarkBytesPerMiB = 1024 * 1024
+
 func BenchmarkQueuePayloadCodecZstdOptions(b *testing.B) {
 	payload, err := (&plog.ProtoMarshaler{}).MarshalLogs(compressibleLogs(16000, 1024))
 	if err != nil {
@@ -20,8 +22,9 @@ func BenchmarkQueuePayloadCodecZstdOptions(b *testing.B) {
 	}
 
 	tests := []struct {
-		name string
-		zstd ZstdPayloadCodecConfig
+		name                string
+		zstd                ZstdPayloadCodecConfig
+		maxLiveHeapAllocMiB float64
 	}{
 		{name: "default"},
 		{
@@ -30,6 +33,7 @@ func BenchmarkQueuePayloadCodecZstdOptions(b *testing.B) {
 				EncoderConcurrency: 1,
 				WindowSize:         2 << 20,
 			},
+			maxLiveHeapAllocMiB: 12,
 		},
 		{
 			name: "concurrency_2_window_2MiB",
@@ -37,6 +41,7 @@ func BenchmarkQueuePayloadCodecZstdOptions(b *testing.B) {
 				EncoderConcurrency: 2,
 				WindowSize:         2 << 20,
 			},
+			maxLiveHeapAllocMiB: 14,
 		},
 		{
 			name: "concurrency_1_window_2MiB_lowmem",
@@ -45,6 +50,7 @@ func BenchmarkQueuePayloadCodecZstdOptions(b *testing.B) {
 				WindowSize:         2 << 20,
 				LowerEncoderMem:    true,
 			},
+			maxLiveHeapAllocMiB: 8,
 		},
 		{
 			name: "concurrency_2_window_2MiB_lowmem",
@@ -53,6 +59,7 @@ func BenchmarkQueuePayloadCodecZstdOptions(b *testing.B) {
 				WindowSize:         2 << 20,
 				LowerEncoderMem:    true,
 			},
+			maxLiveHeapAllocMiB: 10,
 		},
 		{
 			name: "concurrency_1_window_1MiB",
@@ -60,6 +67,7 @@ func BenchmarkQueuePayloadCodecZstdOptions(b *testing.B) {
 				EncoderConcurrency: 1,
 				WindowSize:         1 << 20,
 			},
+			maxLiveHeapAllocMiB: 8,
 		},
 		{
 			name: "concurrency_2_window_1MiB",
@@ -67,6 +75,7 @@ func BenchmarkQueuePayloadCodecZstdOptions(b *testing.B) {
 				EncoderConcurrency: 2,
 				WindowSize:         1 << 20,
 			},
+			maxLiveHeapAllocMiB: 10,
 		},
 		{
 			name: "concurrency_1_window_1MiB_lowmem",
@@ -75,6 +84,7 @@ func BenchmarkQueuePayloadCodecZstdOptions(b *testing.B) {
 				WindowSize:         1 << 20,
 				LowerEncoderMem:    true,
 			},
+			maxLiveHeapAllocMiB: 6,
 		},
 	}
 
@@ -98,9 +108,17 @@ func BenchmarkQueuePayloadCodecZstdOptions(b *testing.B) {
 				queuePayloadCodecBenchmarkSink = encoded
 			}
 			b.StopTimer()
-			b.ReportMetric(float64(stats.firstEncodeAllocBytes)/(1024*1024), "init_alloc_MiB/op")
-			b.ReportMetric(float64(stats.liveHeapAllocBytes)/(1024*1024), "live_heap_alloc_MiB")
-			b.ReportMetric(float64(stats.liveHeapInuseBytes)/(1024*1024), "live_heap_inuse_MiB")
+			liveHeapAllocMiB := float64(stats.liveHeapAllocBytes) / benchmarkBytesPerMiB
+			if tt.maxLiveHeapAllocMiB > 0 && liveHeapAllocMiB > tt.maxLiveHeapAllocMiB {
+				b.Fatalf(
+					"bounded zstd codec retained heap = %.2f MiB, want <= %.2f MiB",
+					liveHeapAllocMiB,
+					tt.maxLiveHeapAllocMiB,
+				)
+			}
+			b.ReportMetric(float64(stats.firstEncodeAllocBytes)/benchmarkBytesPerMiB, "init_alloc_MiB/op")
+			b.ReportMetric(liveHeapAllocMiB, "live_heap_alloc_MiB")
+			b.ReportMetric(float64(stats.liveHeapInuseBytes)/benchmarkBytesPerMiB, "live_heap_inuse_MiB")
 			b.ReportMetric(float64(stats.encodedBytes)/1024, "encoded_KiB")
 		})
 	}
