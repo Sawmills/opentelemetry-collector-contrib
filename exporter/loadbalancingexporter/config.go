@@ -134,12 +134,16 @@ type MetricBatcherConfig struct {
 
 type PayloadCodecConfig struct {
 	Zstd ZstdPayloadCodecConfig `mapstructure:"zstd"`
+	// prevent unkeyed literal initialization
+	_ struct{}
 }
 
 type ZstdPayloadCodecConfig struct {
 	EncoderConcurrency int  `mapstructure:"encoder_concurrency"`
 	WindowSize         int  `mapstructure:"window_size"`
 	LowerEncoderMem    bool `mapstructure:"lower_encoder_mem"`
+	// prevent unkeyed literal initialization
+	_ struct{}
 }
 
 const defaultEndpointHealthQuarantineDuration = 30 * time.Second
