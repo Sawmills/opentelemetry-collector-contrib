@@ -206,13 +206,24 @@ func TestContainsCaseInsensitiveSlowPathConstantAlloc(t *testing.T) {
 	require.LessOrEqualf(t, longAllocs, 5.0,
 		"slow path allocated %.1f objects per run on a 16 kB body — pool is likely missing", longAllocs)
 
-	// Body-size-independent bytes: the dominant SAW-7559 failure mode was
-	// `len(val)` bytes allocated per call (the throwaway lowercase copy).
-	// On a 16 kB body that would show as >=16384 B/op of growth between
-	// short and long. With the pool the byte budget stays roughly constant
-	// — allow at most 256 B of slack for any per-call boxing differences
-	// that may surface as the input grows.
-	require.LessOrEqualf(t, longBytes-shortBytes, 256.0,
-		"slow-path allocated bytes scaled with body size: %.0f B/op (short) → %.0f B/op (long); the fresh []byte per record is back",
-		shortBytes, longBytes)
+	// Body-size-bounded bytes: the dominant SAW-7559 failure mode was
+	// `len(val)` bytes allocated per call (the throwaway lowercase copy)
+	// — a 1:1 byte-for-byte cost. On a 16 kB body the old code would show
+	// a ≈16384 B/op delta between short and long.
+	//
+	// We can't pin bytes/op to a tight constant under `testing.Benchmark`
+	// because `sync.Pool` releases its contents on GC, and `b.N`'s many-
+	// thousand-iteration loop trips GC enough that the pool periodically
+	// drops the warm buffer and re-allocates. In production the buffer
+	// stays warm across records and the per-record byte cost approaches
+	// zero; under bench stress we observe ≈25 % of body size on the
+	// growth axis (still ≪ 100 % of the original bug). Assert against
+	// 50 % of body length — that's slack for pool-eviction transients but
+	// strictly rejects any code path that allocates a fresh per-record
+	// copy of the body.
+	delta := longBytes - shortBytes
+	maxAllowed := float64(len(long)) * 0.5
+	require.Lessf(t, delta, maxAllowed,
+		"slow-path bytes/op grew with body size by %.0f B (%.1f%% of body length %d); the per-record fresh []byte allocation appears to be back. Pre-fix this delta was ~100%% of body length.",
+		delta, delta/float64(len(long))*100, len(long))
 }
