@@ -155,7 +155,16 @@ func TestContainsCaseInsensitiveUnicode(t *testing.T) {
 // per-call constants (interface boxes around the bool return + getter
 // value), which the test pins below 5.
 func TestContainsCaseInsensitiveSlowPathConstantAlloc(t *testing.T) {
-	runWith := func(body string) float64 {
+	// run returns (allocs/op, bytes/op) for the case-insensitive slow path
+	// invoked against `body`. We measure both because the SAW-7559 bug had
+	// two failure modes:
+	//   - alloc count grew by ~1 per call (one fresh []byte) — caught by the
+	//     allocs-per-op assertion;
+	//   - alloc bytes grew with len(body) (the size of that fresh []byte) —
+	//     caught by the bytes-per-op assertion. The architect call-out on
+	//     PR #75: allocs/op alone could mask a regression that hides
+	//     proportional byte growth in a single allocation per call.
+	run := func(body string) (allocsPerOp, bytesPerOp float64) {
 		fn := contains(
 			&ottl.StandardStringGetter[any]{
 				Getter: func(context.Context, any) (any, error) { return body, nil },
@@ -167,26 +176,43 @@ func TestContainsCaseInsensitiveSlowPathConstantAlloc(t *testing.T) {
 		for i := 0; i < 16; i++ {
 			_, _ = fn(context.Background(), nil)
 		}
-		return testing.AllocsPerRun(1000, func() {
-			_, _ = fn(context.Background(), nil)
+		br := testing.Benchmark(func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, _ = fn(context.Background(), nil)
+			}
 		})
+		if br.N == 0 {
+			return 0, 0
+		}
+		return float64(br.AllocsPerOp()), float64(br.AllocedBytesPerOp())
 	}
 
 	short := "Some MIXED-Case Body Line"
 	long := short + " " + strings.Repeat("Padding ", 2000) // ~16 kB
 
-	shortAllocs := runWith(short)
-	longAllocs := runWith(long)
+	shortAllocs, shortBytes := run(short)
+	longAllocs, longBytes := run(long)
 
-	// Body-size-independent: allocations on the long body must not exceed
-	// the short body's count + a tiny constant. The old code would have
-	// allocated ~one 16 kB byte slice per call here (a proportional shift
-	// in alloc count and bytes).
+	// Body-size-independent allocs: the long body must not allocate more
+	// objects than the short body — the per-call constants (bool + getter
+	// interface boxes) don't grow with body size, and the pool reuses the
+	// fold buffer.
 	require.LessOrEqualf(t, longAllocs, shortAllocs+1,
 		"slow-path allocations scaled with body size: %.1f (short) → %.1f (long); pool isn't keeping the buffer reused",
 		shortAllocs, longAllocs)
-	// Hard ceiling — interface boxing of bool + getter value should be
-	// well under 5.
+	// Hard ceiling on alloc count.
 	require.LessOrEqualf(t, longAllocs, 5.0,
 		"slow path allocated %.1f objects per run on a 16 kB body — pool is likely missing", longAllocs)
+
+	// Body-size-independent bytes: the dominant SAW-7559 failure mode was
+	// `len(val)` bytes allocated per call (the throwaway lowercase copy).
+	// On a 16 kB body that would show as >=16384 B/op of growth between
+	// short and long. With the pool the byte budget stays roughly constant
+	// — allow at most 256 B of slack for any per-call boxing differences
+	// that may surface as the input grows.
+	require.LessOrEqualf(t, longBytes-shortBytes, 256.0,
+		"slow-path allocated bytes scaled with body size: %.0f B/op (short) → %.0f B/op (long); the fresh []byte per record is back",
+		shortBytes, longBytes)
 }
