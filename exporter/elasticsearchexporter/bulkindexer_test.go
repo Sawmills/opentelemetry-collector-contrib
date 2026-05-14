@@ -459,7 +459,7 @@ func TestBulkIndexerIncludeSourceOnError(t *testing.T) {
 func TestStripIncludeSourceOnErrorTransport(t *testing.T) {
 	next := &fakeElasticTransport{}
 	transport := stripIncludeSourceOnErrorTransport{next: next}
-	req := httptest.NewRequest(http.MethodPost, "http://localhost:9200/_bulk?include_source_on_error=false&filter_path=items.*.error&pipeline=test", nil)
+	req := httptest.NewRequest(http.MethodPost, "http://localhost:9200/_bulk?include_source_on_error=false&filter_path=items.*.error&pipeline=test", http.NoBody)
 
 	resp, err := transport.Perform(req)
 	require.NoError(t, err)
