@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"text/template"
@@ -152,7 +153,7 @@ func templateReferencesPrefix(tmpl *template.Template) bool {
 	if tmpl == nil || tmpl.Tree == nil {
 		return false
 	}
-	return walkForPrefix(tmpl.Tree.Root)
+	return walkForPrefix(tmpl.Root)
 }
 
 func walkForPrefix(n parse.Node) bool {
@@ -198,19 +199,11 @@ func walkForPrefix(n parse.Node) bool {
 		}
 	case *parse.FieldNode:
 		// `{{.Prefix}}` parses as FieldNode with Ident=["Prefix"].
-		for _, ident := range node.Ident {
-			if ident == "Prefix" {
-				return true
-			}
-		}
+		return slices.Contains(node.Ident, "Prefix")
 	case *parse.ChainNode:
 		// e.g. `{{$x.Prefix}}` would land here, though our schema doesn't
 		// use it. Cover defensively.
-		for _, ident := range node.Field {
-			if ident == "Prefix" {
-				return true
-			}
-		}
+		return slices.Contains(node.Field, "Prefix")
 	}
 	return false
 }

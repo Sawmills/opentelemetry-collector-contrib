@@ -4,7 +4,7 @@ component: exporter/awss3exporter
 
 note: honor s3_prefix as an invariant in legacy template mode
 
-issues: [SAW-7554]
+issues: [74]
 
 subtext: |
   The legacy-template key builder previously treated `s3_prefix` as advisory:
