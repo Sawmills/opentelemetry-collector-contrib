@@ -208,19 +208,21 @@ func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSche
 	state := centralQueueSchedulerStateWaiting
 	for len(q.ready) < q.settings.maxReadyWindows {
 		targetCandidates, fallbackCandidates, _ := q.collectWindowCandidatesLocked(now)
-		staleFallbacks, freshFallbacks := q.splitFallbackByStaleness(fallbackCandidates, now)
 		if len(targetCandidates) == 0 && len(fallbackCandidates) == 0 {
 			return state
 		}
 
-		// Stale fallbacks are scheduled before fresh targets to bound
-		// oldest_item_age (SAW-7548 anti-starvation guarantee).
-		scheduledStale, blocked := q.scheduleReadyWindowCandidatesLocked(staleFallbacks)
+		// SAW-7548: stale fallbacks (those whose oldest item has been
+		// waiting longer than forceScheduleAge) jump ahead of fresh target
+		// candidates to bound oldest_item_age. If a stale fallback is
+		// blocked by the inflight cap we fall through to the original
+		// target/fresh-fallback flow rather than bailing early — smaller
+		// windows in later groups may still fit, and the original code's
+		// blocked-target → InflightBytes signaling remains intact.
+		staleFallbacks, freshFallbacks := q.splitFallbackByStaleness(fallbackCandidates, now)
+		scheduledStale, _ := q.scheduleReadyWindowCandidatesLocked(staleFallbacks)
 		if scheduledStale {
 			state = centralQueueSchedulerStateReady
-		}
-		if blocked && !scheduledStale {
-			return centralQueueSchedulerStateInflightBytes
 		}
 		if len(q.ready) >= q.settings.maxReadyWindows {
 			state = centralQueueSchedulerStateReady

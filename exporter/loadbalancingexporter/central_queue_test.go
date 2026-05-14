@@ -693,6 +693,76 @@ func TestCentralQueueStopAllowsDrainingExistingItems(t *testing.T) {
 	require.ErrorIs(t, err, errCentralQueueStopped)
 }
 
+// TestCentralQueueStaleFallbackBlockedByInflightDoesNotPreemptTargetScheduling
+// covers the architect-review feedback on the first SAW-7548 fix attempt: when
+// a stale fallback candidate cannot fit under the inflight cap but a smaller
+// target or fresh-fallback window still could, the scheduler must NOT return
+// `InflightBytes` early and skip those later groups.
+func TestCentralQueueStaleFallbackBlockedByInflightDoesNotPreemptTargetScheduling(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           1000,
+		maxInflightUncompressedBytes: 50,
+		maxUncompressedBatchBytes:    100,
+		targetCompressedBytes:        20,
+		maxBatchDelay:                250 * time.Millisecond,
+		maxReadyWindows:              2,
+	})
+
+	now := time.Unix(1000, 0)
+
+	// Pre-occupy 30 bytes of inflight budget so the inflight cap (50) is
+	// "loaded" — the remaining 20 bytes will gate which subsequent windows fit.
+	// Primer reaches target on its own (compressedBytes >= targetCompressedBytes)
+	// so it can be leased immediately and reserve inflight.
+	require.NoError(t, q.enqueueAt(centralQueueItem{
+		signal:            signalKindLogs,
+		routingKey:        []byte("primer"),
+		compressedBytes:   20,
+		uncompressedBytes: 30,
+		count:             1,
+	}, now))
+	primerLease, err := q.tryLease(now)
+	require.NoError(t, err)
+	require.NotNil(t, primerLease)
+	require.EqualValues(t, 30, q.inflightUncompressedBytes())
+
+	// Stale fallback: oldest, but 25 uncompressed bytes — when added to
+	// primer's 30 inflight = 55 > 50 cap → blocked.
+	require.NoError(t, q.enqueueAt(centralQueueItem{
+		signal:            signalKindLogs,
+		routingKey:        []byte("stale-too-big"),
+		compressedBytes:   10,
+		uncompressedBytes: 25,
+		count:             1,
+	}, now))
+
+	// Fresh target: 10 + 10 = 20 uncompressed bytes total; combined with
+	// primer's 30 inflight = exactly 50 = cap → fits.
+	target := now.Add(2 * time.Second)
+	require.NoError(t, q.enqueueAt(centralQueueItem{
+		signal:            signalKindLogs,
+		routingKey:        []byte("target"),
+		compressedBytes:   10,
+		uncompressedBytes: 10,
+		count:             1,
+	}, target.Add(-10*time.Millisecond)))
+	require.NoError(t, q.enqueueAt(centralQueueItem{
+		signal:            signalKindLogs,
+		routingKey:        []byte("target"),
+		compressedBytes:   10,
+		uncompressedBytes: 10,
+		count:             1,
+	}, target.Add(-5*time.Millisecond)))
+
+	lease, err := q.tryLease(target)
+	require.NoError(t, err, "stale fallback being inflight-blocked must not bail before target scheduling")
+	require.NotNil(t, lease)
+	require.Equal(t, []byte("target"), lease.window.routingKey,
+		"target window should be leased because stale fallback could not fit; SAW-7548 fix must not silently throttle the target group")
+	lease.done()
+	primerLease.done()
+}
+
 // TestCentralQueueForceScheduleAgeDefaultsToMaxBatchDelayMultiple verifies the
 // derived default for the SAW-7548 starvation guard: when not explicitly set,
 // forceScheduleAge = maxBatchDelay × centralQueueDefaultForceScheduleAgeMultiplier.
