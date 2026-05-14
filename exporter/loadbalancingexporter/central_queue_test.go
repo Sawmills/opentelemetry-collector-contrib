@@ -911,9 +911,9 @@ func TestCentralQueuePromotesStaleFallbackOverFreshTargets(t *testing.T) {
 	leaseTime := enqueueAt.Add(2 * time.Second)
 
 	// Fresh hot lanes arrive at lease time, each producing a target window.
-	for h := 0; h < 5; h++ {
-		laneKey := []byte(fmt.Sprintf("hot-%d", h))
-		for j := 0; j < 2; j++ {
+	for h := range 5 {
+		laneKey := fmt.Appendf(nil, "hot-%d", h)
+		for range 2 {
 			require.NoError(t, q.enqueueAt(centralQueueItem{
 				signal:            signalKindLogs,
 				routingKey:        laneKey,
@@ -963,12 +963,12 @@ func TestCentralQueueDoesNotStarveColdLaneUnderContinuousHotKeyArrivals(t *testi
 	const totalRounds = 30
 	coldServedAtRound := -1
 
-	for round := 0; round < totalRounds; round++ {
+	for round := range totalRounds {
 		roundTime := now.Add(time.Duration(round+1) * 100 * time.Millisecond)
 		// Each round, 5 brand-new hot lanes each fill a target window.
-		for h := 0; h < 5; h++ {
-			laneKey := []byte(fmt.Sprintf("hot-r%d-l%d", round, h))
-			for j := 0; j < 2; j++ {
+		for h := range 5 {
+			laneKey := fmt.Appendf(nil, "hot-r%d-l%d", round, h)
+			for range 2 {
 				require.NoError(t, q.enqueueAt(centralQueueItem{
 					signal:            signalKindLogs,
 					routingKey:        laneKey,
@@ -980,7 +980,7 @@ func TestCentralQueueDoesNotStarveColdLaneUnderContinuousHotKeyArrivals(t *testi
 		}
 
 		// Workers lease 2 windows per round.
-		for w := 0; w < 2; w++ {
+		for range 2 {
 			lease, err := q.tryLease(roundTime.Add(250 * time.Millisecond))
 			require.NoError(t, err)
 			if lease == nil {

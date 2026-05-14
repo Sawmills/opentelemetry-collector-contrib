@@ -4,7 +4,7 @@ component: exporter/loadbalancingexporter
 
 note: Prevent indefinite cold-lane starvation in the central queue scheduler. Fallback candidates older than ``central_queue.force_schedule_age`` (default ``5 × max_batch_delay``) are now promoted ahead of fresh ``target_reached`` candidates, bounding ``oldest_item_age`` under continuous hot-key arrivals.
 
-issues: [SAW-7548]
+issues: [73]
 
 subtext: |
   Without this guard, when a routing key produces target-sized windows faster than the worker pool can drain, the ``maxReadyWindows = num_consumers`` budget is permanently filled by hot lanes and cold lanes never reach the ready queue. ``oldest_item_age`` then grows until the ``max_inflight_uncompressed_bytes`` cap fires upstream refusals (``Unavailable: data refused due to high memory usage``).

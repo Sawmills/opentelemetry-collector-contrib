@@ -272,11 +272,12 @@ func (q *centralQueue) splitFallbackByStaleness(candidates []centralQueueWindowC
 		return nil, candidates
 	}
 	cutoffUnixNano := now.Add(-q.settings.forceScheduleAge).UnixNano()
-	for _, c := range candidates {
+	for i := range candidates {
+		c := &candidates[i]
 		if c.window.oldestEnqueuedAt > 0 && c.window.oldestEnqueuedAt <= cutoffUnixNano {
-			stale = append(stale, c)
+			stale = append(stale, *c)
 		} else {
-			fresh = append(fresh, c)
+			fresh = append(fresh, *c)
 		}
 	}
 	return stale, fresh
