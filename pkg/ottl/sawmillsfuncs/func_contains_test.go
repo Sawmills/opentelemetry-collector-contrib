@@ -6,6 +6,7 @@ package sawmillsfuncs
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -102,4 +103,127 @@ func TestContainsDoesNotMutatePatterns(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"TEST"}, patterns)
+}
+
+// TestContainsCaseInsensitiveUnicode pins the SAW-7559 fix's Unicode
+// fallback: the new ASCII-only fast path doesn't change matching semantics
+// for non-ASCII haystacks (architect catch on PR #75). For any value with
+// a byte ≥ 0x80, contains() must fall back to `strings.ToLower(val)` /
+// `unicode.ToLower` so case-folding matches the original behavior.
+func TestContainsCaseInsensitiveUnicode(t *testing.T) {
+	cases := []struct {
+		name    string
+		value   string
+		pattern string
+		want    bool
+	}{
+		// Cyrillic small/capital — Unicode case-folding required.
+		{"cyrillic upper haystack lower pattern", "Привет МИР", "мир", true},
+		// Greek omega case pair.
+		{"greek omega upper → lower", "GREETING Ω", "ω", true},
+		// Latin-1 with diacritic — ÷ is not a letter, ensure it doesn't match.
+		{"diacritic case", "Ëxample log line", "ëxample", true},
+		// ASCII haystack must still match (regression guard for fast path).
+		{"ascii haystack case-folded match", "MIXED Body Line", "body", true},
+		{"ascii haystack no-match stays false", "MIXED Body Line", "missing", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := contains[any](
+				&ottl.StandardStringGetter[any]{
+					Getter: func(context.Context, any) (any, error) { return tc.value, nil },
+				},
+				[]string{tc.pattern},
+				false,
+			)
+			got, err := fn(t.Context(), nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestContainsCaseInsensitiveSlowPathConstantAlloc pins the SAW-7559 fix:
+// the pool-backed fold path must allocate a *constant* (small, body-size-
+// independent) number of objects per call. Before the fix, the slow path
+// called `strings.ToLower(val)` which allocated len(val) bytes per record
+// × per filter rule — on bigid's pipeline that was the dominant heap
+// pressure source (178 such calls per record at ~4 kB bodies).
+//
+// We measure with a small body and a 16 kB body. With the pool the alloc
+// count must NOT scale with body size — the only allocations left are
+// per-call constants (interface boxes around the bool return + getter
+// value), which the test pins below 5.
+func TestContainsCaseInsensitiveSlowPathConstantAlloc(t *testing.T) {
+	// run returns (allocs/op, bytes/op) for the case-insensitive slow path
+	// invoked against `body`. We measure both because the SAW-7559 bug had
+	// two failure modes:
+	//   - alloc count grew by ~1 per call (one fresh []byte) — caught by the
+	//     allocs-per-op assertion;
+	//   - alloc bytes grew with len(body) (the size of that fresh []byte) —
+	//     caught by the bytes-per-op assertion. The architect call-out on
+	//     PR #75: allocs/op alone could mask a regression that hides
+	//     proportional byte growth in a single allocation per call.
+	run := func(body string) (allocsPerOp, bytesPerOp float64) {
+		fn := contains(
+			&ottl.StandardStringGetter[any]{
+				Getter: func(context.Context, any) (any, error) { return body, nil },
+			},
+			[]string{"xyz-no-such-thing"}, // forces fold-path miss
+			false,
+		)
+		// Warm the pool — first call may allocate the buffer.
+		for range 16 {
+			_, _ = fn(t.Context(), nil)
+		}
+		br := testing.Benchmark(func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				_, _ = fn(t.Context(), nil)
+			}
+		})
+		if br.N == 0 {
+			return 0, 0
+		}
+		return float64(br.AllocsPerOp()), float64(br.AllocedBytesPerOp())
+	}
+
+	short := "Some MIXED-Case Body Line"
+	long := short + " " + strings.Repeat("Padding ", 2000) // ~16 kB
+
+	shortAllocs, shortBytes := run(short)
+	longAllocs, longBytes := run(long)
+
+	// Body-size-independent allocs: the long body must not allocate more
+	// objects than the short body — the per-call constants (bool + getter
+	// interface boxes) don't grow with body size, and the pool reuses the
+	// fold buffer.
+	require.LessOrEqualf(t, longAllocs, shortAllocs+1,
+		"slow-path allocations scaled with body size: %.1f (short) → %.1f (long); pool isn't keeping the buffer reused",
+		shortAllocs, longAllocs)
+	// Hard ceiling on alloc count.
+	require.LessOrEqualf(t, longAllocs, 5.0,
+		"slow path allocated %.1f objects per run on a 16 kB body — pool is likely missing", longAllocs)
+
+	// Body-size-bounded bytes: the dominant SAW-7559 failure mode was
+	// `len(val)` bytes allocated per call (the throwaway lowercase copy)
+	// — a 1:1 byte-for-byte cost. On a 16 kB body the old code would show
+	// a ≈16384 B/op delta between short and long.
+	//
+	// We can't pin bytes/op to a tight constant under `testing.Benchmark`
+	// because `sync.Pool` releases its contents on GC, and `b.N`'s many-
+	// thousand-iteration loop trips GC enough that the pool periodically
+	// drops the warm buffer and re-allocates. In production the buffer
+	// stays warm across records and the per-record byte cost approaches
+	// zero; under bench stress we observe ≈25 % of body size on the
+	// growth axis (still ≪ 100 % of the original bug). Assert against
+	// 50 % of body length — that's slack for pool-eviction transients but
+	// strictly rejects any code path that allocates a fresh per-record
+	// copy of the body.
+	delta := longBytes - shortBytes
+	maxAllowed := float64(len(long)) * 0.5
+	require.Lessf(t, delta, maxAllowed,
+		"slow-path bytes/op grew with body size by %.0f B (%.1f%% of body length %d); the per-record fresh []byte allocation appears to be back. Pre-fix this delta was ~100%% of body length.",
+		delta, delta/float64(len(long))*100, len(long))
 }
