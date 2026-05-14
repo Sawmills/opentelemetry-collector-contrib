@@ -5,6 +5,7 @@ package loadbalancingexporter
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -690,6 +691,174 @@ func TestCentralQueueStopAllowsDrainingExistingItems(t *testing.T) {
 
 	_, err = q.lease(t.Context())
 	require.ErrorIs(t, err, errCentralQueueStopped)
+}
+
+// TestCentralQueueForceScheduleAgeDefaultsToMaxBatchDelayMultiple verifies the
+// derived default for the SAW-7548 starvation guard: when not explicitly set,
+// forceScheduleAge = maxBatchDelay × centralQueueDefaultForceScheduleAgeMultiplier.
+func TestCentralQueueForceScheduleAgeDefaultsToMaxBatchDelayMultiple(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxBatchDelay: 250 * time.Millisecond,
+	})
+	require.Equal(t, 250*time.Millisecond*centralQueueDefaultForceScheduleAgeMultiplier, q.settings.forceScheduleAge)
+}
+
+// TestCentralQueueForceScheduleAgeNegativeDisablesAntiStarvation verifies that a
+// negative forceScheduleAge opts out of the SAW-7548 anti-starvation behavior
+// and restores the legacy strict-target-first scheduling.
+func TestCentralQueueForceScheduleAgeNegativeDisablesAntiStarvation(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           1000,
+		maxInflightUncompressedBytes: 1000,
+		maxUncompressedBatchBytes:    100,
+		targetCompressedBytes:        20,
+		maxBatchDelay:                250 * time.Millisecond,
+		maxReadyWindows:              1,
+		forceScheduleAge:             -1,
+	})
+	now := time.Unix(1000, 0)
+	require.NoError(t, q.enqueueAt(centralQueueItem{
+		signal: signalKindLogs, routingKey: []byte("old-fallback"),
+		compressedBytes: 10, uncompressedBytes: 10, count: 1,
+	}, now))
+	require.NoError(t, q.enqueueAt(centralQueueItem{
+		signal: signalKindLogs, routingKey: []byte("fresh-target"),
+		compressedBytes: 10, uncompressedBytes: 10, count: 1,
+	}, now.Add(2*time.Second)))
+	require.NoError(t, q.enqueueAt(centralQueueItem{
+		signal: signalKindLogs, routingKey: []byte("fresh-target"),
+		compressedBytes: 10, uncompressedBytes: 10, count: 1,
+	}, now.Add(2*time.Second)))
+
+	lease, err := q.tryLease(now.Add(2 * time.Second))
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.Equal(t, []byte("fresh-target"), lease.window.routingKey,
+		"with forceScheduleAge<0, target should win even over very-old fallback (legacy behavior)")
+	lease.done()
+}
+
+// TestCentralQueuePromotesStaleFallbackOverFreshTargets demonstrates that when a
+// fallback candidate has been waiting beyond the starvation threshold (default
+// 5 * maxBatchDelay), it must be scheduled before fresh target candidates even
+// though target_reached normally wins. This is the SAW-7548 anti-starvation
+// guarantee: oldest_item_age is bounded so cold lanes cannot be indefinitely
+// starved by continuous hot-key target arrivals.
+func TestCentralQueuePromotesStaleFallbackOverFreshTargets(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           1000,
+		maxInflightUncompressedBytes: 1000,
+		maxUncompressedBatchBytes:    100,
+		targetCompressedBytes:        20,
+		maxBatchDelay:                250 * time.Millisecond,
+		maxReadyWindows:              2,
+	})
+
+	enqueueAt := time.Unix(1000, 0)
+	// Cold lane: a single 10-byte item, below targetCompressedBytes=20.
+	require.NoError(t, q.enqueueAt(centralQueueItem{
+		signal:            signalKindLogs,
+		routingKey:        []byte("cold"),
+		compressedBytes:   10,
+		uncompressedBytes: 10,
+		count:             1,
+	}, enqueueAt))
+
+	// Wait long enough that the cold item exceeds the starvation threshold
+	// (default = 5 × maxBatchDelay = 1250ms). At 2s of waiting the cold lane
+	// is definitively stale.
+	leaseTime := enqueueAt.Add(2 * time.Second)
+
+	// Fresh hot lanes arrive at lease time, each producing a target window.
+	for h := 0; h < 5; h++ {
+		laneKey := []byte(fmt.Sprintf("hot-%d", h))
+		for j := 0; j < 2; j++ {
+			require.NoError(t, q.enqueueAt(centralQueueItem{
+				signal:            signalKindLogs,
+				routingKey:        laneKey,
+				compressedBytes:   10,
+				uncompressedBytes: 10,
+				count:             1,
+			}, leaseTime.Add(-10*time.Millisecond)))
+		}
+	}
+
+	lease, err := q.tryLease(leaseTime)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.Equal(t, []byte("cold"), lease.window.routingKey,
+		"stale fallback (waited %s) must be prioritized over fresh targets; otherwise oldest_item_age grows unbounded as in SAW-7548",
+		leaseTime.Sub(enqueueAt))
+	lease.done()
+}
+
+// TestCentralQueueDoesNotStarveColdLaneUnderContinuousHotKeyArrivals exercises
+// the production-shaped scenario: continuous arrivals of new hot-routing-key
+// lanes whose target candidates always exceed maxReadyWindows, while a single
+// cold lane has been waiting. Under SAW-7548-buggy scheduling, the cold lane
+// is never served — oldest_item_age grows unbounded until the inflight or
+// compressed caps fire upstream refusals. After the fix, the cold lane MUST
+// be served within a bounded number of rounds.
+func TestCentralQueueDoesNotStarveColdLaneUnderContinuousHotKeyArrivals(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           10000,
+		maxInflightUncompressedBytes: 10000,
+		maxUncompressedBatchBytes:    1000,
+		targetCompressedBytes:        20,
+		maxBatchDelay:                250 * time.Millisecond,
+		maxReadyWindows:              2,
+	})
+
+	now := time.Unix(1000, 0)
+	// Cold lane: one item at t0.
+	require.NoError(t, q.enqueueAt(centralQueueItem{
+		signal:            signalKindLogs,
+		routingKey:        []byte("cold"),
+		compressedBytes:   10,
+		uncompressedBytes: 10,
+		count:             1,
+	}, now))
+
+	const totalRounds = 30
+	coldServedAtRound := -1
+
+	for round := 0; round < totalRounds; round++ {
+		roundTime := now.Add(time.Duration(round+1) * 100 * time.Millisecond)
+		// Each round, 5 brand-new hot lanes each fill a target window.
+		for h := 0; h < 5; h++ {
+			laneKey := []byte(fmt.Sprintf("hot-r%d-l%d", round, h))
+			for j := 0; j < 2; j++ {
+				require.NoError(t, q.enqueueAt(centralQueueItem{
+					signal:            signalKindLogs,
+					routingKey:        laneKey,
+					compressedBytes:   10,
+					uncompressedBytes: 10,
+					count:             1,
+				}, roundTime))
+			}
+		}
+
+		// Workers lease 2 windows per round.
+		for w := 0; w < 2; w++ {
+			lease, err := q.tryLease(roundTime.Add(250 * time.Millisecond))
+			require.NoError(t, err)
+			if lease == nil {
+				continue
+			}
+			if string(lease.window.routingKey) == "cold" && coldServedAtRound == -1 {
+				coldServedAtRound = round
+			}
+			lease.done()
+		}
+
+		if coldServedAtRound >= 0 {
+			break
+		}
+	}
+
+	require.GreaterOrEqual(t, coldServedAtRound, 0,
+		"cold lane was never served in %d rounds (%s of continuous hot-key arrivals); SAW-7548 starvation reproduced",
+		totalRounds, time.Duration(totalRounds)*100*time.Millisecond)
 }
 
 func requireCentralQueueFirstRetryDelay(t *testing.T, q *centralQueue) {
