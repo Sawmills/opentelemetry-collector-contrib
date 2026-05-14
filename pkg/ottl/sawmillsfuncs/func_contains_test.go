@@ -136,7 +136,7 @@ func TestContainsCaseInsensitiveUnicode(t *testing.T) {
 				[]string{tc.pattern},
 				false,
 			)
-			got, err := fn(context.Background(), nil)
+			got, err := fn(t.Context(), nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 		})
@@ -173,14 +173,14 @@ func TestContainsCaseInsensitiveSlowPathConstantAlloc(t *testing.T) {
 			false,
 		)
 		// Warm the pool — first call may allocate the buffer.
-		for i := 0; i < 16; i++ {
-			_, _ = fn(context.Background(), nil)
+		for range 16 {
+			_, _ = fn(t.Context(), nil)
 		}
 		br := testing.Benchmark(func(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				_, _ = fn(context.Background(), nil)
+			for range b.N {
+				_, _ = fn(t.Context(), nil)
 			}
 		})
 		if br.N == 0 {
