@@ -1,6 +1,6 @@
 change_type: enhancement
 
-component: pkg/ottl/sawmillsfuncs
+component: pkg/ottl
 
 note: 'Eliminate per-record allocation in `Contains(..., caseSensitive=false)`. The previous fallback called `strings.ToLower(val)` per call, allocating a fresh lowercase copy of the target. The fold path now writes into a `sync.Pool`-backed buffer for ASCII haystacks; non-ASCII haystacks fall back to `strings.ToLower` to preserve Unicode case-folding semantics.'
 
