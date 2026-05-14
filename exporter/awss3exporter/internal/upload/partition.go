@@ -9,9 +9,11 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"text/template"
+	"text/template/parse"
 	"time"
 
 	"github.com/google/uuid"
@@ -125,11 +127,103 @@ func buildLegacyTemplateKey(prefix string, tmpl *template.Template, ts time.Time
 		return ""
 	}
 
-	return rendered.String()
+	key := rendered.String()
+
+	// SAW-7554: legacy-template mode must honor s3_prefix as an invariant,
+	// symmetric with default mode (which always joins the prefix via
+	// bucketKeyPrefix). When the template author forgot to reference
+	// {{.Prefix}}, the configured prefix would otherwise be silently
+	// dropped. Auto-prepend it; templates that already reference .Prefix
+	// stay unchanged (no double-prepend).
+	if prefix != "" && !templateReferencesPrefix(tmpl) {
+		return path.Join(prefix, key)
+	}
+
+	return key
 }
 
 func parseLegacyTemplate(templateText string) (*template.Template, error) {
 	return template.New("legacy-s3-key").Funcs(legacyTemplateFuncs).Option("missingkey=error").Parse(templateText)
+}
+
+// templateReferencesPrefix reports whether tmpl reads the .Prefix field of
+// legacyTemplateData anywhere in its REACHABLE parse trees. Used by
+// buildLegacyTemplateKey to decide whether to auto-prepend the configured
+// prefix (SAW-7554).
+//
+// Walks from the root tree and follows {{template "name"}} call sites to
+// associated subtemplates. Unused {{define}} blocks (those with no
+// {{template}} call site reachable from root) are intentionally NOT scanned
+// — a reference that the rendered output never emits would otherwise
+// incorrectly suppress the auto-prepend.
+func templateReferencesPrefix(tmpl *template.Template) bool {
+	if tmpl == nil || tmpl.Tree == nil {
+		return false
+	}
+	return walkForPrefix(tmpl, tmpl.Root, map[string]struct{}{})
+}
+
+func walkForPrefix(root *template.Template, n parse.Node, visited map[string]struct{}) bool {
+	switch node := n.(type) {
+	case nil:
+		return false
+	case *parse.ListNode:
+		if node == nil {
+			return false
+		}
+		return slices.ContainsFunc(node.Nodes, func(c parse.Node) bool {
+			return walkForPrefix(root, c, visited)
+		})
+	case *parse.ActionNode:
+		return walkForPrefix(root, node.Pipe, visited)
+	case *parse.IfNode:
+		return walkForPrefix(root, node.Pipe, visited) ||
+			walkForPrefix(root, node.List, visited) ||
+			walkForPrefix(root, node.ElseList, visited)
+	case *parse.RangeNode:
+		return walkForPrefix(root, node.Pipe, visited) ||
+			walkForPrefix(root, node.List, visited) ||
+			walkForPrefix(root, node.ElseList, visited)
+	case *parse.WithNode:
+		return walkForPrefix(root, node.Pipe, visited) ||
+			walkForPrefix(root, node.List, visited) ||
+			walkForPrefix(root, node.ElseList, visited)
+	case *parse.PipeNode:
+		if node == nil {
+			return false
+		}
+		return slices.ContainsFunc(node.Cmds, func(cmd *parse.CommandNode) bool {
+			if cmd == nil {
+				return false
+			}
+			return slices.ContainsFunc(cmd.Args, func(arg parse.Node) bool {
+				return walkForPrefix(root, arg, visited)
+			})
+		})
+	case *parse.TemplateNode:
+		// {{template "name" .pipe}}: the pipe argument may itself reference
+		// .Prefix; the named subtemplate is reachable iff actually invoked
+		// here, so descend (once per name to avoid mutual-recursion loops).
+		if walkForPrefix(root, node.Pipe, visited) {
+			return true
+		}
+		if _, seen := visited[node.Name]; seen {
+			return false
+		}
+		visited[node.Name] = struct{}{}
+		if sub := root.Lookup(node.Name); sub != nil && sub.Tree != nil {
+			return walkForPrefix(root, sub.Root, visited)
+		}
+		return false
+	case *parse.FieldNode:
+		// `{{.Prefix}}` parses as FieldNode with Ident=["Prefix"].
+		return slices.Contains(node.Ident, "Prefix")
+	case *parse.ChainNode:
+		// e.g. `{{$x.Prefix}}` would land here, though our schema doesn't
+		// use it. Cover defensively.
+		return slices.Contains(node.Field, "Prefix")
+	}
+	return false
 }
 
 func ParseLegacyTemplateForValidation(templateText string) (*template.Template, error) {
