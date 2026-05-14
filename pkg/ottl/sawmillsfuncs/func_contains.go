@@ -70,12 +70,30 @@ var lowerBufPool = sync.Pool{
 	},
 }
 
+// isASCII reports whether every byte of s is in the ASCII range. We use it
+// to gate the alloc-free path: ASCII case-folding is byte-local (A-Z → +32)
+// so it can be done in-place into a pooled buffer; case-folding non-ASCII
+// runes needs `unicode.ToLower`, which returns runes that may have a
+// different UTF-8 length from the input — keeping that alloc-free would
+// require a full rune-iterator rewrite. Today's customer-shaped logs are
+// ASCII-only, so the fast path covers the production hot spot.
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
 // lowerASCIIInto folds A-Z to a-z in-place into the pointed-to buffer and
-// returns a string view of the result. If the buffer needs to grow the
-// caller's pointer is updated to point at the resized slice so the new
-// backing memory goes back into the pool. The returned string aliases
-// `*bufPtr`'s backing memory — caller must keep using it only until the
-// pointer is returned to the pool.
+// returns a string view of the result. Callers must verify `isASCII(s)`
+// first — non-ASCII bytes are passed through unchanged, which is wrong for
+// Unicode case-folding. If the buffer needs to grow the caller's pointer
+// is updated to point at the resized slice so the new backing memory goes
+// back into the pool. The returned string aliases `*bufPtr`'s backing
+// memory — caller must keep using it only until the pointer is returned
+// to the pool.
 func lowerASCIIInto(bufPtr *[]byte, s string) string {
 	if cap(*bufPtr) < len(s) {
 		*bufPtr = make([]byte, len(s))
@@ -127,11 +145,20 @@ func contains[K any](
 		if containsAny(val, patterns) {
 			return true, nil
 		}
-		// Slow path: fold val into a pooled buffer and run strings.Contains.
-		// This is the SAW-7559 fix — the pool replaces the per-record
+		// Non-ASCII fallback: ASCII case-folding (A-Z → +32) doesn't cover
+		// Unicode case pairs (Ëë, Ωω, etc.), so for non-ASCII haystacks we
+		// take the original allocating path. `strings.ToLower` uses
+		// `unicode.ToLower` which handles all case-folding the original
+		// behavior promised. Customer's logs are ASCII so this branch is cold
+		// on the hot pipeline.
+		if !isASCII(val) {
+			return containsAny(strings.ToLower(val), patterns), nil
+		}
+		// ASCII fast slow path: fold val into a pooled buffer and run
+		// strings.Contains. The pool replaces the per-record
 		// strings.ToLower allocation that was the dominant heap pressure
-		// source on the filter-sampling pipeline. Pool holds *[]byte to
-		// avoid the slice-header boxing on Pool.Get/Put.
+		// source on the filter-sampling pipeline (SAW-7559). Pool holds
+		// *[]byte to avoid slice-header boxing on Pool.Get/Put.
 		bufPtr := lowerBufPool.Get().(*[]byte)
 		lowered := lowerASCIIInto(bufPtr, val)
 		hit := containsAny(lowered, patterns)
