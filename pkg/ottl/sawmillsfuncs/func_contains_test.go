@@ -6,6 +6,7 @@ package sawmillsfuncs
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -102,4 +103,52 @@ func TestContainsDoesNotMutatePatterns(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"TEST"}, patterns)
+}
+
+// TestContainsCaseInsensitiveSlowPathConstantAlloc pins the SAW-7559 fix:
+// the pool-backed fold path must allocate a *constant* (small, body-size-
+// independent) number of objects per call. Before the fix, the slow path
+// called `strings.ToLower(val)` which allocated len(val) bytes per record
+// × per filter rule — on customer's pipeline that was the dominant heap
+// pressure source (178 such calls per record at ~4 kB bodies).
+//
+// We measure with a small body and a 16 kB body. With the pool the alloc
+// count must NOT scale with body size — the only allocations left are
+// per-call constants (interface boxes around the bool return + getter
+// value), which the test pins below 5.
+func TestContainsCaseInsensitiveSlowPathConstantAlloc(t *testing.T) {
+	runWith := func(body string) float64 {
+		fn := contains(
+			&ottl.StandardStringGetter[any]{
+				Getter: func(context.Context, any) (any, error) { return body, nil },
+			},
+			[]string{"xyz-no-such-thing"}, // forces fold-path miss
+			false,
+		)
+		// Warm the pool — first call may allocate the buffer.
+		for i := 0; i < 16; i++ {
+			_, _ = fn(context.Background(), nil)
+		}
+		return testing.AllocsPerRun(1000, func() {
+			_, _ = fn(context.Background(), nil)
+		})
+	}
+
+	short := "Some MIXED-Case Body Line"
+	long := short + " " + strings.Repeat("Padding ", 2000) // ~16 kB
+
+	shortAllocs := runWith(short)
+	longAllocs := runWith(long)
+
+	// Body-size-independent: allocations on the long body must not exceed
+	// the short body's count + a tiny constant. The old code would have
+	// allocated ~one 16 kB byte slice per call here (a proportional shift
+	// in alloc count and bytes).
+	require.LessOrEqualf(t, longAllocs, shortAllocs+1,
+		"slow-path allocations scaled with body size: %.1f (short) → %.1f (long); pool isn't keeping the buffer reused",
+		shortAllocs, longAllocs)
+	// Hard ceiling — interface boxing of bool + getter value should be
+	// well under 5.
+	require.LessOrEqualf(t, longAllocs, 5.0,
+		"slow path allocated %.1f objects per run on a 16 kB body — pool is likely missing", longAllocs)
 }
