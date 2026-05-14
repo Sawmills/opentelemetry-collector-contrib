@@ -264,6 +264,15 @@ type CentralQueueConfig struct {
 	MaxBatchDelay                time.Duration           `mapstructure:"max_batch_delay"`
 	LaneCount                    int                     `mapstructure:"lane_count"`
 	NumConsumers                 int                     `mapstructure:"num_consumers"`
+	// ForceScheduleAge bounds how long a fallback candidate (a routing-key
+	// lane whose accumulated window is under target_compressed_bytes) may wait
+	// before being promoted ahead of fresh target_reached candidates. This
+	// prevents indefinite cold-lane starvation when many hot lanes
+	// continuously fill the ready-window budget (SAW-7548).
+	//
+	// Zero (default) means "derive as max_batch_delay × 5". A negative value
+	// disables anti-starvation (legacy strict target-first scheduling).
+	ForceScheduleAge time.Duration `mapstructure:"force_schedule_age"`
 }
 
 func (c CentralQueueConfig) effectiveLaneCount() int {

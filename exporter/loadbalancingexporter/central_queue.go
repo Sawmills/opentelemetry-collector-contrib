@@ -21,6 +21,14 @@ const (
 	centralQueueMaxRetryJitter    = 100 * time.Millisecond
 )
 
+// centralQueueDefaultForceScheduleAgeMultiplier bounds oldest_item_age under
+// continuous hot-key arrivals: once a fallback candidate has been waiting longer
+// than maxBatchDelay × this multiplier, the scheduler must serve it before any
+// fresh target_reached candidate from a different lane. This prevents
+// indefinite cold-lane starvation when target candidates continuously fill the
+// maxReadyWindows budget (SAW-7548).
+const centralQueueDefaultForceScheduleAgeMultiplier = 5
+
 func centralQueueReadyWindowLimit(consumers int) int {
 	if consumers <= 0 {
 		return defaultCentralQueueNumConsumers
@@ -47,7 +55,12 @@ type centralQueueSettings struct {
 	targetCompressedBytes        int64
 	maxBatchDelay                time.Duration
 	maxReadyWindows              int
-	telemetry                    *centralQueueTelemetry
+	// forceScheduleAge bounds how long a fallback candidate may wait before it
+	// is promoted ahead of fresh target candidates. Zero means "derive from
+	// maxBatchDelay × centralQueueDefaultForceScheduleAgeMultiplier". A negative
+	// value disables anti-starvation (legacy strict target-first scheduling).
+	forceScheduleAge time.Duration
+	telemetry        *centralQueueTelemetry
 }
 
 type centralQueue struct {
@@ -103,6 +116,9 @@ func newCentralQueue(settings centralQueueSettings) *centralQueue {
 	}
 	if settings.maxReadyWindows <= 0 {
 		settings.maxReadyWindows = 1
+	}
+	if settings.forceScheduleAge == 0 && settings.maxBatchDelay > 0 {
+		settings.forceScheduleAge = settings.maxBatchDelay * centralQueueDefaultForceScheduleAgeMultiplier
 	}
 	q := &centralQueue{settings: settings}
 	q.settings.telemetry.observeOldestItemAge(q.oldestItemAgeMillis)
@@ -196,8 +212,30 @@ func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSche
 			return state
 		}
 
+		// SAW-7548: stale fallbacks (those whose oldest item has been
+		// waiting longer than forceScheduleAge) jump ahead of fresh target
+		// candidates to bound oldest_item_age. If a stale fallback is
+		// blocked by the inflight cap we fall through to the original
+		// target/fresh-fallback flow rather than bailing early — smaller
+		// windows in later groups may still fit, and the original code's
+		// blocked-target → InflightBytes signaling remains intact.
+		staleFallbacks, freshFallbacks := q.splitFallbackByStaleness(fallbackCandidates, now)
+		scheduledStale, _ := q.scheduleReadyWindowCandidatesLocked(staleFallbacks)
+		if scheduledStale {
+			state = centralQueueSchedulerStateReady
+			// Items were removed from q.items, so the previously-collected
+			// targetCandidates / freshFallbacks indexes are stale and could
+			// remove wrong items if reused. Recollect against current state.
+			targetCandidates, fallbackCandidates, _ = q.collectWindowCandidatesLocked(now)
+			_, freshFallbacks = q.splitFallbackByStaleness(fallbackCandidates, now)
+		}
+		if len(q.ready) >= q.settings.maxReadyWindows {
+			state = centralQueueSchedulerStateReady
+			continue
+		}
+
 		scheduledTarget, blocked := q.scheduleReadyWindowCandidatesLocked(targetCandidates)
-		if !scheduledTarget && blocked {
+		if !scheduledTarget && !scheduledStale && blocked {
 			return centralQueueSchedulerStateInflightBytes
 		}
 		if scheduledTarget {
@@ -209,18 +247,40 @@ func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSche
 		}
 		if scheduledTarget {
 			_, fallbackCandidates, _ = q.collectWindowCandidatesLocked(now)
+			_, freshFallbacks = q.splitFallbackByStaleness(fallbackCandidates, now)
 		}
 
-		scheduledFallback, blocked := q.scheduleReadyWindowCandidatesLocked(fallbackCandidates)
+		scheduledFallback, blocked := q.scheduleReadyWindowCandidatesLocked(freshFallbacks)
 		if blocked {
 			return centralQueueSchedulerStateInflightBytes
 		}
-		if !scheduledTarget && !scheduledFallback {
+		if !scheduledStale && !scheduledTarget && !scheduledFallback {
 			return state
 		}
 		state = centralQueueSchedulerStateReady
 	}
 	return centralQueueSchedulerStateReadyWindowLimit
+}
+
+// splitFallbackByStaleness partitions fallback candidates into stale (older
+// than forceScheduleAge) and fresh. Stale candidates jump ahead of fresh
+// target candidates so that under continuous hot-key arrivals no lane can be
+// indefinitely starved. With forceScheduleAge <= 0 or no maxBatchDelay set,
+// all candidates remain "fresh" (legacy strict target-first scheduling).
+func (q *centralQueue) splitFallbackByStaleness(candidates []centralQueueWindowCandidate, now time.Time) (stale, fresh []centralQueueWindowCandidate) {
+	if q.settings.forceScheduleAge <= 0 || len(candidates) == 0 {
+		return nil, candidates
+	}
+	cutoffUnixNano := now.Add(-q.settings.forceScheduleAge).UnixNano()
+	for i := range candidates {
+		c := &candidates[i]
+		if c.window.oldestEnqueuedAt > 0 && c.window.oldestEnqueuedAt <= cutoffUnixNano {
+			stale = append(stale, *c)
+		} else {
+			fresh = append(fresh, *c)
+		}
+	}
+	return stale, fresh
 }
 
 // collectWindowCandidatesLocked evaluates one candidate per routing key so a hot
