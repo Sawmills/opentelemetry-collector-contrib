@@ -1,6 +1,6 @@
 change_type: bug_fix
 
-component: exporter/loadbalancingexporter
+component: exporter/loadbalancing
 
 note: Prevent indefinite cold-lane starvation in the central queue scheduler. Fallback candidates older than ``central_queue.force_schedule_age`` (default ``5 × max_batch_delay``) are now promoted ahead of fresh ``target_reached`` candidates, bounding ``oldest_item_age`` under continuous hot-key arrivals.
 
