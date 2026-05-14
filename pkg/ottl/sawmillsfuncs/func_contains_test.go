@@ -105,6 +105,44 @@ func TestContainsDoesNotMutatePatterns(t *testing.T) {
 	require.Equal(t, []string{"TEST"}, patterns)
 }
 
+// TestContainsCaseInsensitiveUnicode pins the SAW-7559 fix's Unicode
+// fallback: the new ASCII-only fast path doesn't change matching semantics
+// for non-ASCII haystacks (architect catch on PR #75). For any value with
+// a byte ≥ 0x80, contains() must fall back to `strings.ToLower(val)` /
+// `unicode.ToLower` so case-folding matches the original behavior.
+func TestContainsCaseInsensitiveUnicode(t *testing.T) {
+	cases := []struct {
+		name    string
+		value   string
+		pattern string
+		want    bool
+	}{
+		// Cyrillic small/capital — Unicode case-folding required.
+		{"cyrillic upper haystack lower pattern", "Привет МИР", "мир", true},
+		// Greek omega case pair.
+		{"greek omega upper → lower", "GREETING Ω", "ω", true},
+		// Latin-1 with diacritic — ÷ is not a letter, ensure it doesn't match.
+		{"diacritic case", "Ëxample log line", "ëxample", true},
+		// ASCII haystack must still match (regression guard for fast path).
+		{"ascii haystack case-folded match", "MIXED Body Line", "body", true},
+		{"ascii haystack no-match stays false", "MIXED Body Line", "missing", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := contains[any](
+				&ottl.StandardStringGetter[any]{
+					Getter: func(context.Context, any) (any, error) { return tc.value, nil },
+				},
+				[]string{tc.pattern},
+				false,
+			)
+			got, err := fn(context.Background(), nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 // TestContainsCaseInsensitiveSlowPathConstantAlloc pins the SAW-7559 fix:
 // the pool-backed fold path must allocate a *constant* (small, body-size-
 // independent) number of objects per call. Before the fix, the slow path

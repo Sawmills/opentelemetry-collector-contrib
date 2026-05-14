@@ -1,0 +1,18 @@
+change_type: enhancement
+
+component: pkg/ottl/sawmillsfuncs
+
+note: 'Eliminate per-record allocation in `Contains(..., caseSensitive=false)`. The previous fallback called `strings.ToLower(val)` per call, allocating a fresh lowercase copy of the target. The fold path now writes into a `sync.Pool`-backed buffer for ASCII haystacks; non-ASCII haystacks fall back to `strings.ToLower` to preserve Unicode case-folding semantics.'
+
+issues: [75]
+
+subtext: |
+  Locally measured on bigid's `0ec1b24b` boot config @ 8 k rec/s × 90 s
+  (Docker, 4 GiB):
+    - container memory: 473 MiB → 255 MiB (-46 %)
+    - total alloc lifetime: 15.4 GB → 10.2 GB (-34 %)
+    - `bytealg.MakeNoZero` flat: 904 MB (5.89 %) → absent from top-20
+  Drives the OOM-prone `filtersamplingprocessor` chain on dense
+  Datadog-migrated pipelines back under the `memory_limiter` ceiling.
+
+change_logs: [user]
