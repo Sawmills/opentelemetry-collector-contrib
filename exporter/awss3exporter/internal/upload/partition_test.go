@@ -492,19 +492,54 @@ func TestTemplateReferencesPrefix(t *testing.T) {
 // Regression for the architect's review concern (SAW-7554 PR #74): a template
 // that defines .Prefix references in associated subtemplates would have been
 // missed by a root-only AST walk. Validates the detector descends through
-// every parse tree the template carries.
-func TestTemplateReferencesPrefix_AssociatedSubtemplates(t *testing.T) {
+// every parse tree REACHABLE from the root via {{template "name"}}.
+func TestTemplateReferencesPrefix_ReachableSubtemplates(t *testing.T) {
 	t.Parallel()
 
 	// .Prefix lives in a {{define}} block, not the root, and is reached via
-	// {{template "tail"}}. A root-only walker reports false; the correct
-	// answer is true (the rendered output DOES include the prefix).
+	// {{template "tail"}}. The rendered output DOES include the prefix, so
+	// the detector must return true.
 	const tmpl = `{{define "tail"}}{{.Prefix}}/dt={{.Date}}{{end}}{{template "tail" .}}`
 
 	parsed, err := parseLegacyTemplate(tmpl)
 	assert.NoError(t, err)
 	assert.True(t, templateReferencesPrefix(parsed),
-		"detector must descend into associated templates created with {{define}}")
+		"detector must descend into associated templates invoked via {{template}}")
+}
+
+// Regression for the architect's second review concern (SAW-7554 PR #74):
+// an UNUSED {{define}} block must NOT count as a Prefix reference, otherwise
+// the auto-prepend gets suppressed for a template whose rendered key never
+// actually emits the prefix. The detector should only follow reachable
+// {{template "name"}} call sites.
+func TestTemplateReferencesPrefix_IgnoresUnusedDefines(t *testing.T) {
+	t.Parallel()
+
+	// "unused" mentions .Prefix but is never invoked. The rendered key is
+	// just "foo" — the prefix is missing, so the detector must return false
+	// to let buildLegacyTemplateKey auto-prepend it.
+	const tmpl = `{{define "unused"}}{{.Prefix}}{{end}}foo`
+
+	parsed, err := parseLegacyTemplate(tmpl)
+	assert.NoError(t, err)
+	assert.False(t, templateReferencesPrefix(parsed),
+		"detector must ignore {{define}} blocks that are unreachable from root")
+}
+
+// Regression: mutual recursion between named templates must not loop
+// forever. The detector tracks visited template names.
+func TestTemplateReferencesPrefix_MutualRecursionIsBounded(t *testing.T) {
+	t.Parallel()
+
+	// "a" calls "b", "b" calls "a". Neither references .Prefix, so the
+	// detector should return false and, more importantly, terminate.
+	const tmpl = `{{define "a"}}A{{template "b" .}}{{end}}` +
+		`{{define "b"}}B{{template "a" .}}{{end}}` +
+		`{{template "a" .}}`
+
+	parsed, err := parseLegacyTemplate(tmpl)
+	assert.NoError(t, err)
+	assert.False(t, templateReferencesPrefix(parsed))
 }
 
 func TestPartitionKeyInputsUniqueKey(t *testing.T) {

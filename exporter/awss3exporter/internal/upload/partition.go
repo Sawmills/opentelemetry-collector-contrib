@@ -147,28 +147,23 @@ func parseLegacyTemplate(templateText string) (*template.Template, error) {
 }
 
 // templateReferencesPrefix reports whether tmpl reads the .Prefix field of
-// legacyTemplateData anywhere in its body. Used by buildLegacyTemplateKey
-// to decide whether to auto-prepend the configured prefix (SAW-7554).
+// legacyTemplateData anywhere in its REACHABLE parse trees. Used by
+// buildLegacyTemplateKey to decide whether to auto-prepend the configured
+// prefix (SAW-7554).
 //
-// Walks every associated parse tree (`tmpl.Templates()`), not just the root,
-// so a reference defined in a `{{define}}/{{template}}` subtemplate still
-// counts.
+// Walks from the root tree and follows {{template "name"}} call sites to
+// associated subtemplates. Unused {{define}} blocks (those with no
+// {{template}} call site reachable from root) are intentionally NOT scanned
+// — a reference that the rendered output never emits would otherwise
+// incorrectly suppress the auto-prepend.
 func templateReferencesPrefix(tmpl *template.Template) bool {
-	if tmpl == nil {
+	if tmpl == nil || tmpl.Tree == nil {
 		return false
 	}
-	for _, t := range tmpl.Templates() {
-		if t == nil || t.Tree == nil {
-			continue
-		}
-		if walkForPrefix(t.Root) {
-			return true
-		}
-	}
-	return false
+	return walkForPrefix(tmpl, tmpl.Root, map[string]struct{}{})
 }
 
-func walkForPrefix(n parse.Node) bool {
+func walkForPrefix(root *template.Template, n parse.Node, visited map[string]struct{}) bool {
 	switch node := n.(type) {
 	case nil:
 		return false
@@ -176,21 +171,23 @@ func walkForPrefix(n parse.Node) bool {
 		if node == nil {
 			return false
 		}
-		return slices.ContainsFunc(node.Nodes, walkForPrefix)
+		return slices.ContainsFunc(node.Nodes, func(c parse.Node) bool {
+			return walkForPrefix(root, c, visited)
+		})
 	case *parse.ActionNode:
-		return walkForPrefix(node.Pipe)
+		return walkForPrefix(root, node.Pipe, visited)
 	case *parse.IfNode:
-		return walkForPrefix(node.Pipe) ||
-			walkForPrefix(node.List) ||
-			walkForPrefix(node.ElseList)
+		return walkForPrefix(root, node.Pipe, visited) ||
+			walkForPrefix(root, node.List, visited) ||
+			walkForPrefix(root, node.ElseList, visited)
 	case *parse.RangeNode:
-		return walkForPrefix(node.Pipe) ||
-			walkForPrefix(node.List) ||
-			walkForPrefix(node.ElseList)
+		return walkForPrefix(root, node.Pipe, visited) ||
+			walkForPrefix(root, node.List, visited) ||
+			walkForPrefix(root, node.ElseList, visited)
 	case *parse.WithNode:
-		return walkForPrefix(node.Pipe) ||
-			walkForPrefix(node.List) ||
-			walkForPrefix(node.ElseList)
+		return walkForPrefix(root, node.Pipe, visited) ||
+			walkForPrefix(root, node.List, visited) ||
+			walkForPrefix(root, node.ElseList, visited)
 	case *parse.PipeNode:
 		if node == nil {
 			return false
@@ -199,8 +196,25 @@ func walkForPrefix(n parse.Node) bool {
 			if cmd == nil {
 				return false
 			}
-			return slices.ContainsFunc(cmd.Args, walkForPrefix)
+			return slices.ContainsFunc(cmd.Args, func(arg parse.Node) bool {
+				return walkForPrefix(root, arg, visited)
+			})
 		})
+	case *parse.TemplateNode:
+		// {{template "name" .pipe}}: the pipe argument may itself reference
+		// .Prefix; the named subtemplate is reachable iff actually invoked
+		// here, so descend (once per name to avoid mutual-recursion loops).
+		if walkForPrefix(root, node.Pipe, visited) {
+			return true
+		}
+		if _, seen := visited[node.Name]; seen {
+			return false
+		}
+		visited[node.Name] = struct{}{}
+		if sub := root.Lookup(node.Name); sub != nil && sub.Tree != nil {
+			return walkForPrefix(root, sub.Root, visited)
+		}
+		return false
 	case *parse.FieldNode:
 		// `{{.Prefix}}` parses as FieldNode with Ident=["Prefix"].
 		return slices.Contains(node.Ident, "Prefix")
