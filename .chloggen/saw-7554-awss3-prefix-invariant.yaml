@@ -7,12 +7,13 @@ note: honor s3_prefix as an invariant in legacy template mode
 issues: [74]
 
 subtext: |
-  The legacy-template key builder previously treated `s3_prefix` as advisory:
-  it was only honored if the template referenced `{{.Prefix}}`. Default mode
-  (no template) already honored it unconditionally via `bucketKeyPrefix`. That
-  asymmetry let any hardcoded template silently drop the configured prefix
-  and write to bucket root. The exporter now auto-prepends the prefix when
-  the parsed template does not reference `.Prefix`; templates that already
-  reference `.Prefix` render exactly as before (no double-prepend).
+  Tracks SAW-7554. The legacy-template key builder previously treated
+  `s3_prefix` as advisory: it was only honored if the template referenced
+  `{{.Prefix}}`. Default mode (no template) already honored it
+  unconditionally via `bucketKeyPrefix`. That asymmetry let any hardcoded
+  template silently drop the configured prefix and write to bucket root.
+  The exporter now auto-prepends the prefix when the parsed template does
+  not reference `.Prefix`; templates that already reference `.Prefix`
+  render exactly as before (no double-prepend).
 
 change_logs: [user]

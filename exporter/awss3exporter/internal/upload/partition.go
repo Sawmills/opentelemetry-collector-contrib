@@ -149,11 +149,23 @@ func parseLegacyTemplate(templateText string) (*template.Template, error) {
 // templateReferencesPrefix reports whether tmpl reads the .Prefix field of
 // legacyTemplateData anywhere in its body. Used by buildLegacyTemplateKey
 // to decide whether to auto-prepend the configured prefix (SAW-7554).
+//
+// Walks every associated parse tree (`tmpl.Templates()`), not just the root,
+// so a reference defined in a `{{define}}/{{template}}` subtemplate still
+// counts.
 func templateReferencesPrefix(tmpl *template.Template) bool {
-	if tmpl == nil || tmpl.Tree == nil {
+	if tmpl == nil {
 		return false
 	}
-	return walkForPrefix(tmpl.Root)
+	for _, t := range tmpl.Templates() {
+		if t == nil || t.Tree == nil {
+			continue
+		}
+		if walkForPrefix(t.Root) {
+			return true
+		}
+	}
+	return false
 }
 
 func walkForPrefix(n parse.Node) bool {
@@ -164,11 +176,7 @@ func walkForPrefix(n parse.Node) bool {
 		if node == nil {
 			return false
 		}
-		for _, child := range node.Nodes {
-			if walkForPrefix(child) {
-				return true
-			}
-		}
+		return slices.ContainsFunc(node.Nodes, walkForPrefix)
 	case *parse.ActionNode:
 		return walkForPrefix(node.Pipe)
 	case *parse.IfNode:
@@ -187,16 +195,12 @@ func walkForPrefix(n parse.Node) bool {
 		if node == nil {
 			return false
 		}
-		for _, cmd := range node.Cmds {
+		return slices.ContainsFunc(node.Cmds, func(cmd *parse.CommandNode) bool {
 			if cmd == nil {
-				continue
+				return false
 			}
-			for _, arg := range cmd.Args {
-				if walkForPrefix(arg) {
-					return true
-				}
-			}
-		}
+			return slices.ContainsFunc(cmd.Args, walkForPrefix)
+		})
 	case *parse.FieldNode:
 		// `{{.Prefix}}` parses as FieldNode with Ident=["Prefix"].
 		return slices.Contains(node.Ident, "Prefix")

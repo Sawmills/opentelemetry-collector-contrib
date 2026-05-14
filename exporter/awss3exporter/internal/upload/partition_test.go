@@ -489,6 +489,24 @@ func TestTemplateReferencesPrefix(t *testing.T) {
 	}
 }
 
+// Regression for the architect's review concern (SAW-7554 PR #74): a template
+// that defines .Prefix references in associated subtemplates would have been
+// missed by a root-only AST walk. Validates the detector descends through
+// every parse tree the template carries.
+func TestTemplateReferencesPrefix_AssociatedSubtemplates(t *testing.T) {
+	t.Parallel()
+
+	// .Prefix lives in a {{define}} block, not the root, and is reached via
+	// {{template "tail"}}. A root-only walker reports false; the correct
+	// answer is true (the rendered output DOES include the prefix).
+	const tmpl = `{{define "tail"}}{{.Prefix}}/dt={{.Date}}{{end}}{{template "tail" .}}`
+
+	parsed, err := parseLegacyTemplate(tmpl)
+	assert.NoError(t, err)
+	assert.True(t, templateReferencesPrefix(parsed),
+		"detector must descend into associated templates created with {{define}}")
+}
+
 func TestPartitionKeyInputsUniqueKey(t *testing.T) {
 	t.Parallel()
 
