@@ -1,6 +1,6 @@
 change_type: bug_fix
 
-component: exporter/awss3exporter
+component: exporter/awss3
 
 note: honor s3_prefix as an invariant in legacy template mode
 
