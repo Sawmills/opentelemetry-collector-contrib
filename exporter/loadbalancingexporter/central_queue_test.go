@@ -693,6 +693,77 @@ func TestCentralQueueStopAllowsDrainingExistingItems(t *testing.T) {
 	require.ErrorIs(t, err, errCentralQueueStopped)
 }
 
+// TestCentralQueueStaleFallbackSchedulingDoesNotCorruptTargetIndexes guards the
+// coderabbitai feedback: after stale-fallback scheduling removes items from
+// q.items, the previously-collected target/fresh-fallback candidate indexes
+// would point at the wrong rows. The scheduler must recollect those slices
+// against the post-mutation queue before reusing them, or `removeWindowLocked`
+// will drop unrelated items.
+func TestCentralQueueStaleFallbackSchedulingDoesNotCorruptTargetIndexes(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           10000,
+		maxInflightUncompressedBytes: 10000,
+		maxUncompressedBatchBytes:    1000,
+		targetCompressedBytes:        20,
+		maxBatchDelay:                250 * time.Millisecond,
+		maxReadyWindows:              2,
+	})
+
+	t0 := time.Unix(1000, 0)
+
+	// Old cold lane — single item, will become stale.
+	require.NoError(t, q.enqueueAt(centralQueueItem{
+		signal:            signalKindLogs,
+		routingKey:        []byte("cold-stale"),
+		compressedBytes:   10,
+		uncompressedBytes: 10,
+		count:             1,
+	}, t0))
+
+	// Target lane: two items recent, each below target individually, together
+	// reaching target_reached (compressed=20). Each carries a unique sentinel
+	// in its payload so we can prove the right items survived after removal.
+	target := t0.Add(2 * time.Second)
+	require.NoError(t, q.enqueueAt(centralQueueItem{
+		signal:            signalKindLogs,
+		routingKey:        []byte("target-lane"),
+		payload:           []byte("target-payload-1"),
+		compressedBytes:   10,
+		uncompressedBytes: 10,
+		count:             1,
+	}, target.Add(-5*time.Millisecond)))
+	require.NoError(t, q.enqueueAt(centralQueueItem{
+		signal:            signalKindLogs,
+		routingKey:        []byte("target-lane"),
+		payload:           []byte("target-payload-2"),
+		compressedBytes:   10,
+		uncompressedBytes: 10,
+		count:             1,
+	}, target.Add(-1*time.Millisecond)))
+
+	// First lease: stale cold lane wins (anti-starvation).
+	first, err := q.tryLease(target)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	require.Equal(t, []byte("cold-stale"), first.window.routingKey)
+	first.done()
+
+	// Second lease: target lane should be served and its window must contain
+	// BOTH original target-lane items — not arbitrary items removed because
+	// of corrupted post-mutation indexes.
+	second, err := q.tryLease(target)
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	require.Equal(t, []byte("target-lane"), second.window.routingKey)
+	require.Len(t, second.window.items, 2)
+	payloads := []string{string(second.window.items[0].payload), string(second.window.items[1].payload)}
+	require.ElementsMatch(t, []string{"target-payload-1", "target-payload-2"}, payloads,
+		"target-lane window must contain both original target-payload items; stale indexes would have removed the wrong rows")
+	second.done()
+
+	require.Zero(t, q.len(), "queue should be drained — no orphan items left from index mis-removal")
+}
+
 // TestCentralQueueStaleFallbackBlockedByInflightDoesNotPreemptTargetScheduling
 // covers the architect-review feedback on the first SAW-7548 fix attempt: when
 // a stale fallback candidate cannot fit under the inflight cap but a smaller

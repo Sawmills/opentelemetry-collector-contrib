@@ -223,6 +223,11 @@ func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSche
 		scheduledStale, _ := q.scheduleReadyWindowCandidatesLocked(staleFallbacks)
 		if scheduledStale {
 			state = centralQueueSchedulerStateReady
+			// Items were removed from q.items, so the previously-collected
+			// targetCandidates / freshFallbacks indexes are stale and could
+			// remove wrong items if reused. Recollect against current state.
+			targetCandidates, fallbackCandidates, _ = q.collectWindowCandidatesLocked(now)
+			_, freshFallbacks = q.splitFallbackByStaleness(fallbackCandidates, now)
 		}
 		if len(q.ready) >= q.settings.maxReadyWindows {
 			state = centralQueueSchedulerStateReady
