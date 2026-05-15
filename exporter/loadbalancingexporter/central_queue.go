@@ -4,7 +4,6 @@
 package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter"
 
 import (
-	"bytes"
 	"container/heap"
 	"context"
 	"encoding/binary"
@@ -110,6 +109,11 @@ type centralQueueWindowCandidate struct {
 	indexes []int
 }
 
+type centralQueueWindowCandidateBuilder struct {
+	candidate centralQueueWindowCandidate
+	finalized bool
+}
+
 func newCentralQueue(settings centralQueueSettings) *centralQueue {
 	if settings.targetCompressedBytes <= 0 {
 		settings.targetCompressedBytes = 1
@@ -152,6 +156,9 @@ func (q *centralQueue) enqueueAt(item centralQueueItem, now time.Time) error {
 	}
 	if item.enqueuedAtUnixNano == 0 {
 		item.enqueuedAtUnixNano = now.UnixNano()
+	}
+	if item.routingKeyID == "" && len(item.routingKey) > 0 {
+		item.routingKeyID = string(item.routingKey)
 	}
 	q.items = append(q.items, item)
 	q.currentCompressedBytes += int64(item.compressedBytes)
@@ -287,24 +294,80 @@ func (q *centralQueue) splitFallbackByStaleness(candidates []centralQueueWindowC
 // lane cannot fill the bounded ready backlog before other ready lanes get a turn.
 func (q *centralQueue) collectWindowCandidatesLocked(now time.Time) ([]centralQueueWindowCandidate, []centralQueueWindowCandidate, bool) {
 	nowUnixNano := now.UnixNano()
-	evaluatedRoutingKeys := make(map[string]struct{})
+	candidateIndexesByRoutingKey := make(map[string]int)
+	candidates := make([]centralQueueWindowCandidateBuilder, 0)
 	targetCandidates := make([]centralQueueWindowCandidate, 0)
 	fallbackCandidates := make([]centralQueueWindowCandidate, 0)
 	hasReady := false
-	for _, item := range q.items {
+	for i := range q.items {
+		item := &q.items[i]
 		if item.nextAttemptUnixNano > nowUnixNano {
 			continue
 		}
 		hasReady = true
-		routingKey := string(item.routingKey)
-		if _, ok := evaluatedRoutingKeys[routingKey]; ok {
-			continue
+
+		routingKeyID := item.routingKeyID
+		if routingKeyID == "" && len(item.routingKey) > 0 {
+			routingKeyID = string(item.routingKey)
 		}
-		evaluatedRoutingKeys[routingKey] = struct{}{}
-		candidate, ok := q.buildWindowCandidateLocked(item.routingKey, now)
+		candidateIndex, ok := candidateIndexesByRoutingKey[routingKeyID]
 		if !ok {
+			candidateIndexesByRoutingKey[routingKeyID] = len(candidates)
+			candidates = append(candidates, centralQueueWindowCandidateBuilder{
+				candidate: centralQueueWindowCandidate{
+					window: centralQueueWindow{
+						routingKey: append([]byte(nil), item.routingKey...),
+					},
+					indexes: make([]int, 0, 1),
+				},
+			})
+			candidateIndex = len(candidates) - 1
+		}
+
+		candidate := &candidates[candidateIndex]
+		if candidate.finalized {
 			continue
 		}
+		if len(candidate.candidate.indexes) > 0 && q.windowWouldExceedLimit(candidate.candidate.window, item) {
+			candidate.candidate.window.flushReason = centralQueueFlushReasonHardCap
+			candidate.finalized = true
+			continue
+		}
+
+		appendCentralQueueWindowCandidateIndex(&candidate.candidate, item, i)
+		if int64(candidate.candidate.window.compressedBytes) >= q.settings.targetCompressedBytes {
+			candidate.candidate.window.flushReason = centralQueueFlushReasonTargetReached
+			candidate.finalized = true
+		}
+	}
+
+	for i := range candidates {
+		candidate := candidates[i].candidate
+		if len(candidate.indexes) == 0 {
+			continue
+		}
+		switch candidate.window.flushReason {
+		case centralQueueFlushReasonTargetReached:
+		case "":
+			switch {
+			case q.stopped:
+				candidate.window.flushReason = centralQueueFlushReasonShutdown
+			case q.settings.maxBatchDelay <= 0:
+				candidate.window.flushReason = centralQueueFlushReasonMaxDelayLowTraffic
+			default:
+				oldest := time.Unix(0, candidate.window.oldestEnqueuedAt)
+				if oldest.IsZero() || now.Sub(oldest) < q.settings.maxBatchDelay {
+					continue
+				}
+				candidate.window.flushReason = centralQueueFlushReasonMaxDelayLowTraffic
+			}
+		default:
+			if q.stopped {
+				candidate.window.flushReason = centralQueueFlushReasonShutdown
+			}
+		}
+		q.materializeWindowCandidateItemsLocked(&candidate)
+
 		if candidate.window.flushReason != centralQueueFlushReasonTargetReached {
 			fallbackCandidates = append(fallbackCandidates, candidate)
 			continue
@@ -358,66 +421,27 @@ func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQ
 	return true, blocked
 }
 
-func (q *centralQueue) buildWindowCandidateLocked(routingKey []byte, now time.Time) (centralQueueWindowCandidate, bool) {
-	nowUnixNano := now.UnixNano()
-	candidate := centralQueueWindowCandidate{
-		window: centralQueueWindow{
-			routingKey: append([]byte(nil), routingKey...),
-			items:      make([]centralQueueItem, 0, 1),
-		},
-		indexes: make([]int, 0, 1),
+func appendCentralQueueWindowCandidateIndex(candidate *centralQueueWindowCandidate, item *centralQueueItem, index int) {
+	candidate.indexes = append(candidate.indexes, index)
+	candidate.window.compressedBytes += item.compressedBytes
+	candidate.window.uncompressedBytes += item.uncompressedBytes
+	candidate.window.count += item.count
+	if item.attempt > candidate.window.maxAttempt {
+		candidate.window.maxAttempt = item.attempt
 	}
-
-	blockedByHardLimit := false
-	for i, item := range q.items {
-		if !bytes.Equal(item.routingKey, routingKey) || item.nextAttemptUnixNano > nowUnixNano {
-			continue
-		}
-		if len(candidate.window.items) > 0 && q.windowWouldExceedLimit(candidate.window, item) {
-			blockedByHardLimit = true
-			break
-		}
-		candidate.window.items = append(candidate.window.items, item)
-		candidate.indexes = append(candidate.indexes, i)
-		candidate.window.compressedBytes += item.compressedBytes
-		candidate.window.uncompressedBytes += item.uncompressedBytes
-		candidate.window.count += item.count
-		if item.attempt > candidate.window.maxAttempt {
-			candidate.window.maxAttempt = item.attempt
-		}
-		if candidate.window.oldestEnqueuedAt == 0 || item.enqueuedAtUnixNano < candidate.window.oldestEnqueuedAt {
-			candidate.window.oldestEnqueuedAt = item.enqueuedAtUnixNano
-		}
-		if int64(candidate.window.compressedBytes) >= q.settings.targetCompressedBytes {
-			candidate.window.flushReason = centralQueueFlushReasonTargetReached
-			return candidate, true
-		}
+	if candidate.window.oldestEnqueuedAt == 0 || item.enqueuedAtUnixNano < candidate.window.oldestEnqueuedAt {
+		candidate.window.oldestEnqueuedAt = item.enqueuedAtUnixNano
 	}
-
-	if len(candidate.window.items) == 0 {
-		return centralQueueWindowCandidate{}, false
-	}
-	if q.stopped {
-		candidate.window.flushReason = centralQueueFlushReasonShutdown
-		return candidate, true
-	}
-	if blockedByHardLimit {
-		candidate.window.flushReason = centralQueueFlushReasonHardCap
-		return candidate, true
-	}
-	if q.settings.maxBatchDelay <= 0 {
-		candidate.window.flushReason = centralQueueFlushReasonMaxDelayLowTraffic
-		return candidate, true
-	}
-	oldest := time.Unix(0, candidate.window.oldestEnqueuedAt)
-	if !oldest.IsZero() && now.Sub(oldest) >= q.settings.maxBatchDelay {
-		candidate.window.flushReason = centralQueueFlushReasonMaxDelayLowTraffic
-		return candidate, true
-	}
-	return centralQueueWindowCandidate{}, false
 }
 
-func (q *centralQueue) windowWouldExceedLimit(window centralQueueWindow, item centralQueueItem) bool {
+func (q *centralQueue) materializeWindowCandidateItemsLocked(candidate *centralQueueWindowCandidate) {
+	candidate.window.items = make([]centralQueueItem, 0, len(candidate.indexes))
+	for _, index := range candidate.indexes {
+		candidate.window.items = append(candidate.window.items, q.items[index])
+	}
+}
+
+func (q *centralQueue) windowWouldExceedLimit(window centralQueueWindow, item *centralQueueItem) bool {
 	return q.settings.maxUncompressedBatchBytes > 0 &&
 		window.uncompressedBytes+item.uncompressedBytes > q.settings.maxUncompressedBatchBytes
 }
@@ -440,8 +464,8 @@ func (q *centralQueue) leaseReadyWindowLocked() *centralQueueLease {
 	copy(q.ready, q.ready[1:])
 	q.ready[len(q.ready)-1] = centralQueueWindow{}
 	q.ready = q.ready[:len(q.ready)-1]
-	for _, item := range window.items {
-		q.untrackOldestEnqueuedAtLocked(item)
+	for i := range window.items {
+		q.untrackOldestEnqueuedAtLocked(window.items[i])
 	}
 	snapshot := q.snapshotLocked()
 	q.settings.telemetry.record(context.Background(), snapshot)
@@ -456,26 +480,28 @@ func (q *centralQueue) leaseReadyWindowLocked() *centralQueueLease {
 	return lease
 }
 
-func (q *centralQueue) removeItemLocked(index int) {
-	removed := q.items[index]
-	q.items = removeCentralQueueItem(q.items, index)
-	q.untrackOldestEnqueuedAtLocked(removed)
-}
-
 func (q *centralQueue) removeWindowLocked(indexes []int, untrack bool) {
-	for i := len(indexes) - 1; i >= 0; i-- {
-		if untrack {
-			q.removeItemLocked(indexes[i])
+	if len(indexes) == 0 {
+		return
+	}
+
+	writeIndex := indexes[0]
+	removeIndex := 0
+	for readIndex := indexes[0]; readIndex < len(q.items); readIndex++ {
+		if removeIndex < len(indexes) && indexes[removeIndex] == readIndex {
+			if untrack {
+				q.untrackOldestEnqueuedAtLocked(q.items[readIndex])
+			}
+			for removeIndex < len(indexes) && indexes[removeIndex] == readIndex {
+				removeIndex++
+			}
 			continue
 		}
-		q.items = removeCentralQueueItem(q.items, indexes[i])
+		q.items[writeIndex] = q.items[readIndex]
+		writeIndex++
 	}
-}
-
-func removeCentralQueueItem(items []centralQueueItem, index int) []centralQueueItem {
-	copy(items[index:], items[index+1:])
-	items[len(items)-1] = centralQueueItem{}
-	return items[:len(items)-1]
+	clear(q.items[writeIndex:])
+	q.items = q.items[:writeIndex]
 }
 
 func (l *centralQueueLease) done() {
@@ -500,7 +526,8 @@ func (l *centralQueueLease) requeue(now time.Time) error {
 			l.queue.currentCompressedBytes -= int64(l.window.compressedBytes)
 			err = errCentralQueueStopped
 		} else {
-			for _, item := range l.window.items {
+			for i := range l.window.items {
+				item := l.window.items[i]
 				nextAttempt := now.Add(centralQueueRetryDelayWithJitter(item))
 				item.attempt++
 				item.nextAttemptUnixNano = nextAttempt.UnixNano()
