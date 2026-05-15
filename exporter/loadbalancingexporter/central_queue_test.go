@@ -1002,6 +1002,103 @@ func TestCentralQueueDoesNotStarveColdLaneUnderContinuousHotKeyArrivals(t *testi
 		totalRounds, time.Duration(totalRounds)*100*time.Millisecond)
 }
 
+func BenchmarkCentralQueueDrainInterleavedBacklog(b *testing.B) {
+	const (
+		laneCount             = 64
+		itemsPerLane          = 512
+		itemCompressedBytes   = 4 * 1024
+		itemUncompressedBytes = 16 * 1024
+		targetCompressedBytes = 256 * 1024
+	)
+
+	laneKeys := make([][]byte, laneCount)
+	for lane := range laneCount {
+		laneKeys[lane] = fmt.Appendf(nil, "lane-%02d", lane)
+	}
+	now := time.Unix(1000, 0)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		q := newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           int64(laneCount * itemsPerLane * itemCompressedBytes),
+			maxInflightUncompressedBytes: int64(laneCount * targetCompressedBytes * 16),
+			maxUncompressedBatchBytes:    laneCount * targetCompressedBytes,
+			targetCompressedBytes:        targetCompressedBytes,
+			maxBatchDelay:                time.Second,
+			maxReadyWindows:              laneCount,
+		})
+
+		b.StopTimer()
+		for itemIndex := range itemsPerLane {
+			for lane := range laneCount {
+				require.NoError(b, q.enqueueAt(centralQueueItem{
+					signal:            signalKindLogs,
+					routingKey:        laneKeys[lane],
+					compressedBytes:   itemCompressedBytes,
+					uncompressedBytes: itemUncompressedBytes,
+					count:             1,
+				}, now.Add(time.Duration(itemIndex)*time.Nanosecond)))
+			}
+		}
+		b.StartTimer()
+
+		for q.len() > 0 {
+			lease, err := q.tryLease(now.Add(time.Second))
+			require.NoError(b, err)
+			if lease == nil {
+				b.Fatalf("queue stalled with %d items remaining", q.len())
+			}
+			lease.done()
+		}
+	}
+}
+
+func BenchmarkCentralQueueCollectInterleavedUnderfilledBacklog(b *testing.B) {
+	const (
+		laneCount             = 64
+		itemsPerLane          = 512
+		itemCompressedBytes   = 1
+		itemUncompressedBytes = 16 * 1024
+	)
+
+	laneKeys := make([][]byte, laneCount)
+	for lane := range laneCount {
+		laneKeys[lane] = fmt.Appendf(nil, "lane-%02d", lane)
+	}
+	now := time.Unix(1000, 0)
+
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           int64(laneCount * itemsPerLane * itemCompressedBytes),
+		maxInflightUncompressedBytes: int64(laneCount * itemsPerLane * itemUncompressedBytes),
+		maxUncompressedBatchBytes:    laneCount * itemsPerLane * itemUncompressedBytes,
+		targetCompressedBytes:        itemsPerLane + 1,
+		maxBatchDelay:                time.Hour,
+		maxReadyWindows:              laneCount,
+	})
+	for itemIndex := range itemsPerLane {
+		for lane := range laneCount {
+			require.NoError(b, q.enqueueAt(centralQueueItem{
+				signal:            signalKindLogs,
+				routingKey:        laneKeys[lane],
+				compressedBytes:   itemCompressedBytes,
+				uncompressedBytes: itemUncompressedBytes,
+				count:             1,
+			}, now.Add(time.Duration(itemIndex)*time.Nanosecond)))
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		q.mu.Lock()
+		targetCandidates, fallbackCandidates, hasReady := q.collectWindowCandidatesLocked(now)
+		q.mu.Unlock()
+		require.True(b, hasReady)
+		require.Empty(b, targetCandidates)
+		require.Empty(b, fallbackCandidates)
+	}
+}
+
 func requireCentralQueueFirstRetryDelay(t *testing.T, q *centralQueue) {
 	t.Helper()
 

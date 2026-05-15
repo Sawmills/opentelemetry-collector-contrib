@@ -22,6 +22,7 @@ var (
 type centralQueueItem struct {
 	signal              signalKind
 	routingKey          []byte
+	routingKeyID        string
 	payload             []byte
 	compressedBytes     int
 	uncompressedBytes   int
