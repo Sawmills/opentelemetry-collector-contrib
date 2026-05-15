@@ -49,17 +49,75 @@ func startsWithAny(s string, prefixes []string) bool {
 	return false
 }
 
+func startsWithAnyFoldASCII(s string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if len(prefix) > len(s) {
+			continue
+		}
+		matches := true
+		for i := 0; i < len(prefix); i++ {
+			c := s[i]
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if c != prefix[i] {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return true
+		}
+	}
+	return false
+}
+
+func maxPrefixLen(prefixes []string) int {
+	maxLen := 0
+	for _, prefix := range prefixes {
+		if len(prefix) > maxLen {
+			maxLen = len(prefix)
+		}
+	}
+	return maxLen
+}
+
+func allASCII(prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if !isASCII(prefix) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasNonASCIIInPrefixWindow(s string, maxLen int) bool {
+	if maxLen > len(s) {
+		maxLen = len(s)
+	}
+	for i := 0; i < maxLen; i++ {
+		if s[i] >= 0x80 {
+			return true
+		}
+	}
+	return false
+}
+
 func startsWith[K any](
 	target ottl.StringGetter[K],
 	prefixes []string,
 	caseSensitive bool,
 ) ottl.ExprFunc[K] {
+	asciiPrefixes := false
+	longestPrefix := 0
 	if !caseSensitive {
 		lowerPrefixes := make([]string, len(prefixes))
 		for i, prefix := range prefixes {
 			lowerPrefixes[i] = strings.ToLower(prefix)
 		}
 		prefixes = lowerPrefixes
+		asciiPrefixes = allASCII(prefixes)
+		longestPrefix = maxPrefixLen(prefixes)
 	}
 	return func(ctx context.Context, tCtx K) (any, error) {
 		val, err := target.Get(ctx, tCtx)
@@ -76,6 +134,16 @@ func startsWith[K any](
 			// Avoid lowercasing already-lowercase hot-path values.
 			if startsWithAny(val, prefixes) {
 				return true, nil
+			}
+			if startsWithAnyFoldASCII(val, prefixes) {
+				return true, nil
+			}
+			if asciiPrefixes {
+				if !hasNonASCIIInPrefixWindow(val, longestPrefix) {
+					return false, nil
+				}
+			} else if isASCII(val) {
+				return false, nil
 			}
 			val = strings.ToLower(val)
 		}

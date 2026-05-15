@@ -49,6 +49,30 @@ func endsWithAny(s string, suffixes []string) bool {
 	return false
 }
 
+func endsWithAnyFoldASCII(s string, suffixes []string) bool {
+	for _, suffix := range suffixes {
+		if len(suffix) > len(s) {
+			continue
+		}
+		offset := len(s) - len(suffix)
+		matches := true
+		for i := 0; i < len(suffix); i++ {
+			c := s[offset+i]
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if c != suffix[i] {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return true
+		}
+	}
+	return false
+}
+
 func endsWith[K any](
 	target ottl.StringGetter[K],
 	suffixes []string,
@@ -76,6 +100,9 @@ func endsWith[K any](
 			// Avoid lowercasing already-lowercase hot-path values.
 			if endsWithAny(val, suffixes) {
 				return true, nil
+			}
+			if isASCII(val) {
+				return endsWithAnyFoldASCII(val, suffixes), nil
 			}
 			val = strings.ToLower(val)
 		}
