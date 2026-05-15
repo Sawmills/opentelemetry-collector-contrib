@@ -1252,8 +1252,8 @@ func requireCentralQueueFirstRetryDelay(t *testing.T, q *centralQueue) {
 
 func centralQueuePayloadStrings(items []centralQueueItem) []string {
 	payloads := make([]string, 0, len(items))
-	for _, item := range items {
-		payloads = append(payloads, string(item.payload))
+	for i := range items {
+		payloads = append(payloads, string(items[i].payload))
 	}
 	return payloads
 }

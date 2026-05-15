@@ -299,7 +299,8 @@ func (q *centralQueue) collectWindowCandidatesLocked(now time.Time) ([]centralQu
 	targetCandidates := make([]centralQueueWindowCandidate, 0)
 	fallbackCandidates := make([]centralQueueWindowCandidate, 0)
 	hasReady := false
-	for i, item := range q.items {
+	for i := range q.items {
+		item := &q.items[i]
 		if item.nextAttemptUnixNano > nowUnixNano {
 			continue
 		}
@@ -420,7 +421,7 @@ func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQ
 	return true, blocked
 }
 
-func appendCentralQueueWindowCandidateIndex(candidate *centralQueueWindowCandidate, item centralQueueItem, index int) {
+func appendCentralQueueWindowCandidateIndex(candidate *centralQueueWindowCandidate, item *centralQueueItem, index int) {
 	candidate.indexes = append(candidate.indexes, index)
 	candidate.window.compressedBytes += item.compressedBytes
 	candidate.window.uncompressedBytes += item.uncompressedBytes
@@ -440,7 +441,7 @@ func (q *centralQueue) materializeWindowCandidateItemsLocked(candidate *centralQ
 	}
 }
 
-func (q *centralQueue) windowWouldExceedLimit(window centralQueueWindow, item centralQueueItem) bool {
+func (q *centralQueue) windowWouldExceedLimit(window centralQueueWindow, item *centralQueueItem) bool {
 	return q.settings.maxUncompressedBatchBytes > 0 &&
 		window.uncompressedBytes+item.uncompressedBytes > q.settings.maxUncompressedBatchBytes
 }
@@ -463,8 +464,8 @@ func (q *centralQueue) leaseReadyWindowLocked() *centralQueueLease {
 	copy(q.ready, q.ready[1:])
 	q.ready[len(q.ready)-1] = centralQueueWindow{}
 	q.ready = q.ready[:len(q.ready)-1]
-	for _, item := range window.items {
-		q.untrackOldestEnqueuedAtLocked(item)
+	for i := range window.items {
+		q.untrackOldestEnqueuedAtLocked(window.items[i])
 	}
 	snapshot := q.snapshotLocked()
 	q.settings.telemetry.record(context.Background(), snapshot)
@@ -525,7 +526,8 @@ func (l *centralQueueLease) requeue(now time.Time) error {
 			l.queue.currentCompressedBytes -= int64(l.window.compressedBytes)
 			err = errCentralQueueStopped
 		} else {
-			for _, item := range l.window.items {
+			for i := range l.window.items {
+				item := l.window.items[i]
 				nextAttempt := now.Add(centralQueueRetryDelayWithJitter(item))
 				item.attempt++
 				item.nextAttemptUnixNano = nextAttempt.UnixNano()
