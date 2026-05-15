@@ -307,7 +307,8 @@ func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context
 	corruptPayloads := 0
 	droppedItems := 0
 	var firstDecodeErr error
-	for _, item := range window.items {
+	for i := range window.items {
+		item := window.items[i]
 		itemLogs, err := decodeCentralQueueLogsItem(item, e.centralCodec)
 		if err != nil {
 			corruptPayloads++

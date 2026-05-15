@@ -299,7 +299,8 @@ func (e *metricExporterImp) consumeCentralQueueMetricWindowAttempt(ctx context.C
 	corruptPayloads := 0
 	droppedItems := 0
 	var firstDecodeErr error
-	for _, item := range window.items {
+	for i := range window.items {
+		item := window.items[i]
 		itemMetrics, err := decodeCentralQueueMetricsItem(item, e.centralCodec)
 		if err != nil {
 			corruptPayloads++

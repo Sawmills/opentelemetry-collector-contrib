@@ -195,6 +195,138 @@ func TestCentralQueueReadyWindowsHandleInterleavedLaneItems(t *testing.T) {
 	require.Zero(t, q.compressedBytes())
 }
 
+func TestCentralQueueCollectWindowCandidatesGroupsInterleavedKeys(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    100,
+		targetCompressedBytes:        20,
+		maxBatchDelay:                time.Hour,
+	})
+	now := time.Unix(10, 0)
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), payload: []byte("a-1"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-b"), payload: []byte("b-1"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), payload: []byte("a-2"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-b"), payload: []byte("b-2"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
+
+	q.mu.Lock()
+	targetCandidates, fallbackCandidates, hasReady := q.collectWindowCandidatesLocked(now)
+	q.mu.Unlock()
+
+	require.True(t, hasReady)
+	require.Empty(t, fallbackCandidates)
+	require.Len(t, targetCandidates, 2)
+	require.Equal(t, []byte("lane-a"), targetCandidates[0].window.routingKey)
+	require.Equal(t, []int{0, 2}, targetCandidates[0].indexes)
+	require.Equal(t, []string{"a-1", "a-2"}, centralQueuePayloadStrings(targetCandidates[0].window.items))
+	require.Equal(t, centralQueueFlushReasonTargetReached, targetCandidates[0].window.flushReason)
+	require.Equal(t, []byte("lane-b"), targetCandidates[1].window.routingKey)
+	require.Equal(t, []int{1, 3}, targetCandidates[1].indexes)
+	require.Equal(t, []string{"b-1", "b-2"}, centralQueuePayloadStrings(targetCandidates[1].window.items))
+	require.Equal(t, centralQueueFlushReasonTargetReached, targetCandidates[1].window.flushReason)
+}
+
+func TestCentralQueueCollectWindowCandidatesMarksHardCapBeforeTarget(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    30,
+		targetCompressedBytes:        100,
+		maxBatchDelay:                time.Hour,
+	})
+	now := time.Unix(10, 0)
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), payload: []byte("first"), compressedBytes: 10, uncompressedBytes: 20, count: 1}, now))
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), payload: []byte("second"), compressedBytes: 10, uncompressedBytes: 20, count: 1}, now))
+
+	q.mu.Lock()
+	targetCandidates, fallbackCandidates, hasReady := q.collectWindowCandidatesLocked(now)
+	q.mu.Unlock()
+
+	require.True(t, hasReady)
+	require.Empty(t, targetCandidates)
+	require.Len(t, fallbackCandidates, 1)
+	require.Equal(t, centralQueueFlushReasonHardCap, fallbackCandidates[0].window.flushReason)
+	require.Equal(t, []int{0}, fallbackCandidates[0].indexes)
+	require.Equal(t, []string{"first"}, centralQueuePayloadStrings(fallbackCandidates[0].window.items))
+}
+
+func TestCentralQueueCollectWindowCandidatesUsesMaxDelayForLowTraffic(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    100,
+		targetCompressedBytes:        100,
+		maxBatchDelay:                250 * time.Millisecond,
+	})
+	now := time.Unix(10, 0)
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
+
+	q.mu.Lock()
+	targetCandidates, fallbackCandidates, hasReady := q.collectWindowCandidatesLocked(now.Add(249 * time.Millisecond))
+	q.mu.Unlock()
+	require.True(t, hasReady)
+	require.Empty(t, targetCandidates)
+	require.Empty(t, fallbackCandidates)
+
+	q.mu.Lock()
+	targetCandidates, fallbackCandidates, hasReady = q.collectWindowCandidatesLocked(now.Add(250 * time.Millisecond))
+	q.mu.Unlock()
+	require.True(t, hasReady)
+	require.Empty(t, targetCandidates)
+	require.Len(t, fallbackCandidates, 1)
+	require.Equal(t, centralQueueFlushReasonMaxDelayLowTraffic, fallbackCandidates[0].window.flushReason)
+}
+
+func TestCentralQueueCollectWindowCandidatesShutdownOverridesWaitingAndHardCap(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    30,
+		targetCompressedBytes:        100,
+		maxBatchDelay:                time.Hour,
+	})
+	now := time.Unix(10, 0)
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), payload: []byte("first"), compressedBytes: 10, uncompressedBytes: 20, count: 1}, now))
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), payload: []byte("second"), compressedBytes: 10, uncompressedBytes: 20, count: 1}, now))
+	q.stop()
+
+	q.mu.Lock()
+	targetCandidates, fallbackCandidates, hasReady := q.collectWindowCandidatesLocked(now)
+	q.mu.Unlock()
+
+	require.True(t, hasReady)
+	require.Empty(t, targetCandidates)
+	require.Len(t, fallbackCandidates, 1)
+	require.Equal(t, centralQueueFlushReasonShutdown, fallbackCandidates[0].window.flushReason)
+	require.Equal(t, []int{0}, fallbackCandidates[0].indexes)
+	require.Equal(t, []string{"first"}, centralQueuePayloadStrings(fallbackCandidates[0].window.items))
+}
+
+func TestCentralQueueMaterializeAndRemoveWindowKeepsSparseIndexSurvivors(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    100,
+		targetCompressedBytes:        100,
+	})
+	now := time.Unix(10, 0)
+	for _, payload := range []string{"keep-0", "drop-1", "keep-2", "drop-3", "keep-4"} {
+		require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte(payload), payload: []byte(payload), compressedBytes: 1, uncompressedBytes: 1, count: 1}, now))
+	}
+
+	candidate := centralQueueWindowCandidate{
+		indexes: []int{1, 3},
+	}
+	q.mu.Lock()
+	q.materializeWindowCandidateItemsLocked(&candidate)
+	q.removeWindowLocked(candidate.indexes, false)
+	remainingItems := append([]centralQueueItem(nil), q.items...)
+	q.mu.Unlock()
+
+	require.Equal(t, []string{"drop-1", "drop-3"}, centralQueuePayloadStrings(candidate.window.items))
+	require.Equal(t, []string{"keep-0", "keep-2", "keep-4"}, centralQueuePayloadStrings(remainingItems))
+}
+
 func TestCentralQueueReadyWindowsRecollectFallbackAfterTargetRemoval(t *testing.T) {
 	q := newCentralQueue(centralQueueSettings{
 		maxCompressedBytes:           100,
@@ -1002,6 +1134,103 @@ func TestCentralQueueDoesNotStarveColdLaneUnderContinuousHotKeyArrivals(t *testi
 		totalRounds, time.Duration(totalRounds)*100*time.Millisecond)
 }
 
+func BenchmarkCentralQueueDrainInterleavedBacklog(b *testing.B) {
+	const (
+		laneCount             = 64
+		itemsPerLane          = 512
+		itemCompressedBytes   = 4 * 1024
+		itemUncompressedBytes = 16 * 1024
+		targetCompressedBytes = 256 * 1024
+	)
+
+	laneKeys := make([][]byte, laneCount)
+	for lane := range laneCount {
+		laneKeys[lane] = fmt.Appendf(nil, "lane-%02d", lane)
+	}
+	now := time.Unix(1000, 0)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		q := newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           int64(laneCount * itemsPerLane * itemCompressedBytes),
+			maxInflightUncompressedBytes: int64(laneCount * targetCompressedBytes * 16),
+			maxUncompressedBatchBytes:    laneCount * targetCompressedBytes,
+			targetCompressedBytes:        targetCompressedBytes,
+			maxBatchDelay:                time.Second,
+			maxReadyWindows:              laneCount,
+		})
+
+		b.StopTimer()
+		for itemIndex := range itemsPerLane {
+			for lane := range laneCount {
+				require.NoError(b, q.enqueueAt(centralQueueItem{
+					signal:            signalKindLogs,
+					routingKey:        laneKeys[lane],
+					compressedBytes:   itemCompressedBytes,
+					uncompressedBytes: itemUncompressedBytes,
+					count:             1,
+				}, now.Add(time.Duration(itemIndex)*time.Nanosecond)))
+			}
+		}
+		b.StartTimer()
+
+		for q.len() > 0 {
+			lease, err := q.tryLease(now.Add(time.Second))
+			require.NoError(b, err)
+			if lease == nil {
+				b.Fatalf("queue stalled with %d items remaining", q.len())
+			}
+			lease.done()
+		}
+	}
+}
+
+func BenchmarkCentralQueueCollectInterleavedUnderfilledBacklog(b *testing.B) {
+	const (
+		laneCount             = 64
+		itemsPerLane          = 512
+		itemCompressedBytes   = 1
+		itemUncompressedBytes = 16 * 1024
+	)
+
+	laneKeys := make([][]byte, laneCount)
+	for lane := range laneCount {
+		laneKeys[lane] = fmt.Appendf(nil, "lane-%02d", lane)
+	}
+	now := time.Unix(1000, 0)
+
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           int64(laneCount * itemsPerLane * itemCompressedBytes),
+		maxInflightUncompressedBytes: int64(laneCount * itemsPerLane * itemUncompressedBytes),
+		maxUncompressedBatchBytes:    laneCount * itemsPerLane * itemUncompressedBytes,
+		targetCompressedBytes:        itemsPerLane + 1,
+		maxBatchDelay:                time.Hour,
+		maxReadyWindows:              laneCount,
+	})
+	for itemIndex := range itemsPerLane {
+		for lane := range laneCount {
+			require.NoError(b, q.enqueueAt(centralQueueItem{
+				signal:            signalKindLogs,
+				routingKey:        laneKeys[lane],
+				compressedBytes:   itemCompressedBytes,
+				uncompressedBytes: itemUncompressedBytes,
+				count:             1,
+			}, now.Add(time.Duration(itemIndex)*time.Nanosecond)))
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		q.mu.Lock()
+		targetCandidates, fallbackCandidates, hasReady := q.collectWindowCandidatesLocked(now)
+		q.mu.Unlock()
+		require.True(b, hasReady)
+		require.Empty(b, targetCandidates)
+		require.Empty(b, fallbackCandidates)
+	}
+}
+
 func requireCentralQueueFirstRetryDelay(t *testing.T, q *centralQueue) {
 	t.Helper()
 
@@ -1019,6 +1248,14 @@ func requireCentralQueueFirstRetryDelay(t *testing.T, q *centralQueue) {
 	retryAfterEnqueue := time.Unix(0, item.nextAttemptUnixNano).Sub(time.Unix(0, item.enqueuedAtUnixNano))
 	require.GreaterOrEqual(t, retryAfterEnqueue, centralQueueRetryDelay(0))
 	require.LessOrEqual(t, retryAfterEnqueue, centralQueueRetryDelayUpperBound(0)+50*time.Millisecond)
+}
+
+func centralQueuePayloadStrings(items []centralQueueItem) []string {
+	payloads := make([]string, 0, len(items))
+	for i := range items {
+		payloads = append(payloads, string(items[i].payload))
+	}
+	return payloads
 }
 
 func requireNextAttemptWithinRetryDelay(t *testing.T, now time.Time, attempt int, nextAttemptUnixNano int64) {
