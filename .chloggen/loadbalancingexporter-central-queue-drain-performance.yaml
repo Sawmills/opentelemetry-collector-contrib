@@ -1,7 +1,9 @@
 change_type: enhancement
 component: exporter/loadbalancing
 note: Reduce central queue scheduling and drain CPU for load-balanced logs and metrics.
+issues: [76]
 
 subtext: |-
   Reworks central queue candidate collection and window removal to avoid repeated full-backlog scans
   and per-item slice compaction under large queued backlogs.
+change_logs: [user]
