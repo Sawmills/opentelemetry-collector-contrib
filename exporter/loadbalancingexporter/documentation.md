@@ -8,7 +8,7 @@ The following telemetry is emitted by this component.
 
 ### otelcol_loadbalancer_backend_fail_open_total
 
-Number of times endpoint health failed open because every resolver-present backend was quarantined.
+Number of times endpoint health failed open because quarantine would leave too few eligible resolver-present backends.
 
 | Unit | Metric Type | Value Type | Monotonic | Stability |
 | ---- | ----------- | ---------- | --------- | --------- |
