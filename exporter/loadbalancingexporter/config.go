@@ -148,6 +148,10 @@ type ZstdPayloadCodecConfig struct {
 
 const defaultEndpointHealthQuarantineDuration = 30 * time.Second
 const (
+	defaultEndpointHealthMinEligibleBackends   = 1
+	defaultEndpointHealthMaxQuarantinedPercent = 100
+)
+const (
 	defaultEndpointHealthActiveProbeInterval       = 5 * time.Second
 	defaultEndpointHealthActiveProbeTimeout        = 250 * time.Millisecond
 	defaultEndpointHealthActiveProbeJitter         = "20%"
@@ -163,11 +167,13 @@ const (
 )
 
 type EndpointHealthConfig struct {
-	Enabled            bool                            `mapstructure:"enabled"`
-	QuarantineDuration time.Duration                   `mapstructure:"quarantine_duration"`
-	RerouteOnFailure   bool                            `mapstructure:"reroute_on_failure"`
-	MaxRerouteAttempts int                             `mapstructure:"max_reroute_attempts"`
-	ActiveProbe        EndpointHealthActiveProbeConfig `mapstructure:"active_probe"`
+	Enabled               bool                            `mapstructure:"enabled"`
+	QuarantineDuration    time.Duration                   `mapstructure:"quarantine_duration"`
+	RerouteOnFailure      bool                            `mapstructure:"reroute_on_failure"`
+	MaxRerouteAttempts    int                             `mapstructure:"max_reroute_attempts"`
+	MinEligibleBackends   int                             `mapstructure:"min_eligible_backends"`
+	MaxQuarantinedPercent int                             `mapstructure:"max_quarantined_percent"`
+	ActiveProbe           EndpointHealthActiveProbeConfig `mapstructure:"active_probe"`
 }
 
 type EndpointHealthActiveProbeConfig struct {
@@ -477,6 +483,12 @@ func (c EndpointHealthConfig) Validate() error {
 	}
 	if c.MaxRerouteAttempts < 0 {
 		return errors.New("endpoint_health.max_reroute_attempts must be greater than or equal to 0")
+	}
+	if c.MinEligibleBackends <= 0 {
+		return errors.New("endpoint_health.min_eligible_backends must be greater than 0")
+	}
+	if c.MaxQuarantinedPercent <= 0 || c.MaxQuarantinedPercent > 100 {
+		return errors.New("endpoint_health.max_quarantined_percent must be from 1 through 100")
 	}
 	return c.ActiveProbe.Validate()
 }
