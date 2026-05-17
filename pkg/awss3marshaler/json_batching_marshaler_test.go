@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package awss3exporter
+package awss3marshaler
 
 import (
 	"encoding/json"
@@ -36,19 +36,16 @@ func newTestTraces() ptrace.Traces {
 }
 
 func TestMarshalLogsAccumulatesAndFlushReturnsBatchedJSONL(t *testing.T) {
-	m := newJSONBatchingMarshaler(1<<20, zap.NewNop()) // large batch size, won't auto-flush
+	m := newJSONBatchingMarshaler(1<<20, zap.NewNop())
 
-	// First call — accumulates, returns empty.
 	buf, err := m.MarshalLogs(newTestLogs())
 	require.NoError(t, err)
 	assert.Empty(t, buf)
 
-	// Second call — still accumulates.
 	buf, err = m.MarshalLogs(newTestLogs())
 	require.NoError(t, err)
 	assert.Empty(t, buf)
 
-	// FlushLogs returns the accumulated JSONL.
 	flushed, err := m.FlushLogs()
 	require.NoError(t, err)
 	require.NotNil(t, flushed)
@@ -56,7 +53,6 @@ func TestMarshalLogsAccumulatesAndFlushReturnsBatchedJSONL(t *testing.T) {
 	lines := strings.Split(strings.TrimSuffix(string(flushed), "\n"), "\n")
 	assert.Len(t, lines, 2, "expected 2 JSONL lines for 2 accumulated log records")
 
-	// Each line should be valid JSON with the resourceLogs envelope.
 	for _, line := range lines {
 		var doc map[string]json.RawMessage
 		require.NoError(t, json.Unmarshal([]byte(line), &doc))
@@ -106,8 +102,6 @@ func TestFlushTracesReturnsNilWhenNoData(t *testing.T) {
 }
 
 func TestMaxBatchSizeTriggersAutomaticFlush(t *testing.T) {
-	// Use a tiny max batch size so that a single MarshalLogs call triggers
-	// an automatic flush.
 	m := newJSONBatchingMarshaler(1, zap.NewNop())
 
 	buf, err := m.MarshalLogs(newTestLogs())
@@ -117,7 +111,6 @@ func TestMaxBatchSizeTriggersAutomaticFlush(t *testing.T) {
 	lines := strings.Split(strings.TrimSuffix(string(buf), "\n"), "\n")
 	assert.Len(t, lines, 1)
 
-	// After auto-flush, FlushLogs should return nil (buffer drained).
 	flushed, err := m.FlushLogs()
 	require.NoError(t, err)
 	assert.Nil(t, flushed)

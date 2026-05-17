@@ -4,45 +4,47 @@
 package awss3exporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awss3exporter"
 
 import (
-	"errors"
 	"fmt"
+	"time"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
-	"go.uber.org/zap"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/awss3marshaler"
 )
 
-type marshaler interface {
-	MarshalTraces(td ptrace.Traces) ([]byte, error)
-	MarshalLogs(ld plog.Logs) ([]byte, error)
-	MarshalMetrics(md pmetric.Metrics) ([]byte, error)
-	format() string
-	compressed() bool
+type marshaler = awss3marshaler.Marshaler
+type logFlusher = awss3marshaler.LogFlusher
+type logFlusherWithReason = awss3marshaler.LogFlusherWithReason
+type traceFlusher = awss3marshaler.TraceFlusher
+
+// LogMarshalerWithFlushMetadata is an optional encoding extension interface
+// for passing flush timing metadata to S3 exporter telemetry.
+type LogMarshalerWithFlushMetadata interface {
+	MarshalLogsWithFlushMetadata(plog.Logs) ([]byte, string, time.Time, error)
 }
 
-type logFlusher interface {
-	FlushLogs() ([]byte, error)
+var ErrUnknownMarshaler = awss3marshaler.ErrUnknownMarshaler
+
+type encodingMarshaler struct {
+	logsMarshaler           plog.Marshaler
+	tracesMarshaler         ptrace.Marshaler
+	metricsMarshaler        pmetric.Marshaler
+	fileFormat              string
+	isCompressed            bool
+	extLogFlusher           logFlusher
+	extLogFlusherWithReason logFlusherWithReason
+	extTraceFlusher         traceFlusher
 }
 
-type logFlusherWithReason interface {
-	FlushLogsWithReason(reason string) ([]byte, error)
-}
-
-type traceFlusher interface {
-	FlushTraces() ([]byte, error)
-}
-
-var ErrUnknownMarshaler = errors.New("unknown marshaler")
-
-func newMarshalerFromEncoding(encoding *component.ID, fileFormat string, host component.Host, logger *zap.Logger) (marshaler, error) {
-	marshaler := &s3Marshaler{logger: logger}
+func newMarshalerFromEncoding(encoding *component.ID, fileFormat string, host component.Host) (marshaler, error) {
+	marshaler := &encodingMarshaler{fileFormat: fileFormat}
 	e, ok := host.GetExtensions()[*encoding]
 	if !ok {
 		return nil, fmt.Errorf("unknown encoding %q", encoding)
 	}
-	// cast with ok to avoid panics.
 	marshaler.logsMarshaler, _ = e.(plog.Marshaler)
 	marshaler.metricsMarshaler, _ = e.(pmetric.Marshaler)
 	marshaler.tracesMarshaler, _ = e.(ptrace.Marshaler)
@@ -55,45 +57,65 @@ func newMarshalerFromEncoding(encoding *component.ID, fileFormat string, host co
 	if flusher, ok := e.(traceFlusher); ok {
 		marshaler.extTraceFlusher = flusher
 	}
-	marshaler.fileFormat = fileFormat
-	marshaler.IsCompressed = false
 	return marshaler, nil
 }
 
-func newMarshalerWithConfig(mType MarshalerType, maxBatchSize int, logger *zap.Logger) (marshaler, error) {
-	if mType == OtlpJSON && maxBatchSize > 0 {
-		return newJSONBatchingMarshaler(maxBatchSize, logger), nil
-	}
-	return newMarshaler(mType, logger)
+func (marshaler *encodingMarshaler) MarshalTraces(td ptrace.Traces) ([]byte, error) {
+	return marshaler.tracesMarshaler.MarshalTraces(td)
 }
 
-func newMarshaler(mType MarshalerType, logger *zap.Logger) (marshaler, error) {
-	marshaler := &s3Marshaler{logger: logger}
-	switch mType {
-	case OtlpProtobuf:
-		marshaler.logsMarshaler = &plog.ProtoMarshaler{}
-		marshaler.tracesMarshaler = &ptrace.ProtoMarshaler{}
-		marshaler.metricsMarshaler = &pmetric.ProtoMarshaler{}
-		marshaler.fileFormat = "binpb"
-		marshaler.IsCompressed = false
-	case OtlpJSON:
-		marshaler.logsMarshaler = &plog.JSONMarshaler{}
-		marshaler.tracesMarshaler = &ptrace.JSONMarshaler{}
-		marshaler.metricsMarshaler = &pmetric.JSONMarshaler{}
-		marshaler.fileFormat = "json"
-		marshaler.IsCompressed = false
-	case SumoIC:
-		sumomarshaler := newSumoICMarshaler()
-		marshaler.logsMarshaler = &sumomarshaler
-		marshaler.fileFormat = "json"
-		marshaler.IsCompressed = true
-	case Body:
-		exportbodyMarshaler := newbodyMarshaler()
-		marshaler.logsMarshaler = &exportbodyMarshaler
-		marshaler.fileFormat = exportbodyMarshaler.format()
-		marshaler.IsCompressed = false
-	default:
-		return nil, ErrUnknownMarshaler
+func (marshaler *encodingMarshaler) MarshalLogs(ld plog.Logs) ([]byte, error) {
+	buf, _, err := marshaler.MarshalLogsWithFlushMetadata(ld)
+	return buf, err
+}
+
+func (marshaler *encodingMarshaler) MarshalLogsWithFlushMetadata(
+	ld plog.Logs,
+) ([]byte, flushMetadata, error) {
+	if metadataMarshaler, ok := marshaler.logsMarshaler.(LogMarshalerWithFlushMetadata); ok {
+		buf, reason, completedAt, err := metadataMarshaler.MarshalLogsWithFlushMetadata(ld)
+		if err != nil {
+			return nil, flushMetadata{}, err
+		}
+		return buf, flushMetadata{
+			reason:           reason,
+			flushCompletedAt: completedAt,
+		}, nil
 	}
-	return marshaler, nil
+
+	buf, err := marshaler.logsMarshaler.MarshalLogs(ld)
+	return buf, flushMetadata{}, err
+}
+
+func (marshaler *encodingMarshaler) MarshalMetrics(md pmetric.Metrics) ([]byte, error) {
+	return marshaler.metricsMarshaler.MarshalMetrics(md)
+}
+
+func (marshaler *encodingMarshaler) Format() string {
+	return marshaler.fileFormat
+}
+
+func (marshaler *encodingMarshaler) Compressed() bool {
+	return marshaler.isCompressed
+}
+
+func (marshaler *encodingMarshaler) FlushLogs() ([]byte, error) {
+	if marshaler.extLogFlusher != nil {
+		return marshaler.extLogFlusher.FlushLogs()
+	}
+	return nil, nil
+}
+
+func (marshaler *encodingMarshaler) FlushLogsWithReason(reason string) ([]byte, error) {
+	if marshaler.extLogFlusherWithReason != nil {
+		return marshaler.extLogFlusherWithReason.FlushLogsWithReason(reason)
+	}
+	return marshaler.FlushLogs()
+}
+
+func (marshaler *encodingMarshaler) FlushTraces() ([]byte, error) {
+	if marshaler.extTraceFlusher != nil {
+		return marshaler.extTraceFlusher.FlushTraces()
+	}
+	return nil, nil
 }

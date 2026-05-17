@@ -1,14 +1,13 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Sawmills addition: preview marshaling tests for downstream live-tail support.
-
-package awss3exporter
+package awss3marshaler
 
 import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/config/configcompression"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
@@ -17,12 +16,11 @@ import (
 )
 
 func TestMarshalLogsForPreviewUsesExporterMarshaler(t *testing.T) {
-	logs := getTestLogs(t)
-	logs.ResourceLogs().At(0).Resource().Attributes().PutStr("_sourceName", "testSourceName")
+	logs := getPreviewTestLogs()
 
 	for _, marshalerName := range []MarshalerType{OtlpJSON, OtlpProtobuf, SumoIC, Body} {
 		t.Run(string(marshalerName), func(t *testing.T) {
-			marshaler, err := newMarshaler(marshalerName, zap.NewNop())
+			marshaler, err := NewMarshaler(marshalerName)
 			require.NoError(t, err)
 
 			expectedPayload, err := marshaler.MarshalLogs(logs)
@@ -31,26 +29,41 @@ func TestMarshalLogsForPreviewUsesExporterMarshaler(t *testing.T) {
 			result, err := MarshalLogsForPreview(logs, marshalerName)
 			require.NoError(t, err)
 
-			require.Equal(t, marshaler.format(), result.FileFormat)
-			require.Equal(t, marshaler.compressed(), result.IsCompressed)
+			require.Equal(t, marshaler.Format(), result.FileFormat)
+			require.Equal(t, marshaler.Compressed(), result.IsCompressed)
 			require.Equal(t, expectedPayload, result.Payload)
 		})
 	}
 }
 
-func TestMarshalLogsForPreviewUsesBatchingMarshaler(t *testing.T) {
-	logs := getTestLogs(t)
+func TestMarshalLogsForPreviewPreservesBatchingBehavior(t *testing.T) {
+	logs := getPreviewTestLogs()
+
+	result, err := MarshalLogsForPreview(
+		logs,
+		OtlpJSON,
+		WithPreviewMaxFileSizeBytes(1<<20),
+	)
+	require.NoError(t, err)
+
+	require.Equal(t, "json", result.FileFormat)
+	require.False(t, result.IsCompressed)
+	require.Empty(t, result.Payload)
+}
+
+func TestMarshalLogsForPreviewFlushesBatchingMarshalerWhenRequested(t *testing.T) {
+	logs := getPreviewTestLogs()
 	core, observedLogs := observer.New(zap.DebugLevel)
 	logger := zap.New(core)
 
-	marshaler, err := newMarshalerWithConfig(OtlpJSON, 1<<20, zap.NewNop())
+	marshaler, err := NewMarshalerWithConfig(OtlpJSON, 1<<20, zap.NewNop())
 	require.NoError(t, err)
 
 	payload, err := marshaler.MarshalLogs(logs)
 	require.NoError(t, err)
 	require.Empty(t, payload)
 
-	flusher, ok := marshaler.(logFlusher)
+	flusher, ok := marshaler.(LogFlusher)
 	require.True(t, ok)
 	expectedPayload, err := flusher.FlushLogs()
 	require.NoError(t, err)
@@ -60,11 +73,12 @@ func TestMarshalLogsForPreviewUsesBatchingMarshaler(t *testing.T) {
 		OtlpJSON,
 		WithPreviewLogger(logger),
 		WithPreviewMaxFileSizeBytes(1<<20),
+		WithPreviewFlushBatches(),
 	)
 	require.NoError(t, err)
 
-	require.Equal(t, marshaler.format(), result.FileFormat)
-	require.Equal(t, marshaler.compressed(), result.IsCompressed)
+	require.Equal(t, marshaler.Format(), result.FileFormat)
+	require.Equal(t, marshaler.Compressed(), result.IsCompressed)
 	require.Equal(t, expectedPayload, result.Payload)
 	require.Len(t, observedLogs.FilterMessage("Flushed uncompressed JSONL log batch").All(), 1)
 }
@@ -74,7 +88,7 @@ func TestMarshalTracesForPreviewUsesExporterMarshaler(t *testing.T) {
 
 	for _, marshalerName := range []MarshalerType{OtlpJSON, OtlpProtobuf} {
 		t.Run(string(marshalerName), func(t *testing.T) {
-			marshaler, err := newMarshaler(marshalerName, zap.NewNop())
+			marshaler, err := NewMarshaler(marshalerName)
 			require.NoError(t, err)
 
 			expectedPayload, err := marshaler.MarshalTraces(traces)
@@ -83,26 +97,41 @@ func TestMarshalTracesForPreviewUsesExporterMarshaler(t *testing.T) {
 			result, err := MarshalTracesForPreview(traces, marshalerName)
 			require.NoError(t, err)
 
-			require.Equal(t, marshaler.format(), result.FileFormat)
-			require.Equal(t, marshaler.compressed(), result.IsCompressed)
+			require.Equal(t, marshaler.Format(), result.FileFormat)
+			require.Equal(t, marshaler.Compressed(), result.IsCompressed)
 			require.Equal(t, expectedPayload, result.Payload)
 		})
 	}
 }
 
-func TestMarshalTracesForPreviewUsesBatchingMarshaler(t *testing.T) {
+func TestMarshalTracesForPreviewPreservesBatchingBehavior(t *testing.T) {
+	traces := getPreviewTestTraces()
+
+	result, err := MarshalTracesForPreview(
+		traces,
+		OtlpJSON,
+		WithPreviewMaxFileSizeBytes(1<<20),
+	)
+	require.NoError(t, err)
+
+	require.Equal(t, "json", result.FileFormat)
+	require.False(t, result.IsCompressed)
+	require.Empty(t, result.Payload)
+}
+
+func TestMarshalTracesForPreviewFlushesBatchingMarshalerWhenRequested(t *testing.T) {
 	traces := getPreviewTestTraces()
 	core, observedLogs := observer.New(zap.DebugLevel)
 	logger := zap.New(core)
 
-	marshaler, err := newMarshalerWithConfig(OtlpJSON, 1<<20, zap.NewNop())
+	marshaler, err := NewMarshalerWithConfig(OtlpJSON, 1<<20, zap.NewNop())
 	require.NoError(t, err)
 
 	payload, err := marshaler.MarshalTraces(traces)
 	require.NoError(t, err)
 	require.Empty(t, payload)
 
-	flusher, ok := marshaler.(traceFlusher)
+	flusher, ok := marshaler.(TraceFlusher)
 	require.True(t, ok)
 	expectedPayload, err := flusher.FlushTraces()
 	require.NoError(t, err)
@@ -112,13 +141,30 @@ func TestMarshalTracesForPreviewUsesBatchingMarshaler(t *testing.T) {
 		OtlpJSON,
 		WithPreviewLogger(logger),
 		WithPreviewMaxFileSizeBytes(1<<20),
+		WithPreviewFlushBatches(),
 	)
 	require.NoError(t, err)
 
-	require.Equal(t, marshaler.format(), result.FileFormat)
-	require.Equal(t, marshaler.compressed(), result.IsCompressed)
+	require.Equal(t, marshaler.Format(), result.FileFormat)
+	require.Equal(t, marshaler.Compressed(), result.IsCompressed)
 	require.Equal(t, expectedPayload, result.Payload)
 	require.Len(t, observedLogs.FilterMessage("Flushed uncompressed JSONL trace batch").All(), 1)
+}
+
+func TestMarshalTracesForPreviewUnsupportedMarshaler(t *testing.T) {
+	for _, marshalerName := range []MarshalerType{SumoIC, Body} {
+		t.Run(string(marshalerName), func(t *testing.T) {
+			var result PreviewResult
+			var err error
+
+			require.NotPanics(t, func() {
+				result, err = MarshalTracesForPreview(getPreviewTestTraces(), marshalerName)
+			})
+
+			require.Error(t, err)
+			require.Equal(t, PreviewResult{}, result)
+		})
+	}
 }
 
 func TestMarshalMetricsForPreviewUsesExporterMarshaler(t *testing.T) {
@@ -126,7 +172,7 @@ func TestMarshalMetricsForPreviewUsesExporterMarshaler(t *testing.T) {
 
 	for _, marshalerName := range []MarshalerType{OtlpJSON, OtlpProtobuf} {
 		t.Run(string(marshalerName), func(t *testing.T) {
-			marshaler, err := newMarshaler(marshalerName, zap.NewNop())
+			marshaler, err := NewMarshaler(marshalerName)
 			require.NoError(t, err)
 
 			expectedPayload, err := marshaler.MarshalMetrics(metrics)
@@ -135,11 +181,40 @@ func TestMarshalMetricsForPreviewUsesExporterMarshaler(t *testing.T) {
 			result, err := MarshalMetricsForPreview(metrics, marshalerName)
 			require.NoError(t, err)
 
-			require.Equal(t, marshaler.format(), result.FileFormat)
-			require.Equal(t, marshaler.compressed(), result.IsCompressed)
+			require.Equal(t, marshaler.Format(), result.FileFormat)
+			require.Equal(t, marshaler.Compressed(), result.IsCompressed)
 			require.Equal(t, expectedPayload, result.Payload)
 		})
 	}
+}
+
+func TestMarshalMetricsForPreviewUnsupportedMarshaler(t *testing.T) {
+	for _, marshalerName := range []MarshalerType{SumoIC, Body} {
+		t.Run(string(marshalerName), func(t *testing.T) {
+			var result PreviewResult
+			var err error
+
+			require.NotPanics(t, func() {
+				result, err = MarshalMetricsForPreview(getPreviewTestMetrics(), marshalerName)
+			})
+
+			require.Error(t, err)
+			require.Equal(t, PreviewResult{}, result)
+		})
+	}
+}
+
+func TestMarshalLogsForPreviewReportsExporterCompression(t *testing.T) {
+	result, err := MarshalLogsForPreview(
+		getPreviewTestLogs(),
+		OtlpJSON,
+		WithPreviewCompression(configcompression.TypeGzip),
+	)
+	require.NoError(t, err)
+
+	require.Equal(t, configcompression.TypeGzip, result.Compression)
+	require.True(t, result.IsCompressed)
+	require.NotEmpty(t, result.Payload)
 }
 
 func TestMarshalLogsForPreviewUnknownMarshaler(t *testing.T) {
@@ -147,6 +222,20 @@ func TestMarshalLogsForPreviewUnknownMarshaler(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrUnknownMarshaler)
 	require.Equal(t, PreviewResult{}, result)
+}
+
+func getPreviewTestLogs() plog.Logs {
+	logs := plog.NewLogs()
+	resourceLogs := logs.ResourceLogs().AppendEmpty()
+	attrs := resourceLogs.Resource().Attributes()
+	attrs.PutStr(SourceCategoryKey, "logfile")
+	attrs.PutStr(SourceHostKey, "host")
+	attrs.PutStr(SourceNameKey, "source")
+
+	record := resourceLogs.ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+	record.Body().SetStr("log entry")
+	record.Attributes().PutStr("log.file.path_resolved", "data.log")
+	return logs
 }
 
 func getPreviewTestTraces() ptrace.Traces {
