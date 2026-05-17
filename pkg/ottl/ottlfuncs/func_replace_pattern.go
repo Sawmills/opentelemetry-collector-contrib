@@ -158,7 +158,7 @@ func newFastReplacePattern[K any](target ottl.GetSetter[K], regexPattern, replac
 	if !patternLiteral || !replacementLiteral {
 		return nil
 	}
-	if pattern != "^\x1b" || replacementValue != "" {
+	if pattern != "^\\x1b" || replacementValue != "" {
 		return nil
 	}
 	return func(ctx context.Context, tCtx K) (any, error) {

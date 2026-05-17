@@ -266,7 +266,7 @@ func Test_replacePattern_fastEscPrefix(t *testing.T) {
 	}
 	pattern, err := ottl.NewTestingLiteralGetter[pcommon.Value, string](true, ottl.StandardStringGetter[pcommon.Value]{
 		Getter: func(context.Context, pcommon.Value) (any, error) {
-			return "^\x1b", nil
+			return "^\\x1b", nil
 		},
 	})
 	require.NoError(t, err)
@@ -302,8 +302,8 @@ func Test_replacePattern_fastEscPrefix(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			value := pcommon.NewValueStr(tt.in)
-			exprFunc, err := replacePattern[pcommon.Value](target, pattern, replacement, ottl.Optional[ottl.FunctionGetter[pcommon.Value]]{}, ottl.Optional[ottl.StringGetter[pcommon.Value]]{})
-			require.NoError(t, err)
+			exprFunc := newFastReplacePattern[pcommon.Value](target, pattern, replacement, ottl.Optional[ottl.FunctionGetter[pcommon.Value]]{}, ottl.Optional[ottl.StringGetter[pcommon.Value]]{})
+			require.NotNil(t, exprFunc)
 			_, err = exprFunc(t.Context(), value)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, value.Str())
