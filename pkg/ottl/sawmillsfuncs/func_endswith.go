@@ -73,17 +73,41 @@ func endsWithAnyFoldASCII(s string, suffixes []string) bool {
 	return false
 }
 
+func maxSuffixLen(suffixes []string) int {
+	maxLen := 0
+	for _, suffix := range suffixes {
+		if len(suffix) > maxLen {
+			maxLen = len(suffix)
+		}
+	}
+	return maxLen
+}
+
+func hasNonASCIIInSuffixWindow(s string, maxLen int) bool {
+	if maxLen > len(s) {
+		maxLen = len(s)
+	}
+	for i := len(s) - maxLen; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return true
+		}
+	}
+	return false
+}
+
 func endsWith[K any](
 	target ottl.StringGetter[K],
 	suffixes []string,
 	caseSensitive bool,
 ) ottl.ExprFunc[K] {
+	longestSuffix := 0
 	if !caseSensitive {
 		lowerSuffixes := make([]string, len(suffixes))
 		for i, suffix := range suffixes {
 			lowerSuffixes[i] = strings.ToLower(suffix)
 		}
 		suffixes = lowerSuffixes
+		longestSuffix = maxSuffixLen(suffixes)
 	}
 	return func(ctx context.Context, tCtx K) (any, error) {
 		val, err := target.Get(ctx, tCtx)
@@ -101,8 +125,11 @@ func endsWith[K any](
 			if endsWithAny(val, suffixes) {
 				return true, nil
 			}
-			if isASCII(val) {
-				return endsWithAnyFoldASCII(val, suffixes), nil
+			if endsWithAnyFoldASCII(val, suffixes) {
+				return true, nil
+			}
+			if !hasNonASCIIInSuffixWindow(val, longestSuffix) {
+				return false, nil
 			}
 			val = strings.ToLower(val)
 		}

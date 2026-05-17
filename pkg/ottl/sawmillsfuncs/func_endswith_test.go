@@ -155,3 +155,35 @@ func TestEndsWithCaseInsensitiveASCIIFoldDoesNotAllocateByBodySize(t *testing.T)
 	require.LessOrEqualf(t, longBytes, shortBytes+512,
 		"endsWith bytes/op scaled with body size: %.1f short -> %.1f long", shortBytes, longBytes)
 }
+
+func TestEndsWithCaseInsensitiveSuffixWindowDoesNotAllocateByBodySize(t *testing.T) {
+	run := func(body string) (allocsPerOp, bytesPerOp float64) {
+		fn := endsWith(
+			&ottl.StandardStringGetter[any]{
+				Getter: func(context.Context, any) (any, error) { return body, nil },
+			},
+			[]string{"xyz-no-such-thing"},
+			false,
+		)
+		br := testing.Benchmark(func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				_, _ = fn(t.Context(), nil)
+			}
+		})
+		return float64(br.AllocsPerOp()), float64(br.AllocedBytesPerOp())
+	}
+
+	short := "Привет Some MIXED-Case Body Line"
+	long := "Привет " + strings.Repeat("Padding ", 2000) + "Some MIXED-Case Body Line"
+
+	shortAllocs, shortBytes := run(short)
+	longAllocs, longBytes := run(long)
+
+	require.LessOrEqualf(t, longAllocs, shortAllocs+1,
+		"endsWith allocations scaled with body size: %.1f short -> %.1f long", shortAllocs, longAllocs)
+	require.LessOrEqualf(t, longAllocs, 5.0,
+		"endsWith allocated %.1f objects per run on a body with non-ASCII outside the suffix window", longAllocs)
+	require.LessOrEqualf(t, longBytes, shortBytes+512,
+		"endsWith bytes/op scaled with body size when non-ASCII was outside the suffix window: %.1f short -> %.1f long", shortBytes, longBytes)
+}
