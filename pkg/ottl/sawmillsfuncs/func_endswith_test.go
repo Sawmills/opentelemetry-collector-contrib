@@ -5,6 +5,7 @@ package sawmillsfuncs
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -92,4 +93,97 @@ func TestEndsWithDoesNotMutateSuffixes(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"STRING"}, suffixes)
+}
+
+func TestEndsWithCaseInsensitiveUnicode(t *testing.T) {
+	cases := []struct {
+		name   string
+		value  string
+		suffix string
+		want   bool
+	}{
+		{"cyrillic upper haystack lower suffix", "hello МИР", "мир", true},
+		{"greek omega upper lower suffix", "hello Ω", "ω", true},
+		{"diacritic case", "log linË", "linë", true},
+		{"ascii haystack case-folded match", "MIXED Body Line", "line", true},
+		{"ascii haystack no-match stays false", "MIXED Body Line", "body", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := endsWith[any](
+				&ottl.StandardStringGetter[any]{
+					Getter: func(context.Context, any) (any, error) { return tc.value, nil },
+				},
+				[]string{tc.suffix},
+				false,
+			)
+			got, err := fn(t.Context(), nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestEndsWithCaseInsensitiveASCIIFoldDoesNotAllocateByBodySize(t *testing.T) {
+	run := func(body string) (allocsPerOp, bytesPerOp float64) {
+		fn := endsWith(
+			&ottl.StandardStringGetter[any]{
+				Getter: func(context.Context, any) (any, error) { return body, nil },
+			},
+			[]string{"xyz-no-such-thing"},
+			false,
+		)
+		br := testing.Benchmark(func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				_, _ = fn(t.Context(), nil)
+			}
+		})
+		return float64(br.AllocsPerOp()), float64(br.AllocedBytesPerOp())
+	}
+
+	short := "Some MIXED-Case Body Line"
+	long := strings.Repeat("Padding ", 2000) + short
+
+	shortAllocs, shortBytes := run(short)
+	longAllocs, longBytes := run(long)
+
+	require.LessOrEqualf(t, longAllocs, shortAllocs+1,
+		"endsWith allocations scaled with body size: %.1f short -> %.1f long", shortAllocs, longAllocs)
+	require.LessOrEqualf(t, longAllocs, 5.0,
+		"endsWith allocated %.1f objects per run on a 16 kB body", longAllocs)
+	require.LessOrEqualf(t, longBytes, shortBytes+512,
+		"endsWith bytes/op scaled with body size: %.1f short -> %.1f long", shortBytes, longBytes)
+}
+
+func TestEndsWithCaseInsensitiveSuffixWindowDoesNotAllocateByBodySize(t *testing.T) {
+	run := func(body string) (allocsPerOp, bytesPerOp float64) {
+		fn := endsWith(
+			&ottl.StandardStringGetter[any]{
+				Getter: func(context.Context, any) (any, error) { return body, nil },
+			},
+			[]string{"xyz-no-such-thing"},
+			false,
+		)
+		br := testing.Benchmark(func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				_, _ = fn(t.Context(), nil)
+			}
+		})
+		return float64(br.AllocsPerOp()), float64(br.AllocedBytesPerOp())
+	}
+
+	short := "Привет Some MIXED-Case Body Line"
+	long := "Привет " + strings.Repeat("Padding ", 2000) + "Some MIXED-Case Body Line"
+
+	shortAllocs, shortBytes := run(short)
+	longAllocs, longBytes := run(long)
+
+	require.LessOrEqualf(t, longAllocs, shortAllocs+1,
+		"endsWith allocations scaled with body size: %.1f short -> %.1f long", shortAllocs, longAllocs)
+	require.LessOrEqualf(t, longAllocs, 5.0,
+		"endsWith allocated %.1f objects per run on a body with non-ASCII outside the suffix window", longAllocs)
+	require.LessOrEqualf(t, longBytes, shortBytes+512,
+		"endsWith bytes/op scaled with body size when non-ASCII was outside the suffix window: %.1f short -> %.1f long", shortBytes, longBytes)
 }

@@ -100,6 +100,9 @@ func applyOptReplaceFunction[K any](ctx context.Context, tCtx K, compiledPattern
 }
 
 func replacePattern[K any](target ottl.GetSetter[K], regexPattern, replacement ottl.StringGetter[K], fn ottl.Optional[ottl.FunctionGetter[K]], replacementFormat ottl.Optional[ottl.StringGetter[K]]) (ottl.ExprFunc[K], error) {
+	if fastPath := newFastReplacePattern(target, regexPattern, replacement, fn, replacementFormat); fastPath != nil {
+		return fastPath, nil
+	}
 	compiledPattern, err := newDynamicRegex("replace_pattern", regexPattern)
 	if err != nil {
 		return nil, err
@@ -144,4 +147,30 @@ func replacePattern[K any](target ottl.GetSetter[K], regexPattern, replacement o
 		}
 		return nil, nil
 	}, nil
+}
+
+func newFastReplacePattern[K any](target ottl.GetSetter[K], regexPattern, replacement ottl.StringGetter[K], fn ottl.Optional[ottl.FunctionGetter[K]], replacementFormat ottl.Optional[ottl.StringGetter[K]]) ottl.ExprFunc[K] {
+	if !fn.IsEmpty() || !replacementFormat.IsEmpty() {
+		return nil
+	}
+	pattern, patternLiteral := ottl.GetLiteralValue(regexPattern)
+	replacementValue, replacementLiteral := ottl.GetLiteralValue(replacement)
+	if !patternLiteral || !replacementLiteral {
+		return nil
+	}
+	if pattern != "^\\x1b" || replacementValue != "" {
+		return nil
+	}
+	return func(ctx context.Context, tCtx K) (any, error) {
+		originalVal, err := target.Get(ctx, tCtx)
+		if err != nil {
+			return nil, err
+		}
+		if originalValStr, ok := originalVal.(string); ok && strings.HasPrefix(originalValStr, "\x1b") {
+			if err := target.Set(ctx, tCtx, originalValStr[1:]); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+	}
 }

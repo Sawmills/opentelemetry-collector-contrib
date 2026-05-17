@@ -1,0 +1,6 @@
+change_type: enhancement
+component: pkg/ottl
+note: Improve performance of OTTL string transforms by fast-pathing leading escape removal and ASCII case-insensitive prefix/suffix checks.
+issues: [79]
+subtext:
+change_logs: [user]
