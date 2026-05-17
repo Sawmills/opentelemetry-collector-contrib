@@ -254,6 +254,63 @@ func Test_replacePattern(t *testing.T) {
 	}
 }
 
+func Test_replacePattern_fastEscPrefix(t *testing.T) {
+	target := &ottl.StandardGetSetter[pcommon.Value]{
+		Getter: func(_ context.Context, tCtx pcommon.Value) (any, error) {
+			return tCtx.Str(), nil
+		},
+		Setter: func(_ context.Context, tCtx pcommon.Value, val any) error {
+			tCtx.SetStr(val.(string))
+			return nil
+		},
+	}
+	pattern, err := ottl.NewTestingLiteralGetter[pcommon.Value, string](true, ottl.StandardStringGetter[pcommon.Value]{
+		Getter: func(context.Context, pcommon.Value) (any, error) {
+			return "^\\x1b", nil
+		},
+	})
+	require.NoError(t, err)
+	replacement, err := ottl.NewTestingLiteralGetter[pcommon.Value, string](true, ottl.StandardStringGetter[pcommon.Value]{
+		Getter: func(context.Context, pcommon.Value) (any, error) {
+			return "", nil
+		},
+	})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "prefix",
+			in:   "\x1b[32mmessage",
+			want: "[32mmessage",
+		},
+		{
+			name: "middle escape is not changed",
+			in:   "message\x1b[32m",
+			want: "message\x1b[32m",
+		},
+		{
+			name: "empty",
+			in:   "",
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value := pcommon.NewValueStr(tt.in)
+			exprFunc := newFastReplacePattern[pcommon.Value](target, pattern, replacement, ottl.Optional[ottl.FunctionGetter[pcommon.Value]]{}, ottl.Optional[ottl.StringGetter[pcommon.Value]]{})
+			require.NotNil(t, exprFunc)
+			_, err = exprFunc(t.Context(), value)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, value.Str())
+		})
+	}
+}
+
 func Test_replacePattern_bad_input(t *testing.T) {
 	input := pcommon.NewValueInt(1)
 	target := &ottl.StandardGetSetter[any]{

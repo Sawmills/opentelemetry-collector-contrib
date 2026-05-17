@@ -49,17 +49,55 @@ func endsWithAny(s string, suffixes []string) bool {
 	return false
 }
 
+func endsWithAnyFoldASCII(s string, suffixes []string) bool {
+	for _, suffix := range suffixes {
+		if len(suffix) > len(s) {
+			continue
+		}
+		offset := len(s) - len(suffix)
+		matches := true
+		for i := 0; i < len(suffix); i++ {
+			c := s[offset+i]
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if c != suffix[i] {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return true
+		}
+	}
+	return false
+}
+
+func hasNonASCIIInSuffixWindow(s string, maxLen int) bool {
+	if maxLen > len(s) {
+		maxLen = len(s)
+	}
+	for i := len(s) - maxLen; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return true
+		}
+	}
+	return false
+}
+
 func endsWith[K any](
 	target ottl.StringGetter[K],
 	suffixes []string,
 	caseSensitive bool,
 ) ottl.ExprFunc[K] {
+	longestSuffix := 0
 	if !caseSensitive {
 		lowerSuffixes := make([]string, len(suffixes))
 		for i, suffix := range suffixes {
 			lowerSuffixes[i] = strings.ToLower(suffix)
 		}
 		suffixes = lowerSuffixes
+		longestSuffix = maxStringLen(suffixes)
 	}
 	return func(ctx context.Context, tCtx K) (any, error) {
 		val, err := target.Get(ctx, tCtx)
@@ -76,6 +114,12 @@ func endsWith[K any](
 			// Avoid lowercasing already-lowercase hot-path values.
 			if endsWithAny(val, suffixes) {
 				return true, nil
+			}
+			if endsWithAnyFoldASCII(val, suffixes) {
+				return true, nil
+			}
+			if !hasNonASCIIInSuffixWindow(val, longestSuffix) {
+				return false, nil
 			}
 			val = strings.ToLower(val)
 		}
