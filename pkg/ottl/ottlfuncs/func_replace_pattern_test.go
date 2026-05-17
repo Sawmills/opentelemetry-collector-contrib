@@ -304,7 +304,7 @@ func Test_replacePattern_fastEscPrefix(t *testing.T) {
 			value := pcommon.NewValueStr(tt.in)
 			exprFunc, err := replacePattern[pcommon.Value](target, pattern, replacement, ottl.Optional[ottl.FunctionGetter[pcommon.Value]]{}, ottl.Optional[ottl.StringGetter[pcommon.Value]]{})
 			require.NoError(t, err)
-			_, err = exprFunc(context.Background(), value)
+			_, err = exprFunc(t.Context(), value)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, value.Str())
 		})

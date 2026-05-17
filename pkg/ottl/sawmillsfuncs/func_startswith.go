@@ -82,15 +82,6 @@ func maxPrefixLen(prefixes []string) int {
 	return maxLen
 }
 
-func allASCII(prefixes []string) bool {
-	for _, prefix := range prefixes {
-		if !isASCII(prefix) {
-			return false
-		}
-	}
-	return true
-}
-
 func hasNonASCIIInPrefixWindow(s string, maxLen int) bool {
 	if maxLen > len(s) {
 		maxLen = len(s)
@@ -108,7 +99,6 @@ func startsWith[K any](
 	prefixes []string,
 	caseSensitive bool,
 ) ottl.ExprFunc[K] {
-	asciiPrefixes := false
 	longestPrefix := 0
 	if !caseSensitive {
 		lowerPrefixes := make([]string, len(prefixes))
@@ -116,7 +106,6 @@ func startsWith[K any](
 			lowerPrefixes[i] = strings.ToLower(prefix)
 		}
 		prefixes = lowerPrefixes
-		asciiPrefixes = allASCII(prefixes)
 		longestPrefix = maxPrefixLen(prefixes)
 	}
 	return func(ctx context.Context, tCtx K) (any, error) {
@@ -138,11 +127,7 @@ func startsWith[K any](
 			if startsWithAnyFoldASCII(val, prefixes) {
 				return true, nil
 			}
-			if asciiPrefixes {
-				if !hasNonASCIIInPrefixWindow(val, longestPrefix) {
-					return false, nil
-				}
-			} else if isASCII(val) {
+			if !hasNonASCIIInPrefixWindow(val, longestPrefix) {
 				return false, nil
 			}
 			val = strings.ToLower(val)

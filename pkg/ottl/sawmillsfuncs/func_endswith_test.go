@@ -143,7 +143,7 @@ func TestEndsWithCaseInsensitiveASCIIFoldDoesNotAllocateByBodySize(t *testing.T)
 	}
 
 	short := "Some MIXED-Case Body Line"
-	long := short + " " + strings.Repeat("Padding ", 2000)
+	long := strings.Repeat("Padding ", 2000) + short
 
 	shortAllocs, shortBytes := run(short)
 	longAllocs, longBytes := run(long)
