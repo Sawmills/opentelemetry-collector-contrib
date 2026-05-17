@@ -5,6 +5,7 @@ package sawmillsfuncs
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -92,4 +93,79 @@ func TestStartsWithDoesNotMutatePrefixes(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"THIS"}, prefixes)
+}
+
+func TestStartsWithCaseInsensitiveUnicode(t *testing.T) {
+	cases := []struct {
+		name   string
+		value  string
+		prefix string
+		want   bool
+	}{
+		{"cyrillic upper haystack lower prefix", "Привет мир", "привет", true},
+		{"greek omega upper lower prefix", "Ωmega", "ω", true},
+		{"diacritic case", "Ëxample log line", "ëxample", true},
+		{"unicode fallback for ascii prefix", "\u212aelvin log line", "kelvin", true},
+		{"ascii haystack case-folded match", "MIXED Body Line", "mixed", true},
+		{"ascii haystack no-match stays false", "MIXED Body Line", "body", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := startsWith[any](
+				&ottl.StandardStringGetter[any]{
+					Getter: func(context.Context, any) (any, error) { return tc.value, nil },
+				},
+				[]string{tc.prefix},
+				false,
+			)
+			got, err := fn(t.Context(), nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestStartsWithCaseInsensitiveMixedASCIIPrefixes(t *testing.T) {
+	fn := startsWith[any](
+		&ottl.StandardStringGetter[any]{
+			Getter: func(context.Context, any) (any, error) { return "MIXED Body Line", nil },
+		},
+		[]string{"ω", "mixed"},
+		false,
+	)
+	got, err := fn(t.Context(), nil)
+	require.NoError(t, err)
+	require.Equal(t, true, got)
+}
+
+func TestStartsWithCaseInsensitiveASCIIFoldDoesNotAllocateByBodySize(t *testing.T) {
+	run := func(body string) (allocsPerOp, bytesPerOp float64) {
+		fn := startsWith(
+			&ottl.StandardStringGetter[any]{
+				Getter: func(context.Context, any) (any, error) { return body, nil },
+			},
+			[]string{"xyz-no-such-thing"},
+			false,
+		)
+		br := testing.Benchmark(func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				_, _ = fn(t.Context(), nil)
+			}
+		})
+		return float64(br.AllocsPerOp()), float64(br.AllocedBytesPerOp())
+	}
+
+	short := "Some MIXED-Case Body Line"
+	long := short + " " + strings.Repeat("Padding ", 2000)
+
+	shortAllocs, shortBytes := run(short)
+	longAllocs, longBytes := run(long)
+
+	require.LessOrEqualf(t, longAllocs, shortAllocs+1,
+		"startsWith allocations scaled with body size: %.1f short -> %.1f long", shortAllocs, longAllocs)
+	require.LessOrEqualf(t, longAllocs, 5.0,
+		"startsWith allocated %.1f objects per run on a 16 kB body", longAllocs)
+	require.LessOrEqualf(t, longBytes, shortBytes+512,
+		"startsWith bytes/op scaled with body size: %.1f short -> %.1f long", shortBytes, longBytes)
 }
