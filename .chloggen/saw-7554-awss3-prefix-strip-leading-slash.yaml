@@ -1,0 +1,25 @@
+change_type: bug_fix
+
+component: exporter/awss3
+
+note: strip leading and trailing slashes from s3_prefix to prevent leading-slash S3 keys
+
+issues: [74]
+
+subtext: |
+  SAW-7554 follow-up. The previous fix auto-prepended the prefix only when
+  the template did not reference `{{.Prefix}}`. Templates that DID reference
+  `{{.Prefix}}` (e.g. the `{{if .Prefix}}{{.Prefix}}/{{end}}dt=...` form
+  emitted by collectors-service PR #876, since reverted but still rendered
+  into many live customer configs) substituted the raw value verbatim. A
+  configured `s3_prefix: /datadog/hosted/logs` then produced keys starting
+  with `/`, landing in a distinct S3 keyspace from the slash-less variant
+  and breaking Datadog hosted-archive search for affected tenants.
+
+  Normalization now happens at the entry to `buildLegacyTemplateKey` and
+  in `legacyTemplatePrefix`, so both the `{{.Prefix}}` substitution path
+  and the default-mode `bucketKeyPrefix` path emit keys whose first
+  character is the first path segment, never `/`. Trailing slashes are
+  trimmed symmetrically to avoid `foo//dt=...` mid-key.
+
+change_logs: [user]

@@ -116,6 +116,8 @@ type legacyTemplateData struct {
 }
 
 func buildLegacyTemplateKey(prefix string, tmpl *template.Template, ts time.Time) string {
+	prefix = strings.Trim(prefix, "/")
+
 	var rendered bytes.Buffer
 	err := tmpl.Execute(&rendered, legacyTemplateData{
 		Prefix: prefix,
@@ -246,12 +248,12 @@ func (pki *PartitionKeyBuilder) legacyTemplatePrefix(overridePrefix string) stri
 
 	var pathParts []string
 
-	if pki.PartitionBasePrefix != "" {
-		pathParts = append(pathParts, pki.PartitionBasePrefix)
+	if base := strings.Trim(pki.PartitionBasePrefix, "/"); base != "" {
+		pathParts = append(pathParts, base)
 	}
 
-	if prefix != "" {
-		pathParts = append(pathParts, prefix)
+	if p := strings.Trim(prefix, "/"); p != "" {
+		pathParts = append(pathParts, p)
 	}
 
 	return strings.Join(pathParts, "/")

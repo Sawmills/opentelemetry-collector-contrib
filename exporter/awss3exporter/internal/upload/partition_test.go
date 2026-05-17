@@ -4,6 +4,7 @@
 package upload
 
 import (
+	"strings"
 	"testing"
 	"text/template"
 	"time"
@@ -93,7 +94,7 @@ func TestPartitionKeyInputsNewPartitionKey(t *testing.T) {
 					return "fixed"
 				},
 			},
-			expect:         "/telemetry/service-01_pod2/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics",
+			expect:         "telemetry/service-01_pod2/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics",
 			overridePrefix: "",
 		},
 		{
@@ -109,7 +110,7 @@ func TestPartitionKeyInputsNewPartitionKey(t *testing.T) {
 					return "fixed"
 				},
 			},
-			expect:         "/telemetry/service-01_pod2/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics.gz",
+			expect:         "telemetry/service-01_pod2/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics.gz",
 			overridePrefix: "",
 		},
 		{
@@ -125,7 +126,7 @@ func TestPartitionKeyInputsNewPartitionKey(t *testing.T) {
 					return "fixed"
 				},
 			},
-			expect:         "/foo-prefix1/service-01_pod2/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics.gz",
+			expect:         "foo-prefix1/service-01_pod2/year=2024/month=01/day=24/hour=06/minute=40/signal-output-service-01_pod2_fixed.metrics.gz",
 			overridePrefix: "/foo-prefix1",
 		},
 		{
@@ -254,6 +255,51 @@ func TestPartitionKeyInputsBucketPrefix(t *testing.T) {
 			},
 			expect:         "foo3/2024/01/24/06/40",
 			overridePrefix: "foo3",
+		},
+		{
+			name: "slash-only base prefix",
+			inputs: &PartitionKeyBuilder{
+				PartitionBasePrefix: "/",
+				PartitionFormat:     "year=%Y/month=%m/day=%d",
+			},
+			expect:         "year=2024/month=01/day=24",
+			overridePrefix: "",
+		},
+		{
+			name: "slash-only partition prefix",
+			inputs: &PartitionKeyBuilder{
+				PartitionPrefix: "/",
+				PartitionFormat: "year=%Y/month=%m/day=%d",
+			},
+			expect:         "year=2024/month=01/day=24",
+			overridePrefix: "",
+		},
+		{
+			name: "slash-only override prefix",
+			inputs: &PartitionKeyBuilder{
+				PartitionFormat: "year=%Y/month=%m/day=%d",
+			},
+			expect:         "year=2024/month=01/day=24",
+			overridePrefix: "/",
+		},
+		{
+			name: "multi-slash base prefix",
+			inputs: &PartitionKeyBuilder{
+				PartitionBasePrefix: "///",
+				PartitionFormat:     "year=%Y/month=%m/day=%d",
+			},
+			expect:         "year=2024/month=01/day=24",
+			overridePrefix: "",
+		},
+		{
+			name: "slash-only base with valid partition prefix",
+			inputs: &PartitionKeyBuilder{
+				PartitionBasePrefix: "/",
+				PartitionPrefix:     "telemetry",
+				PartitionFormat:     "year=%Y/month=%m/day=%d",
+			},
+			expect:         "telemetry/year=2024/month=01/day=24",
+			overridePrefix: "",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -397,19 +443,9 @@ func TestValidateLegacyTemplate_DatadogKeyTemplate(t *testing.T) {
 	assert.NoError(t, ValidateLegacyTemplateForValidation(tmpl))
 }
 
-// SAW-7554: the legacy-template mode must honor the configured s3_prefix as
-// a runtime invariant, symmetric with default mode (which always joins the
-// prefix via bucketKeyPrefix). Before this fix, a template that omitted
-// {{.Prefix}} would silently drop the prefix on the floor, causing every
-// caller (e.g. the collectors-service generator) to bear responsibility for
-// remembering to reference .Prefix — see the bug report for the production
-// impact (~486 active collectors writing to bucket root).
-
 func TestBuildKey_LegacyTemplate_AutoPrependsPrefix_WhenTemplateOmitsPrefix(t *testing.T) {
 	t.Parallel()
 
-	// The exact "datadog archive" template emitted by collectors-service:
-	// authored before {{.Prefix}} was a thing, never referenced it.
 	const tmpl = `dt={{ dateInZone "20060102" (now) "UTC" }}/hour={{ dateInZone "15" (now) "UTC" }}/archive_{{ dateInZone "150405.0000" (now) "UTC" }}.{{ randAlpha 22 }}.json.gz`
 
 	parsed, err := parseLegacyTemplate(tmpl)
@@ -421,18 +457,12 @@ func TestBuildKey_LegacyTemplate_AutoPrependsPrefix_WhenTemplateOmitsPrefix(t *t
 		time.Date(2026, 5, 14, 12, 30, 0, 0, time.UTC),
 	)
 
-	// Prefix must be present at the start. The template uses `(now)`, not
-	// the ts arg, so the date/hour/seconds reflect wall-clock — assert
-	// only the invariant pieces.
-	assert.Regexp(t, `^/datadog/hosted/logs/dt=\d{8}/hour=\d{2}/archive_\d+\.\d+\.[A-Za-z]{22}\.json\.gz$`, key)
+	assert.Regexp(t, `^datadog/hosted/logs/dt=\d{8}/hour=\d{2}/archive_\d+\.\d+\.[A-Za-z]{22}\.json\.gz$`, key)
 }
 
 func TestBuildKey_LegacyTemplate_PreservesExistingPrefixReference(t *testing.T) {
 	t.Parallel()
 
-	// A template that already references {{.Prefix}} must NOT have the
-	// prefix prepended a second time — back-compat for callers that
-	// learned the original rule.
 	parsed, err := parseLegacyTemplate(`{{.Prefix}}/{{.Date}}/{{.UUID}}.json.gz`)
 	assert.NoError(t, err)
 
@@ -442,7 +472,41 @@ func TestBuildKey_LegacyTemplate_PreservesExistingPrefixReference(t *testing.T) 
 		time.Date(2026, 5, 14, 12, 30, 0, 0, time.UTC),
 	)
 
-	assert.Regexp(t, `^/datadog/hosted/logs/2026/05/14/.+\.json\.gz$`, key)
+	assert.Regexp(t, `^datadog/hosted/logs/2026/05/14/.+\.json\.gz$`, key)
+}
+
+func TestBuildKey_LegacyTemplate_StripsLeadingSlash_TemplateWithPrefixRef(t *testing.T) {
+	t.Parallel()
+
+	const generatorTemplate = `{{if .Prefix}}{{.Prefix}}/{{end}}dt={{ dateInZone "20060102" (now) "UTC" }}/hour={{ dateInZone "15" (now) "UTC" }}/archive_{{ dateInZone "150405.0000" (now) "UTC" }}.{{ randAlpha 22 }}.json.gz`
+
+	parsed, err := parseLegacyTemplate(generatorTemplate)
+	assert.NoError(t, err)
+
+	key := buildLegacyTemplateKey(
+		"/datadog/hosted/logs",
+		parsed,
+		time.Date(2026, 5, 17, 7, 0, 0, 0, time.UTC),
+	)
+
+	assert.False(t, strings.HasPrefix(key, "/"), "S3 key must not start with `/`: got %q", key)
+	assert.Regexp(t, `^datadog/hosted/logs/dt=\d{8}/hour=\d{2}/archive_\d+\.\d+\.[A-Za-z]{22}\.json\.gz$`, key)
+}
+
+func TestBuildKey_LegacyTemplate_StripsTrailingSlash(t *testing.T) {
+	t.Parallel()
+
+	parsed, err := parseLegacyTemplate(`{{.Prefix}}/dt=20260517/archive.json.gz`)
+	assert.NoError(t, err)
+
+	key := buildLegacyTemplateKey(
+		"datadog/hosted/logs/",
+		parsed,
+		time.Date(2026, 5, 17, 7, 0, 0, 0, time.UTC),
+	)
+
+	assert.NotContains(t, key, "//", "rendered key must not contain `//`: got %q", key)
+	assert.Equal(t, "datadog/hosted/logs/dt=20260517/archive.json.gz", key)
 }
 
 func TestBuildKey_LegacyTemplate_EmptyPrefix_NoLeadingSlash(t *testing.T) {
@@ -489,16 +553,9 @@ func TestTemplateReferencesPrefix(t *testing.T) {
 	}
 }
 
-// Regression for the architect's review concern (SAW-7554 PR #74): a template
-// that defines .Prefix references in associated subtemplates would have been
-// missed by a root-only AST walk. Validates the detector descends through
-// every parse tree REACHABLE from the root via {{template "name"}}.
 func TestTemplateReferencesPrefix_ReachableSubtemplates(t *testing.T) {
 	t.Parallel()
 
-	// .Prefix lives in a {{define}} block, not the root, and is reached via
-	// {{template "tail"}}. The rendered output DOES include the prefix, so
-	// the detector must return true.
 	const tmpl = `{{define "tail"}}{{.Prefix}}/dt={{.Date}}{{end}}{{template "tail" .}}`
 
 	parsed, err := parseLegacyTemplate(tmpl)
@@ -507,17 +564,9 @@ func TestTemplateReferencesPrefix_ReachableSubtemplates(t *testing.T) {
 		"detector must descend into associated templates invoked via {{template}}")
 }
 
-// Regression for the architect's second review concern (SAW-7554 PR #74):
-// an UNUSED {{define}} block must NOT count as a Prefix reference, otherwise
-// the auto-prepend gets suppressed for a template whose rendered key never
-// actually emits the prefix. The detector should only follow reachable
-// {{template "name"}} call sites.
 func TestTemplateReferencesPrefix_IgnoresUnusedDefines(t *testing.T) {
 	t.Parallel()
 
-	// "unused" mentions .Prefix but is never invoked. The rendered key is
-	// just "foo" — the prefix is missing, so the detector must return false
-	// to let buildLegacyTemplateKey auto-prepend it.
 	const tmpl = `{{define "unused"}}{{.Prefix}}{{end}}foo`
 
 	parsed, err := parseLegacyTemplate(tmpl)
