@@ -72,11 +72,11 @@ func startsWithAnyFoldASCII(s string, prefixes []string) bool {
 	return false
 }
 
-func maxPrefixLen(prefixes []string) int {
+func maxStringLen(values []string) int {
 	maxLen := 0
-	for _, prefix := range prefixes {
-		if len(prefix) > maxLen {
-			maxLen = len(prefix)
+	for _, value := range values {
+		if len(value) > maxLen {
+			maxLen = len(value)
 		}
 	}
 	return maxLen
@@ -106,7 +106,7 @@ func startsWith[K any](
 			lowerPrefixes[i] = strings.ToLower(prefix)
 		}
 		prefixes = lowerPrefixes
-		longestPrefix = maxPrefixLen(prefixes)
+		longestPrefix = maxStringLen(prefixes)
 	}
 	return func(ctx context.Context, tCtx K) (any, error) {
 		val, err := target.Get(ctx, tCtx)

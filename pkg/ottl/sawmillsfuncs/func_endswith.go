@@ -73,16 +73,6 @@ func endsWithAnyFoldASCII(s string, suffixes []string) bool {
 	return false
 }
 
-func maxSuffixLen(suffixes []string) int {
-	maxLen := 0
-	for _, suffix := range suffixes {
-		if len(suffix) > maxLen {
-			maxLen = len(suffix)
-		}
-	}
-	return maxLen
-}
-
 func hasNonASCIIInSuffixWindow(s string, maxLen int) bool {
 	if maxLen > len(s) {
 		maxLen = len(s)
@@ -107,7 +97,7 @@ func endsWith[K any](
 			lowerSuffixes[i] = strings.ToLower(suffix)
 		}
 		suffixes = lowerSuffixes
-		longestSuffix = maxSuffixLen(suffixes)
+		longestSuffix = maxStringLen(suffixes)
 	}
 	return func(ctx context.Context, tCtx K) (any, error) {
 		val, err := target.Get(ctx, tCtx)
