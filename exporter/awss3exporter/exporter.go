@@ -123,7 +123,7 @@ func (e *s3Exporter) start(ctx context.Context, host component.Host) error {
 		}
 	case e.config.MaxFileSizeBytes > 0:
 		if m, err = awss3marshaler.NewMarshalerWithConfig(e.config.MarshalerName, e.config.MaxFileSizeBytes, e.logger); err != nil {
-			return err
+			return fmt.Errorf("create marshaler %q: %w", e.config.MarshalerName, err)
 		}
 	default:
 		if m, err = awss3marshaler.NewMarshaler(e.config.MarshalerName); err != nil {

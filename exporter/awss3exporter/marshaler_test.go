@@ -13,6 +13,8 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/ptrace"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/awss3marshaler"
 )
@@ -86,6 +88,23 @@ func TestMarshalerFromEncoding(t *testing.T) {
 		assert.EqualError(t, err, `unknown encoding "foo"`)
 		require.Nil(t, m)
 	}
+}
+
+func TestMarshalerFromEncodingUnsupportedSignals(t *testing.T) {
+	id := component.MustNewID("foo")
+	m, err := newMarshalerFromEncoding(&id, "myext", hostWithExtensions{
+		encoding: encodingExtension{},
+	})
+	require.NoError(t, err)
+
+	_, err = m.MarshalLogs(plog.NewLogs())
+	require.EqualError(t, err, "configured encoding does not support logs marshaling")
+
+	_, err = m.MarshalTraces(ptrace.NewTraces())
+	require.EqualError(t, err, "configured encoding does not support traces marshaling")
+
+	_, err = m.MarshalMetrics(pmetric.NewMetrics())
+	require.EqualError(t, err, "configured encoding does not support metrics marshaling")
 }
 
 type encodingExtensionWithFlushMetadata struct {

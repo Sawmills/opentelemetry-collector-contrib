@@ -61,10 +61,16 @@ func newMarshalerFromEncoding(encoding *component.ID, fileFormat string, host co
 }
 
 func (marshaler *encodingMarshaler) MarshalTraces(td ptrace.Traces) ([]byte, error) {
+	if marshaler.tracesMarshaler == nil {
+		return nil, fmt.Errorf("configured encoding does not support traces marshaling")
+	}
 	return marshaler.tracesMarshaler.MarshalTraces(td)
 }
 
 func (marshaler *encodingMarshaler) MarshalLogs(ld plog.Logs) ([]byte, error) {
+	if marshaler.logsMarshaler == nil {
+		return nil, fmt.Errorf("configured encoding does not support logs marshaling")
+	}
 	buf, _, err := marshaler.MarshalLogsWithFlushMetadata(ld)
 	return buf, err
 }
@@ -72,6 +78,9 @@ func (marshaler *encodingMarshaler) MarshalLogs(ld plog.Logs) ([]byte, error) {
 func (marshaler *encodingMarshaler) MarshalLogsWithFlushMetadata(
 	ld plog.Logs,
 ) ([]byte, flushMetadata, error) {
+	if marshaler.logsMarshaler == nil {
+		return nil, flushMetadata{}, fmt.Errorf("configured encoding does not support logs marshaling")
+	}
 	if metadataMarshaler, ok := marshaler.logsMarshaler.(LogMarshalerWithFlushMetadata); ok {
 		buf, reason, completedAt, err := metadataMarshaler.MarshalLogsWithFlushMetadata(ld)
 		if err != nil {
@@ -88,6 +97,9 @@ func (marshaler *encodingMarshaler) MarshalLogsWithFlushMetadata(
 }
 
 func (marshaler *encodingMarshaler) MarshalMetrics(md pmetric.Metrics) ([]byte, error) {
+	if marshaler.metricsMarshaler == nil {
+		return nil, fmt.Errorf("configured encoding does not support metrics marshaling")
+	}
 	return marshaler.metricsMarshaler.MarshalMetrics(md)
 }
 

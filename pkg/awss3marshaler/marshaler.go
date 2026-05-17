@@ -119,15 +119,3 @@ func (marshaler *s3Marshaler) Format() string {
 func (marshaler *s3Marshaler) Compressed() bool {
 	return marshaler.isCompressed
 }
-
-func (*s3Marshaler) FlushLogs() ([]byte, error) {
-	return nil, nil
-}
-
-func (marshaler *s3Marshaler) FlushLogsWithReason(string) ([]byte, error) {
-	return marshaler.FlushLogs()
-}
-
-func (*s3Marshaler) FlushTraces() ([]byte, error) {
-	return nil, nil
-}
