@@ -4,6 +4,7 @@
 package awss3exporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awss3exporter"
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -15,10 +16,12 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/awss3marshaler"
 )
 
-type marshaler = awss3marshaler.Marshaler
-type logFlusher = awss3marshaler.LogFlusher
-type logFlusherWithReason = awss3marshaler.LogFlusherWithReason
-type traceFlusher = awss3marshaler.TraceFlusher
+type (
+	marshaler            = awss3marshaler.Marshaler
+	logFlusher           = awss3marshaler.LogFlusher
+	logFlusherWithReason = awss3marshaler.LogFlusherWithReason
+	traceFlusher         = awss3marshaler.TraceFlusher
+)
 
 // LogMarshalerWithFlushMetadata is an optional encoding extension interface
 // for passing flush timing metadata to S3 exporter telemetry.
@@ -62,14 +65,14 @@ func newMarshalerFromEncoding(encoding *component.ID, fileFormat string, host co
 
 func (marshaler *encodingMarshaler) MarshalTraces(td ptrace.Traces) ([]byte, error) {
 	if marshaler.tracesMarshaler == nil {
-		return nil, fmt.Errorf("configured encoding does not support traces marshaling")
+		return nil, errors.New("configured encoding does not support traces marshaling")
 	}
 	return marshaler.tracesMarshaler.MarshalTraces(td)
 }
 
 func (marshaler *encodingMarshaler) MarshalLogs(ld plog.Logs) ([]byte, error) {
 	if marshaler.logsMarshaler == nil {
-		return nil, fmt.Errorf("configured encoding does not support logs marshaling")
+		return nil, errors.New("configured encoding does not support logs marshaling")
 	}
 	buf, _, err := marshaler.MarshalLogsWithFlushMetadata(ld)
 	return buf, err
@@ -79,7 +82,7 @@ func (marshaler *encodingMarshaler) MarshalLogsWithFlushMetadata(
 	ld plog.Logs,
 ) ([]byte, flushMetadata, error) {
 	if marshaler.logsMarshaler == nil {
-		return nil, flushMetadata{}, fmt.Errorf("configured encoding does not support logs marshaling")
+		return nil, flushMetadata{}, errors.New("configured encoding does not support logs marshaling")
 	}
 	if metadataMarshaler, ok := marshaler.logsMarshaler.(LogMarshalerWithFlushMetadata); ok {
 		buf, reason, completedAt, err := metadataMarshaler.MarshalLogsWithFlushMetadata(ld)
@@ -98,7 +101,7 @@ func (marshaler *encodingMarshaler) MarshalLogsWithFlushMetadata(
 
 func (marshaler *encodingMarshaler) MarshalMetrics(md pmetric.Metrics) ([]byte, error) {
 	if marshaler.metricsMarshaler == nil {
-		return nil, fmt.Errorf("configured encoding does not support metrics marshaling")
+		return nil, errors.New("configured encoding does not support metrics marshaling")
 	}
 	return marshaler.metricsMarshaler.MarshalMetrics(md)
 }
