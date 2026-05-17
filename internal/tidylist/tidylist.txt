@@ -90,6 +90,7 @@ exporter/awscloudwatchlogsexporter
 internal/aws/metrics
 exporter/awsemfexporter
 exporter/awskinesisexporter
+pkg/awss3marshaler
 exporter/awss3exporter
 internal/aws/xray
 exporter/awsxrayexporter
@@ -208,7 +209,6 @@ internal/k8sleaderelectortest
 internal/kubelet
 internal/sqlquery
 internal/tools
-pkg/awss3marshaler
 pkg/expohisto
 pkg/translator/azure
 pkg/translator/azurelogs
