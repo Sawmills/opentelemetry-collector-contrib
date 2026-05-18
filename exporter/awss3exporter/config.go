@@ -15,6 +15,7 @@ import (
 	"go.uber.org/multierr"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awss3exporter/internal/upload"
+	awss3marshaler "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/awss3marshaler"
 )
 
 const (
@@ -88,13 +89,13 @@ type S3UploaderConfig struct {
 	UniqueKeyFuncName string `mapstructure:"unique_key_func_name"`
 }
 
-type MarshalerType string
+type MarshalerType = awss3marshaler.MarshalerType
 
 const (
-	OtlpProtobuf MarshalerType = "otlp_proto"
-	OtlpJSON     MarshalerType = "otlp_json"
-	SumoIC       MarshalerType = "sumo_ic"
-	Body         MarshalerType = "body"
+	OtlpProtobuf = awss3marshaler.OtlpProtobuf
+	OtlpJSON     = awss3marshaler.OtlpJSON
+	SumoIC       = awss3marshaler.SumoIC
+	Body         = awss3marshaler.Body
 )
 
 // ResourceAttrsToS3 defines the mapping of S3 uploading configuration values to resource attribute values.

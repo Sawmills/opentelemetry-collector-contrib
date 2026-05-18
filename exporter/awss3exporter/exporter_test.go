@@ -23,6 +23,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awss3exporter/internal/upload"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/awss3marshaler"
 )
 
 var (
@@ -56,7 +57,8 @@ func init() {
 }
 
 func getLogExporter(t *testing.T) *s3Exporter {
-	marshaler, _ := newMarshaler("otlp_json", zap.NewNop())
+	marshaler, err := awss3marshaler.NewMarshaler("otlp_json")
+	require.NoError(t, err)
 	exporter := &s3Exporter{
 		config:    createDefaultConfig().(*Config),
 		uploader:  &testWriter{t: t, expectedOpts: &upload.UploadOptions{OverridePrefix: ""}},
@@ -73,7 +75,8 @@ func TestLog(t *testing.T) {
 }
 
 func getLogExporterWithResourceAttrs(t *testing.T) *s3Exporter {
-	marshaler, _ := newMarshaler("otlp_json", zap.NewNop())
+	marshaler, err := awss3marshaler.NewMarshaler("otlp_json")
+	require.NoError(t, err)
 	config := createDefaultConfig().(*Config)
 	config.ResourceAttrsToS3.S3Prefix = s3PrefixKey
 	exporter := &s3Exporter{
@@ -92,7 +95,8 @@ func TestLogWithResourceAttrs(t *testing.T) {
 }
 
 func getLogExporterWithBucketAndPrefixAttrs(t *testing.T) *s3Exporter {
-	marshaler, _ := newMarshaler("otlp_json", zap.NewNop())
+	marshaler, err := awss3marshaler.NewMarshaler("otlp_json")
+	require.NoError(t, err)
 	config := createDefaultConfig().(*Config)
 	config.ResourceAttrsToS3.S3Bucket = s3BucketKey
 	config.ResourceAttrsToS3.S3Prefix = s3PrefixKey
@@ -130,9 +134,9 @@ func (m *flushMetadataMarshaler) MarshalLogsWithFlushMetadata(
 
 func (*flushMetadataMarshaler) MarshalMetrics(pmetric.Metrics) ([]byte, error) { return nil, nil }
 
-func (*flushMetadataMarshaler) format() string { return "parquet" }
+func (*flushMetadataMarshaler) Format() string { return "parquet" }
 
-func (*flushMetadataMarshaler) compressed() bool { return false }
+func (*flushMetadataMarshaler) Compressed() bool { return false }
 
 type uploaderStub struct {
 	err         error

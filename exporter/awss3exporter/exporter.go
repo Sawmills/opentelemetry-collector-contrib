@@ -23,6 +23,7 @@ import (
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awss3exporter/internal/metadata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awss3exporter/internal/upload"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/awss3marshaler"
 )
 
 type flushMetadata struct {
@@ -117,22 +118,22 @@ func (e *s3Exporter) start(ctx context.Context, host component.Host) error {
 	var err error
 	switch {
 	case e.config.Encoding != nil:
-		if m, err = newMarshalerFromEncoding(e.config.Encoding, e.config.EncodingFileExtension, host, e.logger); err != nil {
+		if m, err = newMarshalerFromEncoding(e.config.Encoding, e.config.EncodingFileExtension, host); err != nil {
 			return err
 		}
 	case e.config.MaxFileSizeBytes > 0:
-		if m, err = newMarshalerWithConfig(e.config.MarshalerName, e.config.MaxFileSizeBytes, e.logger); err != nil {
-			return err
+		if m, err = awss3marshaler.NewMarshalerWithConfig(e.config.MarshalerName, e.config.MaxFileSizeBytes, e.logger); err != nil {
+			return fmt.Errorf("create marshaler %q: %w", e.config.MarshalerName, err)
 		}
 	default:
-		if m, err = newMarshaler(e.config.MarshalerName, e.logger); err != nil {
+		if m, err = awss3marshaler.NewMarshaler(e.config.MarshalerName); err != nil {
 			return fmt.Errorf("unknown marshaler %q", e.config.MarshalerName)
 		}
 	}
 
 	e.marshaler = m
 
-	up, err := newUploadManager(ctx, e.config, e.logger, e.signalType, m.format(), m.compressed())
+	up, err := newUploadManager(ctx, e.config, e.logger, e.signalType, m.Format(), m.Compressed())
 	if err != nil {
 		return err
 	}
