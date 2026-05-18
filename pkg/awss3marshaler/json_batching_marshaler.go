@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package awss3exporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awss3exporter"
+package awss3marshaler // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/awss3marshaler"
 
 import (
 	"bytes"
@@ -15,14 +15,6 @@ import (
 )
 
 // jsonBatchingMarshaler handles JSON marshaling with proper batching.
-// It accumulates raw JSON bytes and flushes them at partition boundaries
-// (via runEvery in exporter.go).
-//
-// Limitation: the marshaler does not track per-resource upload options.
-// Timer/shutdown flushes upload with nil UploadOptions, using the exporter's
-// default S3 prefix. This means resource_attrs_to_s3 routing is not applied
-// to flushed batches. This is a known limitation matching the old
-// sawmills-collector local fork behavior.
 type jsonBatchingMarshaler struct {
 	mutex sync.Mutex
 
@@ -126,9 +118,6 @@ func (m *jsonBatchingMarshaler) MarshalTraces(td ptrace.Traces) ([]byte, error) 
 		return nil, err
 	}
 
-	// Unwrap individual resourceSpans entries so each JSONL line represents
-	// a single resourceSpan.  This matches the old sawmills-collector fork
-	// format that downstream consumers expect.
 	var parsed map[string]json.RawMessage
 	if err := json.Unmarshal(buf, &parsed); err != nil {
 		return nil, err
@@ -162,8 +151,6 @@ func (m *jsonBatchingMarshaler) flushTraceBatch() ([]byte, error) {
 		return nil, nil
 	}
 
-	// Wrap each individual resourceSpan back into a valid OTLP JSON envelope
-	// so every JSONL line is a standalone {"resourceSpans":[<entry>]} document.
 	wrapped := make([]json.RawMessage, 0, len(m.traceBatches))
 	for _, span := range m.traceBatches {
 		envelope, err := json.Marshal(map[string][]json.RawMessage{
@@ -200,10 +187,10 @@ func (m *jsonBatchingMarshaler) MarshalMetrics(md pmetric.Metrics) ([]byte, erro
 	return m.metricsMarshaler.MarshalMetrics(md)
 }
 
-func (*jsonBatchingMarshaler) format() string {
+func (*jsonBatchingMarshaler) Format() string {
 	return "json"
 }
 
-func (*jsonBatchingMarshaler) compressed() bool {
+func (*jsonBatchingMarshaler) Compressed() bool {
 	return false
 }

@@ -13,38 +13,41 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/pdata/plog"
-	"go.uber.org/zap"
+	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/collector/pdata/ptrace"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/awss3marshaler"
 )
 
 func TestMarshaler(t *testing.T) {
 	{
-		m, err := newMarshaler("otlp_json", zap.NewNop())
+		m, err := awss3marshaler.NewMarshaler("otlp_json")
 		assert.NoError(t, err)
 		require.NotNil(t, m)
-		assert.Equal(t, "json", m.format())
+		assert.Equal(t, "json", m.Format())
 	}
 	{
-		m, err := newMarshaler("otlp_proto", zap.NewNop())
+		m, err := awss3marshaler.NewMarshaler("otlp_proto")
 		assert.NoError(t, err)
 		require.NotNil(t, m)
-		assert.Equal(t, "binpb", m.format())
+		assert.Equal(t, "binpb", m.Format())
 	}
 	{
-		m, err := newMarshaler("sumo_ic", zap.NewNop())
+		m, err := awss3marshaler.NewMarshaler("sumo_ic")
 		assert.NoError(t, err)
 		require.NotNil(t, m)
-		assert.Equal(t, "json", m.format())
+		assert.Equal(t, "json", m.Format())
 	}
 	{
-		m, err := newMarshaler("unknown", zap.NewNop())
+		m, err := awss3marshaler.NewMarshaler("unknown")
 		assert.Error(t, err)
 		require.Nil(t, m)
 	}
 	{
-		m, err := newMarshaler("body", zap.NewNop())
+		m, err := awss3marshaler.NewMarshaler("body")
 		assert.NoError(t, err)
 		require.NotNil(t, m)
-		assert.Equal(t, "txt", m.format())
+		assert.Equal(t, "txt", m.Format())
 	}
 }
 
@@ -75,16 +78,33 @@ func TestMarshalerFromEncoding(t *testing.T) {
 		host := hostWithExtensions{
 			encoding: encodingExtension{},
 		}
-		m, err := newMarshalerFromEncoding(&id, "myext", host, zap.NewNop())
+		m, err := newMarshalerFromEncoding(&id, "myext", host)
 		assert.NoError(t, err)
 		require.NotNil(t, m)
-		assert.Equal(t, "myext", m.format())
+		assert.Equal(t, "myext", m.Format())
 	}
 	{
-		m, err := newMarshalerFromEncoding(&id, "", componenttest.NewNopHost(), zap.NewNop())
+		m, err := newMarshalerFromEncoding(&id, "", componenttest.NewNopHost())
 		assert.EqualError(t, err, `unknown encoding "foo"`)
 		require.Nil(t, m)
 	}
+}
+
+func TestMarshalerFromEncodingUnsupportedSignals(t *testing.T) {
+	id := component.MustNewID("foo")
+	m, err := newMarshalerFromEncoding(&id, "myext", hostWithExtensions{
+		encoding: encodingExtension{},
+	})
+	require.NoError(t, err)
+
+	_, err = m.MarshalLogs(plog.NewLogs())
+	require.EqualError(t, err, "configured encoding does not support logs marshaling")
+
+	_, err = m.MarshalTraces(ptrace.NewTraces())
+	require.EqualError(t, err, "configured encoding does not support traces marshaling")
+
+	_, err = m.MarshalMetrics(pmetric.NewMetrics())
+	require.EqualError(t, err, "configured encoding does not support metrics marshaling")
 }
 
 type encodingExtensionWithFlushMetadata struct {
@@ -122,10 +142,10 @@ func TestMarshalLogsWithFlushMetadata_FromEncodingExtension(t *testing.T) {
 		},
 	}
 
-	m, err := newMarshalerFromEncoding(&id, "parquet", host, zap.NewNop())
+	m, err := newMarshalerFromEncoding(&id, "parquet", host)
 	require.NoError(t, err)
 
-	s3m, ok := m.(*s3Marshaler)
+	s3m, ok := m.(marshalerWithFlushMetadata)
 	require.True(t, ok)
 
 	buf, meta, err := s3m.MarshalLogsWithFlushMetadata(plog.NewLogs())

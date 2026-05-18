@@ -1,0 +1,3 @@
+$defs:
+  marshaler_type:
+    type: string

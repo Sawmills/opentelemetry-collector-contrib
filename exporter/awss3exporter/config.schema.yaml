@@ -1,6 +1,6 @@
 $defs:
   marshaler_type:
-    type: string
+    $ref: /pkg/awss3marshaler.marshaler_type
   resource_attrs_to_s_3:
     description: ResourceAttrsToS3 defines the mapping of S3 uploading configuration values to resource attribute values.
     type: object

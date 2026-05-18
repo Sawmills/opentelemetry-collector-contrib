@@ -13,6 +13,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/itchyny/timefmt-go v0.1.7
 	github.com/klauspost/compress v1.18.5
+	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/awss3marshaler v0.149.0
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/batchperresourceattr v0.149.0
 	github.com/stretchr/testify v1.11.1
 	github.com/tilinna/clock v1.1.0
@@ -162,3 +163,5 @@ retract (
 )
 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/batchperresourceattr => ../../pkg/batchperresourceattr
+
+replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/awss3marshaler => ../../pkg/awss3marshaler

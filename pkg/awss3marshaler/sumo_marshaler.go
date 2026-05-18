@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package awss3exporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/awss3exporter"
+package awss3marshaler // import "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/awss3marshaler"
 
 import (
 	"bytes"
@@ -111,7 +111,7 @@ func (sumoMarshaler) MarshalLogs(ld plog.Logs) ([]byte, error) {
 		fieldsMap := make(map[string]any)
 		ra.Range(func(k string, v pcommon.Value) bool {
 			if k == SourceCategoryKey || k == SourceHostKey || k == SourceNameKey {
-				return true // continue to next attribute
+				return true
 			}
 			fieldsMap[k] = v.AsRaw()
 			return true
@@ -144,11 +144,6 @@ func (sumoMarshaler) MarshalLogs(ld plog.Logs) ([]byte, error) {
 }
 
 func getMessageJSON(lr plog.LogRecord) (string, error) {
-	// The "message" fields is a JSON created from combining the actual log body and log-level attributes,
-	// where the log body is stored under "log" key.
-	// More info:
-	// https://help.sumologic.com/docs/send-data/opentelemetry-collector/data-source-configurations/additional-configurations-reference/#mapping-opentelemetry-concepts-to-sumo-logic
-	// Create a new map to avoid mutating the original log record
 	messageMap := make(map[string]any)
 
 	lr.Attributes().Range(func(k string, v pcommon.Value) bool {
