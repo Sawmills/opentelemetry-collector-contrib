@@ -81,6 +81,15 @@ $defs:
       max_reroute_attempts:
         type: integer
         minimum: 0
+      min_eligible_backends:
+        type: integer
+        minimum: 1
+        description: Endpoint health fails open when quarantine would leave fewer than this many eligible resolver-present backends.
+      max_quarantined_percent:
+        type: integer
+        minimum: 1
+        maximum: 100
+        description: Endpoint health fails open when more than this percentage of resolver-present backends are quarantined.
       quarantine_duration:
         type: string
         format: duration

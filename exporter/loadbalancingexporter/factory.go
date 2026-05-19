@@ -79,10 +79,12 @@ func createDefaultConfig() component.Config {
 			PayloadCompression:       QueuePayloadCompressionNone,
 		},
 		EndpointHealth: EndpointHealthConfig{
-			Enabled:            false,
-			QuarantineDuration: defaultEndpointHealthQuarantineDuration,
-			RerouteOnFailure:   true,
-			MaxRerouteAttempts: 1,
+			Enabled:               false,
+			QuarantineDuration:    defaultEndpointHealthQuarantineDuration,
+			RerouteOnFailure:      true,
+			MaxRerouteAttempts:    1,
+			MinEligibleBackends:   defaultEndpointHealthMinEligibleBackends,
+			MaxQuarantinedPercent: defaultEndpointHealthMaxQuarantinedPercent,
 			ActiveProbe: EndpointHealthActiveProbeConfig{
 				Enabled:        false,
 				Type:           EndpointHealthActiveProbeTypeTCPConnect,
