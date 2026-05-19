@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -253,6 +254,190 @@ func TestConsumeLogsCentralQueueUsesLaneRoutingForIgnoredTraceIDs(t *testing.T) 
 		mergeLogChunksByMove(merged, decoded)
 	}
 	require.Equal(t, first.LogRecordCount(), merged.LogRecordCount())
+}
+
+func TestConsumeLogsCentralQueueSplitsOversizedLogBatchByUncompressedBytes(t *testing.T) {
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	logs := sharedScopeLogsWithoutTraceIDs(repeatedStrings(20, strings.Repeat("a", 512))...)
+	limit := mustMarshalLogsSize(t, firstNLogRecords(logs, 4)) + 32
+	fallbackRoutingKey := pcommon.TraceID{7}
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    limit,
+			targetCompressedBytes:        1 << 20,
+		}),
+		centralCodec:          codec,
+		ignoreTraceID:         true,
+		centralQueueLaneCount: 64,
+		randomTraceID: func() pcommon.TraceID {
+			return fallbackRoutingKey
+		},
+	}
+	p.started.Store(true)
+
+	require.NoError(t, p.ConsumeLogs(t.Context(), logs))
+	require.Greater(t, p.centralQueue.len(), 1)
+
+	expectedRoutingKey := centralQueueLaneRoutingKey(signalKindLogs, fallbackRoutingKey[:], 64)
+	merged := plog.NewLogs()
+	for _, item := range p.centralQueue.items {
+		require.LessOrEqual(t, item.uncompressedBytes, limit)
+		require.Equal(t, expectedRoutingKey, item.routingKey)
+		decoded, err := decodeCentralQueueLogsItem(item, codec)
+		require.NoError(t, err)
+		mergeLogChunksByMove(merged, decoded)
+	}
+	require.NoError(t, plogtest.CompareLogs(logs, merged))
+}
+
+func TestConsumeLogsCentralQueueRejectsSingleOversizedLogRecord(t *testing.T) {
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    512,
+		}),
+		centralCodec:          codec,
+		centralQueueLaneCount: 64,
+	}
+	p.started.Store(true)
+
+	err := p.ConsumeLogs(t.Context(), sharedResourceScopeLog(strings.Repeat("a", 2048)))
+	require.ErrorIs(t, err, errCentralQueueItemTooLarge)
+	require.Equal(t, 0, p.centralQueue.len())
+}
+
+func TestConsumeLogsCentralQueueRecordsRejectedMetricForSingleOversizedLogRecord(t *testing.T) {
+	reader := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, reader.Shutdown(context.WithoutCancel(t.Context())))
+	})
+	telemetry, err := newCentralQueueTelemetry(reader.NewTelemetrySettings(), signalKindLogs)
+	require.NoError(t, err)
+	codec := newQueuePayloadCodec(QueuePayloadCompressionNone)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	logs := sharedResourceScopeLog(strings.Repeat("a", 2048))
+	payload, err := (&plog.ProtoMarshaler{}).MarshalLogs(logs)
+	require.NoError(t, err)
+	encoded, err := codec.Encode(payload)
+	require.NoError(t, err)
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    512,
+			telemetry:                    telemetry,
+		}),
+		centralCodec:          codec,
+		centralQueueLaneCount: 64,
+	}
+	p.started.Store(true)
+
+	err = p.ConsumeLogs(t.Context(), logs)
+	require.ErrorIs(t, err, errCentralQueueItemTooLarge)
+	require.Equal(t, 0, p.centralQueue.len())
+	requireCentralQueueIntSum(
+		t,
+		reader,
+		"otelcol_loadbalancer_central_queue_rejected_compressed_bytes",
+		"By",
+		attribute.NewSet(attribute.String("signal", string(signalKindLogs))),
+		int64(len(encoded)),
+	)
+}
+
+func TestConsumeLogsCentralQueueRejectsOversizedLogRecordBeforePartialEnqueue(t *testing.T) {
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    768,
+		}),
+		centralCodec:          codec,
+		ignoreTraceID:         true,
+		centralQueueLaneCount: 64,
+		randomTraceID: func() pcommon.TraceID {
+			return pcommon.TraceID{7}
+		},
+	}
+	p.started.Store(true)
+	logs := sharedScopeLogsWithoutTraceIDs(
+		strings.Repeat("a", 512),
+		strings.Repeat("b", 512),
+		strings.Repeat("c", 2048),
+	)
+
+	err := p.ConsumeLogs(t.Context(), logs)
+	require.ErrorIs(t, err, errCentralQueueItemTooLarge)
+	require.Equal(t, 0, p.centralQueue.len())
+}
+
+func TestConsumeLogsCentralQueueSplitsAtInflightUncompressedLimit(t *testing.T) {
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	logs := sharedScopeLogsWithoutTraceIDs(repeatedStrings(12, strings.Repeat("a", 512))...)
+	inflightLimit := mustMarshalLogsSize(t, firstNLogRecords(logs, 3)) + 32
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: int64(inflightLimit),
+			maxUncompressedBatchBytes:    1 << 20,
+			targetCompressedBytes:        1 << 20,
+		}),
+		centralCodec:          codec,
+		ignoreTraceID:         true,
+		centralQueueLaneCount: 64,
+		randomTraceID: func() pcommon.TraceID {
+			return pcommon.TraceID{7}
+		},
+	}
+	p.started.Store(true)
+
+	require.NoError(t, p.ConsumeLogs(t.Context(), logs))
+	require.Greater(t, p.centralQueue.len(), 1)
+	for _, item := range p.centralQueue.items {
+		require.LessOrEqual(t, item.uncompressedBytes, inflightLimit)
+	}
+}
+
+func TestConsumeLogsCentralQueueSplitsBySizeNotRawRoutingKey(t *testing.T) {
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	logs := sharedScopeLogsWithTraceIDs(repeatedTraceIDs(8)...)
+	limit := mustMarshalLogsSize(t, firstNLogRecords(logs, 4)) + 32
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    limit,
+			targetCompressedBytes:        1 << 20,
+		}),
+		centralCodec:          codec,
+		centralQueueLaneCount: 1,
+	}
+	p.started.Store(true)
+
+	require.NoError(t, p.ConsumeLogs(t.Context(), logs))
+	require.Greater(t, p.centralQueue.len(), 1)
+	require.Less(t, p.centralQueue.len(), logs.LogRecordCount())
+
+	expectedRoutingKey := centralQueueLaneRoutingKey(signalKindLogs, []byte{1}, 1)
+	merged := plog.NewLogs()
+	for _, item := range p.centralQueue.items {
+		require.LessOrEqual(t, item.uncompressedBytes, limit)
+		require.Equal(t, expectedRoutingKey, item.routingKey)
+		decoded, err := decodeCentralQueueLogsItem(item, codec)
+		require.NoError(t, err)
+		mergeLogChunksByMove(merged, decoded)
+	}
+	require.NoError(t, plogtest.CompareLogs(logs, merged))
 }
 
 func TestLogsCentralQueueWindowUsesRoutingKeyWhenIgnoringTraceIDs(t *testing.T) {
@@ -1910,6 +2095,61 @@ func sharedScopeLogsWithoutTraceIDs(bodies ...string) plog.Logs {
 		rec.Body().SetStr(body)
 	}
 	return logs
+}
+
+func sharedScopeLogsWithTraceIDs(traceIDs ...pcommon.TraceID) plog.Logs {
+	logs := plog.NewLogs()
+	rl := logs.ResourceLogs().AppendEmpty()
+	rl.Resource().Attributes().PutStr("resource", "shared")
+	sl := rl.ScopeLogs().AppendEmpty()
+	sl.Scope().SetName("shared-scope")
+	for i, traceID := range traceIDs {
+		rec := sl.LogRecords().AppendEmpty()
+		rec.SetTraceID(traceID)
+		rec.Body().SetStr(fmt.Sprintf("body-%d-%s", i, strings.Repeat("a", 128)))
+	}
+	return logs
+}
+
+func repeatedTraceIDs(count int) []pcommon.TraceID {
+	traceIDs := make([]pcommon.TraceID, 0, count)
+	for i := 0; i < count; i++ {
+		traceID := pcommon.TraceID{}
+		copy(traceID[:], strconv.Itoa(i+1))
+		traceIDs = append(traceIDs, traceID)
+	}
+	return traceIDs
+}
+
+func repeatedStrings(count int, value string) []string {
+	values := make([]string, count)
+	for i := range values {
+		values[i] = value
+	}
+	return values
+}
+
+func firstNLogRecords(src plog.Logs, count int) plog.Logs {
+	logs := plog.NewLogs()
+	copied := 0
+	for i := 0; i < src.ResourceLogs().Len() && copied < count; i++ {
+		rl := src.ResourceLogs().At(i)
+		for j := 0; j < rl.ScopeLogs().Len() && copied < count; j++ {
+			sl := rl.ScopeLogs().At(j)
+			for k := 0; k < sl.LogRecords().Len() && copied < count; k++ {
+				insertLogRecord(logs, rl, sl, sl.LogRecords().At(k))
+				copied++
+			}
+		}
+	}
+	return logs
+}
+
+func mustMarshalLogsSize(t *testing.T, logs plog.Logs) int {
+	t.Helper()
+	payload, err := (&plog.ProtoMarshaler{}).MarshalLogs(logs)
+	require.NoError(t, err)
+	return len(payload)
 }
 
 func simpleLogWithoutID() plog.Logs {
