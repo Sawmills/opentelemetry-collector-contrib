@@ -312,6 +312,101 @@ func TestConsumeLogsCentralQueueRejectsSingleOversizedLogRecord(t *testing.T) {
 	require.Equal(t, 0, p.centralQueue.len())
 }
 
+func TestConsumeLogsCentralQueueRecordsRejectedMetricForSingleOversizedLogRecord(t *testing.T) {
+	reader := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, reader.Shutdown(context.WithoutCancel(t.Context())))
+	})
+	telemetry, err := newCentralQueueTelemetry(reader.NewTelemetrySettings(), signalKindLogs)
+	require.NoError(t, err)
+	codec := newQueuePayloadCodec(QueuePayloadCompressionNone)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	logs := sharedResourceScopeLog(strings.Repeat("a", 2048))
+	payload, err := (&plog.ProtoMarshaler{}).MarshalLogs(logs)
+	require.NoError(t, err)
+	encoded, err := codec.Encode(payload)
+	require.NoError(t, err)
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    512,
+			telemetry:                    telemetry,
+		}),
+		centralCodec:          codec,
+		centralQueueLaneCount: 64,
+	}
+	p.started.Store(true)
+
+	err = p.ConsumeLogs(t.Context(), logs)
+	require.ErrorIs(t, err, errCentralQueueItemTooLarge)
+	require.Equal(t, 0, p.centralQueue.len())
+	requireCentralQueueIntSum(
+		t,
+		reader,
+		"otelcol_loadbalancer_central_queue_rejected_compressed_bytes",
+		"By",
+		attribute.NewSet(attribute.String("signal", string(signalKindLogs))),
+		int64(len(encoded)),
+	)
+}
+
+func TestConsumeLogsCentralQueueRejectsOversizedLogRecordBeforePartialEnqueue(t *testing.T) {
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    768,
+		}),
+		centralCodec:          codec,
+		ignoreTraceID:         true,
+		centralQueueLaneCount: 64,
+		randomTraceID: func() pcommon.TraceID {
+			return pcommon.TraceID{7}
+		},
+	}
+	p.started.Store(true)
+	logs := sharedScopeLogsWithoutTraceIDs(
+		strings.Repeat("a", 512),
+		strings.Repeat("b", 512),
+		strings.Repeat("c", 2048),
+	)
+
+	err := p.ConsumeLogs(t.Context(), logs)
+	require.ErrorIs(t, err, errCentralQueueItemTooLarge)
+	require.Equal(t, 0, p.centralQueue.len())
+}
+
+func TestConsumeLogsCentralQueueSplitsAtInflightUncompressedLimit(t *testing.T) {
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	logs := sharedScopeLogsWithoutTraceIDs(repeatedStrings(12, strings.Repeat("a", 512))...)
+	inflightLimit := mustMarshalLogsSize(t, firstNLogRecords(logs, 3)) + 32
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: int64(inflightLimit),
+			maxUncompressedBatchBytes:    1 << 20,
+			targetCompressedBytes:        1 << 20,
+		}),
+		centralCodec:          codec,
+		ignoreTraceID:         true,
+		centralQueueLaneCount: 64,
+		randomTraceID: func() pcommon.TraceID {
+			return pcommon.TraceID{7}
+		},
+	}
+	p.started.Store(true)
+
+	require.NoError(t, p.ConsumeLogs(t.Context(), logs))
+	require.Greater(t, p.centralQueue.len(), 1)
+	for _, item := range p.centralQueue.items {
+		require.LessOrEqual(t, item.uncompressedBytes, inflightLimit)
+	}
+}
+
 func TestConsumeLogsCentralQueueSplitsBySizeNotRawRoutingKey(t *testing.T) {
 	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
 	t.Cleanup(func() { require.NoError(t, codec.Close()) })

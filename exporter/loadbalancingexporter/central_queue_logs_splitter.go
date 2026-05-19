@@ -15,10 +15,11 @@ import (
 const centralQueueLogSplitHeadroom = 4096
 
 type centralQueueLogSplitter struct {
-	exporter *logExporterImp
-	codec    *queuePayloadCodec
-	limit    int
-	now      time.Time
+	exporter  *logExporterImp
+	codec     *queuePayloadCodec
+	hardLimit int
+	limit     int
+	now       time.Time
 
 	marshaler              *plog.ProtoMarshaler
 	emptyTraceFallbackKeys map[[2]int]pcommon.TraceID
@@ -56,6 +57,7 @@ func newCentralQueueLogSplitter(exporter *logExporterImp, limit int, now time.Ti
 	return &centralQueueLogSplitter{
 		exporter:               exporter,
 		codec:                  exporter.centralCodec,
+		hardLimit:              limit,
 		limit:                  effectiveLimit,
 		now:                    now,
 		marshaler:              &plog.ProtoMarshaler{},
@@ -64,7 +66,19 @@ func newCentralQueueLogSplitter(exporter *logExporterImp, limit int, now time.Ti
 	}
 }
 
-func (s *centralQueueLogSplitter) consume(_ context.Context, ld plog.Logs) error {
+func centralQueueEffectiveUncompressedItemLimit(settings centralQueueSettings) int {
+	limit := settings.maxUncompressedBatchBytes
+	if settings.maxInflightUncompressedBytes > 0 && (limit <= 0 || settings.maxInflightUncompressedBytes < int64(limit)) {
+		limit = int(settings.maxInflightUncompressedBytes)
+	}
+	return limit
+}
+
+func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) error {
+	if err := s.rejectUnsplittableRecords(ctx, ld); err != nil {
+		return err
+	}
+
 	var errs error
 	for i := 0; i < ld.ResourceLogs().Len(); i++ {
 		rl := ld.ResourceLogs().At(i)
@@ -77,8 +91,7 @@ func (s *centralQueueLogSplitter) consume(_ context.Context, ld plog.Logs) error
 				lane := s.lane(queueRoutingKey)
 				if !lane.empty() && !lane.canFit(rl, sl, rec, s.marshaler, s.limit) {
 					if err := s.flushLane(lane); err != nil {
-						errs = multierr.Append(errs, err)
-						continue
+						return multierr.Append(errs, err)
 					}
 				}
 				lane.appendRecord(rl, sl, rec, s.marshaler)
@@ -90,6 +103,37 @@ func (s *centralQueueLogSplitter) consume(_ context.Context, ld plog.Logs) error
 		errs = multierr.Append(errs, s.flushLane(lane))
 	}
 	return errs
+}
+
+func (s *centralQueueLogSplitter) rejectUnsplittableRecords(ctx context.Context, ld plog.Logs) error {
+	if s.hardLimit <= 0 {
+		return nil
+	}
+
+	for i := 0; i < ld.ResourceLogs().Len(); i++ {
+		rl := ld.ResourceLogs().At(i)
+		for j := 0; j < rl.ScopeLogs().Len(); j++ {
+			sl := rl.ScopeLogs().At(j)
+			for k := 0; k < sl.LogRecords().Len(); k++ {
+				single := plog.NewLogs()
+				insertLogRecord(single, rl, sl, sl.LogRecords().At(k))
+				payload, err := s.marshaler.MarshalLogs(single)
+				if err != nil {
+					return err
+				}
+				if len(payload) <= s.hardLimit {
+					continue
+				}
+				encoded, err := s.codec.Encode(payload)
+				if err != nil {
+					return err
+				}
+				s.exporter.centralQueue.settings.telemetry.recordRejected(ctx, int64(len(encoded)))
+				return errCentralQueueItemTooLarge
+			}
+		}
+	}
+	return nil
 }
 
 func (s *centralQueueLogSplitter) lane(routingKey []byte) *centralQueueLogLaneBuilder {
@@ -154,8 +198,7 @@ func (s *centralQueueLogSplitter) flushLane(lane *centralQueueLogLaneBuilder) er
 }
 
 func (s *centralQueueLogSplitter) itemExceedsLimit(item centralQueueItem) bool {
-	hardLimit := s.exporter.centralQueue.settings.maxUncompressedBatchBytes
-	return hardLimit > 0 && item.uncompressedBytes > hardLimit
+	return s.hardLimit > 0 && item.uncompressedBytes > s.hardLimit
 }
 
 func (s *centralQueueLogSplitter) exactSplitAndEnqueue(routingKey []byte, logs plog.Logs) error {
@@ -201,7 +244,6 @@ func (s *centralQueueLogSplitter) exactSplitAndEnqueue(routingKey []byte, logs p
 					if err := flushCurrent(); err != nil {
 						return err
 					}
-					current = plog.NewLogs()
 					insertLogRecord(current, rl, sl, rec)
 					currentRecords = 1
 					singleItem, singleErr := newCentralQueueLogsItem(routingKey, current, s.codec, s.now)
