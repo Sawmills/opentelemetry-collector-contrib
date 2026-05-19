@@ -198,7 +198,7 @@ func (e *logExporterImp) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
 }
 
 func (e *logExporterImp) consumeLogsCentralQueue(ctx context.Context, ld plog.Logs) error {
-	splitter := newCentralQueueLogSplitter(e, e.centralQueue.settings.maxUncompressedBatchBytes, time.Now())
+	splitter := newCentralQueueLogSplitter(e, centralQueueEffectiveUncompressedItemLimit(e.centralQueue.settings), time.Now())
 	return splitter.consume(ctx, ld)
 }
 
