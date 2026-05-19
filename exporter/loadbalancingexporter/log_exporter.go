@@ -197,44 +197,9 @@ func (e *logExporterImp) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
 	return e.consumeLogsBatched(ctx, ld)
 }
 
-func (e *logExporterImp) consumeLogsCentralQueue(_ context.Context, ld plog.Logs) error {
-	batches := e.groupLogsByRoutingKey(ld)
-	var errs error
-	now := time.Now()
-	for routingKey, logs := range batches {
-		queueRoutingKey := centralQueueLaneRoutingKey(signalKindLogs, routingKey[:], e.centralQueueLaneCount)
-		item, err := newCentralQueueLogsItem(queueRoutingKey, logs, e.centralCodec, now)
-		if err != nil {
-			errs = multierr.Append(errs, err)
-			continue
-		}
-		errs = multierr.Append(errs, e.centralQueue.enqueue(item))
-	}
-	return errs
-}
-
-func (e *logExporterImp) groupLogsByRoutingKey(ld plog.Logs) map[pcommon.TraceID]plog.Logs {
-	batches := make(map[pcommon.TraceID]plog.Logs)
-	emptyTraceFallbackKeys := make(map[[2]int]pcommon.TraceID)
-
-	for i := 0; i < ld.ResourceLogs().Len(); i++ {
-		rl := ld.ResourceLogs().At(i)
-		for j := 0; j < rl.ScopeLogs().Len(); j++ {
-			sl := rl.ScopeLogs().At(j)
-			for k := 0; k < sl.LogRecords().Len(); k++ {
-				rec := sl.LogRecords().At(k)
-				balancingKey := e.routingKeyForLogRecord(rec, [2]int{i, j}, emptyTraceFallbackKeys)
-				batch, ok := batches[balancingKey]
-				if !ok {
-					batch = plog.NewLogs()
-					batches[balancingKey] = batch
-				}
-				insertLogRecord(batch, rl, sl, rec)
-			}
-		}
-	}
-
-	return batches
+func (e *logExporterImp) consumeLogsCentralQueue(ctx context.Context, ld plog.Logs) error {
+	splitter := newCentralQueueLogSplitter(e, e.centralQueue.settings.maxUncompressedBatchBytes, time.Now())
+	return splitter.consume(ctx, ld)
 }
 
 func (e *logExporterImp) runCentralQueue(ctx context.Context) {
