@@ -466,6 +466,8 @@ func TestConfigValidateEndpointHealth(t *testing.T) {
 	require.Equal(t, defaultEndpointHealthQuarantineDuration, cfg.EndpointHealth.QuarantineDuration)
 	require.True(t, cfg.EndpointHealth.RerouteOnFailure)
 	require.Equal(t, 1, cfg.EndpointHealth.MaxRerouteAttempts)
+	require.Equal(t, defaultEndpointHealthMinEligibleBackends, cfg.EndpointHealth.MinEligibleBackends)
+	require.Equal(t, defaultEndpointHealthMaxQuarantinedPercent, cfg.EndpointHealth.MaxQuarantinedPercent)
 	require.NoError(t, cfg.Validate())
 
 	cfg.EndpointHealth.QuarantineDuration = -time.Second
@@ -488,6 +490,16 @@ func TestConfigValidateEndpointHealth(t *testing.T) {
 	cfg.EndpointHealth.MaxRerouteAttempts = 0
 	cfg.EndpointHealth.RerouteOnFailure = false
 	require.NoError(t, cfg.Validate())
+
+	cfg.EndpointHealth.MinEligibleBackends = 0
+	require.ErrorContains(t, cfg.Validate(), "endpoint_health.min_eligible_backends")
+	cfg.EndpointHealth.MinEligibleBackends = defaultEndpointHealthMinEligibleBackends
+
+	cfg.EndpointHealth.MaxQuarantinedPercent = 0
+	require.ErrorContains(t, cfg.Validate(), "endpoint_health.max_quarantined_percent")
+	cfg.EndpointHealth.MaxQuarantinedPercent = 101
+	require.ErrorContains(t, cfg.Validate(), "endpoint_health.max_quarantined_percent")
+	cfg.EndpointHealth.MaxQuarantinedPercent = defaultEndpointHealthMaxQuarantinedPercent
 }
 
 func TestConfigValidateEndpointHealthActiveProbe(t *testing.T) {
@@ -820,10 +832,12 @@ func TestLoadConfigWithEndpointHealth(t *testing.T) {
 			},
 		},
 		"endpoint_health": map[string]any{
-			"enabled":              true,
-			"quarantine_duration":  "10s",
-			"reroute_on_failure":   true,
-			"max_reroute_attempts": 1,
+			"enabled":                 true,
+			"quarantine_duration":     "10s",
+			"reroute_on_failure":      true,
+			"max_reroute_attempts":    1,
+			"min_eligible_backends":   3,
+			"max_quarantined_percent": 20,
 			"active_probe": map[string]any{
 				"enabled":         true,
 				"type":            "tcp_connect",
@@ -842,6 +856,8 @@ func TestLoadConfigWithEndpointHealth(t *testing.T) {
 	require.Equal(t, 10*time.Second, cfg.EndpointHealth.QuarantineDuration)
 	require.True(t, cfg.EndpointHealth.RerouteOnFailure)
 	require.Equal(t, 1, cfg.EndpointHealth.MaxRerouteAttempts)
+	require.Equal(t, 3, cfg.EndpointHealth.MinEligibleBackends)
+	require.Equal(t, 20, cfg.EndpointHealth.MaxQuarantinedPercent)
 	require.True(t, cfg.EndpointHealth.ActiveProbe.Enabled)
 	require.Equal(t, EndpointHealthActiveProbeTypeTCPConnect, cfg.EndpointHealth.ActiveProbe.Type)
 	require.Equal(t, 5*time.Second, cfg.EndpointHealth.ActiveProbe.Interval)

@@ -24,7 +24,7 @@ func NewSettings(tt *componenttest.Telemetry) exporter.Settings {
 func AssertEqualLoadbalancerBackendFailOpenTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_loadbalancer_backend_fail_open_total",
-		Description: "Number of times endpoint health failed open because every resolver-present backend was quarantined. [Development]",
+		Description: "Number of times endpoint health failed open because quarantine would leave too few eligible resolver-present backends. [Development]",
 		Unit:        "{events}",
 		Data: metricdata.Sum[int64]{
 			Temporality: metricdata.CumulativeTemporality,

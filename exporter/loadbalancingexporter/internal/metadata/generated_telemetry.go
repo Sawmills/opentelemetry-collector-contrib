@@ -72,7 +72,7 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 	var err, errs error
 	builder.LoadbalancerBackendFailOpenTotal, err = builder.meter.Int64Counter(
 		"otelcol_loadbalancer_backend_fail_open_total",
-		metric.WithDescription("Number of times endpoint health failed open because every resolver-present backend was quarantined. [Development]"),
+		metric.WithDescription("Number of times endpoint health failed open because quarantine would leave too few eligible resolver-present backends. [Development]"),
 		metric.WithUnit("{events}"),
 	)
 	errs = errors.Join(errs, err)

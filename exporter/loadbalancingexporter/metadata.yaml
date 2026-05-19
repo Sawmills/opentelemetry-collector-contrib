@@ -64,7 +64,7 @@ telemetry:
     loadbalancer_backend_fail_open_total:
       enabled: true
       stability: development
-      description: Number of times endpoint health failed open because every resolver-present backend was quarantined.
+      description: Number of times endpoint health failed open because quarantine would leave too few eligible resolver-present backends.
       unit: "{events}"
       sum:
         value_type: int

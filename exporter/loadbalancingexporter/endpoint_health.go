@@ -35,12 +35,14 @@ const (
 )
 
 type endpointHealthSettings struct {
-	enabled            bool
-	quarantineDuration time.Duration
-	rerouteOnFailure   bool
-	maxRerouteAttempts int
-	activeProbe        endpointHealthActiveProbeSettings
-	now                func() time.Time
+	enabled               bool
+	quarantineDuration    time.Duration
+	rerouteOnFailure      bool
+	maxRerouteAttempts    int
+	minEligibleBackends   int
+	maxQuarantinedPercent int
+	activeProbe           endpointHealthActiveProbeSettings
+	now                   func() time.Time
 }
 
 type endpointHealthActiveProbeSettings struct {
@@ -110,6 +112,12 @@ func newEndpointHealthManager(settings endpointHealthSettings) *endpointHealthMa
 	if settings.quarantineDuration <= 0 {
 		settings.quarantineDuration = defaultEndpointHealthQuarantineDuration
 	}
+	if settings.minEligibleBackends <= 0 {
+		settings.minEligibleBackends = defaultEndpointHealthMinEligibleBackends
+	}
+	if settings.maxQuarantinedPercent <= 0 || settings.maxQuarantinedPercent > 100 {
+		settings.maxQuarantinedPercent = defaultEndpointHealthMaxQuarantinedPercent
+	}
 	return &endpointHealthManager{
 		settings:  settings,
 		endpoints: make(map[string]*endpointHealthState),
@@ -122,10 +130,12 @@ func endpointHealthSettingsFromConfig(cfg EndpointHealthConfig) endpointHealthSe
 		quarantineDuration = defaultEndpointHealthQuarantineDuration
 	}
 	return endpointHealthSettings{
-		enabled:            cfg.Enabled,
-		quarantineDuration: quarantineDuration,
-		rerouteOnFailure:   cfg.RerouteOnFailure,
-		maxRerouteAttempts: cfg.MaxRerouteAttempts,
+		enabled:               cfg.Enabled,
+		quarantineDuration:    quarantineDuration,
+		rerouteOnFailure:      cfg.RerouteOnFailure,
+		maxRerouteAttempts:    cfg.MaxRerouteAttempts,
+		minEligibleBackends:   cfg.MinEligibleBackends,
+		maxQuarantinedPercent: cfg.MaxQuarantinedPercent,
 		activeProbe: endpointHealthActiveProbeSettings{
 			enabled: cfg.ActiveProbe.Enabled,
 			fall:    cfg.ActiveProbe.Fall,
@@ -463,6 +473,7 @@ func (m *endpointHealthManager) eligibleEndpointsLockedWithRefresh(now time.Time
 	var eligible []string
 	var present []string
 	var nextExpiry time.Time
+	quarantined := 0
 	for _, state := range m.endpoints {
 		if !state.present {
 			continue
@@ -484,6 +495,8 @@ func (m *endpointHealthManager) eligibleEndpointsLockedWithRefresh(now time.Time
 		}
 		if state.quarantinedUntil.IsZero() && !state.probeUnhealthy {
 			eligible = append(eligible, state.endpoint)
+		} else {
+			quarantined++
 		}
 	}
 	if nextExpiry.IsZero() {
@@ -494,13 +507,26 @@ func (m *endpointHealthManager) eligibleEndpointsLockedWithRefresh(now time.Time
 
 	sort.Strings(present)
 	sort.Strings(eligible)
-	failOpen := len(present) > 0 && len(eligible) == 0
+	failOpen := m.shouldFailOpenLocked(len(present), len(eligible), quarantined)
 	failOpenStarted := failOpen && !m.failOpenActive
 	m.failOpenActive = failOpen
 	if failOpen {
 		return present, true, failOpenStarted
 	}
 	return eligible, false, false
+}
+
+func (m *endpointHealthManager) shouldFailOpenLocked(present, eligible, quarantined int) bool {
+	if present == 0 {
+		return false
+	}
+	if quarantined == 0 {
+		return false
+	}
+	if eligible < m.settings.minEligibleBackends {
+		return true
+	}
+	return quarantined*100 > present*m.settings.maxQuarantinedPercent
 }
 
 func (s *endpointHealthState) hasActiveTransportQuarantine(now time.Time) bool {

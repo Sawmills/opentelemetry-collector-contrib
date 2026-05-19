@@ -53,6 +53,8 @@ loadbalancing/6:
     quarantine_duration: 30s
     reroute_on_failure: true
     max_reroute_attempts: 1
+    min_eligible_backends: 2
+    max_quarantined_percent: 50
     active_probe:
       enabled: true
       type: tcp_connect
