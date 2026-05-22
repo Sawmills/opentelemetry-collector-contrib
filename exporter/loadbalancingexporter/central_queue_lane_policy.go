@@ -155,8 +155,8 @@ func (c *centralQueueLaneController) laneCount(backendCount int, now time.Time) 
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.rollRateWindowLocked(now)
-	if !c.effectiveSet || backendCount != c.lastBackendCount {
+	rateRolled := c.rollRateWindowLocked(now)
+	if rateRolled || !c.effectiveSet || backendCount != c.lastBackendCount {
 		c.recomputeLocked(backendCount)
 	}
 	return c.effectiveLaneCount
@@ -171,36 +171,36 @@ func (c *centralQueueLaneController) observeCompressedBytes(compressedBytes int,
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.rollRateWindowLocked(now)
+	rateRolled := c.rollRateWindowLocked(now)
 	if c.windowStart.IsZero() {
 		c.windowStart = now
 	}
 	if compressedBytes > 0 {
 		c.windowBytes += int64(compressedBytes)
 	}
-	if !c.effectiveSet || backendCount != c.lastBackendCount {
+	if rateRolled || !c.effectiveSet || backendCount != c.lastBackendCount {
 		c.recomputeLocked(backendCount)
 	}
 	return c.effectiveLaneCount
 }
 
-func (c *centralQueueLaneController) rollRateWindowLocked(now time.Time) {
+func (c *centralQueueLaneController) rollRateWindowLocked(now time.Time) bool {
 	if c.rateWindow <= 0 {
 		c.rateWindow = centralQueueLaneRateWindow
 	}
 	if c.windowStart.IsZero() {
-		return
+		return false
 	}
 	elapsed := now.Sub(c.windowStart)
 	if elapsed < c.rateWindow {
-		return
+		return false
 	}
 	if elapsed > 0 {
 		c.bytesPerSec = int64(float64(c.windowBytes) / elapsed.Seconds())
 	}
 	c.windowStart = now
 	c.windowBytes = 0
-	c.recomputeLocked(c.lastBackendCount)
+	return true
 }
 
 func (c *centralQueueLaneController) recomputeLocked(backendCount int) {
