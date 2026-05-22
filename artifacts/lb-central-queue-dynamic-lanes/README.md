@@ -28,10 +28,10 @@ go test . -count=1
 ok github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter 5.201s
 ```
 
-Final benchmark after bucketed queue storage, selected-window materialization, and per-bucket candidate scratch:
+Final benchmark after bucketed queue storage, selected-window materialization, per-bucket candidate scratch, and review fixes:
 
 ```text
-BenchmarkCentralQueueCollectManyLanesManyItems-10  56656-71857 ns/op  19068-19070 B/op  7 allocs/op
+BenchmarkCentralQueueCollectManyLanesManyItems-10  65262-83014 ns/op  19070-19073 B/op  7 allocs/op
 ```
 
 Compared with the red baseline:
