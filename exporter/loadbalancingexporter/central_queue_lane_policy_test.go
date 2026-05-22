@@ -104,7 +104,7 @@ func TestCentralQueueLaneControllerRecomputesFromBackendCountAndRate(t *testing.
 
 	require.Equal(t, 4, controller.laneCount(4, now))
 
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		controller.observeCompressedBytes(20<<20, 4, now.Add(time.Duration(i)*time.Second))
 	}
 

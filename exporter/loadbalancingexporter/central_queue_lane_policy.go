@@ -81,10 +81,7 @@ func newCentralQueueLanePolicy(cfg CentralQueueConfig) centralQueueLanePolicy {
 
 func (p centralQueueLanePolicy) compute(inputs centralQueueLaneInputs) int {
 	minLanes := max(p.minLanes, 1)
-	maxLanes := p.maxLanes
-	if maxLanes < minLanes {
-		maxLanes = minLanes
-	}
+	maxLanes := max(p.maxLanes, minLanes)
 
 	backends := inputs.healthyBackends
 	if backends <= 0 {
@@ -162,7 +159,7 @@ func (c *centralQueueLaneController) laneCount(backendCount int, now time.Time) 
 	return c.effectiveLaneCount
 }
 
-func (c *centralQueueLaneController) observeCompressedBytes(compressedBytes int, backendCount int, now time.Time) int {
+func (c *centralQueueLaneController) observeCompressedBytes(compressedBytes, backendCount int, now time.Time) int {
 	if c == nil {
 		return defaultCentralQueueMaxLanes
 	}

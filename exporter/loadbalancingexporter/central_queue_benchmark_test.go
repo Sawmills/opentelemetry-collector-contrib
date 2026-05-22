@@ -23,9 +23,9 @@ func BenchmarkCentralQueueCollectManyLanesManyItems(b *testing.B) {
 		maxReadyWindows:              centralQueueReadyWindowLimit(defaultCentralQueueNumConsumers),
 	})
 
-	for lane := 0; lane < laneCount; lane++ {
-		routingKey := []byte(fmt.Sprintf("lane-%02d", lane))
-		for i := 0; i < itemsPerLane; i++ {
+	for lane := range laneCount {
+		routingKey := fmt.Appendf(nil, "lane-%02d", lane)
+		for range itemsPerLane {
 			err := q.enqueueAt(centralQueueItem{
 				signal:            signalKindLogs,
 				routingKey:        routingKey,

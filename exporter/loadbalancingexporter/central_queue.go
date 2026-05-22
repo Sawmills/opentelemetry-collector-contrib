@@ -217,7 +217,7 @@ func (q *centralQueue) tryLease(now time.Time) (*centralQueueLease, error) {
 func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSchedulerState {
 	state := centralQueueSchedulerStateWaiting
 	for len(q.ready) < q.settings.maxReadyWindows {
-		targetCandidates, fallbackCandidates, _ := q.collectReadyWindowCandidatesLocked(now)
+		targetCandidates, fallbackCandidates := q.collectReadyWindowCandidatesLocked(now)
 		if len(targetCandidates) == 0 && len(fallbackCandidates) == 0 {
 			return state
 		}
@@ -236,7 +236,7 @@ func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSche
 			// Items were removed from buckets, so the previously-collected
 			// targetCandidates / freshFallbacks indexes are stale and could
 			// remove wrong items if reused. Recollect against current state.
-			targetCandidates, fallbackCandidates, _ = q.collectReadyWindowCandidatesLocked(now)
+			targetCandidates, fallbackCandidates = q.collectReadyWindowCandidatesLocked(now)
 			_, freshFallbacks = q.splitFallbackByStaleness(fallbackCandidates, now)
 		}
 		if len(q.ready) >= q.settings.maxReadyWindows {
@@ -256,7 +256,7 @@ func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSche
 			continue
 		}
 		if scheduledTarget {
-			_, fallbackCandidates, _ = q.collectReadyWindowCandidatesLocked(now)
+			_, fallbackCandidates = q.collectReadyWindowCandidatesLocked(now)
 			_, freshFallbacks = q.splitFallbackByStaleness(fallbackCandidates, now)
 		}
 
@@ -370,10 +370,7 @@ func (q *centralQueue) bucketReadyAtUnixNanoLocked(bucket *centralQueueBucket, n
 	if q.settings.maxBatchDelay <= 0 {
 		readyAt = candidateReadyAt
 	} else {
-		readyAt = candidate.oldestEnqueuedAt + q.settings.maxBatchDelay.Nanoseconds()
-		if readyAt < candidateReadyAt {
-			readyAt = candidateReadyAt
-		}
+		readyAt = max(candidateReadyAt, candidate.oldestEnqueuedAt+q.settings.maxBatchDelay.Nanoseconds())
 	}
 	if futureReadyAt > 0 && futureReadyAt < readyAt {
 		return futureReadyAt
@@ -381,17 +378,15 @@ func (q *centralQueue) bucketReadyAtUnixNanoLocked(bucket *centralQueueBucket, n
 	return readyAt
 }
 
-func (q *centralQueue) collectReadyWindowCandidatesLocked(now time.Time) ([]centralQueueWindowCandidate, []centralQueueWindowCandidate, bool) {
+func (q *centralQueue) collectReadyWindowCandidatesLocked(now time.Time) ([]centralQueueWindowCandidate, []centralQueueWindowCandidate) {
 	nowUnixNano := now.UnixNano()
 	targetCandidates := make([]centralQueueWindowCandidate, 0)
 	fallbackCandidates := make([]centralQueueWindowCandidate, 0)
-	hasReady := false
 	for _, bucket := range q.readyBuckets {
 		if bucket.readyAtUnixNano > nowUnixNano {
 			continue
 		}
-		candidate, bucketHasReady := q.buildWindowCandidateFromBucketLocked(bucket, now)
-		hasReady = hasReady || bucketHasReady
+		candidate, _ := q.buildWindowCandidateFromBucketLocked(bucket, now)
 		if len(candidate.indexes) == 0 {
 			continue
 		}
@@ -403,7 +398,7 @@ func (q *centralQueue) collectReadyWindowCandidatesLocked(now time.Time) ([]cent
 	}
 	sortCentralQueueWindowCandidates(targetCandidates)
 	sortCentralQueueWindowCandidates(fallbackCandidates)
-	return targetCandidates, fallbackCandidates, hasReady
+	return targetCandidates, fallbackCandidates
 }
 
 // collectWindowCandidatesLocked evaluates one candidate per routing-key bucket
@@ -527,7 +522,7 @@ func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQ
 
 	for i := range selected {
 		candidate := &selected[i]
-		q.materializeWindowCandidateItemsLocked(candidate)
+		materializeWindowCandidateItemsLocked(candidate)
 		q.ready = append(q.ready, candidate.window)
 		q.currentInflightBytes += int64(candidate.window.uncompressedBytes)
 	}
@@ -561,7 +556,7 @@ func appendCentralQueueWindowItemStats(window *centralQueueWindow, item *central
 	}
 }
 
-func (q *centralQueue) materializeWindowCandidateItemsLocked(candidate *centralQueueWindowCandidate) {
+func materializeWindowCandidateItemsLocked(candidate *centralQueueWindowCandidate) {
 	candidate.window.items = make([]centralQueueItem, 0, len(candidate.indexes))
 	for _, index := range candidate.indexes {
 		candidate.window.items = append(candidate.window.items, candidate.bucket.items[index])
@@ -614,8 +609,8 @@ func (q *centralQueue) removeWindowFromBucketLocked(bucket *centralQueueBucket, 
 	removed := bucket.removeIndexes(indexes)
 	q.itemCount -= len(removed)
 	if untrack {
-		for _, item := range removed {
-			q.untrackOldestEnqueuedAtLocked(item)
+		for i := range removed {
+			q.untrackOldestEnqueuedAtLocked(removed[i])
 		}
 	}
 	if len(bucket.items) > 0 {

@@ -285,7 +285,7 @@ func TestCentralQueueCollectWindowCandidatesGroupsInterleavedKeys(t *testing.T) 
 
 	q.mu.Lock()
 	targetCandidates, fallbackCandidates, hasReady := q.collectWindowCandidatesLocked(now)
-	materializeCentralQueueCandidatesLocked(q, targetCandidates)
+	materializeCentralQueueCandidatesLocked(targetCandidates)
 	q.mu.Unlock()
 
 	require.True(t, hasReady)
@@ -315,7 +315,7 @@ func TestCentralQueueCollectWindowCandidatesMarksHardCapBeforeTarget(t *testing.
 
 	q.mu.Lock()
 	targetCandidates, fallbackCandidates, hasReady := q.collectWindowCandidatesLocked(now)
-	materializeCentralQueueCandidatesLocked(q, fallbackCandidates)
+	materializeCentralQueueCandidatesLocked(fallbackCandidates)
 	q.mu.Unlock()
 
 	require.True(t, hasReady)
@@ -368,7 +368,7 @@ func TestCentralQueueCollectWindowCandidatesShutdownOverridesWaitingAndHardCap(t
 
 	q.mu.Lock()
 	targetCandidates, fallbackCandidates, hasReady := q.collectWindowCandidatesLocked(now)
-	materializeCentralQueueCandidatesLocked(q, fallbackCandidates)
+	materializeCentralQueueCandidatesLocked(fallbackCandidates)
 	q.mu.Unlock()
 
 	require.True(t, hasReady)
@@ -396,7 +396,7 @@ func TestCentralQueueMaterializeAndRemoveWindowKeepsSparseIndexSurvivors(t *test
 		bucket:  q.buckets[0],
 		indexes: []int{1, 3},
 	}
-	q.materializeWindowCandidateItemsLocked(&candidate)
+	materializeWindowCandidateItemsLocked(&candidate)
 	q.removeWindowFromBucketLocked(candidate.bucket, candidate.indexes, false)
 	remainingItems := q.queuedItemsLocked()
 	q.mu.Unlock()
@@ -1404,9 +1404,9 @@ func centralQueuePayloadStrings(items []centralQueueItem) []string {
 	return payloads
 }
 
-func materializeCentralQueueCandidatesLocked(q *centralQueue, candidates []centralQueueWindowCandidate) {
+func materializeCentralQueueCandidatesLocked(candidates []centralQueueWindowCandidate) {
 	for i := range candidates {
-		q.materializeWindowCandidateItemsLocked(&candidates[i])
+		materializeWindowCandidateItemsLocked(&candidates[i])
 	}
 }
 
@@ -1444,15 +1444,6 @@ func requireCentralQueueLeaseResult(t *testing.T, result <-chan centralQueueLeas
 	case <-time.After(time.Second):
 		t.Fatal("expected central queue lease")
 		return nil
-	}
-}
-
-func requireCentralQueueNotification(t *testing.T, q *centralQueue) {
-	t.Helper()
-	select {
-	case <-q.notify:
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("expected central queue notification")
 	}
 }
 
