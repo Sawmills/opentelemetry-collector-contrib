@@ -82,7 +82,7 @@ func TestCentralQueueEnqueueSignalsLeaseWaiters(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	waiter := startCentralQueueLease(ctx, q)
+	waiter := startCentralQueueLeaseWithoutPolling(ctx, q)
 	requireNoCentralQueueLeaseResult(t, waiter)
 
 	require.NoError(t, q.enqueueAt(centralQueueItem{
@@ -116,7 +116,7 @@ func TestCentralQueueDoneSignalsInflightWaiters(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	waiter := startCentralQueueLease(ctx, q)
+	waiter := startCentralQueueLeaseWithoutPolling(ctx, q)
 	requireNoCentralQueueLeaseResult(t, waiter)
 
 	lease.done()
@@ -1415,10 +1415,10 @@ type centralQueueLeaseResult struct {
 	err   error
 }
 
-func startCentralQueueLease(ctx context.Context, q *centralQueue) <-chan centralQueueLeaseResult {
+func startCentralQueueLeaseWithoutPolling(ctx context.Context, q *centralQueue) <-chan centralQueueLeaseResult {
 	result := make(chan centralQueueLeaseResult, 1)
 	go func() {
-		lease, err := q.lease(ctx)
+		lease, err := q.leaseWithPollInterval(ctx, 0)
 		result <- centralQueueLeaseResult{lease: lease, err: err}
 	}()
 	return result

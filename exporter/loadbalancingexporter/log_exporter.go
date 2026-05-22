@@ -213,7 +213,7 @@ func (e *logExporterImp) observeCentralQueueLaneBytes(compressedBytes int, now t
 	if e.centralQueue == nil {
 		return
 	}
-	observeCentralQueueLaneBytes(e.centralQueue.settings.telemetry, e.centralQueueLanes, e.centralQueueLaneCount, e.loadBalancer, compressedBytes, now)
+	observeCentralQueueLaneBytes(e.centralQueue.settings.telemetry, e.centralQueueLanes, e.centralQueueLaneCount, compressedBytes, now)
 }
 
 func (e *logExporterImp) runCentralQueue(ctx context.Context) {

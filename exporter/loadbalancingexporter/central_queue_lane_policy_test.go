@@ -105,7 +105,7 @@ func TestCentralQueueLaneControllerRecomputesFromBackendCountAndRate(t *testing.
 	require.Equal(t, 4, controller.laneCount(4, now))
 
 	for i := range 30 {
-		controller.observeCompressedBytes(20<<20, 4, now.Add(time.Duration(i)*time.Second))
+		controller.observeCompressedBytes(20<<20, now.Add(time.Duration(i)*time.Second))
 	}
 
 	require.Equal(t, 8, controller.laneCount(4, now.Add(31*time.Second)))
@@ -119,7 +119,7 @@ func TestCentralQueueLaneControllerRateRollWithBackendChangeUsesStablePreviousLa
 	now := time.Unix(10, 0)
 
 	require.Equal(t, 4, controller.laneCount(4, now))
-	require.Equal(t, 4, controller.observeCompressedBytes(150<<20, 4, now))
+	require.Equal(t, 4, controller.observeCompressedBytes(150<<20, now))
 
 	require.Equal(t, 10, controller.laneCount(5, now.Add(31*time.Second)))
 }
@@ -131,5 +131,5 @@ func TestCentralQueueLaneControllerHonorsFixedOverride(t *testing.T) {
 	now := time.Unix(10, 0)
 
 	require.Equal(t, 3, controller.laneCount(40, now))
-	require.Equal(t, 3, controller.observeCompressedBytes(64<<20, 40, now.Add(31*time.Second)))
+	require.Equal(t, 3, controller.observeCompressedBytes(64<<20, now.Add(31*time.Second)))
 }

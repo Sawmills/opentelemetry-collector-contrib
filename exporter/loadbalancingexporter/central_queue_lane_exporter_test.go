@@ -93,6 +93,35 @@ func TestMetricExporterCentralQueueObservedBytesUpdateEffectiveLanes(t *testing.
 	requireCentralQueueLaneGauges(t, reader, signalKindMetrics, 8)
 }
 
+func TestMetricExporterCentralQueueObservationReusesCachedBackendCount(t *testing.T) {
+	reader := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, reader.Shutdown(context.WithoutCancel(t.Context())))
+	})
+	telemetry, err := newCentralQueueTelemetry(reader.NewTelemetrySettings(), signalKindMetrics)
+	require.NoError(t, err)
+
+	controller := centralQueueLanePathTestController()
+	p := &metricExporterImp{
+		loadBalancer:      loadBalancerWithBackendCount(2),
+		centralQueue:      centralQueueLanePathTestQueue(telemetry),
+		centralQueueLanes: controller,
+	}
+	now := time.Unix(10, 0)
+	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(now))
+
+	p.loadBalancer = loadBalancerWithBackendCount(8)
+	p.observeCentralQueueLaneBytes(16<<20, now)
+	p.observeCentralQueueLaneBytes(16<<20, now.Add(time.Second))
+
+	controller.mu.Lock()
+	lastBackendCount := controller.lastBackendCount
+	effectiveLaneCount := controller.effectiveLaneCount
+	controller.mu.Unlock()
+	require.Equal(t, 2, lastBackendCount)
+	require.Equal(t, 4, effectiveLaneCount)
+}
+
 func TestMetricExporterCentralQueueUsesRoutableBackendCountForDynamicLanes(t *testing.T) {
 	controller := centralQueueLanePathTestController()
 	p := &metricExporterImp{
@@ -131,7 +160,8 @@ func centralQueueLanePathTestQueue(telemetry *centralQueueTelemetry) *centralQue
 func loadBalancerWithBackendCount(count int) *loadBalancer {
 	exporters := make(map[string]*wrappedExporter, count)
 	for i := range count {
-		exporters[fmt.Sprintf("endpoint-%d", i)] = nil
+		endpoint := fmt.Sprintf("endpoint-%d", i)
+		exporters[endpoint] = newWrappedExporter(mockComponent{}, endpoint)
 	}
 	return &loadBalancer{exporters: exporters}
 }
