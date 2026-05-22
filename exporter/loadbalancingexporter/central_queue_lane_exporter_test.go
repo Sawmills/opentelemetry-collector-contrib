@@ -4,6 +4,7 @@
 package loadbalancingexporter
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -29,6 +31,7 @@ func TestLogExporterCentralQueueObservedBytesUpdateEffectiveLanes(t *testing.T) 
 		centralQueue:             centralQueueLanePathTestQueue(telemetry),
 		centralQueueLanes:        controller,
 		centralQueueNumConsumers: 1,
+		ignoreTraceID:            true,
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	p.startCentralQueueConsumers(ctx)
@@ -54,9 +57,28 @@ func TestLogExporterCentralQueueUsesRoutableBackendCountForDynamicLanes(t *testi
 	p := &logExporterImp{
 		loadBalancer:      loadBalancerWithRoutableBackendCount(2, 4),
 		centralQueueLanes: controller,
+		ignoreTraceID:     true,
 	}
 
 	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
+}
+
+func TestLogExporterCentralQueueTraceIDRoutingUsesStableLaneCount(t *testing.T) {
+	controller := centralQueueLanePathTestController()
+	p := &logExporterImp{
+		loadBalancer:      loadBalancerWithBackendCount(4),
+		centralQueueLanes: controller,
+	}
+	now := time.Unix(10, 0)
+	traceID := traceIDWithDifferentCentralQueueLanes(t, 4, 8)
+
+	first := centralQueueLaneRoutingKey(signalKindLogs, traceID[:], p.effectiveCentralQueueLaneCount(now))
+	controller.observeCompressedBytes(16<<20, now)
+	controller.observeCompressedBytes(16<<20, now.Add(time.Second))
+	require.Equal(t, 8, controller.laneCount(4, now.Add(time.Second)))
+	second := centralQueueLaneRoutingKey(signalKindLogs, traceID[:], p.effectiveCentralQueueLaneCount(now.Add(time.Second)))
+
+	require.Equal(t, first, second)
 }
 
 func TestMetricExporterCentralQueueObservedBytesUpdateEffectiveLanes(t *testing.T) {
@@ -180,6 +202,20 @@ func loadBalancerWithRoutableBackendCount(routableCount, exporterCount int) *loa
 		exporters: exporters,
 		ring:      newHashRing(endpoints),
 	}
+}
+
+func traceIDWithDifferentCentralQueueLanes(t *testing.T, firstLaneCount, secondLaneCount int) pcommon.TraceID {
+	t.Helper()
+	for i := 1; i < 10000; i++ {
+		traceID := pcommon.TraceID{byte(i), byte(i >> 8), byte(i >> 16), byte(i >> 24)}
+		first := centralQueueLaneRoutingKey(signalKindLogs, traceID[:], firstLaneCount)
+		second := centralQueueLaneRoutingKey(signalKindLogs, traceID[:], secondLaneCount)
+		if !bytes.Equal(first, second) {
+			return traceID
+		}
+	}
+	t.Fatal("expected trace ID with different lane routing keys")
+	return pcommon.TraceID{}
 }
 
 func requireCentralQueueLaneGauges(t *testing.T, reader *componenttest.Telemetry, signal signalKind, effective int64) {

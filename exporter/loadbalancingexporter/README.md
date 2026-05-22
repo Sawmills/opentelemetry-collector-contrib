@@ -166,7 +166,7 @@ Refer to [config.yaml](./testdata/config.yaml) for detailed examples on using th
   * `target_compressed_bytes` is the soft compressed-size target for one backend request assembled from queued payloads. Default: `262144` (`256 KiB`).
   * `max_batch_delay` bounds how long a small backend lane can wait for more queued payloads before dispatch. Default: `250ms`.
   * `num_consumers` sets the number of parallel central queue drain workers per signal exporter. Default: `30`.
-  * `lane_count` optionally overrides the number of backend lanes used to coalesce routing keys before endpoint selection. Leave it unset for normal use; when unset, lanes are selected dynamically from backend count and compressed ingest rate.
+  * `lane_count` optionally overrides the number of backend lanes used to coalesce routing keys before endpoint selection. Leave it unset for normal use; when unset, lanes are selected dynamically from backend count and compressed ingest rate. Logs that preserve trace IDs use a stable lane count to avoid rate-driven trace remapping; logs with `log_routing.ignore_trace_id=true` and metrics use the dynamic lane policy.
   * `min_lanes`, `max_lanes`, `backend_lane_multiplier`, `target_lane_fill_duration`, and `lane_hysteresis_factor` tune dynamic lane selection. Defaults are `1`, `256`, `2`, derived from `max_batch_delay`, and `2`.
   * Queued payloads stay compressed until dispatch. Central queue capacity is enforced on compressed bytes; request windows are decoded only after a ready lane window is leased.
   * The scheduler keeps a bounded set of ready request windows, limited by `num_consumers`. Ready windows reserve uncompressed in-flight budget before a worker leases them, so parallel consumers do not shrink request windows beyond `target_compressed_bytes` unless a bounded flush reason applies.
@@ -551,7 +551,7 @@ The following metrics are recorded by this exporter:
   * `otelcol_loadbalancer_central_queue_configured_consumers` reports configured drain workers per signal exporter.
   * `otelcol_loadbalancer_central_queue_active_consumers` reports drain workers currently processing or sending a leased queue window.
   * `otelcol_loadbalancer_central_queue_lanes` reports the configured static `lane_count` override. A value of `0` means dynamic lane policy is active.
-  * `otelcol_loadbalancer_central_queue_effective_lanes` reports lanes selected by the static `lane_count` override or by the dynamic backend-count and ingest-rate policy.
+  * `otelcol_loadbalancer_central_queue_effective_lanes` reports lanes selected by the static `lane_count` override, the trace-preserving stable log lane count, or the dynamic backend-count and ingest-rate policy.
 * Central queue scheduler metrics show the bounded ready-window state:
   * `otelcol_loadbalancer_central_queue_ready_windows` reports request windows ready to be leased by drain workers.
   * `otelcol_loadbalancer_central_queue_ready_window_limit` reports the ready-window bound, which follows `central_queue.num_consumers`.

@@ -12,7 +12,7 @@
 
 ## Evidence And Root Cause
 
-Production pprof from BigID `production-mt-1-eu-west-1` showed the LB hot path inside central queue leasing/window selection, not HAProxy or backend network wait.
+A production pprof capture from a high-throughput deployment showed the LB hot path inside central queue leasing/window selection, not backend network wait.
 
 - Hot cumulative CPU was in `runCentralQueue`, queue lease/try-lease, and the current queue window candidate builder.
 - Heap allocation profile showed queue candidate selection as the dominant allocator.
@@ -91,9 +91,9 @@ backend_multiplier = 2
 target_fill_duration = min(max_batch_delay / 2, 500ms)
 ```
 
-For BigID-like high traffic this can still settle high. For 4 workers or low traffic it should stay low enough to avoid tiny batches and delay-heavy flushing.
+For high-throughput traffic this can still settle high. For 4 workers or low traffic it should stay low enough to avoid tiny batches and delay-heavy flushing.
 
-Implementation update from review evidence: the shipped default `max_lanes` is `256`, not `64`. The dynamic policy still contracts low-backend/low-rate clusters through backend-count and fill-rate bounds, while high-traffic many-backend clusters can reach the 256-lane spread that previously stabilized BigID-like traffic without requiring a per-cluster override.
+Implementation update from review evidence: the shipped default `max_lanes` is `256`, not `64`. The dynamic policy still contracts low-backend/low-rate clusters through backend-count and fill-rate bounds, while high-traffic many-backend clusters can reach the 256-lane spread without requiring a per-cluster override.
 
 ## Task 1: Add Red Benchmarks And Policy Tests
 
@@ -1020,7 +1020,7 @@ Expected: package tests pass.
 **Files:**
 - Modify: `exporter/loadbalancingexporter/config.go`
 - Modify: `exporter/loadbalancingexporter/documentation.md`
-- Modify in downstream repos after this PR merges: collectors-service FF rendering and Helm chart values.
+- Modify downstream configuration rendering after this PR merges so managed deployments use dynamic-lane guardrails.
 
 - [ ] **Step 1: Keep old behavior available**
 
@@ -1038,9 +1038,9 @@ target_lane_fill_duration=500ms
 lane_hysteresis_factor=2
 ```
 
-- [ ] **Step 3: Prepare downstream FF changes**
+- [ ] **Step 3: Prepare downstream configuration changes**
 
-In collectors-service, render these fields for LB-enabled deployments:
+Render these fields for LB-enabled deployments:
 
 ```yaml
 central_queue:
@@ -1071,9 +1071,9 @@ HAProxy fallback
 generated vs delivered
 ```
 
-- [ ] **Step 5: Validate in prod canary before BigID**
+- [ ] **Step 5: Validate in production canary before customer rollout**
 
-Repeat staging validation in a Sawmills-owned prod canary. Only prepare BigID deployment after the canary shows lower LB CPU/GC and no latency/refusal regression.
+Repeat staging validation in an owned production canary. Only prepare broader customer rollout after the canary shows lower LB CPU/GC and no latency/refusal regression.
 
 ## Acceptance Gates
 
@@ -1087,8 +1087,8 @@ Green means all of the following are true:
 - Few-backend scenario computes low effective lanes and avoids tiny delay-flushed batches.
 - Many-backend/high-throughput scenario can use high effective lanes without global queue scan cost.
 - Static `lane_count` override still works for rollback.
-- Staging pprof confirms lower LB CPU/GC before any BigID deployment.
+- Staging pprof confirms lower LB CPU/GC before broader customer rollout.
 
 ## Open Decision For Review
 
-The default `max_lanes=256` preserves the high-traffic ceiling needed for BigID-like clusters. The fill-rate and backend-count terms remain the first-principles controls that keep low-worker or low-rate clusters from over-sharding.
+The default `max_lanes=256` preserves the high-traffic ceiling needed for large clusters. The fill-rate and backend-count terms remain the first-principles controls that keep low-worker or low-rate clusters from over-sharding.

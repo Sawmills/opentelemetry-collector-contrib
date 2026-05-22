@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
@@ -56,7 +57,9 @@ type loadBalancer struct {
 	probeWG   sync.WaitGroup
 	probeStop context.CancelFunc
 
-	updateLock sync.RWMutex
+	updateLock                    sync.RWMutex
+	cachedRoutableBackendCount    atomic.Int64
+	hasCachedRoutableBackendCount atomic.Bool
 }
 
 // Create new load balancer
@@ -205,6 +208,7 @@ func (lb *loadBalancer) onBackendChanges(resolved []string) {
 	// add the missing exporters first
 	lb.addMissingExporters(ctx, resolved)
 	removed := lb.removeExtraExportersLocked(resolved)
+	lb.refreshRoutableBackendCountLocked()
 	lb.updateLock.Unlock()
 
 	if len(removed) > 0 {
@@ -241,6 +245,7 @@ func (lb *loadBalancer) commitEndpointHealthResolverUpdateLocked(resolved []stri
 
 	duplicates := lb.installCreatedExportersLocked(created, eligible)
 	removed := lb.removeExtraExportersLocked(resolved)
+	lb.refreshRoutableBackendCountLocked()
 	return duplicates, removed
 }
 
@@ -376,9 +381,20 @@ func (lb *loadBalancer) routableBackendCount() int {
 	if lb == nil {
 		return 0
 	}
+	if lb.hasCachedRoutableBackendCount.Load() {
+		return int(lb.cachedRoutableBackendCount.Load())
+	}
 	lb.updateLock.RLock()
 	defer lb.updateLock.RUnlock()
+	return lb.computeRoutableBackendCountLocked()
+}
 
+func (lb *loadBalancer) refreshRoutableBackendCountLocked() {
+	lb.cachedRoutableBackendCount.Store(int64(lb.computeRoutableBackendCountLocked()))
+	lb.hasCachedRoutableBackendCount.Store(true)
+}
+
+func (lb *loadBalancer) computeRoutableBackendCountLocked() int {
 	if lb.ring == nil || len(lb.ring.items) == 0 {
 		count := 0
 		for _, exp := range lb.exporters {
@@ -530,6 +546,7 @@ func (lb *loadBalancer) handleBackendFailureHealthOnly(ctx context.Context, endp
 		}
 	}
 	duplicates := lb.installCreatedExportersLocked(created, eligible)
+	lb.refreshRoutableBackendCountLocked()
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)
@@ -567,6 +584,7 @@ func (lb *loadBalancer) handleBackendProbeFailure(ctx context.Context, endpoint 
 		removed = append(removed, removedExporter{endpoint: endpoint, exporter: exp})
 	}
 	duplicates := lb.installCreatedExportersLocked(created, eligible)
+	lb.refreshRoutableBackendCountLocked()
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)
@@ -595,6 +613,7 @@ func (lb *loadBalancer) handleBackendProbeSuccess(ctx context.Context, endpoint 
 	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
 	lb.ring = newHashRing(eligible)
 	duplicates := lb.installCreatedExportersLocked(created, eligible)
+	lb.refreshRoutableBackendCountLocked()
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)
@@ -610,6 +629,7 @@ func (lb *loadBalancer) cleanupBackendWithoutDrain(ctx context.Context, endpoint
 		delete(lb.exporters, endpoint)
 		removed = append(removed, removedExporter{endpoint: endpoint, exporter: exp})
 	}
+	lb.refreshRoutableBackendCountLocked()
 	lb.updateLock.Unlock()
 	if len(removed) > 0 {
 		lb.runCleanupAsync(func() {
@@ -644,6 +664,7 @@ func (lb *loadBalancer) handleBackendFailureWithDrain(ctx context.Context, endpo
 		removed = append(removed, removedExporter{endpoint: endpoint, exporter: exp})
 	}
 	duplicates := lb.installCreatedExportersLocked(created, eligible)
+	lb.refreshRoutableBackendCountLocked()
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)
@@ -693,6 +714,7 @@ func (lb *loadBalancer) handleBackendSuccess(endpoint string) {
 	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
 	lb.ring = newHashRing(eligible)
 	duplicates := lb.installCreatedExportersLocked(created, eligible)
+	lb.refreshRoutableBackendCountLocked()
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)
@@ -718,6 +740,7 @@ func (lb *loadBalancer) refreshExpiredEndpointHealth(ctx context.Context) {
 	lb.updateLock.Lock()
 	lb.ring = newHashRing(refresh.eligible)
 	duplicates := lb.installCreatedExportersLocked(created, refresh.eligible)
+	lb.refreshRoutableBackendCountLocked()
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)

@@ -614,13 +614,14 @@ func (q *centralQueue) removeWindowFromBucketLocked(bucket *centralQueueBucket, 
 	if bucket == nil || len(indexes) == 0 {
 		return false
 	}
-	removed := bucket.removeIndexes(indexes)
-	q.itemCount -= len(removed)
+	var onRemoved func(centralQueueItem)
 	if untrack {
-		for i := range removed {
-			q.untrackOldestEnqueuedAtLocked(removed[i])
+		onRemoved = func(item centralQueueItem) {
+			q.untrackOldestEnqueuedAtLocked(item)
 		}
 	}
+	removed := bucket.removeIndexes(indexes, onRemoved)
+	q.itemCount -= removed
 	if len(bucket.items) > 0 {
 		return false
 	}
