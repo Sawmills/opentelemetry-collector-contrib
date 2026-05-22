@@ -221,6 +221,26 @@ func centralQueueEffectiveLaneCount(controller *centralQueueLaneController, stat
 	return 0
 }
 
+func centralQueueStableLaneCount(controller *centralQueueLaneController, staticLaneCount int) int {
+	if staticLaneCount > 0 {
+		return staticLaneCount
+	}
+	if controller != nil {
+		return controller.stableLaneCount()
+	}
+	return 0
+}
+
+func (c *centralQueueLaneController) stableLaneCount() int {
+	if c == nil {
+		return 0
+	}
+	if c.fixedLaneCount > 0 {
+		return c.fixedLaneCount
+	}
+	return max(c.policy.maxLanes, c.policy.minLanes)
+}
+
 func observeCentralQueueLaneBytes(telemetry *centralQueueTelemetry, controller *centralQueueLaneController, staticLaneCount, compressedBytes int, now time.Time) {
 	lanes := 0
 	if controller != nil {

@@ -206,11 +206,18 @@ func (e *logExporterImp) consumeLogsCentralQueue(ctx context.Context, ld plog.Lo
 }
 
 func (e *logExporterImp) effectiveCentralQueueLaneCount(now time.Time) int {
+	if !e.ignoreTraceID {
+		return centralQueueStableLaneCount(e.centralQueueLanes, e.centralQueueLaneCount)
+	}
 	return centralQueueEffectiveLaneCount(e.centralQueueLanes, e.centralQueueLaneCount, e.loadBalancer, now)
 }
 
 func (e *logExporterImp) observeCentralQueueLaneBytes(compressedBytes int, now time.Time) {
 	if e.centralQueue == nil {
+		return
+	}
+	if !e.ignoreTraceID {
+		e.centralQueue.settings.telemetry.recordEffectiveLanes(context.Background(), int64(centralQueueStableLaneCount(e.centralQueueLanes, e.centralQueueLaneCount)))
 		return
 	}
 	observeCentralQueueLaneBytes(e.centralQueue.settings.telemetry, e.centralQueueLanes, e.centralQueueLaneCount, compressedBytes, now)

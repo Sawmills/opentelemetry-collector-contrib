@@ -232,6 +232,7 @@ func TestLogsCentralQueueDynamicLanesUseBackendCountAndRate(t *testing.T) {
 		}),
 		centralQueueLanes: newCentralQueueLaneController(cfg),
 		loadBalancer:      loadBalancerWithBackendCount(4),
+		ignoreTraceID:     true,
 	}
 	now := time.Unix(10, 0)
 

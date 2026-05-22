@@ -29,17 +29,20 @@ func (b *centralQueueBucket) append(item centralQueueItem) {
 // build these indexes from bucket.items while holding the queue lock; the
 // implementation relies on indexes[0] as the first read/write offset and may
 // panic if the indexes are unsorted or out of bounds.
-func (b *centralQueueBucket) removeIndexes(indexes []int) []centralQueueItem {
+func (b *centralQueueBucket) removeIndexes(indexes []int, onRemoved func(centralQueueItem)) int {
 	if len(indexes) == 0 {
-		return nil
+		return 0
 	}
 
-	removed := make([]centralQueueItem, 0, len(indexes))
+	removed := 0
 	writeIndex := indexes[0]
 	removeIndex := 0
 	for readIndex := indexes[0]; readIndex < len(b.items); readIndex++ {
 		if removeIndex < len(indexes) && indexes[removeIndex] == readIndex {
-			removed = append(removed, b.items[readIndex])
+			if onRemoved != nil {
+				onRemoved(b.items[readIndex])
+			}
+			removed++
 			for removeIndex < len(indexes) && indexes[removeIndex] == readIndex {
 				removeIndex++
 			}
