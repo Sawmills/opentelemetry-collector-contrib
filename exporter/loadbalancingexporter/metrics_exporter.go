@@ -161,7 +161,8 @@ func (e *metricExporterImp) startCentralQueueConsumers(ctx context.Context) {
 	}
 	e.centralQueue.settings.telemetry.recordConfiguredConsumers(ctx, int64(consumers))
 	e.centralQueue.settings.telemetry.recordActiveConsumers(ctx, e.centralActiveConsumers.Load())
-	e.centralQueue.settings.telemetry.recordLanes(ctx, int64(e.effectiveCentralQueueLaneCount(time.Now())))
+	e.centralQueue.settings.telemetry.recordConfiguredLanes(ctx, int64(e.centralQueueLaneCount))
+	e.centralQueue.settings.telemetry.recordEffectiveLanes(ctx, int64(e.effectiveCentralQueueLaneCount(time.Now())))
 	for i := 0; i < consumers; i++ {
 		e.centralWG.Add(1)
 		go e.runCentralQueue(ctx)
@@ -262,7 +263,7 @@ func (e *metricExporterImp) observeCentralQueueLaneBytes(compressedBytes int, no
 		}
 		lanes = e.centralQueueLanes.observeCompressedBytes(compressedBytes, backendCount, now)
 	}
-	e.centralQueue.settings.telemetry.recordLanes(context.Background(), int64(lanes))
+	e.centralQueue.settings.telemetry.recordEffectiveLanes(context.Background(), int64(lanes))
 }
 
 func (e *metricExporterImp) runCentralQueue(ctx context.Context) {

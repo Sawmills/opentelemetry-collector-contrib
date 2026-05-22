@@ -45,7 +45,8 @@ func TestCentralQueueTelemetryRecordsInstruments(t *testing.T) {
 	telemetry.recordDecodeFailure(t.Context(), 5)
 	telemetry.recordConfiguredConsumers(t.Context(), 30)
 	telemetry.recordActiveConsumers(t.Context(), 3)
-	telemetry.recordLanes(t.Context(), 64)
+	telemetry.recordConfiguredLanes(t.Context(), 4)
+	telemetry.recordEffectiveLanes(t.Context(), 64)
 	telemetry.recordWindow(t.Context(), centralQueueWindow{
 		items:             []centralQueueItem{{}, {}},
 		compressedBytes:   32,
@@ -70,7 +71,7 @@ func TestCentralQueueTelemetryRecordsInstruments(t *testing.T) {
 	requireCentralQueueSchedulerState(t, reader, centralQueueSchedulerStateWaiting)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_configured_consumers", "{workers}", attrs, 30)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_active_consumers", "{workers}", attrs, 3)
-	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_lanes", "{lanes}", attrs, 64)
+	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_lanes", "{lanes}", attrs, 4)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_effective_lanes", "{lanes}", attrs, 64)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_oldest_item_age", "ms", attrs, 125)
 	requireCentralQueueIntSum(t, reader, "otelcol_loadbalancer_central_queue_rejected_compressed_bytes", "By", attrs, 7)

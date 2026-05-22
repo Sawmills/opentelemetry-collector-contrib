@@ -7,6 +7,7 @@ import (
 	"container/heap"
 	"context"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"sync"
 	"time"
@@ -169,8 +170,12 @@ func (q *centralQueue) lease(ctx context.Context) (*centralQueueLease, error) {
 	defer ticker.Stop()
 
 	for {
-		if lease, err := q.tryLease(time.Now()); lease != nil || err != nil {
-			return lease, err
+		lease, err := q.tryLease(time.Now())
+		if lease != nil {
+			return lease, nil
+		}
+		if err != nil && !errors.Is(err, errCentralQueueInflightFull) {
+			return nil, err
 		}
 
 		select {
@@ -295,7 +300,7 @@ func (q *centralQueue) bucketForItemLocked(item centralQueueItem) *centralQueueB
 	if bucket != nil {
 		return bucket
 	}
-	bucket = newCentralQueueBucket(item.routingKey)
+	bucket = newCentralQueueBucket(key, item.routingKey)
 	q.bucketsByKey[key] = bucket
 	q.buckets = append(q.buckets, bucket)
 	return bucket
@@ -490,7 +495,9 @@ func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQ
 			blocked = true
 			continue
 		}
-		selected = append(selected, *candidate)
+		selectedCandidate := *candidate
+		selectedCandidate.indexes = append([]int(nil), candidate.indexes...)
+		selected = append(selected, selectedCandidate)
 		pendingInflightBytes += int64(candidate.window.uncompressedBytes)
 	}
 
@@ -507,8 +514,9 @@ func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQ
 
 	for i := range selected {
 		candidate := &selected[i]
-		q.removeWindowFromBucketLocked(candidate.bucket, candidate.indexes, false)
-		q.updateReadyBucketLocked(candidate.bucket, now.UnixNano())
+		if !q.removeWindowFromBucketLocked(candidate.bucket, candidate.indexes, false) {
+			q.updateReadyBucketLocked(candidate.bucket, now.UnixNano())
+		}
 	}
 
 	snapshot := q.snapshotLocked()
@@ -579,9 +587,9 @@ func (q *centralQueue) leaseReadyWindowLocked() *centralQueueLease {
 	return lease
 }
 
-func (q *centralQueue) removeWindowFromBucketLocked(bucket *centralQueueBucket, indexes []int, untrack bool) {
+func (q *centralQueue) removeWindowFromBucketLocked(bucket *centralQueueBucket, indexes []int, untrack bool) bool {
 	if bucket == nil || len(indexes) == 0 {
-		return
+		return false
 	}
 	removed := bucket.removeIndexes(indexes)
 	q.itemCount -= len(removed)
@@ -590,6 +598,26 @@ func (q *centralQueue) removeWindowFromBucketLocked(bucket *centralQueueBucket, 
 			q.untrackOldestEnqueuedAtLocked(item)
 		}
 	}
+	if len(bucket.items) > 0 {
+		return false
+	}
+	q.pruneBucketLocked(bucket)
+	return true
+}
+
+func (q *centralQueue) pruneBucketLocked(bucket *centralQueueBucket) {
+	q.removeReadyBucketLocked(bucket)
+	delete(q.bucketsByKey, bucket.routingKeyID)
+	for i := range q.buckets {
+		if q.buckets[i] != bucket {
+			continue
+		}
+		copy(q.buckets[i:], q.buckets[i+1:])
+		q.buckets[len(q.buckets)-1] = nil
+		q.buckets = q.buckets[:len(q.buckets)-1]
+		break
+	}
+	bucket.candidateIndexes = bucket.candidateIndexes[:0]
 }
 
 func (l *centralQueueLease) done() {

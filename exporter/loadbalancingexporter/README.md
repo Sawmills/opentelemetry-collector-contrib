@@ -550,7 +550,7 @@ The following metrics are recorded by this exporter:
 * Central queue worker metrics show whether each LB pod is draining queue windows in parallel:
   * `otelcol_loadbalancer_central_queue_configured_consumers` reports configured drain workers per signal exporter.
   * `otelcol_loadbalancer_central_queue_active_consumers` reports drain workers currently processing or sending a leased queue window.
-  * `otelcol_loadbalancer_central_queue_lanes` reports the effective queue lanes used for routing-key coalescing. This legacy metric mirrors `otelcol_loadbalancer_central_queue_effective_lanes`.
+  * `otelcol_loadbalancer_central_queue_lanes` reports the configured static `lane_count` override. A value of `0` means dynamic lane policy is active.
   * `otelcol_loadbalancer_central_queue_effective_lanes` reports lanes selected by the static `lane_count` override or by the dynamic backend-count and ingest-rate policy.
 * Central queue scheduler metrics show the bounded ready-window state:
   * `otelcol_loadbalancer_central_queue_ready_windows` reports request windows ready to be leased by drain workers.

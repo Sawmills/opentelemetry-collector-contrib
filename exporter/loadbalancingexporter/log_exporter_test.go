@@ -213,6 +213,44 @@ func TestConsumeLogsCentralQueueEnqueuesCompressedByRoutingKey(t *testing.T) {
 	require.NoError(t, plogtest.CompareLogs(logs, decoded))
 }
 
+func TestLogsCentralQueueDynamicLanesUseBackendCountAndRate(t *testing.T) {
+	reader := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, reader.Shutdown(context.WithoutCancel(t.Context())))
+	})
+	telemetry, err := newCentralQueueTelemetry(reader.NewTelemetrySettings(), signalKindLogs)
+	require.NoError(t, err)
+	cfg := createDefaultConfig().(*Config).CentralQueue
+	cfg.TargetCompressedBytes = 256 << 10
+	cfg.TargetLaneFillDuration = 500 * time.Millisecond
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 30,
+			maxInflightUncompressedBytes: 1 << 30,
+			maxUncompressedBatchBytes:    1 << 20,
+			telemetry:                    telemetry,
+		}),
+		centralQueueLanes: newCentralQueueLaneController(cfg),
+		loadBalancer:      loadBalancerWithBackendCount(4),
+	}
+	now := time.Unix(10, 0)
+
+	require.Equal(t, 4, p.effectiveCentralQueueLaneCount(now))
+	p.observeCentralQueueLaneBytes(512<<20, now)
+	require.Equal(t, 4, p.effectiveCentralQueueLaneCount(now))
+
+	p.observeCentralQueueLaneBytes(512<<20, now.Add(31*time.Second))
+	require.Equal(t, 8, p.effectiveCentralQueueLaneCount(now.Add(31*time.Second)))
+	requireCentralQueueIntGauge(
+		t,
+		reader,
+		"otelcol_loadbalancer_central_queue_effective_lanes",
+		"{lanes}",
+		attribute.NewSet(attribute.String("signal", string(signalKindLogs))),
+		8,
+	)
+}
+
 func TestConsumeLogsCentralQueueUsesLaneRoutingForIgnoredTraceIDs(t *testing.T) {
 	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
 	t.Cleanup(func() { require.NoError(t, codec.Close()) })
