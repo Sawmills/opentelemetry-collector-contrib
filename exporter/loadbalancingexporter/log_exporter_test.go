@@ -283,7 +283,7 @@ func TestConsumeLogsCentralQueueSplitsOversizedLogBatchByUncompressedBytes(t *te
 
 	expectedRoutingKey := centralQueueLaneRoutingKey(signalKindLogs, fallbackRoutingKey[:], 64)
 	merged := plog.NewLogs()
-	for _, item := range p.centralQueue.items {
+	for _, item := range p.centralQueue.queuedItems() {
 		require.LessOrEqual(t, item.uncompressedBytes, limit)
 		require.Equal(t, expectedRoutingKey, item.routingKey)
 		decoded, err := decodeCentralQueueLogsItem(item, codec)
@@ -402,7 +402,7 @@ func TestConsumeLogsCentralQueueSplitsAtInflightUncompressedLimit(t *testing.T) 
 
 	require.NoError(t, p.ConsumeLogs(t.Context(), logs))
 	require.Greater(t, p.centralQueue.len(), 1)
-	for _, item := range p.centralQueue.items {
+	for _, item := range p.centralQueue.queuedItems() {
 		require.LessOrEqual(t, item.uncompressedBytes, inflightLimit)
 	}
 }
@@ -430,7 +430,7 @@ func TestConsumeLogsCentralQueueSplitsBySizeNotRawRoutingKey(t *testing.T) {
 
 	expectedRoutingKey := centralQueueLaneRoutingKey(signalKindLogs, []byte{1}, 1)
 	merged := plog.NewLogs()
-	for _, item := range p.centralQueue.items {
+	for _, item := range p.centralQueue.queuedItems() {
 		require.LessOrEqual(t, item.uncompressedBytes, limit)
 		require.Equal(t, expectedRoutingKey, item.routingKey)
 		decoded, err := decodeCentralQueueLogsItem(item, codec)

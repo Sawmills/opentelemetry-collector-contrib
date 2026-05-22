@@ -44,6 +44,7 @@ type metricExporterImp struct {
 	started                  atomic.Bool
 	telemetry                *metadata.TelemetryBuilder
 	centralQueueLaneCount    int
+	centralQueueLanes        *centralQueueLaneController
 	centralQueueNumConsumers int
 	centralActiveConsumers   atomic.Int64
 	centralCancel            context.CancelFunc
@@ -73,7 +74,8 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 		routingKey:               svcRouting,
 		telemetry:                telemetry,
 		logger:                   params.Logger,
-		centralQueueLaneCount:    cfg.(*Config).CentralQueue.effectiveLaneCount(),
+		centralQueueLaneCount:    cfg.(*Config).CentralQueue.LaneCount,
+		centralQueueLanes:        newCentralQueueLaneController(cfg.(*Config).CentralQueue),
 		centralQueueNumConsumers: cfg.(*Config).CentralQueue.NumConsumers,
 	}
 	if cfg.(*Config).CentralQueue.Enabled {
@@ -159,7 +161,7 @@ func (e *metricExporterImp) startCentralQueueConsumers(ctx context.Context) {
 	}
 	e.centralQueue.settings.telemetry.recordConfiguredConsumers(ctx, int64(consumers))
 	e.centralQueue.settings.telemetry.recordActiveConsumers(ctx, e.centralActiveConsumers.Load())
-	e.centralQueue.settings.telemetry.recordLanes(ctx, int64(e.centralQueueLaneCount))
+	e.centralQueue.settings.telemetry.recordLanes(ctx, int64(e.effectiveCentralQueueLaneCount(time.Now())))
 	for i := 0; i < consumers; i++ {
 		e.centralWG.Add(1)
 		go e.runCentralQueue(ctx)
@@ -217,16 +219,50 @@ func (e *metricExporterImp) ConsumeMetrics(ctx context.Context, md pmetric.Metri
 func (e *metricExporterImp) consumeMetricsCentralQueue(batches map[string]pmetric.Metrics) error {
 	var errs error
 	now := time.Now()
+	laneCount := e.effectiveCentralQueueLaneCount(now)
 	for routingKey, md := range batches {
-		queueRoutingKey := centralQueueLaneRoutingKey(signalKindMetrics, []byte(routingKey), e.centralQueueLaneCount)
+		queueRoutingKey := centralQueueLaneRoutingKey(signalKindMetrics, []byte(routingKey), laneCount)
 		item, err := newCentralQueueMetricsItem(queueRoutingKey, md, e.centralCodec, now)
 		if err != nil {
 			errs = multierr.Append(errs, err)
 			continue
 		}
-		errs = multierr.Append(errs, e.centralQueue.enqueue(item))
+		err = e.centralQueue.enqueue(item)
+		if err == nil {
+			e.observeCentralQueueLaneBytes(item.compressedBytes, now)
+		}
+		errs = multierr.Append(errs, err)
 	}
 	return errs
+}
+
+func (e *metricExporterImp) effectiveCentralQueueLaneCount(now time.Time) int {
+	if e.centralQueueLanes != nil {
+		backendCount := 0
+		if e.loadBalancer != nil {
+			backendCount = e.loadBalancer.backendCount()
+		}
+		return e.centralQueueLanes.laneCount(backendCount, now)
+	}
+	if e.centralQueueLaneCount > 0 {
+		return e.centralQueueLaneCount
+	}
+	return 0
+}
+
+func (e *metricExporterImp) observeCentralQueueLaneBytes(compressedBytes int, now time.Time) {
+	if e.centralQueue == nil {
+		return
+	}
+	lanes := e.effectiveCentralQueueLaneCount(now)
+	if e.centralQueueLanes != nil {
+		backendCount := 0
+		if e.loadBalancer != nil {
+			backendCount = e.loadBalancer.backendCount()
+		}
+		lanes = e.centralQueueLanes.observeCompressedBytes(compressedBytes, backendCount, now)
+	}
+	e.centralQueue.settings.telemetry.recordLanes(context.Background(), int64(lanes))
 }
 
 func (e *metricExporterImp) runCentralQueue(ctx context.Context) {

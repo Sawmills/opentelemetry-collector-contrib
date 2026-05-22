@@ -256,7 +256,6 @@ const (
 	defaultCentralQueueMaxInflightBytes          = int64(512 << 20)
 	defaultCentralQueueTargetCompressedBytes     = int64(256 << 10)
 	defaultCentralQueueMaxBatchDelay             = 250 * time.Millisecond
-	defaultCentralQueueLaneCount                 = 64
 	defaultCentralQueueNumConsumers              = 30
 )
 
@@ -269,6 +268,11 @@ type CentralQueueConfig struct {
 	TargetCompressedBytes        int64                   `mapstructure:"target_compressed_bytes"`
 	MaxBatchDelay                time.Duration           `mapstructure:"max_batch_delay"`
 	LaneCount                    int                     `mapstructure:"lane_count"`
+	MinLanes                     int                     `mapstructure:"min_lanes"`
+	MaxLanes                     int                     `mapstructure:"max_lanes"`
+	BackendLaneMultiplier        int                     `mapstructure:"backend_lane_multiplier"`
+	TargetLaneFillDuration       time.Duration           `mapstructure:"target_lane_fill_duration"`
+	LaneHysteresisFactor         int                     `mapstructure:"lane_hysteresis_factor"`
 	NumConsumers                 int                     `mapstructure:"num_consumers"`
 	// ForceScheduleAge bounds how long a fallback candidate (a routing-key
 	// lane whose accumulated window is under target_compressed_bytes) may wait
@@ -285,7 +289,9 @@ func (c CentralQueueConfig) effectiveLaneCount() int {
 	if c.LaneCount > 0 {
 		return c.LaneCount
 	}
-	return centralQueueLaneCount(c.NumConsumers)
+	return newCentralQueueLanePolicy(c).compute(centralQueueLaneInputs{
+		healthyBackends: c.NumConsumers,
+	})
 }
 
 func (q QueueSettings) Validate() error {
@@ -418,8 +424,23 @@ func (c CentralQueueConfig) Validate() error {
 	if c.LaneCount < 0 {
 		return errors.New("central_queue.lane_count must be greater than or equal to 0 when central_queue.enabled=true")
 	}
-	if c.LaneCount > 0 && c.LaneCount < c.NumConsumers {
-		return errors.New("central_queue.lane_count must be greater than or equal to central_queue.num_consumers when set")
+	if c.MinLanes < 0 {
+		return errors.New("central_queue.min_lanes must be greater than or equal to 0 when central_queue.enabled=true")
+	}
+	if c.MaxLanes < 0 {
+		return errors.New("central_queue.max_lanes must be greater than or equal to 0 when central_queue.enabled=true")
+	}
+	if c.MinLanes > 0 && c.MaxLanes > 0 && c.MaxLanes < c.MinLanes {
+		return errors.New("central_queue.max_lanes must be greater than or equal to central_queue.min_lanes when both are set")
+	}
+	if c.BackendLaneMultiplier < 0 {
+		return errors.New("central_queue.backend_lane_multiplier must be greater than or equal to 0 when central_queue.enabled=true")
+	}
+	if c.TargetLaneFillDuration < 0 {
+		return errors.New("central_queue.target_lane_fill_duration must be greater than or equal to 0 when central_queue.enabled=true")
+	}
+	if c.LaneHysteresisFactor < 0 {
+		return errors.New("central_queue.lane_hysteresis_factor must be greater than or equal to 0 when central_queue.enabled=true")
 	}
 	return nil
 }
