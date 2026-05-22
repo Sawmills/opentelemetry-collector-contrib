@@ -40,7 +40,7 @@ func TestCentralQueueLeaseReservesInflightUncompressedBytes(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 40, q.inflightUncompressedBytes())
 
-	_, err = q.lease(t.Context())
+	_, err = q.tryLease(time.Now())
 	require.ErrorIs(t, err, errCentralQueueInflightFull)
 
 	lease.done()
@@ -80,6 +80,11 @@ func TestCentralQueueEnqueueSignalsLeaseWaiters(t *testing.T) {
 	})
 	now := time.Unix(10, 0)
 
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	waiter := startCentralQueueLease(ctx, q)
+	requireNoCentralQueueLeaseResult(t, waiter)
+
 	require.NoError(t, q.enqueueAt(centralQueueItem{
 		signal:            signalKindLogs,
 		routingKey:        []byte("lane-a"),
@@ -88,7 +93,9 @@ func TestCentralQueueEnqueueSignalsLeaseWaiters(t *testing.T) {
 		count:             1,
 	}, now))
 
-	requireCentralQueueNotification(t, q)
+	lease := requireCentralQueueLeaseResult(t, waiter)
+	require.Equal(t, []byte("lane-a"), lease.window.routingKey)
+	lease.done()
 }
 
 func TestCentralQueueDoneSignalsInflightWaiters(t *testing.T) {
@@ -101,14 +108,47 @@ func TestCentralQueueDoneSignalsInflightWaiters(t *testing.T) {
 	})
 	now := time.Unix(10, 0)
 	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
-	requireCentralQueueNotification(t, q)
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-b"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
 
 	lease, err := q.tryLease(now)
 	require.NoError(t, err)
 	require.NotNil(t, lease)
 
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	waiter := startCentralQueueLease(ctx, q)
+	requireNoCentralQueueLeaseResult(t, waiter)
+
 	lease.done()
-	requireCentralQueueNotification(t, q)
+	secondLease := requireCentralQueueLeaseResult(t, waiter)
+	require.Equal(t, []byte("lane-b"), secondLease.window.routingKey)
+	secondLease.done()
+}
+
+func TestCentralQueuePrunesEmptyBucketsAfterScheduling(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:        100,
+		maxUncompressedBatchBytes: 100,
+		targetCompressedBytes:     10,
+		maxBatchDelay:             time.Second,
+	})
+	now := time.Unix(10, 0)
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-b"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
+	requireCentralQueueBucketCounts(t, q, 2, 2, 2)
+
+	first, err := q.tryLease(now)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	requireCentralQueueBucketCounts(t, q, 1, 1, 1)
+
+	first.done()
+	second, err := q.tryLease(now)
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	requireCentralQueueBucketCounts(t, q, 0, 0, 0)
+
+	second.done()
 }
 
 func TestCentralQueueLeaseReservesCompressedBytesUntilDoneOrRequeue(t *testing.T) {
@@ -1304,6 +1344,43 @@ func materializeCentralQueueCandidatesLocked(q *centralQueue, candidates []centr
 	}
 }
 
+type centralQueueLeaseResult struct {
+	lease *centralQueueLease
+	err   error
+}
+
+func startCentralQueueLease(ctx context.Context, q *centralQueue) <-chan centralQueueLeaseResult {
+	result := make(chan centralQueueLeaseResult, 1)
+	go func() {
+		lease, err := q.lease(ctx)
+		result <- centralQueueLeaseResult{lease: lease, err: err}
+	}()
+	return result
+}
+
+func requireNoCentralQueueLeaseResult(t *testing.T, result <-chan centralQueueLeaseResult) {
+	t.Helper()
+	select {
+	case leaseResult := <-result:
+		require.NoError(t, leaseResult.err)
+		t.Fatalf("unexpected central queue lease: %+v", leaseResult.lease)
+	case <-time.After(25 * time.Millisecond):
+	}
+}
+
+func requireCentralQueueLeaseResult(t *testing.T, result <-chan centralQueueLeaseResult) *centralQueueLease {
+	t.Helper()
+	select {
+	case leaseResult := <-result:
+		require.NoError(t, leaseResult.err)
+		require.NotNil(t, leaseResult.lease)
+		return leaseResult.lease
+	case <-time.After(time.Second):
+		t.Fatal("expected central queue lease")
+		return nil
+	}
+}
+
 func requireCentralQueueNotification(t *testing.T, q *centralQueue) {
 	t.Helper()
 	select {
@@ -1311,6 +1388,15 @@ func requireCentralQueueNotification(t *testing.T, q *centralQueue) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("expected central queue notification")
 	}
+}
+
+func requireCentralQueueBucketCounts(t *testing.T, q *centralQueue, buckets, bucketsByKey, readyBuckets int) {
+	t.Helper()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	require.Len(t, q.buckets, buckets)
+	require.Len(t, q.bucketsByKey, bucketsByKey)
+	require.Len(t, q.readyBuckets, readyBuckets)
 }
 
 func requireNextAttemptWithinRetryDelay(t *testing.T, now time.Time, attempt int, nextAttemptUnixNano int64) {

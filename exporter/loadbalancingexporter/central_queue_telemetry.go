@@ -178,7 +178,7 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 	errs = errors.Join(errs, err)
 	t.lanes, err = meter.Int64Gauge(
 		"otelcol_loadbalancer_central_queue_lanes",
-		metric.WithDescription("Effective central queue lanes used to coalesce routing keys before backend selection."),
+		metric.WithDescription("Configured central queue lane_count override. Zero means dynamic lane policy is active."),
 		metric.WithUnit("{lanes}"),
 	)
 	errs = errors.Join(errs, err)
@@ -364,11 +364,17 @@ func (t *centralQueueTelemetry) recordActiveConsumers(ctx context.Context, consu
 	t.activeConsumers.Record(ctx, consumers, t.signalAttrs)
 }
 
-func (t *centralQueueTelemetry) recordLanes(ctx context.Context, lanes int64) {
+func (t *centralQueueTelemetry) recordConfiguredLanes(ctx context.Context, lanes int64) {
 	if t == nil {
 		return
 	}
 	t.lanes.Record(ctx, lanes, t.signalAttrs)
+}
+
+func (t *centralQueueTelemetry) recordEffectiveLanes(ctx context.Context, lanes int64) {
+	if t == nil {
+		return
+	}
 	t.effectiveLanes.Record(ctx, lanes, t.signalAttrs)
 }
 

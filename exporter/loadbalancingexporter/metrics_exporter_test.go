@@ -204,6 +204,52 @@ func TestConsumeMetricsCentralQueueEnqueuesCompressedByRoutingKey(t *testing.T) 
 	require.Equal(t, md.DataPointCount(), decoded.DataPointCount())
 }
 
+func TestConsumeMetricsCentralQueueUsesDynamicEffectiveLanes(t *testing.T) {
+	reader := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, reader.Shutdown(context.WithoutCancel(t.Context())))
+	})
+	telemetry, err := newCentralQueueTelemetry(reader.NewTelemetrySettings(), signalKindMetrics)
+	require.NoError(t, err)
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	cfg := createDefaultConfig().(*Config).CentralQueue
+	p := &metricExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    1 << 20,
+			telemetry:                    telemetry,
+		}),
+		centralCodec:      codec,
+		routingKey:        svcRouting,
+		centralQueueLanes: newCentralQueueLaneController(cfg),
+		loadBalancer:      loadBalancerWithBackendCount(4),
+	}
+	p.started.Store(true)
+	now := time.Unix(10, 0)
+
+	require.Equal(t, 4, p.effectiveCentralQueueLaneCount(now))
+	p.loadBalancer = loadBalancerWithBackendCount(8)
+	require.Equal(t, 8, p.effectiveCentralQueueLaneCount(now.Add(time.Second)))
+
+	md := simpleMetricsWithServiceName()
+	require.NoError(t, p.ConsumeMetrics(t.Context(), md))
+
+	lease, err := p.centralQueue.lease(t.Context())
+	require.NoError(t, err)
+	defer lease.done()
+	require.Equal(t, centralQueueLaneRoutingKey(signalKindMetrics, []byte(serviceName1), 8), lease.item.routingKey)
+	requireCentralQueueIntGauge(
+		t,
+		reader,
+		"otelcol_loadbalancer_central_queue_effective_lanes",
+		"{lanes}",
+		attribute.NewSet(attribute.String("signal", string(signalKindMetrics))),
+		8,
+	)
+}
+
 func TestConsumeMetricsCentralQueueCoalescesByLane(t *testing.T) {
 	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
 	t.Cleanup(func() { require.NoError(t, codec.Close()) })

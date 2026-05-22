@@ -4,6 +4,7 @@
 package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter"
 
 type centralQueueBucket struct {
+	routingKeyID     string
 	routingKey       []byte
 	items            []centralQueueItem
 	candidateIndexes []int
@@ -11,8 +12,9 @@ type centralQueueBucket struct {
 	readyHeapIndex   int
 }
 
-func newCentralQueueBucket(routingKey []byte) *centralQueueBucket {
+func newCentralQueueBucket(routingKeyID string, routingKey []byte) *centralQueueBucket {
 	return &centralQueueBucket{
+		routingKeyID:   routingKeyID,
 		routingKey:     append([]byte(nil), routingKey...),
 		readyHeapIndex: -1,
 	}
@@ -22,6 +24,10 @@ func (b *centralQueueBucket) append(item centralQueueItem) {
 	b.items = append(b.items, item)
 }
 
+// removeIndexes removes sorted, in-bounds item indexes from the bucket. Callers
+// build these indexes from bucket.items while holding the queue lock; the
+// implementation relies on indexes[0] as the first read/write offset and may
+// panic if the indexes are unsorted or out of bounds.
 func (b *centralQueueBucket) removeIndexes(indexes []int) []centralQueueItem {
 	if len(indexes) == 0 {
 		return nil
