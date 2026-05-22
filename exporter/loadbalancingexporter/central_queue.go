@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
+	"sort"
 	"sync"
 	"time"
 )
@@ -53,14 +54,15 @@ type centralQueueSettings struct {
 type centralQueue struct {
 	settings centralQueueSettings
 
-	mu           sync.Mutex
-	buckets      []*centralQueueBucket
-	bucketsByKey map[string]*centralQueueBucket
-	readyBuckets centralQueueReadyHeap
-	itemCount    int
-	stopped      bool
-	ready        []centralQueueWindow
-	notify       chan struct{}
+	mu            sync.Mutex
+	buckets       []*centralQueueBucket
+	bucketsByKey  map[string]*centralQueueBucket
+	readyBuckets  centralQueueReadyHeap
+	readySequence int64
+	itemCount     int
+	stopped       bool
+	ready         []centralQueueWindow
+	notify        chan struct{}
 
 	currentCompressedBytes int64
 	currentInflightBytes   int64
@@ -313,6 +315,8 @@ func (q *centralQueue) updateReadyBucketLocked(bucket *centralQueueBucket, nowUn
 		return
 	}
 	bucket.readyAtUnixNano = readyAtUnixNano
+	q.readySequence++
+	bucket.readySequence = q.readySequence
 	if bucket.readyHeapIndex >= 0 {
 		heap.Fix(&q.readyBuckets, bucket.readyHeapIndex)
 		return
@@ -397,6 +401,8 @@ func (q *centralQueue) collectReadyWindowCandidatesLocked(now time.Time) ([]cent
 		}
 		targetCandidates = append(targetCandidates, candidate)
 	}
+	sortCentralQueueWindowCandidates(targetCandidates)
+	sortCentralQueueWindowCandidates(fallbackCandidates)
 	return targetCandidates, fallbackCandidates, hasReady
 }
 
@@ -435,7 +441,7 @@ func (q *centralQueue) buildWindowCandidateFromBucketLocked(bucket *centralQueue
 	hasReady := false
 	for i := range bucket.items {
 		item := &bucket.items[i]
-		if item.nextAttemptUnixNano > nowUnixNano {
+		if !q.stopped && item.nextAttemptUnixNano > nowUnixNano {
 			continue
 		}
 		hasReady = true
@@ -453,12 +459,15 @@ func (q *centralQueue) buildWindowCandidateFromBucketLocked(bucket *centralQueue
 		bucket.candidateIndexes = candidate.indexes
 		return centralQueueWindowCandidate{}, hasReady
 	}
+	if q.stopped {
+		candidate.window.flushReason = centralQueueFlushReasonShutdown
+		bucket.candidateIndexes = candidate.indexes
+		return candidate, hasReady
+	}
 	switch candidate.window.flushReason {
 	case centralQueueFlushReasonTargetReached:
 	case "":
 		switch {
-		case q.stopped:
-			candidate.window.flushReason = centralQueueFlushReasonShutdown
 		case q.settings.maxBatchDelay <= 0:
 			candidate.window.flushReason = centralQueueFlushReasonMaxDelayLowTraffic
 		default:
@@ -469,13 +478,23 @@ func (q *centralQueue) buildWindowCandidateFromBucketLocked(bucket *centralQueue
 			}
 			candidate.window.flushReason = centralQueueFlushReasonMaxDelayLowTraffic
 		}
-	default:
-		if q.stopped {
-			candidate.window.flushReason = centralQueueFlushReasonShutdown
-		}
 	}
 	bucket.candidateIndexes = candidate.indexes
 	return candidate, hasReady
+}
+
+func sortCentralQueueWindowCandidates(candidates []centralQueueWindowCandidate) {
+	sort.Slice(candidates, func(i, j int) bool {
+		left := candidates[i].bucket
+		right := candidates[j].bucket
+		if left == nil || right == nil {
+			return right != nil
+		}
+		if left.readyAtUnixNano != right.readyAtUnixNano {
+			return left.readyAtUnixNano < right.readyAtUnixNano
+		}
+		return left.readySequence < right.readySequence
+	})
 }
 
 func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQueueWindowCandidate, now time.Time) (bool, bool) {

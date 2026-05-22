@@ -86,12 +86,14 @@ Initial defaults:
 
 ```text
 min_lanes = 1
-max_lanes = 64
+max_lanes = 256
 backend_multiplier = 2
 target_fill_duration = min(max_batch_delay / 2, 500ms)
 ```
 
 For BigID-like high traffic this can still settle high. For 4 workers or low traffic it should stay low enough to avoid tiny batches and delay-heavy flushing.
+
+Implementation update from review evidence: the shipped default `max_lanes` is `256`, not `64`. The dynamic policy still contracts low-backend/low-rate clusters through backend-count and fill-rate bounds, while high-traffic many-backend clusters can reach the 256-lane spread that previously stabilized BigID-like traffic without requiring a per-cluster override.
 
 ## Task 1: Add Red Benchmarks And Policy Tests
 
@@ -263,7 +265,7 @@ import (
 
 const (
 	defaultCentralQueueMinLanes          = 1
-	defaultCentralQueueMaxLanes          = 64
+	defaultCentralQueueMaxLanes          = 256
 	defaultCentralQueueBackendMultiplier = 2
 	defaultCentralQueueHysteresisFactor  = 2
 )
@@ -902,7 +904,7 @@ Add a test where backend count is `2`, ingest rate is low, and `laneRoutingKey` 
 
 - [ ] **Step 6: Test many-backend high-throughput lane growth**
 
-Add a test where backend count is `40`, ingest rate is high, and effective lane count reaches `64`.
+Add a test where backend count is high, ingest rate is high, and effective lane count reaches `256`.
 
 - [ ] **Step 7: Run exporter tests**
 
@@ -944,7 +946,7 @@ Document:
 central_queue:
   num_consumers: 30
   min_lanes: 1
-  max_lanes: 64
+  max_lanes: 256
   backend_lane_multiplier: 2
   target_lane_fill_duration: 500ms
   lane_hysteresis_factor: 2
@@ -1030,7 +1032,7 @@ When `lane_count` is unset, use dynamic effective lanes with defaults:
 
 ```text
 min_lanes=1
-max_lanes=64
+max_lanes=256
 backend_lane_multiplier=2
 target_lane_fill_duration=500ms
 lane_hysteresis_factor=2
@@ -1044,7 +1046,7 @@ In collectors-service, render these fields for LB-enabled deployments:
 central_queue:
   num_consumers: 30
   min_lanes: 1
-  max_lanes: 64
+  max_lanes: 256
   backend_lane_multiplier: 2
   target_lane_fill_duration: 500ms
   lane_hysteresis_factor: 2
@@ -1089,4 +1091,4 @@ Green means all of the following are true:
 
 ## Open Decision For Review
 
-The default `max_lanes=64` is conservative and matches existing default lane floor. If benchmark and staging evidence show queue skew with many workers, raise `max_lanes` through FF for high-traffic clusters only; do not raise the default without proof.
+The default `max_lanes=256` preserves the high-traffic ceiling needed for BigID-like clusters. The fill-rate and backend-count terms remain the first-principles controls that keep low-worker or low-rate clusters from over-sharding.

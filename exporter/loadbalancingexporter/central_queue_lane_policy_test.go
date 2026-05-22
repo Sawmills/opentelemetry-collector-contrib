@@ -48,6 +48,17 @@ func TestCentralQueueLanePolicyAllowsManyBackendsWhenFillRateSupportsIt(t *testi
 	require.Equal(t, 64, lanes)
 }
 
+func TestCentralQueueLanePolicyDefaultAllowsBigIDScaleWhenFillRateSupportsIt(t *testing.T) {
+	policy := newCentralQueueLanePolicy(createDefaultConfig().(*Config).CentralQueue)
+
+	lanes := policy.compute(centralQueueLaneInputs{
+		healthyBackends:             200,
+		compressedIngestBytesPerSec: 512 << 20,
+	})
+
+	require.Equal(t, 256, lanes)
+}
+
 func TestCentralQueueLanePolicyUsesHysteresis(t *testing.T) {
 	policy := centralQueueLanePolicy{
 		minLanes:           1,

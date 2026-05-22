@@ -222,7 +222,7 @@ func TestCentralQueueDefaultDisabled(t *testing.T) {
 	require.Equal(t, 250*time.Millisecond, cfg.CentralQueue.MaxBatchDelay)
 	require.Zero(t, cfg.CentralQueue.LaneCount)
 	require.Equal(t, 1, cfg.CentralQueue.MinLanes)
-	require.Equal(t, 64, cfg.CentralQueue.MaxLanes)
+	require.Equal(t, 256, cfg.CentralQueue.MaxLanes)
 	require.Equal(t, 2, cfg.CentralQueue.BackendLaneMultiplier)
 	require.Zero(t, cfg.CentralQueue.TargetLaneFillDuration)
 	require.Equal(t, 2, cfg.CentralQueue.LaneHysteresisFactor)
@@ -368,7 +368,7 @@ func TestCentralQueueValidation(t *testing.T) {
 	cfg.CentralQueue.LaneCount = 0
 	cfg.CentralQueue.MaxInflightUncompressedBytes = int64(cfg.CentralQueue.NumConsumers * cfg.CentralQueue.MaxUncompressedBatchBytes)
 	require.NoError(t, cfg.Validate())
-	require.Equal(t, 64, cfg.CentralQueue.effectiveLaneCount())
+	require.Equal(t, 65, cfg.CentralQueue.effectiveLaneCount())
 
 	cfg.CentralQueue.NumConsumers = 30
 	cfg.CentralQueue.LaneCount = 2
