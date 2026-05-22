@@ -111,6 +111,19 @@ func TestCentralQueueLaneControllerRecomputesFromBackendCountAndRate(t *testing.
 	require.Equal(t, 8, controller.laneCount(4, now.Add(31*time.Second)))
 }
 
+func TestCentralQueueLaneControllerRateRollWithBackendChangeUsesStablePreviousLanes(t *testing.T) {
+	cfg := createDefaultConfig().(*Config).CentralQueue
+	cfg.MaxLanes = 64
+	cfg.TargetLaneFillDuration = 500 * time.Millisecond
+	controller := newCentralQueueLaneController(cfg)
+	now := time.Unix(10, 0)
+
+	require.Equal(t, 4, controller.laneCount(4, now))
+	require.Equal(t, 4, controller.observeCompressedBytes(150<<20, 4, now))
+
+	require.Equal(t, 10, controller.laneCount(5, now.Add(31*time.Second)))
+}
+
 func TestCentralQueueLaneControllerHonorsFixedOverride(t *testing.T) {
 	cfg := createDefaultConfig().(*Config).CentralQueue
 	cfg.LaneCount = 3
