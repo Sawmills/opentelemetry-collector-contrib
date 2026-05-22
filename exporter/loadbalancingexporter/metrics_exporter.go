@@ -255,13 +255,15 @@ func (e *metricExporterImp) observeCentralQueueLaneBytes(compressedBytes int, no
 	if e.centralQueue == nil {
 		return
 	}
-	lanes := e.effectiveCentralQueueLaneCount(now)
+	backendCount := 0
+	if e.loadBalancer != nil {
+		backendCount = e.loadBalancer.backendCount()
+	}
+	lanes := 0
 	if e.centralQueueLanes != nil {
-		backendCount := 0
-		if e.loadBalancer != nil {
-			backendCount = e.loadBalancer.backendCount()
-		}
 		lanes = e.centralQueueLanes.observeCompressedBytes(compressedBytes, backendCount, now)
+	} else if e.centralQueueLaneCount > 0 {
+		lanes = e.centralQueueLaneCount
 	}
 	e.centralQueue.settings.telemetry.recordEffectiveLanes(context.Background(), int64(lanes))
 }
