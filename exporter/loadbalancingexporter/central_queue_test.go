@@ -904,6 +904,72 @@ func TestCentralQueueStopAllowsDrainingExistingItems(t *testing.T) {
 	require.ErrorIs(t, err, errCentralQueueStopped)
 }
 
+func TestCentralQueueStopDrainsBackedOffRetryWithoutWaiting(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    100,
+		targetCompressedBytes:        10,
+		maxBatchDelay:                time.Second,
+	})
+
+	now := time.Now()
+	require.NoError(t, q.enqueueAt(centralQueueItem{
+		signal:            signalKindLogs,
+		routingKey:        []byte("retrying"),
+		compressedBytes:   10,
+		uncompressedBytes: 10,
+		count:             1,
+	}, now))
+	lease, err := q.tryLease(now)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.NoError(t, lease.requeue(now))
+
+	q.stop()
+
+	lease, err = q.tryLease(time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, lease, "stopped queue must bypass retry backoff and drain immediately")
+	require.Equal(t, centralQueueFlushReasonShutdown, lease.window.flushReason)
+	lease.done()
+}
+
+func TestCentralQueueRotatesReadyBucketsWhenReadyWindowLimitSaturated(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           1000,
+		maxInflightUncompressedBytes: 1000,
+		maxUncompressedBatchBytes:    100,
+		targetCompressedBytes:        20,
+		maxBatchDelay:                time.Second,
+		maxReadyWindows:              1,
+	})
+
+	now := time.Unix(1000, 0)
+	for _, lane := range []string{"lane-a", "lane-b", "lane-c"} {
+		for range 4 {
+			require.NoError(t, q.enqueueAt(centralQueueItem{
+				signal:            signalKindLogs,
+				routingKey:        []byte(lane),
+				compressedBytes:   10,
+				uncompressedBytes: 10,
+				count:             1,
+			}, now))
+		}
+	}
+
+	leased := map[string]struct{}{}
+	for range 3 {
+		lease, err := q.tryLease(now)
+		require.NoError(t, err)
+		require.NotNil(t, lease)
+		leased[string(lease.window.routingKey)] = struct{}{}
+		lease.done()
+	}
+
+	require.Len(t, leased, 3, "ready buckets with equal readiness should rotate instead of repeatedly leasing the same hot bucket")
+}
+
 // TestCentralQueueStaleFallbackSchedulingDoesNotCorruptTargetIndexes guards the
 // coderabbitai feedback: after stale-fallback scheduling removes items from
 // queue buckets, the previously-collected target/fresh-fallback candidate indexes

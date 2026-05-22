@@ -49,6 +49,16 @@ func TestLogExporterCentralQueueObservedBytesUpdateEffectiveLanes(t *testing.T) 
 	requireCentralQueueLaneGauges(t, reader, signalKindLogs, 0, 8)
 }
 
+func TestLogExporterCentralQueueUsesRoutableBackendCountForDynamicLanes(t *testing.T) {
+	controller := centralQueueLanePathTestController()
+	p := &logExporterImp{
+		loadBalancer:      loadBalancerWithRoutableBackendCount(2, 4),
+		centralQueueLanes: controller,
+	}
+
+	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
+}
+
 func TestMetricExporterCentralQueueObservedBytesUpdateEffectiveLanes(t *testing.T) {
 	reader := componenttest.NewTelemetry()
 	t.Cleanup(func() {
@@ -83,6 +93,16 @@ func TestMetricExporterCentralQueueObservedBytesUpdateEffectiveLanes(t *testing.
 	requireCentralQueueLaneGauges(t, reader, signalKindMetrics, 0, 8)
 }
 
+func TestMetricExporterCentralQueueUsesRoutableBackendCountForDynamicLanes(t *testing.T) {
+	controller := centralQueueLanePathTestController()
+	p := &metricExporterImp{
+		loadBalancer:      loadBalancerWithRoutableBackendCount(2, 4),
+		centralQueueLanes: controller,
+	}
+
+	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
+}
+
 func centralQueueLanePathTestController() *centralQueueLaneController {
 	cfg := createDefaultConfig().(*Config).CentralQueue
 	cfg.LaneCount = 0
@@ -114,6 +134,22 @@ func loadBalancerWithBackendCount(count int) *loadBalancer {
 		exporters[fmt.Sprintf("endpoint-%d", i)] = nil
 	}
 	return &loadBalancer{exporters: exporters}
+}
+
+func loadBalancerWithRoutableBackendCount(routableCount, exporterCount int) *loadBalancer {
+	exporters := make(map[string]*wrappedExporter, exporterCount)
+	endpoints := make([]string, 0, routableCount)
+	for i := range exporterCount {
+		endpoint := fmt.Sprintf("endpoint-%d:4317", i)
+		exporters[endpoint] = newWrappedExporter(mockComponent{}, endpoint)
+		if i < routableCount {
+			endpoints = append(endpoints, endpoint)
+		}
+	}
+	return &loadBalancer{
+		exporters: exporters,
+		ring:      newHashRing(endpoints),
+	}
 }
 
 func requireCentralQueueLaneGauges(t *testing.T, reader *componenttest.Telemetry, signal signalKind, configured, effective int64) {

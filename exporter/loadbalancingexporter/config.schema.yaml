@@ -41,7 +41,7 @@ $defs:
       max_lanes:
         type: integer
         minimum: 0
-        default: 64
+        default: 256
         description: Maximum dynamically selected central queue lanes when lane_count is unset. Zero uses the default.
       backend_lane_multiplier:
         type: integer

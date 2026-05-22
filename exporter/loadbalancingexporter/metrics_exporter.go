@@ -238,34 +238,14 @@ func (e *metricExporterImp) consumeMetricsCentralQueue(batches map[string]pmetri
 }
 
 func (e *metricExporterImp) effectiveCentralQueueLaneCount(now time.Time) int {
-	if e.centralQueueLanes != nil {
-		backendCount := 0
-		if e.loadBalancer != nil {
-			backendCount = e.loadBalancer.backendCount()
-		}
-		return e.centralQueueLanes.laneCount(backendCount, now)
-	}
-	if e.centralQueueLaneCount > 0 {
-		return e.centralQueueLaneCount
-	}
-	return 0
+	return centralQueueEffectiveLaneCount(e.centralQueueLanes, e.centralQueueLaneCount, e.loadBalancer, now)
 }
 
 func (e *metricExporterImp) observeCentralQueueLaneBytes(compressedBytes int, now time.Time) {
 	if e.centralQueue == nil {
 		return
 	}
-	backendCount := 0
-	if e.loadBalancer != nil {
-		backendCount = e.loadBalancer.backendCount()
-	}
-	lanes := 0
-	if e.centralQueueLanes != nil {
-		lanes = e.centralQueueLanes.observeCompressedBytes(compressedBytes, backendCount, now)
-	} else if e.centralQueueLaneCount > 0 {
-		lanes = e.centralQueueLaneCount
-	}
-	e.centralQueue.settings.telemetry.recordEffectiveLanes(context.Background(), int64(lanes))
+	observeCentralQueueLaneBytes(e.centralQueue.settings.telemetry, e.centralQueueLanes, e.centralQueueLaneCount, e.loadBalancer, compressedBytes, now)
 }
 
 func (e *metricExporterImp) runCentralQueue(ctx context.Context) {

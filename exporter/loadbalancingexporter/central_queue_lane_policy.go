@@ -4,6 +4,7 @@
 package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter"
 
 import (
+	"context"
 	"math"
 	"sync"
 	"time"
@@ -11,7 +12,7 @@ import (
 
 const (
 	defaultCentralQueueMinLanes              = 1
-	defaultCentralQueueMaxLanes              = 64
+	defaultCentralQueueMaxLanes              = 256
 	defaultCentralQueueBackendLaneMultiplier = 2
 	defaultCentralQueueLaneHysteresisFactor  = 2
 	centralQueueLaneRateWindow               = 30 * time.Second
@@ -211,4 +212,31 @@ func (c *centralQueueLaneController) recomputeLocked(backendCount int) {
 	})
 	c.effectiveSet = true
 	c.lastBackendCount = backendCount
+}
+
+func centralQueueEffectiveLaneCount(controller *centralQueueLaneController, staticLaneCount int, lb *loadBalancer, now time.Time) int {
+	if controller != nil {
+		return controller.laneCount(centralQueueRoutableBackendCount(lb), now)
+	}
+	if staticLaneCount > 0 {
+		return staticLaneCount
+	}
+	return 0
+}
+
+func observeCentralQueueLaneBytes(telemetry *centralQueueTelemetry, controller *centralQueueLaneController, staticLaneCount int, lb *loadBalancer, compressedBytes int, now time.Time) {
+	lanes := 0
+	if controller != nil {
+		lanes = controller.observeCompressedBytes(compressedBytes, centralQueueRoutableBackendCount(lb), now)
+	} else if staticLaneCount > 0 {
+		lanes = staticLaneCount
+	}
+	telemetry.recordEffectiveLanes(context.Background(), int64(lanes))
+}
+
+func centralQueueRoutableBackendCount(lb *loadBalancer) int {
+	if lb == nil {
+		return 0
+	}
+	return lb.routableBackendCount()
 }

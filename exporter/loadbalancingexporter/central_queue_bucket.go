@@ -9,6 +9,7 @@ type centralQueueBucket struct {
 	items            []centralQueueItem
 	candidateIndexes []int
 	readyAtUnixNano  int64
+	readySequence    int64
 	readyHeapIndex   int
 }
 
@@ -59,7 +60,10 @@ func (h centralQueueReadyHeap) Len() int {
 }
 
 func (h centralQueueReadyHeap) Less(i, j int) bool {
-	return h[i].readyAtUnixNano < h[j].readyAtUnixNano
+	if h[i].readyAtUnixNano != h[j].readyAtUnixNano {
+		return h[i].readyAtUnixNano < h[j].readyAtUnixNano
+	}
+	return h[i].readySequence < h[j].readySequence
 }
 
 func (h centralQueueReadyHeap) Swap(i, j int) {

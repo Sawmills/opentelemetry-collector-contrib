@@ -372,13 +372,36 @@ func (lb *loadBalancer) endpointHealthCurrentlyEligible(endpoint string) bool {
 	return slices.Contains(lb.endpointHealth.eligibleEndpoints(), endpointWithPort(endpoint))
 }
 
-func (lb *loadBalancer) backendCount() int {
+func (lb *loadBalancer) routableBackendCount() int {
 	if lb == nil {
 		return 0
 	}
 	lb.updateLock.RLock()
 	defer lb.updateLock.RUnlock()
-	return len(lb.exporters)
+
+	if lb.ring == nil || len(lb.ring.items) == 0 {
+		count := 0
+		for _, exp := range lb.exporters {
+			if exp == nil || !exp.isStopping() {
+				count++
+			}
+		}
+		return count
+	}
+
+	endpoints := make(map[string]struct{})
+	for _, item := range lb.ring.items {
+		endpoint := endpointWithPort(item.endpoint)
+		exp, ok := lb.exporters[endpoint]
+		if !ok {
+			continue
+		}
+		if exp != nil && exp.isStopping() {
+			continue
+		}
+		endpoints[endpoint] = struct{}{}
+	}
+	return len(endpoints)
 }
 
 func (lb *loadBalancer) shutdownSkippedExporter(ctx context.Context, endpoint string, exp component.Component) {
