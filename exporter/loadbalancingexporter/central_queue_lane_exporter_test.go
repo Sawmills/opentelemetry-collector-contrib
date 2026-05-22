@@ -40,13 +40,13 @@ func TestLogExporterCentralQueueObservedBytesUpdateEffectiveLanes(t *testing.T) 
 
 	now := time.Unix(10, 0)
 	require.Equal(t, 4, p.effectiveCentralQueueLaneCount(now))
-	requireCentralQueueLaneGauges(t, reader, signalKindLogs, 0, 4)
+	requireCentralQueueLaneGauges(t, reader, signalKindLogs, 4)
 
 	p.observeCentralQueueLaneBytes(4<<20, now)
 	p.observeCentralQueueLaneBytes(4<<20, now.Add(time.Second))
 
 	require.Equal(t, 8, p.effectiveCentralQueueLaneCount(now.Add(time.Second)))
-	requireCentralQueueLaneGauges(t, reader, signalKindLogs, 0, 8)
+	requireCentralQueueLaneGauges(t, reader, signalKindLogs, 8)
 }
 
 func TestLogExporterCentralQueueUsesRoutableBackendCountForDynamicLanes(t *testing.T) {
@@ -84,13 +84,13 @@ func TestMetricExporterCentralQueueObservedBytesUpdateEffectiveLanes(t *testing.
 
 	now := time.Unix(10, 0)
 	require.Equal(t, 4, p.effectiveCentralQueueLaneCount(now))
-	requireCentralQueueLaneGauges(t, reader, signalKindMetrics, 0, 4)
+	requireCentralQueueLaneGauges(t, reader, signalKindMetrics, 4)
 
 	p.observeCentralQueueLaneBytes(4<<20, now)
 	p.observeCentralQueueLaneBytes(4<<20, now.Add(time.Second))
 
 	require.Equal(t, 8, p.effectiveCentralQueueLaneCount(now.Add(time.Second)))
-	requireCentralQueueLaneGauges(t, reader, signalKindMetrics, 0, 8)
+	requireCentralQueueLaneGauges(t, reader, signalKindMetrics, 8)
 }
 
 func TestMetricExporterCentralQueueUsesRoutableBackendCountForDynamicLanes(t *testing.T) {
@@ -152,16 +152,16 @@ func loadBalancerWithRoutableBackendCount(routableCount, exporterCount int) *loa
 	}
 }
 
-func requireCentralQueueLaneGauges(t *testing.T, reader *componenttest.Telemetry, signal signalKind, configured, effective int64) {
+func requireCentralQueueLaneGauges(t *testing.T, reader *componenttest.Telemetry, signal signalKind, effective int64) {
 	t.Helper()
 	attrs := attribute.NewSet(attribute.String("signal", string(signal)))
-	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_lanes", "{lanes}", attrs, configured)
+	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_lanes", "{lanes}", attrs, 0)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_effective_lanes", "{lanes}", attrs, effective)
 }
 
 func requireCentralQueueConsumersStopped(t *testing.T, wg *sync.WaitGroup) {
 	t.Helper()
-	waitCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	waitCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), time.Second)
 	defer cancel()
 	require.NoError(t, waitForInflight(waitCtx, wg))
 }

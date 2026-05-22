@@ -146,11 +146,12 @@ type ZstdPayloadCodecConfig struct {
 	_ struct{}
 }
 
-const defaultEndpointHealthQuarantineDuration = 30 * time.Second
 const (
+	defaultEndpointHealthQuarantineDuration    = 30 * time.Second
 	defaultEndpointHealthMinEligibleBackends   = 1
 	defaultEndpointHealthMaxQuarantinedPercent = 100
 )
+
 const (
 	defaultEndpointHealthActiveProbeInterval       = 5 * time.Second
 	defaultEndpointHealthActiveProbeTimeout        = 250 * time.Millisecond

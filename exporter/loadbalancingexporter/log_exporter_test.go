@@ -2151,7 +2151,7 @@ func sharedScopeLogsWithTraceIDs(traceIDs ...pcommon.TraceID) plog.Logs {
 
 func repeatedTraceIDs(count int) []pcommon.TraceID {
 	traceIDs := make([]pcommon.TraceID, 0, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		traceID := pcommon.TraceID{}
 		copy(traceID[:], strconv.Itoa(i+1))
 		traceIDs = append(traceIDs, traceID)
