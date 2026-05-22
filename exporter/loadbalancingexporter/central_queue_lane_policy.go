@@ -159,7 +159,7 @@ func (c *centralQueueLaneController) laneCount(backendCount int, now time.Time) 
 	return c.effectiveLaneCount
 }
 
-func (c *centralQueueLaneController) observeCompressedBytes(compressedBytes, backendCount int, now time.Time) int {
+func (c *centralQueueLaneController) observeCompressedBytes(compressedBytes int, now time.Time) int {
 	if c == nil {
 		return defaultCentralQueueMaxLanes
 	}
@@ -175,8 +175,8 @@ func (c *centralQueueLaneController) observeCompressedBytes(compressedBytes, bac
 	if compressedBytes > 0 {
 		c.windowBytes += int64(compressedBytes)
 	}
-	if rateRolled || !c.effectiveSet || backendCount != c.lastBackendCount {
-		c.recomputeLocked(backendCount)
+	if rateRolled || !c.effectiveSet {
+		c.recomputeLocked(c.lastBackendCount)
 	}
 	return c.effectiveLaneCount
 }
@@ -221,10 +221,10 @@ func centralQueueEffectiveLaneCount(controller *centralQueueLaneController, stat
 	return 0
 }
 
-func observeCentralQueueLaneBytes(telemetry *centralQueueTelemetry, controller *centralQueueLaneController, staticLaneCount int, lb *loadBalancer, compressedBytes int, now time.Time) {
+func observeCentralQueueLaneBytes(telemetry *centralQueueTelemetry, controller *centralQueueLaneController, staticLaneCount, compressedBytes int, now time.Time) {
 	lanes := 0
 	if controller != nil {
-		lanes = controller.observeCompressedBytes(compressedBytes, centralQueueRoutableBackendCount(lb), now)
+		lanes = controller.observeCompressedBytes(compressedBytes, now)
 	} else if staticLaneCount > 0 {
 		lanes = staticLaneCount
 	}

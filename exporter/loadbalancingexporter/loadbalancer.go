@@ -382,7 +382,7 @@ func (lb *loadBalancer) routableBackendCount() int {
 	if lb.ring == nil || len(lb.ring.items) == 0 {
 		count := 0
 		for _, exp := range lb.exporters {
-			if exp == nil || !exp.isStopping() {
+			if exp != nil && !exp.isStopping() {
 				count++
 			}
 		}
@@ -396,7 +396,7 @@ func (lb *loadBalancer) routableBackendCount() int {
 		if !ok {
 			continue
 		}
-		if exp != nil && exp.isStopping() {
+		if exp == nil || exp.isStopping() {
 			continue
 		}
 		endpoints[endpoint] = struct{}{}

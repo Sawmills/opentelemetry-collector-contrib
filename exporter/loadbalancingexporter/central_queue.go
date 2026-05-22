@@ -168,9 +168,17 @@ func (q *centralQueue) enqueueAt(item centralQueueItem, now time.Time) error {
 }
 
 func (q *centralQueue) lease(ctx context.Context) (*centralQueueLease, error) {
-	ticker := time.NewTicker(centralQueueLeasePollInterval)
-	defer ticker.Stop()
+	return q.leaseWithPollInterval(ctx, centralQueueLeasePollInterval)
+}
 
+func (q *centralQueue) leaseWithPollInterval(ctx context.Context, pollInterval time.Duration) (*centralQueueLease, error) {
+	var ticker *time.Ticker
+	var poll <-chan time.Time
+	if pollInterval > 0 {
+		ticker = time.NewTicker(pollInterval)
+		poll = ticker.C
+		defer ticker.Stop()
+	}
 	for {
 		lease, err := q.tryLease(time.Now())
 		if lease != nil {
@@ -184,7 +192,7 @@ func (q *centralQueue) lease(ctx context.Context) (*centralQueueLease, error) {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-q.notify:
-		case <-ticker.C:
+		case <-poll:
 		}
 	}
 }
