@@ -27,12 +27,6 @@ func TestCentralQueueAdmitsByCompressedBytes(t *testing.T) {
 	require.EqualValues(t, 10, q.compressedBytes())
 }
 
-func TestCentralQueueDerivedLaneCountKeepsEnoughLanesForConsumers(t *testing.T) {
-	require.Equal(t, 64, centralQueueLaneCount(1))
-	require.Equal(t, 64, centralQueueLaneCount(30))
-	require.Equal(t, 256, centralQueueLaneCount(65))
-}
-
 func TestCentralQueueLeaseReservesInflightUncompressedBytes(t *testing.T) {
 	q := newCentralQueue(centralQueueSettings{
 		maxCompressedBytes:           100,
@@ -75,6 +69,46 @@ func TestCentralQueueLeaseTreatsZeroInflightBudgetAsUnlimited(t *testing.T) {
 
 	first.done()
 	second.done()
+}
+
+func TestCentralQueueEnqueueSignalsLeaseWaiters(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:        100,
+		maxUncompressedBatchBytes: 100,
+		targetCompressedBytes:     10,
+		maxBatchDelay:             time.Second,
+	})
+	now := time.Unix(10, 0)
+
+	require.NoError(t, q.enqueueAt(centralQueueItem{
+		signal:            signalKindLogs,
+		routingKey:        []byte("lane-a"),
+		compressedBytes:   10,
+		uncompressedBytes: 10,
+		count:             1,
+	}, now))
+
+	requireCentralQueueNotification(t, q)
+}
+
+func TestCentralQueueDoneSignalsInflightWaiters(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 10,
+		maxUncompressedBatchBytes:    100,
+		targetCompressedBytes:        10,
+		maxBatchDelay:                time.Second,
+	})
+	now := time.Unix(10, 0)
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
+	requireCentralQueueNotification(t, q)
+
+	lease, err := q.tryLease(now)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+
+	lease.done()
+	requireCentralQueueNotification(t, q)
 }
 
 func TestCentralQueueLeaseReservesCompressedBytesUntilDoneOrRequeue(t *testing.T) {
@@ -211,17 +245,18 @@ func TestCentralQueueCollectWindowCandidatesGroupsInterleavedKeys(t *testing.T) 
 
 	q.mu.Lock()
 	targetCandidates, fallbackCandidates, hasReady := q.collectWindowCandidatesLocked(now)
+	materializeCentralQueueCandidatesLocked(q, targetCandidates)
 	q.mu.Unlock()
 
 	require.True(t, hasReady)
 	require.Empty(t, fallbackCandidates)
 	require.Len(t, targetCandidates, 2)
 	require.Equal(t, []byte("lane-a"), targetCandidates[0].window.routingKey)
-	require.Equal(t, []int{0, 2}, targetCandidates[0].indexes)
+	require.Equal(t, []int{0, 1}, targetCandidates[0].indexes)
 	require.Equal(t, []string{"a-1", "a-2"}, centralQueuePayloadStrings(targetCandidates[0].window.items))
 	require.Equal(t, centralQueueFlushReasonTargetReached, targetCandidates[0].window.flushReason)
 	require.Equal(t, []byte("lane-b"), targetCandidates[1].window.routingKey)
-	require.Equal(t, []int{1, 3}, targetCandidates[1].indexes)
+	require.Equal(t, []int{0, 1}, targetCandidates[1].indexes)
 	require.Equal(t, []string{"b-1", "b-2"}, centralQueuePayloadStrings(targetCandidates[1].window.items))
 	require.Equal(t, centralQueueFlushReasonTargetReached, targetCandidates[1].window.flushReason)
 }
@@ -240,6 +275,7 @@ func TestCentralQueueCollectWindowCandidatesMarksHardCapBeforeTarget(t *testing.
 
 	q.mu.Lock()
 	targetCandidates, fallbackCandidates, hasReady := q.collectWindowCandidatesLocked(now)
+	materializeCentralQueueCandidatesLocked(q, fallbackCandidates)
 	q.mu.Unlock()
 
 	require.True(t, hasReady)
@@ -292,6 +328,7 @@ func TestCentralQueueCollectWindowCandidatesShutdownOverridesWaitingAndHardCap(t
 
 	q.mu.Lock()
 	targetCandidates, fallbackCandidates, hasReady := q.collectWindowCandidatesLocked(now)
+	materializeCentralQueueCandidatesLocked(q, fallbackCandidates)
 	q.mu.Unlock()
 
 	require.True(t, hasReady)
@@ -311,16 +348,17 @@ func TestCentralQueueMaterializeAndRemoveWindowKeepsSparseIndexSurvivors(t *test
 	})
 	now := time.Unix(10, 0)
 	for _, payload := range []string{"keep-0", "drop-1", "keep-2", "drop-3", "keep-4"} {
-		require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte(payload), payload: []byte(payload), compressedBytes: 1, uncompressedBytes: 1, count: 1}, now))
+		require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), payload: []byte(payload), compressedBytes: 1, uncompressedBytes: 1, count: 1}, now))
 	}
 
+	q.mu.Lock()
 	candidate := centralQueueWindowCandidate{
+		bucket:  q.buckets[0],
 		indexes: []int{1, 3},
 	}
-	q.mu.Lock()
 	q.materializeWindowCandidateItemsLocked(&candidate)
-	q.removeWindowLocked(candidate.indexes, false)
-	remainingItems := append([]centralQueueItem(nil), q.items...)
+	q.removeWindowFromBucketLocked(candidate.bucket, candidate.indexes, false)
+	remainingItems := q.queuedItemsLocked()
 	q.mu.Unlock()
 
 	require.Equal(t, []string{"drop-1", "drop-3"}, centralQueuePayloadStrings(candidate.window.items))
@@ -615,11 +653,12 @@ func TestCentralQueueRequeueUsesPerItemRetryDelay(t *testing.T) {
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	require.Len(t, q.items, 2)
-	require.Equal(t, 4, q.items[0].attempt)
-	requireNextAttemptWithinRetryDelay(t, now, 3, q.items[0].nextAttemptUnixNano)
-	require.Equal(t, 1, q.items[1].attempt)
-	requireNextAttemptWithinRetryDelay(t, now, 0, q.items[1].nextAttemptUnixNano)
+	items := q.queuedItemsLocked()
+	require.Len(t, items, 2)
+	require.Equal(t, 4, items[0].attempt)
+	requireNextAttemptWithinRetryDelay(t, now, 3, items[0].nextAttemptUnixNano)
+	require.Equal(t, 1, items[1].attempt)
+	requireNextAttemptWithinRetryDelay(t, now, 0, items[1].nextAttemptUnixNano)
 }
 
 func TestCentralQueueSnapshotReportsOldestQueuedItemAge(t *testing.T) {
@@ -827,9 +866,9 @@ func TestCentralQueueStopAllowsDrainingExistingItems(t *testing.T) {
 
 // TestCentralQueueStaleFallbackSchedulingDoesNotCorruptTargetIndexes guards the
 // coderabbitai feedback: after stale-fallback scheduling removes items from
-// q.items, the previously-collected target/fresh-fallback candidate indexes
+// queue buckets, the previously-collected target/fresh-fallback candidate indexes
 // would point at the wrong rows. The scheduler must recollect those slices
-// against the post-mutation queue before reusing them, or `removeWindowLocked`
+// against the post-mutation queue before reusing them, or bucket removal
 // will drop unrelated items.
 func TestCentralQueueStaleFallbackSchedulingDoesNotCorruptTargetIndexes(t *testing.T) {
 	q := newCentralQueue(centralQueueSettings{
@@ -1238,10 +1277,11 @@ func requireCentralQueueFirstRetryDelay(t *testing.T, q *centralQueue) {
 	require.Eventually(t, func() bool {
 		q.mu.Lock()
 		defer q.mu.Unlock()
-		if len(q.items) != 1 || q.items[0].attempt != 1 || q.items[0].nextAttemptUnixNano == 0 {
+		items := q.queuedItemsLocked()
+		if len(items) != 1 || items[0].attempt != 1 || items[0].nextAttemptUnixNano == 0 {
 			return false
 		}
-		item = q.items[0]
+		item = items[0]
 		return true
 	}, time.Second, time.Millisecond)
 
@@ -1256,6 +1296,21 @@ func centralQueuePayloadStrings(items []centralQueueItem) []string {
 		payloads = append(payloads, string(items[i].payload))
 	}
 	return payloads
+}
+
+func materializeCentralQueueCandidatesLocked(q *centralQueue, candidates []centralQueueWindowCandidate) {
+	for i := range candidates {
+		q.materializeWindowCandidateItemsLocked(&candidates[i])
+	}
+}
+
+func requireCentralQueueNotification(t *testing.T, q *centralQueue) {
+	t.Helper()
+	select {
+	case <-q.notify:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected central queue notification")
+	}
 }
 
 func requireNextAttemptWithinRetryDelay(t *testing.T, now time.Time, attempt int, nextAttemptUnixNano int64) {

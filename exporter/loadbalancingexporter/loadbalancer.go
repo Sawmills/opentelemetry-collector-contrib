@@ -372,6 +372,15 @@ func (lb *loadBalancer) endpointHealthCurrentlyEligible(endpoint string) bool {
 	return slices.Contains(lb.endpointHealth.eligibleEndpoints(), endpointWithPort(endpoint))
 }
 
+func (lb *loadBalancer) backendCount() int {
+	if lb == nil {
+		return 0
+	}
+	lb.updateLock.RLock()
+	defer lb.updateLock.RUnlock()
+	return len(lb.exporters)
+}
+
 func (lb *loadBalancer) shutdownSkippedExporter(ctx context.Context, endpoint string, exp component.Component) {
 	lb.runCleanupAsync(func() {
 		if err := exp.Shutdown(context.WithoutCancel(ctx)); err != nil {

@@ -6,6 +6,7 @@ package loadbalancingexporter
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component/componenttest"
@@ -25,6 +26,7 @@ func TestCentralQueueTelemetryRecordsInstruments(t *testing.T) {
 		return centralQueueSchedulerSnapshot{
 			readyWindows:      2,
 			readyWindowLimit:  4,
+			readyLanes:        3,
 			readyUncompressed: 48,
 			state:             centralQueueSchedulerStateWaiting,
 		}
@@ -49,6 +51,7 @@ func TestCentralQueueTelemetryRecordsInstruments(t *testing.T) {
 		compressedBytes:   32,
 		uncompressedBytes: 128,
 		count:             11,
+		oldestEnqueuedAt:  time.Now().Add(-100 * time.Millisecond).UnixNano(),
 		flushReason:       centralQueueFlushReasonMaxDelayLowTraffic,
 	}, 64)
 
@@ -62,16 +65,19 @@ func TestCentralQueueTelemetryRecordsInstruments(t *testing.T) {
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_inflight_uncompressed_capacity", "By", attrs, 160)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_ready_windows", "{windows}", attrs, 2)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_ready_window_limit", "{windows}", attrs, 4)
+	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_ready_lanes", "{lanes}", attrs, 3)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_ready_uncompressed_bytes", "By", attrs, 48)
 	requireCentralQueueSchedulerState(t, reader, centralQueueSchedulerStateWaiting)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_configured_consumers", "{workers}", attrs, 30)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_active_consumers", "{workers}", attrs, 3)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_lanes", "{lanes}", attrs, 64)
+	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_effective_lanes", "{lanes}", attrs, 64)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_oldest_item_age", "ms", attrs, 125)
 	requireCentralQueueIntSum(t, reader, "otelcol_loadbalancer_central_queue_rejected_compressed_bytes", "By", attrs, 7)
 	requireCentralQueueIntSum(t, reader, "otelcol_loadbalancer_central_queue_retries", "{retries}", attrs, 1)
 	requireCentralQueueIntSum(t, reader, "otelcol_loadbalancer_central_queue_decode_failures", "{items}", attrs, 5)
 	requireCentralQueueIntHistogram(t, reader, "otelcol_loadbalancer_central_queue_window_compressed_bytes", "By", attrs, 32)
+	requireCentralQueueFloatHistogramCount(t, reader, "otelcol_loadbalancer_central_queue_lane_fill_seconds", "s", attrs)
 	requireCentralQueueIntHistogram(t, reader, "otelcol_loadbalancer_central_queue_window_uncompressed_bytes", "By", attrs, 128)
 	requireCentralQueueIntHistogram(t, reader, "otelcol_loadbalancer_central_queue_window_items", "{items}", attrs, 11)
 	requireCentralQueueIntHistogram(t, reader, "otelcol_loadbalancer_central_queue_window_payloads", "{payloads}", attrs, 2)
@@ -176,5 +182,17 @@ func requireCentralQueueIntHistogram(t *testing.T, reader *componenttest.Telemet
 	require.Len(t, histogram.DataPoints, 1)
 	require.Equal(t, attrs, histogram.DataPoints[0].Attributes)
 	require.Equal(t, value, histogram.DataPoints[0].Sum)
+	require.EqualValues(t, 1, histogram.DataPoints[0].Count)
+}
+
+func requireCentralQueueFloatHistogramCount(t *testing.T, reader *componenttest.Telemetry, name, unit string, attrs attribute.Set) {
+	t.Helper()
+	metric, err := reader.GetMetric(name)
+	require.NoError(t, err)
+	require.Equal(t, unit, metric.Unit)
+	histogram, ok := metric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok)
+	require.Len(t, histogram.DataPoints, 1)
+	require.Equal(t, attrs, histogram.DataPoints[0].Attributes)
 	require.EqualValues(t, 1, histogram.DataPoints[0].Count)
 }

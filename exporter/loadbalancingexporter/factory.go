@@ -61,6 +61,11 @@ func createDefaultConfig() component.Config {
 			TargetCompressedBytes:        defaultCentralQueueTargetCompressedBytes,
 			MaxBatchDelay:                defaultCentralQueueMaxBatchDelay,
 			LaneCount:                    0,
+			MinLanes:                     defaultCentralQueueMinLanes,
+			MaxLanes:                     defaultCentralQueueMaxLanes,
+			BackendLaneMultiplier:        defaultCentralQueueBackendLaneMultiplier,
+			TargetLaneFillDuration:       0,
+			LaneHysteresisFactor:         defaultCentralQueueLaneHysteresisFactor,
 			NumConsumers:                 defaultCentralQueueNumConsumers,
 		},
 		LogBatcher: LogBatcherConfig{
