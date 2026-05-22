@@ -428,7 +428,7 @@ func (q *centralQueue) buildWindowCandidateFromBucketLocked(bucket *centralQueue
 	candidate := centralQueueWindowCandidate{
 		bucket: bucket,
 		window: centralQueueWindow{
-			routingKey: append([]byte(nil), bucket.routingKey...),
+			routingKey: bucket.routingKey,
 		},
 		indexes: bucket.candidateIndexes,
 	}
@@ -497,6 +497,7 @@ func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQ
 		}
 		selectedCandidate := *candidate
 		selectedCandidate.indexes = append([]int(nil), candidate.indexes...)
+		selectedCandidate.window.routingKey = append([]byte(nil), candidate.window.routingKey...)
 		selected = append(selected, selectedCandidate)
 		pendingInflightBytes += int64(candidate.window.uncompressedBytes)
 	}
