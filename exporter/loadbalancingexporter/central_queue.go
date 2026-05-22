@@ -428,7 +428,7 @@ func (q *centralQueue) buildWindowCandidateFromBucketLocked(bucket *centralQueue
 	candidate := centralQueueWindowCandidate{
 		bucket: bucket,
 		window: centralQueueWindow{
-			routingKey: bucket.routingKey,
+			routingKey: append([]byte(nil), bucket.routingKey...),
 		},
 		indexes: bucket.candidateIndexes,
 	}
