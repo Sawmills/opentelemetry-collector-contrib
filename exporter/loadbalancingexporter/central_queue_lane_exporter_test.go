@@ -63,6 +63,36 @@ func TestLogExporterCentralQueueUsesRoutableBackendCountForDynamicLanes(t *testi
 	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
 }
 
+func TestLogExporterCentralQueueDynamicLanesUseLastEffectiveConsumers(t *testing.T) {
+	controller := centralQueueLanePathTestController()
+	consumers := newCentralQueueConsumerController(120, 256<<10, 3)
+	p := &logExporterImp{
+		loadBalancer:          loadBalancerWithRoutableBackendCount(6, 6),
+		centralQueueLanes:     controller,
+		centralQueueConsumers: consumers,
+		ignoreTraceID:         true,
+	}
+	decision := consumers.compute(1<<30, 6, false)
+	require.Equal(t, 2, decision.effectiveConsumers)
+
+	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
+}
+
+func TestLogExporterCentralQueueDynamicLanesCollapseOnKnownZeroEffectiveConsumers(t *testing.T) {
+	controller := centralQueueLanePathTestController()
+	consumers := newCentralQueueConsumerController(120, 256<<10, 4)
+	p := &logExporterImp{
+		loadBalancer:          loadBalancerWithRoutableBackendCount(3, 3),
+		centralQueueLanes:     controller,
+		centralQueueConsumers: consumers,
+		ignoreTraceID:         true,
+	}
+	decision := consumers.compute(1<<30, 3, false)
+	require.Zero(t, decision.effectiveConsumers)
+
+	require.Equal(t, 1, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
+}
+
 func TestLogExporterCentralQueueTraceIDRoutingUsesStableLaneCount(t *testing.T) {
 	controller := centralQueueLanePathTestController()
 	p := &logExporterImp{
@@ -150,6 +180,20 @@ func TestMetricExporterCentralQueueUsesRoutableBackendCountForDynamicLanes(t *te
 		loadBalancer:      loadBalancerWithRoutableBackendCount(2, 4),
 		centralQueueLanes: controller,
 	}
+
+	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
+}
+
+func TestMetricExporterCentralQueueDynamicLanesUseLastEffectiveConsumers(t *testing.T) {
+	controller := centralQueueLanePathTestController()
+	consumers := newCentralQueueConsumerController(120, 256<<10, 3)
+	p := &metricExporterImp{
+		loadBalancer:          loadBalancerWithRoutableBackendCount(6, 6),
+		centralQueueLanes:     controller,
+		centralQueueConsumers: consumers,
+	}
+	decision := consumers.compute(1<<30, 6, false)
+	require.Equal(t, 2, decision.effectiveConsumers)
 
 	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
 }

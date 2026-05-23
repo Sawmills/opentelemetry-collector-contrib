@@ -110,6 +110,7 @@ func TestCentralQueueLanePolicyUsesEffectiveConsumersForBackendLaneCap(t *testin
 	lanes := policy.compute(centralQueueLaneInputs{
 		healthyBackends:             100,
 		effectiveConsumers:          4,
+		effectiveConsumersKnown:     true,
 		compressedIngestBytesPerSec: 64 << 20,
 	})
 

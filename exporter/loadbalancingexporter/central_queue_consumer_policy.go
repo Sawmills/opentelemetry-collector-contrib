@@ -221,6 +221,18 @@ func (c *centralQueueConsumerController) compute(queueCompressedBytes int64, rea
 	return result
 }
 
+func (c *centralQueueConsumerController) lastEffectiveConsumers() (int, bool) {
+	if c == nil {
+		return 0, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.last.limitReason == "" {
+		return 0, false
+	}
+	return c.last.effectiveConsumers, true
+}
+
 func configuredCentralQueueConsumers(consumers int) int {
 	if consumers <= 0 {
 		return defaultCentralQueueNumConsumers
@@ -240,4 +252,14 @@ func centralQueueConsumerBackendCapacity(configuredConsumers, readyBackends int)
 		return 0
 	}
 	return min(configuredCentralQueueConsumers(configuredConsumers), readyBackends)
+}
+
+func centralQueueEffectiveConsumersForLanes(controller *centralQueueConsumerController, configuredConsumers, readyBackends int) (int, bool) {
+	if effectiveConsumers, ok := controller.lastEffectiveConsumers(); ok {
+		return effectiveConsumers, true
+	}
+	if readyBackends <= 0 {
+		return 0, false
+	}
+	return centralQueueConsumerBackendCapacity(configuredConsumers, readyBackends), true
 }

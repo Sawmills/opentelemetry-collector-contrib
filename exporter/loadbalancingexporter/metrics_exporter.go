@@ -246,8 +246,8 @@ func (e *metricExporterImp) consumeMetricsCentralQueue(batches map[string]pmetri
 }
 
 func (e *metricExporterImp) effectiveCentralQueueLaneCount(now time.Time) int {
-	consumerCount := centralQueueConsumerBackendCapacity(e.centralQueueNumConsumers, centralQueueRoutableBackendCount(e.loadBalancer))
-	return centralQueueEffectiveLaneCount(e.centralQueueLanes, e.centralQueueLaneCount, e.loadBalancer, consumerCount, now)
+	consumerCount, consumerKnown := centralQueueEffectiveConsumersForLanes(e.centralQueueConsumers, e.centralQueueNumConsumers, centralQueueRoutableBackendCount(e.loadBalancer))
+	return centralQueueEffectiveLaneCount(e.centralQueueLanes, e.centralQueueLaneCount, e.loadBalancer, consumerCount, consumerKnown, now)
 }
 
 func (e *metricExporterImp) observeCentralQueueLaneBytes(compressedBytes int, now time.Time) {

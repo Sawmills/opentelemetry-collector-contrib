@@ -217,8 +217,8 @@ func (e *logExporterImp) effectiveCentralQueueLaneCount(now time.Time) int {
 	if !e.ignoreTraceID {
 		return centralQueueStableLaneCount(e.centralQueueLanes, e.centralQueueLaneCount)
 	}
-	consumerCount := centralQueueConsumerBackendCapacity(e.centralQueueNumConsumers, centralQueueRoutableBackendCount(e.loadBalancer))
-	return centralQueueEffectiveLaneCount(e.centralQueueLanes, e.centralQueueLaneCount, e.loadBalancer, consumerCount, now)
+	consumerCount, consumerKnown := centralQueueEffectiveConsumersForLanes(e.centralQueueConsumers, e.centralQueueNumConsumers, centralQueueRoutableBackendCount(e.loadBalancer))
+	return centralQueueEffectiveLaneCount(e.centralQueueLanes, e.centralQueueLaneCount, e.loadBalancer, consumerCount, consumerKnown, now)
 }
 
 func (e *logExporterImp) observeCentralQueueLaneBytes(compressedBytes int, now time.Time) {
