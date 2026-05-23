@@ -97,6 +97,25 @@ func TestCentralQueueLanePolicyUsesBackendCountWhenRateUnknown(t *testing.T) {
 	require.Equal(t, 4, lanes)
 }
 
+func TestCentralQueueLanePolicyUsesEffectiveConsumersForBackendLaneCap(t *testing.T) {
+	policy := centralQueueLanePolicy{
+		minLanes:           1,
+		maxLanes:           64,
+		backendMultiplier:  2,
+		targetFillDuration: 500 * time.Millisecond,
+		targetBytes:        256 << 10,
+		hysteresisFactor:   2,
+	}
+
+	lanes := policy.compute(centralQueueLaneInputs{
+		healthyBackends:             100,
+		effectiveConsumers:          4,
+		compressedIngestBytesPerSec: 64 << 20,
+	})
+
+	require.Equal(t, 8, lanes)
+}
+
 func TestCentralQueueLaneControllerRecomputesFromBackendCountAndRate(t *testing.T) {
 	cfg := createDefaultConfig().(*Config).CentralQueue
 	controller := newCentralQueueLaneController(cfg)

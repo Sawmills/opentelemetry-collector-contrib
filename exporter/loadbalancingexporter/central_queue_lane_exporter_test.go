@@ -30,7 +30,7 @@ func TestLogExporterCentralQueueObservedBytesUpdateEffectiveLanes(t *testing.T) 
 		loadBalancer:             loadBalancerWithBackendCount(4),
 		centralQueue:             centralQueueLanePathTestQueue(telemetry),
 		centralQueueLanes:        controller,
-		centralQueueNumConsumers: 1,
+		centralQueueNumConsumers: 4,
 		ignoreTraceID:            true,
 	}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -94,7 +94,7 @@ func TestMetricExporterCentralQueueObservedBytesUpdateEffectiveLanes(t *testing.
 		loadBalancer:             loadBalancerWithBackendCount(4),
 		centralQueue:             centralQueueLanePathTestQueue(telemetry),
 		centralQueueLanes:        controller,
-		centralQueueNumConsumers: 1,
+		centralQueueNumConsumers: 4,
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	p.startCentralQueueConsumers(ctx)
@@ -149,6 +149,17 @@ func TestMetricExporterCentralQueueUsesRoutableBackendCountForDynamicLanes(t *te
 	p := &metricExporterImp{
 		loadBalancer:      loadBalancerWithRoutableBackendCount(2, 4),
 		centralQueueLanes: controller,
+	}
+
+	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
+}
+
+func TestMetricExporterCentralQueueDynamicLanesUseConfiguredConsumerCapacity(t *testing.T) {
+	controller := centralQueueLanePathTestController()
+	p := &metricExporterImp{
+		loadBalancer:             loadBalancerWithRoutableBackendCount(4, 4),
+		centralQueueLanes:        controller,
+		centralQueueNumConsumers: 2,
 	}
 
 	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))

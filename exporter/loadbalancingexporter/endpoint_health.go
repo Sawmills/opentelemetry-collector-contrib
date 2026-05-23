@@ -366,6 +366,30 @@ func (m *endpointHealthManager) failOpen() bool {
 	return m.failOpenActive
 }
 
+func (m *endpointHealthManager) underPressure() bool {
+	if !m.enabled() {
+		return false
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := m.settings.now()
+	_, failOpen, _ := m.eligibleEndpointsLocked(now)
+	if failOpen {
+		return true
+	}
+	for _, state := range m.endpoints {
+		if !state.present {
+			continue
+		}
+		if state.probeUnhealthy || state.hasActiveTransportQuarantine(now) {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *endpointHealthManager) eligibleEndpoints() []string {
 	if !m.enabled() {
 		return nil

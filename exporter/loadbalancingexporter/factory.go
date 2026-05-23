@@ -67,6 +67,7 @@ func createDefaultConfig() component.Config {
 			TargetLaneFillDuration:       0,
 			LaneHysteresisFactor:         defaultCentralQueueLaneHysteresisFactor,
 			NumConsumers:                 defaultCentralQueueNumConsumers,
+			ActiveLoadBalancerReplicas:   defaultCentralQueueActiveLBReplicas,
 		},
 		LogBatcher: LogBatcherConfig{
 			Enabled:            false,

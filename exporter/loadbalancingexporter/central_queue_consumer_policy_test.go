@@ -1,0 +1,124 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package loadbalancingexporter
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestCentralQueueConsumerPolicyCapsFewBackendsAcrossLBReplicas(t *testing.T) {
+	policy := centralQueueConsumerPolicy{
+		maxConsumers:               120,
+		minConsumers:               1,
+		targetCompressedBytes:      256 << 10,
+		maxInflightSendsPerBackend: 1,
+		activeLoadBalancerReplicas: 3,
+	}
+
+	decision := policy.compute(centralQueueConsumerInputs{
+		queueCompressedBytes: 1 << 30,
+		readyBackends:        6,
+	})
+
+	require.Equal(t, 4096, decision.queueDemandConsumers)
+	require.Equal(t, 2, decision.backendSafeConsumersPerLB)
+	require.Equal(t, 2, decision.effectiveConsumers)
+}
+
+func TestCentralQueueConsumerControllerUsesConfiguredActiveLoadBalancerReplicas(t *testing.T) {
+	controller := newCentralQueueConsumerController(120, 256<<10, 3)
+
+	decision := controller.compute(1<<30, 6, false)
+
+	require.Equal(t, 2, decision.backendSafeConsumersPerLB)
+	require.Equal(t, 2, decision.effectiveConsumers)
+}
+
+func TestCentralQueueConsumerPolicyQueueGrowthIncreasesDemandUntilBackendSafeCap(t *testing.T) {
+	policy := centralQueueConsumerPolicy{
+		maxConsumers:               120,
+		minConsumers:               1,
+		targetCompressedBytes:      256 << 10,
+		maxInflightSendsPerBackend: 1,
+	}
+
+	lowDemand := policy.compute(centralQueueConsumerInputs{
+		queueCompressedBytes: 256 << 10,
+		readyBackends:        20,
+	})
+	require.Equal(t, 1, lowDemand.effectiveConsumers)
+
+	higherDemand := policy.compute(centralQueueConsumerInputs{
+		queueCompressedBytes: 3 << 20,
+		readyBackends:        20,
+	})
+	require.Equal(t, 12, higherDemand.effectiveConsumers)
+
+	backendCapped := policy.compute(centralQueueConsumerInputs{
+		queueCompressedBytes: 64 << 20,
+		readyBackends:        20,
+	})
+	require.Equal(t, 20, backendCapped.effectiveConsumers)
+}
+
+func TestCentralQueueConsumerPolicyBackendPressureReducesQuickly(t *testing.T) {
+	policy := centralQueueConsumerPolicy{
+		maxConsumers:                 120,
+		minConsumers:                 1,
+		targetCompressedBytes:        256 << 10,
+		maxInflightSendsPerBackend:   1,
+		previousEffectiveConsumers:   16,
+		previousEffectiveConsumersOK: true,
+	}
+
+	decision := policy.compute(centralQueueConsumerInputs{
+		queueCompressedBytes: 64 << 20,
+		readyBackends:        16,
+		backendPressure:      true,
+	})
+
+	require.Equal(t, centralQueueConsumerPressureReducing, decision.pressureState)
+	require.Equal(t, 8, decision.effectiveConsumers)
+}
+
+func TestCentralQueueConsumerPolicyBackendPressureReducesFirstSample(t *testing.T) {
+	policy := centralQueueConsumerPolicy{
+		maxConsumers:               120,
+		minConsumers:               1,
+		targetCompressedBytes:      256 << 10,
+		maxInflightSendsPerBackend: 1,
+	}
+
+	decision := policy.compute(centralQueueConsumerInputs{
+		queueCompressedBytes: 64 << 20,
+		readyBackends:        16,
+		backendPressure:      true,
+	})
+
+	require.Equal(t, centralQueueConsumerPressureReducing, decision.pressureState)
+	require.Equal(t, 8, decision.effectiveConsumers)
+}
+
+func TestCentralQueueConsumerPolicyPressureRecoveryIsGradual(t *testing.T) {
+	policy := centralQueueConsumerPolicy{
+		maxConsumers:                 120,
+		minConsumers:                 1,
+		targetCompressedBytes:        256 << 10,
+		maxInflightSendsPerBackend:   1,
+		pressureRecoveryStep:         1,
+		previousEffectiveConsumers:   4,
+		previousEffectiveConsumersOK: true,
+		pressureRecoveryActive:       true,
+	}
+
+	decision := policy.compute(centralQueueConsumerInputs{
+		queueCompressedBytes: 64 << 20,
+		readyBackends:        16,
+	})
+
+	require.Equal(t, centralQueueConsumerPressureRecovering, decision.pressureState)
+	require.Equal(t, 5, decision.effectiveConsumers)
+}

@@ -44,7 +44,16 @@ func TestCentralQueueTelemetryRecordsInstruments(t *testing.T) {
 	telemetry.recordRetry(t.Context())
 	telemetry.recordDecodeFailure(t.Context(), 5)
 	telemetry.recordConfiguredConsumers(t.Context(), 30)
+	telemetry.recordActiveLoadBalancerReplicas(t.Context(), 2)
+	telemetry.recordEffectiveConsumers(t.Context(), 12)
 	telemetry.recordActiveConsumers(t.Context(), 3)
+	telemetry.recordConsumerDecision(t.Context(), centralQueueConsumerResult{
+		effectiveConsumers:        12,
+		queueDemandConsumers:      16,
+		backendSafeConsumersPerLB: 8,
+		limitReason:               centralQueueConsumerLimitReasonBackendPressure,
+		pressureState:             centralQueueConsumerPressureReducing,
+	})
 	telemetry.recordConfiguredLanes(t.Context(), 4)
 	telemetry.recordEffectiveLanes(t.Context(), 64)
 	telemetry.recordWindow(t.Context(), centralQueueWindow{
@@ -70,7 +79,13 @@ func TestCentralQueueTelemetryRecordsInstruments(t *testing.T) {
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_ready_uncompressed_bytes", "By", attrs, 48)
 	requireCentralQueueSchedulerState(t, reader, centralQueueSchedulerStateWaiting)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_configured_consumers", "{workers}", attrs, 30)
+	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_active_load_balancer_replicas", "{replicas}", attrs, 2)
+	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_effective_consumers", "{workers}", attrs, 12)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_active_consumers", "{workers}", attrs, 3)
+	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_queue_demand_consumers", "{workers}", attrs, 16)
+	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_backend_safe_consumers_per_lb", "{workers}", attrs, 8)
+	requireCentralQueueConsumerLimitReason(t, reader, centralQueueConsumerLimitReasonBackendPressure)
+	requireCentralQueueConsumerPressureState(t, reader, centralQueueConsumerPressureReducing)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_lanes", "{lanes}", attrs, 4)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_effective_lanes", "{lanes}", attrs, 64)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_oldest_item_age", "ms", attrs, 125)
@@ -116,6 +131,44 @@ func requireCentralQueueSchedulerState(t *testing.T, reader *componenttest.Telem
 	gauge, ok := metric.Data.(metricdata.Gauge[int64])
 	require.True(t, ok)
 	require.Len(t, gauge.DataPoints, len(centralQueueSchedulerStates))
+	for _, datapoint := range gauge.DataPoints {
+		value, ok := datapoint.Attributes.Value("state")
+		require.True(t, ok)
+		if value.AsString() == string(activeState) {
+			require.EqualValues(t, 1, datapoint.Value)
+			continue
+		}
+		require.Zero(t, datapoint.Value)
+	}
+}
+
+func requireCentralQueueConsumerLimitReason(t *testing.T, reader *componenttest.Telemetry, activeReason centralQueueConsumerLimitReason) {
+	t.Helper()
+	metric, err := reader.GetMetric("otelcol_loadbalancer_central_queue_consumer_limit_reason")
+	require.NoError(t, err)
+	require.Equal(t, "1", metric.Unit)
+	gauge, ok := metric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok)
+	require.Len(t, gauge.DataPoints, len(centralQueueConsumerLimitReasons))
+	for _, datapoint := range gauge.DataPoints {
+		value, ok := datapoint.Attributes.Value("reason")
+		require.True(t, ok)
+		if value.AsString() == string(activeReason) {
+			require.EqualValues(t, 1, datapoint.Value)
+			continue
+		}
+		require.Zero(t, datapoint.Value)
+	}
+}
+
+func requireCentralQueueConsumerPressureState(t *testing.T, reader *componenttest.Telemetry, activeState centralQueueConsumerPressureState) {
+	t.Helper()
+	metric, err := reader.GetMetric("otelcol_loadbalancer_central_queue_consumer_pressure_state")
+	require.NoError(t, err)
+	require.Equal(t, "1", metric.Unit)
+	gauge, ok := metric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok)
+	require.Len(t, gauge.DataPoints, len(centralQueueConsumerPressureStates))
 	for _, datapoint := range gauge.DataPoints {
 		value, ok := datapoint.Attributes.Value("state")
 		require.True(t, ok)

@@ -21,6 +21,8 @@ const (
 	centralQueueMaxRetryJitter    = 100 * time.Millisecond
 )
 
+var errCentralQueueConsumersFull = errors.New("central queue effective consumers full")
+
 // centralQueueDefaultForceScheduleAgeMultiplier bounds oldest_item_age under
 // continuous hot-key arrivals: once a fallback candidate has been waiting longer
 // than maxBatchDelay × this multiplier, the scheduler must serve it before any
@@ -172,6 +174,16 @@ func (q *centralQueue) lease(ctx context.Context) (*centralQueueLease, error) {
 }
 
 func (q *centralQueue) leaseWithPollInterval(ctx context.Context, pollInterval time.Duration) (*centralQueueLease, error) {
+	return q.leaseWithPollIntervalAndAcquire(ctx, pollInterval, nil)
+}
+
+type centralQueueLeaseAcquireFunc func(queueCompressedBytes int64) bool
+
+func (q *centralQueue) leaseWithAcquire(ctx context.Context, acquire centralQueueLeaseAcquireFunc) (*centralQueueLease, error) {
+	return q.leaseWithPollIntervalAndAcquire(ctx, centralQueueLeasePollInterval, acquire)
+}
+
+func (q *centralQueue) leaseWithPollIntervalAndAcquire(ctx context.Context, pollInterval time.Duration, acquire centralQueueLeaseAcquireFunc) (*centralQueueLease, error) {
 	var ticker *time.Ticker
 	var poll <-chan time.Time
 	if pollInterval > 0 {
@@ -180,11 +192,11 @@ func (q *centralQueue) leaseWithPollInterval(ctx context.Context, pollInterval t
 		defer ticker.Stop()
 	}
 	for {
-		lease, err := q.tryLease(time.Now())
+		lease, err := q.tryLeaseWithAcquire(time.Now(), acquire)
 		if lease != nil {
 			return lease, nil
 		}
-		if err != nil && !errors.Is(err, errCentralQueueInflightFull) {
+		if err != nil && !errors.Is(err, errCentralQueueInflightFull) && !errors.Is(err, errCentralQueueConsumersFull) {
 			return nil, err
 		}
 
@@ -198,10 +210,17 @@ func (q *centralQueue) leaseWithPollInterval(ctx context.Context, pollInterval t
 }
 
 func (q *centralQueue) tryLease(now time.Time) (*centralQueueLease, error) {
+	return q.tryLeaseWithAcquire(now, nil)
+}
+
+func (q *centralQueue) tryLeaseWithAcquire(now time.Time, acquire centralQueueLeaseAcquireFunc) (*centralQueueLease, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	if lease := q.leaseReadyWindowLocked(); lease != nil {
+	if lease, blocked := q.leaseReadyWindowLocked(acquire); lease != nil || blocked {
+		if blocked {
+			return nil, errCentralQueueConsumersFull
+		}
 		return lease, nil
 	}
 
@@ -213,7 +232,10 @@ func (q *centralQueue) tryLease(now time.Time) (*centralQueueLease, error) {
 	}
 
 	state := q.prepareReadyWindowsLocked(now)
-	if lease := q.leaseReadyWindowLocked(); lease != nil {
+	if lease, blocked := q.leaseReadyWindowLocked(acquire); lease != nil || blocked {
+		if blocked {
+			return nil, errCentralQueueConsumersFull
+		}
 		return lease, nil
 	}
 	if state == centralQueueSchedulerStateInflightBytes {
@@ -585,9 +607,12 @@ func (q *centralQueue) windowInflightBlockedWithBase(window centralQueueWindow, 
 		inflightBytes+int64(window.uncompressedBytes) > q.settings.maxInflightUncompressedBytes
 }
 
-func (q *centralQueue) leaseReadyWindowLocked() *centralQueueLease {
+func (q *centralQueue) leaseReadyWindowLocked(acquire centralQueueLeaseAcquireFunc) (*centralQueueLease, bool) {
 	if len(q.ready) == 0 {
-		return nil
+		return nil, false
+	}
+	if acquire != nil && !acquire(q.currentCompressedBytes) {
+		return nil, true
 	}
 
 	window := q.ready[0]
@@ -607,7 +632,7 @@ func (q *centralQueue) leaseReadyWindowLocked() *centralQueueLease {
 	if len(window.items) > 0 {
 		lease.item = window.items[0]
 	}
-	return lease
+	return lease, false
 }
 
 func (q *centralQueue) removeWindowFromBucketLocked(bucket *centralQueueBucket, indexes []int, untrack bool) bool {
