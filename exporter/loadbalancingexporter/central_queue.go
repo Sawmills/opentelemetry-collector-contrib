@@ -733,6 +733,7 @@ func (q *centralQueue) stop() {
 	q.notifyLeaseWaiters()
 	q.settings.telemetry.stopObservingOldestItemAge()
 	q.settings.telemetry.stopObservingSchedulerState()
+	q.settings.telemetry.stopObservingConsumerDecision()
 }
 
 func (q *centralQueue) notifyLeaseWaiters() {

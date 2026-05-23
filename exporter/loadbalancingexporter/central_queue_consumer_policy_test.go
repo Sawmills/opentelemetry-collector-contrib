@@ -5,6 +5,7 @@ package loadbalancingexporter
 
 import (
 	"math"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -161,4 +162,12 @@ func TestCentralQueueConsumerPolicyPressureRecoveryIsGradual(t *testing.T) {
 
 func TestCeilDivInt64ToIntDoesNotOverflow(t *testing.T) {
 	require.Equal(t, int(math.MaxInt64/2+1), ceilDivInt64ToInt(math.MaxInt64, 2))
+}
+
+func TestCeilDivInt64ToIntClampsToMaxIntOn32Bit(t *testing.T) {
+	if strconv.IntSize == 64 {
+		t.Skip("int64 quotient cannot exceed int on 64-bit builds")
+	}
+	maxInt64 := int64(math.MaxInt)
+	require.Equal(t, math.MaxInt, ceilDivInt64ToInt(maxInt64+1, 1))
 }

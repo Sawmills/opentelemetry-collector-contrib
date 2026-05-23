@@ -920,6 +920,40 @@ func TestCentralQueueStopUnregistersOldestItemAgeObserver(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestCentralQueueStopUnregistersConsumerDecisionObserver(t *testing.T) {
+	reader := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, reader.Shutdown(context.WithoutCancel(t.Context())))
+	})
+	telemetry, err := newCentralQueueTelemetry(reader.NewTelemetrySettings(), signalKindLogs)
+	require.NoError(t, err)
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    100,
+		telemetry:                    telemetry,
+	})
+	telemetry.recordConsumerDecision(t.Context(), centralQueueConsumerResult{
+		effectiveConsumers:        2,
+		queueDemandConsumers:      4,
+		backendSafeConsumersPerLB: 2,
+		limitReason:               centralQueueConsumerLimitReasonBackendCapacity,
+		pressureState:             centralQueueConsumerPressureStable,
+	})
+	requireCentralQueueConsumerLimitReason(t, reader, centralQueueConsumerLimitReasonBackendCapacity)
+
+	q.stop()
+
+	require.Eventually(t, func() bool {
+		metric, err := reader.GetMetric("otelcol_loadbalancer_central_queue_consumer_limit_reason")
+		if err != nil {
+			return true
+		}
+		gauge, ok := metric.Data.(metricdata.Gauge[int64])
+		return ok && len(gauge.DataPoints) == 0
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestCentralQueueRetriesDoNotGrowOldestEnqueuedHeap(t *testing.T) {
 	q := newCentralQueue(centralQueueSettings{
 		maxCompressedBytes:           100,

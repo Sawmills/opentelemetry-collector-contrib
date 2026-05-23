@@ -462,6 +462,21 @@ func (t *centralQueueTelemetry) recordConsumerDecision(ctx context.Context, resu
 	t.consumerDecisionMu.Unlock()
 }
 
+func (t *centralQueueTelemetry) stopObservingConsumerDecision() {
+	if t == nil {
+		return
+	}
+	t.consumerDecisionMu.Lock()
+	registration := t.consumerDecisionReg
+	t.consumerDecisionReg = nil
+	t.consumerDecision = centralQueueConsumerResult{}
+	t.consumerDecisionSet = false
+	t.consumerDecisionMu.Unlock()
+	if registration != nil {
+		_ = registration.Unregister()
+	}
+}
+
 func (t *centralQueueTelemetry) recordActiveConsumers(ctx context.Context, consumers int64) {
 	if t == nil {
 		return
