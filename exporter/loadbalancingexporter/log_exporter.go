@@ -240,8 +240,13 @@ func (e *logExporterImp) observeCentralQueueLaneBytes(compressedBytes int, now t
 func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 	defer e.centralWG.Done()
 	for {
-		lease, err := e.centralQueue.leaseWithAcquire(ctx, func(queueCompressedBytes int64) bool {
-			return tryAcquireCentralQueueConsumer(ctx, &e.centralActiveConsumers, e.centralQueueConsumers, e.centralQueue, e.loadBalancer, queueCompressedBytes)
+		lease, err := e.centralQueue.leaseWithAcquire(ctx, func(queueCompressedBytes int64) (func(), bool) {
+			if !tryAcquireCentralQueueConsumer(ctx, &e.centralActiveConsumers, e.centralQueueConsumers, e.centralQueue, e.loadBalancer, queueCompressedBytes) {
+				return nil, false
+			}
+			return func() {
+				releaseCentralQueueConsumer(ctx, &e.centralActiveConsumers, e.centralQueue)
+			}, true
 		})
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, errCentralQueueStopped) {
@@ -262,24 +267,24 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 		err = e.consumeCentralQueueLogWindow(ctx, lease.window)
 		if err == nil {
 			lease.done()
-			releaseCentralQueueConsumer(ctx, &e.centralActiveConsumers, e.centralQueue)
+			lease.releaseConsumer()
 			continue
 		}
 		if ctx.Err() != nil {
 			lease.done()
-			releaseCentralQueueConsumer(ctx, &e.centralActiveConsumers, e.centralQueue)
+			lease.releaseConsumer()
 			return
 		}
 		if consumererror.IsPermanent(err) {
 			e.logger.Warn("dropping central log queue item after permanent export error", zap.Error(err))
 			lease.done()
-			releaseCentralQueueConsumer(ctx, &e.centralActiveConsumers, e.centralQueue)
+			lease.releaseConsumer()
 			continue
 		}
 		if requeueErr := lease.requeue(time.Now()); requeueErr != nil {
 			e.logger.Warn("failed to requeue central log queue item", zap.Error(requeueErr), zap.Error(err))
 		}
-		releaseCentralQueueConsumer(ctx, &e.centralActiveConsumers, e.centralQueue)
+		lease.releaseConsumer()
 	}
 }
 

@@ -74,10 +74,12 @@ type centralQueue struct {
 }
 
 type centralQueueLease struct {
-	queue  *centralQueue
-	window centralQueueWindow
-	item   centralQueueItem
-	once   sync.Once
+	queue               *centralQueue
+	window              centralQueueWindow
+	item                centralQueueItem
+	once                sync.Once
+	consumerRelease     func()
+	consumerReleaseOnce sync.Once
 }
 
 type centralQueueWindow struct {
@@ -177,7 +179,7 @@ func (q *centralQueue) leaseWithPollInterval(ctx context.Context, pollInterval t
 	return q.leaseWithPollIntervalAndAcquire(ctx, pollInterval, nil)
 }
 
-type centralQueueLeaseAcquireFunc func(queueCompressedBytes int64) bool
+type centralQueueLeaseAcquireFunc func(queueCompressedBytes int64) (func(), bool)
 
 func (q *centralQueue) leaseWithAcquire(ctx context.Context, acquire centralQueueLeaseAcquireFunc) (*centralQueueLease, error) {
 	return q.leaseWithPollIntervalAndAcquire(ctx, centralQueueLeasePollInterval, acquire)
@@ -214,38 +216,57 @@ func (q *centralQueue) tryLease(now time.Time) (*centralQueueLease, error) {
 }
 
 func (q *centralQueue) tryLeaseWithAcquire(now time.Time, acquire centralQueueLeaseAcquireFunc) (*centralQueueLease, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+	for {
+		q.mu.Lock()
+		if len(q.ready) == 0 && q.itemCount == 0 {
+			stopped := q.stopped
+			q.mu.Unlock()
+			if stopped {
+				return nil, errCentralQueueStopped
+			}
+			return nil, nil
+		}
 
-	if lease, blocked := q.leaseReadyWindowLocked(acquire); lease != nil || blocked {
-		if blocked {
+		state := centralQueueSchedulerStateReady
+		if len(q.ready) == 0 {
+			readyWindowLimit := q.settings.maxReadyWindows
+			if acquire != nil {
+				readyWindowLimit = 1
+			}
+			state = q.prepareReadyWindowsLocked(now, readyWindowLimit)
+		}
+		if len(q.ready) == 0 {
+			q.mu.Unlock()
+			if state == centralQueueSchedulerStateInflightBytes {
+				return nil, errCentralQueueInflightFull
+			}
+			return nil, nil
+		}
+		if acquire == nil {
+			lease := q.leaseReadyWindowLocked()
+			q.mu.Unlock()
+			return lease, nil
+		}
+		queueCompressedBytes := q.currentCompressedBytes
+		q.mu.Unlock()
+
+		release, acquired := acquire(queueCompressedBytes)
+		if !acquired {
 			return nil, errCentralQueueConsumersFull
 		}
+
+		q.mu.Lock()
+		lease := q.leaseReadyWindowLocked()
+		q.mu.Unlock()
+		if lease == nil {
+			if release != nil {
+				release()
+			}
+			continue
+		}
+		lease.consumerRelease = release
 		return lease, nil
 	}
-
-	if q.itemCount == 0 {
-		if q.stopped {
-			return nil, errCentralQueueStopped
-		}
-		return nil, nil
-	}
-
-	readyWindowLimit := q.settings.maxReadyWindows
-	if acquire != nil {
-		readyWindowLimit = 1
-	}
-	state := q.prepareReadyWindowsLocked(now, readyWindowLimit)
-	if lease, blocked := q.leaseReadyWindowLocked(acquire); lease != nil || blocked {
-		if blocked {
-			return nil, errCentralQueueConsumersFull
-		}
-		return lease, nil
-	}
-	if state == centralQueueSchedulerStateInflightBytes {
-		return nil, errCentralQueueInflightFull
-	}
-	return nil, nil
 }
 
 func (q *centralQueue) prepareReadyWindowsLocked(now time.Time, readyWindowLimit int) centralQueueSchedulerState {
@@ -617,12 +638,9 @@ func (q *centralQueue) windowInflightBlockedWithBase(window centralQueueWindow, 
 		inflightBytes+int64(window.uncompressedBytes) > q.settings.maxInflightUncompressedBytes
 }
 
-func (q *centralQueue) leaseReadyWindowLocked(acquire centralQueueLeaseAcquireFunc) (*centralQueueLease, bool) {
+func (q *centralQueue) leaseReadyWindowLocked() *centralQueueLease {
 	if len(q.ready) == 0 {
-		return nil, false
-	}
-	if acquire != nil && !acquire(q.currentCompressedBytes) {
-		return nil, true
+		return nil
 	}
 
 	window := q.ready[0]
@@ -642,7 +660,7 @@ func (q *centralQueue) leaseReadyWindowLocked(acquire centralQueueLeaseAcquireFu
 	if len(window.items) > 0 {
 		lease.item = window.items[0]
 	}
-	return lease, false
+	return lease
 }
 
 func (q *centralQueue) removeWindowFromBucketLocked(bucket *centralQueueBucket, indexes []int, untrack bool) bool {
@@ -689,6 +707,13 @@ func (l *centralQueueLease) done() {
 		l.queue.notifyLeaseWaiters()
 		l.queue.settings.telemetry.record(context.Background(), snapshot)
 	})
+}
+
+func (l *centralQueueLease) releaseConsumer() {
+	if l == nil || l.consumerRelease == nil {
+		return
+	}
+	l.consumerReleaseOnce.Do(l.consumerRelease)
 }
 
 func (l *centralQueueLease) requeue(now time.Time) error {

@@ -138,13 +138,61 @@ func TestCentralQueueTryLeaseWithAcquireBlocksWhenConsumersFull(t *testing.T) {
 	now := time.Unix(10, 0)
 	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
 
-	lease, err := q.tryLeaseWithAcquire(now, func(queueCompressedBytes int64) bool {
+	lease, err := q.tryLeaseWithAcquire(now, func(queueCompressedBytes int64) (func(), bool) {
 		require.EqualValues(t, 10, queueCompressedBytes)
-		return false
+		return nil, false
 	})
 
 	require.ErrorIs(t, err, errCentralQueueConsumersFull)
 	require.Nil(t, lease)
+}
+
+func TestCentralQueueTryLeaseWithAcquireDoesNotHoldQueueLockWhileAcquiring(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    100,
+		targetCompressedBytes:        10,
+		maxBatchDelay:                time.Second,
+		maxReadyWindows:              4,
+	})
+	now := time.Unix(10, 0)
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
+
+	acquireStarted := make(chan struct{})
+	releaseAcquire := make(chan struct{})
+	result := make(chan centralQueueLeaseResult, 1)
+	go func() {
+		lease, err := q.tryLeaseWithAcquire(now, func(int64) (func(), bool) {
+			close(acquireStarted)
+			<-releaseAcquire
+			return nil, false
+		})
+		result <- centralQueueLeaseResult{lease: lease, err: err}
+	}()
+
+	<-acquireStarted
+	enqueueDone := make(chan error, 1)
+	go func() {
+		enqueueDone <- q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-b"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now)
+	}()
+
+	select {
+	case err := <-enqueueDone:
+		require.NoError(t, err)
+	case <-time.After(200 * time.Millisecond):
+		close(releaseAcquire)
+		t.Fatal("enqueue blocked while acquire callback was waiting")
+	}
+
+	close(releaseAcquire)
+	select {
+	case leaseResult := <-result:
+		require.ErrorIs(t, leaseResult.err, errCentralQueueConsumersFull)
+		require.Nil(t, leaseResult.lease)
+	case <-time.After(time.Second):
+		t.Fatal("expected central queue acquire result")
+	}
 }
 
 func TestCentralQueueTryLeaseWithAcquireSucceedsWhenConsumersAvailable(t *testing.T) {
@@ -159,9 +207,9 @@ func TestCentralQueueTryLeaseWithAcquireSucceedsWhenConsumersAvailable(t *testin
 	now := time.Unix(10, 0)
 	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
 
-	lease, err := q.tryLeaseWithAcquire(now, func(queueCompressedBytes int64) bool {
+	lease, err := q.tryLeaseWithAcquire(now, func(queueCompressedBytes int64) (func(), bool) {
 		require.EqualValues(t, 10, queueCompressedBytes)
-		return true
+		return func() {}, true
 	})
 
 	require.NoError(t, err)
@@ -190,7 +238,7 @@ func TestCentralQueueTryLeaseWithAcquirePreparesOnlyOneReadyWindow(t *testing.T)
 		}, now))
 	}
 
-	lease, err := q.tryLeaseWithAcquire(now, func(int64) bool { return true })
+	lease, err := q.tryLeaseWithAcquire(now, func(int64) (func(), bool) { return func() {}, true })
 
 	require.NoError(t, err)
 	require.NotNil(t, lease)
@@ -220,8 +268,11 @@ func TestCentralQueueLeaseWithAcquireRetriesWhenConsumersBecomeAvailable(t *test
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	go func() {
-		lease, err := q.leaseWithPollIntervalAndAcquire(ctx, time.Hour, func(int64) bool {
-			return attempts.Add(1) >= 2
+		lease, err := q.leaseWithPollIntervalAndAcquire(ctx, time.Hour, func(int64) (func(), bool) {
+			if attempts.Add(1) >= 2 {
+				return func() {}, true
+			}
+			return nil, false
 		})
 		result <- centralQueueLeaseResult{lease: lease, err: err}
 	}()
