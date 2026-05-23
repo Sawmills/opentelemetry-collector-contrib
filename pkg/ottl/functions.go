@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -86,14 +87,14 @@ func (p *Parser[K]) newPath(path *path) (*basePath[K], error) {
 
 	originalText := buildOriginalText(path)
 	var current *basePath[K]
-	for i := len(fields) - 1; i >= 0; i-- {
-		keys, err := p.newKeys(fields[i].Keys)
+	for _, field := range slices.Backward(fields) {
+		keys, err := p.newKeys(field.Keys)
 		if err != nil {
 			return nil, err
 		}
 		current = &basePath[K]{
 			context:      pathContext,
-			name:         fields[i].Name,
+			name:         field.Name,
 			keys:         keys,
 			nextPath:     current,
 			originalText: originalText,
