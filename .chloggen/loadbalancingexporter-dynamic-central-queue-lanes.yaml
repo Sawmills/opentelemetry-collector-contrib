@@ -1,0 +1,9 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Add bucketed central queue leasing with dynamic effective lanes for load-balanced logs and metrics.
+issues: [83]
+subtext: |-
+  The central queue now wakes consumers on new work and adapts effective lanes from
+  backend count and compressed-byte throughput while preserving explicit lane_count
+  overrides.
+change_logs: [user]

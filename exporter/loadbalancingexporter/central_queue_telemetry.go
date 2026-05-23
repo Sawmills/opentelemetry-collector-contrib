@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/otel/attribute"
@@ -30,7 +31,9 @@ type centralQueueTelemetry struct {
 	configuredConsumers  metric.Int64Gauge
 	activeConsumers      metric.Int64Gauge
 	lanes                metric.Int64Gauge
+	effectiveLanes       metric.Int64Gauge
 	windowCompressed     metric.Int64Histogram
+	laneFillSeconds      metric.Float64Histogram
 	windowFlush          metric.Int64Counter
 	windowUncompressed   metric.Int64Histogram
 	windowItems          metric.Int64Histogram
@@ -42,6 +45,7 @@ type centralQueueTelemetry struct {
 	oldestItemAgeMillis  func() int64
 	readyWindows         metric.Int64ObservableGauge
 	readyWindowLimit     metric.Int64ObservableGauge
+	readyLanes           metric.Int64ObservableGauge
 	readyUncompressed    metric.Int64ObservableGauge
 	schedulerState       metric.Int64ObservableGauge
 	schedulerStateReg    metric.Registration
@@ -63,6 +67,7 @@ type centralQueueSnapshot struct {
 type centralQueueSchedulerSnapshot struct {
 	readyWindows      int64
 	readyWindowLimit  int64
+	readyLanes        int64
 	readyUncompressed int64
 	state             centralQueueSchedulerState
 }
@@ -173,7 +178,13 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 	errs = errors.Join(errs, err)
 	t.lanes, err = meter.Int64Gauge(
 		"otelcol_loadbalancer_central_queue_lanes",
-		metric.WithDescription("Effective central queue lanes used to coalesce routing keys before backend selection."),
+		metric.WithDescription("Configured central queue lane_count override. Zero means dynamic lane policy is active."),
+		metric.WithUnit("{lanes}"),
+	)
+	errs = errors.Join(errs, err)
+	t.effectiveLanes, err = meter.Int64Gauge(
+		"otelcol_loadbalancer_central_queue_effective_lanes",
+		metric.WithDescription("Effective central queue lanes selected after applying static override or dynamic backend/rate policy."),
 		metric.WithUnit("{lanes}"),
 	)
 	errs = errors.Join(errs, err)
@@ -182,6 +193,13 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 		metric.WithDescription("Compressed bytes in each central load-balancing queue window before decode and send."),
 		metric.WithUnit("By"),
 		metric.WithExplicitBucketBoundaries(1024, 4096, 16384, 65536, 262144, 1048576, 4194304),
+	)
+	errs = errors.Join(errs, err)
+	t.laneFillSeconds, err = meter.Float64Histogram(
+		"otelcol_loadbalancer_central_queue_lane_fill_seconds",
+		metric.WithDescription("Seconds between the oldest queued item in a leased central queue lane window and dispatch."),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10),
 	)
 	errs = errors.Join(errs, err)
 	t.windowFlush, err = meter.Int64Counter(
@@ -249,6 +267,13 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 	)
 	errs = errors.Join(errs, err)
 	schedulerErrs = errors.Join(schedulerErrs, err)
+	t.readyLanes, err = meter.Int64ObservableGauge(
+		"otelcol_loadbalancer_central_queue_ready_lanes",
+		metric.WithDescription("Central load-balancing queue lanes currently ready to produce a request window."),
+		metric.WithUnit("{lanes}"),
+	)
+	errs = errors.Join(errs, err)
+	schedulerErrs = errors.Join(schedulerErrs, err)
 	t.readyUncompressed, err = meter.Int64ObservableGauge(
 		"otelcol_loadbalancer_central_queue_ready_uncompressed_bytes",
 		metric.WithDescription("Uncompressed bytes reserved by central load-balancing request windows waiting ready before workers lease them."),
@@ -274,6 +299,7 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 			snapshot := schedulerSnapshot()
 			observer.ObserveInt64(t.readyWindows, snapshot.readyWindows, t.signalAttrs)
 			observer.ObserveInt64(t.readyWindowLimit, snapshot.readyWindowLimit, t.signalAttrs)
+			observer.ObserveInt64(t.readyLanes, snapshot.readyLanes, t.signalAttrs)
 			observer.ObserveInt64(t.readyUncompressed, snapshot.readyUncompressed, t.signalAttrs)
 			for _, state := range centralQueueSchedulerStates {
 				value := int64(0)
@@ -283,7 +309,7 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 				observer.ObserveInt64(t.schedulerState, value, t.schedulerStateAttrs[state])
 			}
 			return nil
-		}, t.readyWindows, t.readyWindowLimit, t.readyUncompressed, t.schedulerState)
+		}, t.readyWindows, t.readyWindowLimit, t.readyLanes, t.readyUncompressed, t.schedulerState)
 		errs = errors.Join(errs, err)
 	}
 	return t, errs
@@ -338,11 +364,18 @@ func (t *centralQueueTelemetry) recordActiveConsumers(ctx context.Context, consu
 	t.activeConsumers.Record(ctx, consumers, t.signalAttrs)
 }
 
-func (t *centralQueueTelemetry) recordLanes(ctx context.Context, lanes int64) {
+func (t *centralQueueTelemetry) recordConfiguredLanes(ctx context.Context, lanes int64) {
 	if t == nil {
 		return
 	}
 	t.lanes.Record(ctx, lanes, t.signalAttrs)
+}
+
+func (t *centralQueueTelemetry) recordEffectiveLanes(ctx context.Context, lanes int64) {
+	if t == nil {
+		return
+	}
+	t.effectiveLanes.Record(ctx, lanes, t.signalAttrs)
 }
 
 func (t *centralQueueTelemetry) recordWindow(ctx context.Context, window centralQueueWindow, targetCompressedBytes int64) {
@@ -350,6 +383,12 @@ func (t *centralQueueTelemetry) recordWindow(ctx context.Context, window central
 		return
 	}
 	t.windowCompressed.Record(ctx, int64(window.compressedBytes), t.signalAttrs)
+	if window.oldestEnqueuedAt > 0 {
+		fillSeconds := time.Since(time.Unix(0, window.oldestEnqueuedAt)).Seconds()
+		if fillSeconds >= 0 {
+			t.laneFillSeconds.Record(ctx, fillSeconds, t.signalAttrs)
+		}
+	}
 	t.windowUncompressed.Record(ctx, int64(window.uncompressedBytes), t.signalAttrs)
 	t.windowItems.Record(ctx, int64(window.count), t.signalAttrs)
 	t.windowPayloads.Record(ctx, int64(len(window.items)), t.signalAttrs)

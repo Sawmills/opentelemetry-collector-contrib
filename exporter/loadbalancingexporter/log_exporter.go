@@ -41,6 +41,7 @@ type logExporterImp struct {
 	randomTraceID            func() pcommon.TraceID
 	centralQueueByteBatching bool
 	centralQueueLaneCount    int
+	centralQueueLanes        *centralQueueLaneController
 	centralQueueNumConsumers int
 	centralActiveConsumers   atomic.Int64
 	centralCancel            context.CancelFunc
@@ -73,7 +74,8 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 		ignoreTraceID:            cfg.(*Config).LogRouting.IgnoreTraceID,
 		randomTraceID:            random,
 		centralQueueByteBatching: cfg.(*Config).centralQueueByteBatchingEnabled(),
-		centralQueueLaneCount:    cfg.(*Config).CentralQueue.effectiveLaneCount(),
+		centralQueueLaneCount:    cfg.(*Config).CentralQueue.LaneCount,
+		centralQueueLanes:        newCentralQueueLaneController(cfg.(*Config).CentralQueue),
 		centralQueueNumConsumers: cfg.(*Config).CentralQueue.NumConsumers,
 	}
 	if cfg.(*Config).CentralQueue.Enabled {
@@ -144,7 +146,8 @@ func (e *logExporterImp) startCentralQueueConsumers(ctx context.Context) {
 	}
 	e.centralQueue.settings.telemetry.recordConfiguredConsumers(ctx, int64(consumers))
 	e.centralQueue.settings.telemetry.recordActiveConsumers(ctx, e.centralActiveConsumers.Load())
-	e.centralQueue.settings.telemetry.recordLanes(ctx, int64(e.centralQueueLaneCount))
+	e.centralQueue.settings.telemetry.recordConfiguredLanes(ctx, int64(e.centralQueueLaneCount))
+	e.centralQueue.settings.telemetry.recordEffectiveLanes(ctx, int64(e.effectiveCentralQueueLaneCount(time.Now())))
 	for i := 0; i < consumers; i++ {
 		e.centralWG.Add(1)
 		go e.runCentralQueue(ctx)
@@ -200,6 +203,24 @@ func (e *logExporterImp) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
 func (e *logExporterImp) consumeLogsCentralQueue(ctx context.Context, ld plog.Logs) error {
 	splitter := newCentralQueueLogSplitter(e, centralQueueEffectiveUncompressedItemLimit(e.centralQueue.settings), time.Now())
 	return splitter.consume(ctx, ld)
+}
+
+func (e *logExporterImp) effectiveCentralQueueLaneCount(now time.Time) int {
+	if !e.ignoreTraceID {
+		return centralQueueStableLaneCount(e.centralQueueLanes, e.centralQueueLaneCount)
+	}
+	return centralQueueEffectiveLaneCount(e.centralQueueLanes, e.centralQueueLaneCount, e.loadBalancer, now)
+}
+
+func (e *logExporterImp) observeCentralQueueLaneBytes(compressedBytes int, now time.Time) {
+	if e.centralQueue == nil {
+		return
+	}
+	if !e.ignoreTraceID {
+		e.centralQueue.settings.telemetry.recordEffectiveLanes(context.Background(), int64(centralQueueStableLaneCount(e.centralQueueLanes, e.centralQueueLaneCount)))
+		return
+	}
+	observeCentralQueueLaneBytes(e.centralQueue.settings.telemetry, e.centralQueueLanes, e.centralQueueLaneCount, compressedBytes, now)
 }
 
 func (e *logExporterImp) runCentralQueue(ctx context.Context) {

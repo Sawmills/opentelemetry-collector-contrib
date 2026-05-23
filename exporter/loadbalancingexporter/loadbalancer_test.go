@@ -118,6 +118,31 @@ func TestLoadBalancerStart(t *testing.T) {
 	assert.NoError(t, res)
 }
 
+func TestLoadBalancerRoutableBackendCountIgnoresNilExporters(t *testing.T) {
+	p := &loadBalancer{
+		exporters: map[string]*wrappedExporter{
+			"endpoint-1:4317": newWrappedExporter(mockComponent{}, "endpoint-1:4317"),
+			"endpoint-2:4317": nil,
+		},
+	}
+	require.Equal(t, 1, p.routableBackendCount())
+
+	p.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	require.Equal(t, 1, p.routableBackendCount())
+}
+
+func TestLoadBalancerRoutableBackendCountUsesCachedValue(t *testing.T) {
+	p := loadBalancerWithRoutableBackendCount(2, 2)
+	p.updateLock.Lock()
+	p.refreshRoutableBackendCountLocked()
+	p.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317", "endpoint-3:4317", "endpoint-4:4317"})
+	p.exporters["endpoint-3:4317"] = newWrappedExporter(mockComponent{}, "endpoint-3:4317")
+	p.exporters["endpoint-4:4317"] = newWrappedExporter(mockComponent{}, "endpoint-4:4317")
+	p.updateLock.Unlock()
+
+	require.Equal(t, 2, p.routableBackendCount())
+}
+
 func TestWithDNSResolver(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	cfg := &Config{

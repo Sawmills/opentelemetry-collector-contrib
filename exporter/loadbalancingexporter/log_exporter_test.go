@@ -213,6 +213,45 @@ func TestConsumeLogsCentralQueueEnqueuesCompressedByRoutingKey(t *testing.T) {
 	require.NoError(t, plogtest.CompareLogs(logs, decoded))
 }
 
+func TestLogsCentralQueueDynamicLanesUseBackendCountAndRate(t *testing.T) {
+	reader := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, reader.Shutdown(context.WithoutCancel(t.Context())))
+	})
+	telemetry, err := newCentralQueueTelemetry(reader.NewTelemetrySettings(), signalKindLogs)
+	require.NoError(t, err)
+	cfg := createDefaultConfig().(*Config).CentralQueue
+	cfg.TargetCompressedBytes = 256 << 10
+	cfg.TargetLaneFillDuration = 500 * time.Millisecond
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 30,
+			maxInflightUncompressedBytes: 1 << 30,
+			maxUncompressedBatchBytes:    1 << 20,
+			telemetry:                    telemetry,
+		}),
+		centralQueueLanes: newCentralQueueLaneController(cfg),
+		loadBalancer:      loadBalancerWithBackendCount(4),
+		ignoreTraceID:     true,
+	}
+	now := time.Unix(10, 0)
+
+	require.Equal(t, 4, p.effectiveCentralQueueLaneCount(now))
+	p.observeCentralQueueLaneBytes(512<<20, now)
+	require.Equal(t, 4, p.effectiveCentralQueueLaneCount(now))
+
+	p.observeCentralQueueLaneBytes(512<<20, now.Add(31*time.Second))
+	require.Equal(t, 8, p.effectiveCentralQueueLaneCount(now.Add(31*time.Second)))
+	requireCentralQueueIntGauge(
+		t,
+		reader,
+		"otelcol_loadbalancer_central_queue_effective_lanes",
+		"{lanes}",
+		attribute.NewSet(attribute.String("signal", string(signalKindLogs))),
+		8,
+	)
+}
+
 func TestConsumeLogsCentralQueueUsesLaneRoutingForIgnoredTraceIDs(t *testing.T) {
 	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
 	t.Cleanup(func() { require.NoError(t, codec.Close()) })
@@ -283,7 +322,7 @@ func TestConsumeLogsCentralQueueSplitsOversizedLogBatchByUncompressedBytes(t *te
 
 	expectedRoutingKey := centralQueueLaneRoutingKey(signalKindLogs, fallbackRoutingKey[:], 64)
 	merged := plog.NewLogs()
-	for _, item := range p.centralQueue.items {
+	for _, item := range p.centralQueue.queuedItems() {
 		require.LessOrEqual(t, item.uncompressedBytes, limit)
 		require.Equal(t, expectedRoutingKey, item.routingKey)
 		decoded, err := decodeCentralQueueLogsItem(item, codec)
@@ -402,7 +441,7 @@ func TestConsumeLogsCentralQueueSplitsAtInflightUncompressedLimit(t *testing.T) 
 
 	require.NoError(t, p.ConsumeLogs(t.Context(), logs))
 	require.Greater(t, p.centralQueue.len(), 1)
-	for _, item := range p.centralQueue.items {
+	for _, item := range p.centralQueue.queuedItems() {
 		require.LessOrEqual(t, item.uncompressedBytes, inflightLimit)
 	}
 }
@@ -430,7 +469,7 @@ func TestConsumeLogsCentralQueueSplitsBySizeNotRawRoutingKey(t *testing.T) {
 
 	expectedRoutingKey := centralQueueLaneRoutingKey(signalKindLogs, []byte{1}, 1)
 	merged := plog.NewLogs()
-	for _, item := range p.centralQueue.items {
+	for _, item := range p.centralQueue.queuedItems() {
 		require.LessOrEqual(t, item.uncompressedBytes, limit)
 		require.Equal(t, expectedRoutingKey, item.routingKey)
 		decoded, err := decodeCentralQueueLogsItem(item, codec)
@@ -2113,7 +2152,7 @@ func sharedScopeLogsWithTraceIDs(traceIDs ...pcommon.TraceID) plog.Logs {
 
 func repeatedTraceIDs(count int) []pcommon.TraceID {
 	traceIDs := make([]pcommon.TraceID, 0, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		traceID := pcommon.TraceID{}
 		copy(traceID[:], strconv.Itoa(i+1))
 		traceIDs = append(traceIDs, traceID)
