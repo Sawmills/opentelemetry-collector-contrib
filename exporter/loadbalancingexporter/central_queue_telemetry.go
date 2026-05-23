@@ -416,13 +416,6 @@ func (t *centralQueueTelemetry) recordActiveLoadBalancerReplicas(ctx context.Con
 	t.activeLBReplicas.Record(ctx, replicas, t.signalAttrs)
 }
 
-func (t *centralQueueTelemetry) recordEffectiveConsumers(ctx context.Context, consumers int64) {
-	if t == nil {
-		return
-	}
-	t.effectiveConsumers.Record(ctx, consumers, t.signalAttrs)
-}
-
 func (t *centralQueueTelemetry) recordConsumerDecision(ctx context.Context, result centralQueueConsumerResult) {
 	if t == nil {
 		return

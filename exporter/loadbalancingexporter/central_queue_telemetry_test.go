@@ -45,7 +45,6 @@ func TestCentralQueueTelemetryRecordsInstruments(t *testing.T) {
 	telemetry.recordDecodeFailure(t.Context(), 5)
 	telemetry.recordConfiguredConsumers(t.Context(), 30)
 	telemetry.recordActiveLoadBalancerReplicas(t.Context(), 2)
-	telemetry.recordEffectiveConsumers(t.Context(), 12)
 	telemetry.recordActiveConsumers(t.Context(), 3)
 	telemetry.recordConsumerDecision(t.Context(), centralQueueConsumerResult{
 		effectiveConsumers:        12,
