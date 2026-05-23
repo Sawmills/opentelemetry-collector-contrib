@@ -92,6 +92,22 @@ func TestLogExporterCentralQueueDynamicLanesUseLastEffectiveConsumers(t *testing
 	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
 }
 
+func TestLogExporterCentralQueueDynamicLanesCapStaleEffectiveConsumersByCurrentBackends(t *testing.T) {
+	controller := centralQueueLanePathTestController()
+	consumers := newCentralQueueConsumerController(120, 256<<10, 1)
+	decision := consumers.compute(1<<30, 8, false)
+	require.Equal(t, 8, decision.effectiveConsumers)
+
+	p := &logExporterImp{
+		loadBalancer:          loadBalancerWithRoutableBackendCount(2, 2),
+		centralQueueLanes:     controller,
+		centralQueueConsumers: consumers,
+		ignoreTraceID:         true,
+	}
+
+	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
+}
+
 func TestLogExporterCentralQueueDynamicLanesUseFractionalBackendShare(t *testing.T) {
 	controller := centralQueueLanePathTestController()
 	consumers := newCentralQueueConsumerController(120, 256<<10, 4)

@@ -287,11 +287,14 @@ func centralQueueConsumerBackendCapacity(configuredConsumers, readyBackends int)
 }
 
 func centralQueueEffectiveConsumersForLanes(controller *centralQueueConsumerController, configuredConsumers, readyBackends int) (int, bool) {
-	if effectiveConsumers, ok := controller.lastEffectiveConsumers(); ok {
-		return effectiveConsumers, true
-	}
 	if readyBackends <= 0 {
 		return 0, false
+	}
+	if effectiveConsumers, ok := controller.lastEffectiveConsumers(); ok {
+		if backendSafe, backendSafeKnown := controller.backendSafeConsumersForLanes(readyBackends); backendSafeKnown {
+			return min(effectiveConsumers, backendSafe), true
+		}
+		return effectiveConsumers, true
 	}
 	if effectiveConsumers, ok := controller.backendSafeConsumersForLanes(readyBackends); ok {
 		return effectiveConsumers, true
