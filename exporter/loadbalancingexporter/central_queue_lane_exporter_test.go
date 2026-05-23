@@ -63,6 +63,20 @@ func TestLogExporterCentralQueueUsesRoutableBackendCountForDynamicLanes(t *testi
 	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
 }
 
+func TestLogExporterCentralQueueLaneBootstrapUsesActiveLoadBalancerReplicas(t *testing.T) {
+	controller := centralQueueLanePathTestController()
+	consumers := newCentralQueueConsumerController(120, 256<<10, 3)
+	p := &logExporterImp{
+		loadBalancer:             loadBalancerWithRoutableBackendCount(6, 6),
+		centralQueueLanes:        controller,
+		centralQueueConsumers:    consumers,
+		centralQueueNumConsumers: 120,
+		ignoreTraceID:            true,
+	}
+
+	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
+}
+
 func TestLogExporterCentralQueueDynamicLanesUseLastEffectiveConsumers(t *testing.T) {
 	controller := centralQueueLanePathTestController()
 	consumers := newCentralQueueConsumerController(120, 256<<10, 3)

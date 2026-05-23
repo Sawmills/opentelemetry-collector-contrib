@@ -99,22 +99,7 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 		queueDemand = minConsumers
 	}
 
-	backendSafe := 0
-	if inputs.readyBackends > 0 {
-		inflightPerBackend := p.maxInflightSendsPerBackend
-		if inflightPerBackend <= 0 {
-			inflightPerBackend = defaultCentralQueueMaxInflightSendsPerBackend
-		}
-		lbReplicas := p.activeLoadBalancerReplicas
-		if lbReplicas <= 0 {
-			lbReplicas = 1
-		}
-		totalBackendCapacity := inputs.readyBackends * inflightPerBackend
-		backendSafe = totalBackendCapacity / lbReplicas
-		if backendSafe <= 0 && totalBackendCapacity > 0 {
-			backendSafe = 1
-		}
-	}
+	backendSafe := p.backendSafeConsumersPerLB(inputs.readyBackends)
 	if backendSafe <= 0 {
 		return centralQueueConsumerResult{
 			queueDemandConsumers:      queueDemand,
@@ -168,6 +153,26 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 		limitReason:               reason,
 		pressureState:             pressureState,
 	}
+}
+
+func (p centralQueueConsumerPolicy) backendSafeConsumersPerLB(readyBackends int) int {
+	if readyBackends <= 0 {
+		return 0
+	}
+	inflightPerBackend := p.maxInflightSendsPerBackend
+	if inflightPerBackend <= 0 {
+		inflightPerBackend = defaultCentralQueueMaxInflightSendsPerBackend
+	}
+	lbReplicas := p.activeLoadBalancerReplicas
+	if lbReplicas <= 0 {
+		lbReplicas = 1
+	}
+	totalBackendCapacity := readyBackends * inflightPerBackend
+	backendSafe := totalBackendCapacity / lbReplicas
+	if backendSafe <= 0 && totalBackendCapacity > 0 {
+		return 1
+	}
+	return backendSafe
 }
 
 func ceilDivInt64ToInt(numerator, denominator int64) int {
@@ -247,6 +252,19 @@ func (c *centralQueueConsumerController) lastEffectiveConsumers() (int, bool) {
 	return c.last.effectiveConsumers, true
 }
 
+func (c *centralQueueConsumerController) backendSafeConsumersForLanes(readyBackends int) (int, bool) {
+	if c == nil || readyBackends <= 0 {
+		return 0, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	backendSafe := c.policy.backendSafeConsumersPerLB(readyBackends)
+	if backendSafe <= 0 {
+		return 0, true
+	}
+	return min(configuredCentralQueueConsumers(c.policy.maxConsumers), backendSafe), true
+}
+
 func configuredCentralQueueConsumers(consumers int) int {
 	if consumers <= 0 {
 		return defaultCentralQueueNumConsumers
@@ -274,6 +292,9 @@ func centralQueueEffectiveConsumersForLanes(controller *centralQueueConsumerCont
 	}
 	if readyBackends <= 0 {
 		return 0, false
+	}
+	if effectiveConsumers, ok := controller.backendSafeConsumersForLanes(readyBackends); ok {
+		return effectiveConsumers, true
 	}
 	return centralQueueConsumerBackendCapacity(configuredConsumers, readyBackends), true
 }
