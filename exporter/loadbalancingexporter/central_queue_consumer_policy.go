@@ -6,6 +6,7 @@ package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry
 import (
 	"math"
 	"sync"
+	"sync/atomic"
 )
 
 type centralQueueConsumerLimitReason string
@@ -218,8 +219,43 @@ func (c *centralQueueConsumerController) computeWithChange(queueCompressedBytes 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	previous := c.last
-	previousOK := previous.limitReason != ""
+	result := c.computeLocked(centralQueueConsumerInputs{
+		queueCompressedBytes: queueCompressedBytes,
+		readyBackends:        readyBackends,
+		backendPressure:      backendPressure,
+	})
+	return result, c.commitLocked(result, true)
+}
+
+func (c *centralQueueConsumerController) tryAcquire(
+	active *atomic.Int64,
+	queueCompressedBytes int64,
+	readyBackends int,
+	backendPressure bool,
+) (centralQueueConsumerResult, bool, bool) {
+	if c == nil {
+		result := centralQueueConsumerPolicy{}.compute(centralQueueConsumerInputs{
+			queueCompressedBytes: queueCompressedBytes,
+			readyBackends:        readyBackends,
+			backendPressure:      backendPressure,
+		})
+		return result, tryIncrementCentralQueueActiveConsumers(active, result.effectiveConsumers), true
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	result := c.computeLocked(centralQueueConsumerInputs{
+		queueCompressedBytes: queueCompressedBytes,
+		readyBackends:        readyBackends,
+		backendPressure:      backendPressure,
+	})
+	acquired := tryIncrementCentralQueueActiveConsumers(active, result.effectiveConsumers)
+	changed := c.commitLocked(result, acquired)
+	return result, acquired, changed
+}
+
+func (c *centralQueueConsumerController) computeLocked(inputs centralQueueConsumerInputs) centralQueueConsumerResult {
 	policy := c.policy
 	if c.last.effectiveConsumers > 0 {
 		policy.previousEffectiveConsumers = c.last.effectiveConsumers
@@ -227,13 +263,20 @@ func (c *centralQueueConsumerController) computeWithChange(queueCompressedBytes 
 	}
 	policy.pressureRecoveryActive = c.last.pressureState == centralQueueConsumerPressureReducing ||
 		c.last.pressureState == centralQueueConsumerPressureRecovering
-	result := policy.compute(centralQueueConsumerInputs{
-		queueCompressedBytes: queueCompressedBytes,
-		readyBackends:        readyBackends,
-		backendPressure:      backendPressure,
-	})
+	return policy.compute(inputs)
+}
+
+func (c *centralQueueConsumerController) commitLocked(result centralQueueConsumerResult, allowRecoveryAdvance bool) bool {
+	previous := c.last
+	previousOK := previous.limitReason != ""
+	if !allowRecoveryAdvance &&
+		previousOK &&
+		result.pressureState == centralQueueConsumerPressureRecovering &&
+		result.effectiveConsumers > previous.effectiveConsumers {
+		return false
+	}
 	c.last = result
-	return result, !previousOK || result != previous
+	return !previousOK || result != previous
 }
 
 func (c *centralQueueConsumerController) lastEffectiveConsumers() (int, bool) {

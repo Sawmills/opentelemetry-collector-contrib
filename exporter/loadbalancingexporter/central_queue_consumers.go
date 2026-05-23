@@ -19,26 +19,31 @@ func tryAcquireCentralQueueConsumer(
 	if active == nil {
 		return false
 	}
-	result, decisionChanged := controller.computeWithChange(queueCompressedBytes, centralQueueRoutableBackendCount(lb), centralQueueBackendPressure(lb))
+	result, acquired, decisionChanged := controller.tryAcquire(
+		active,
+		queueCompressedBytes,
+		centralQueueRoutableBackendCount(lb),
+		centralQueueBackendPressure(lb),
+	)
 	if queue != nil && decisionChanged {
 		queue.settings.telemetry.recordConsumerDecision(ctx, result)
 	}
-	if result.effectiveConsumers <= 0 {
+	if acquired && queue != nil {
+		queue.settings.telemetry.recordActiveConsumers(ctx, active.Load())
+	}
+	return acquired
+}
+
+func tryIncrementCentralQueueActiveConsumers(active *atomic.Int64, effectiveConsumers int) bool {
+	if active == nil || effectiveConsumers <= 0 {
 		return false
 	}
-
-	for {
-		current := active.Load()
-		if current >= int64(result.effectiveConsumers) {
-			return false
-		}
-		if active.CompareAndSwap(current, current+1) {
-			if queue != nil {
-				queue.settings.telemetry.recordActiveConsumers(ctx, current+1)
-			}
-			return true
-		}
+	current := active.Load()
+	if current >= int64(effectiveConsumers) {
+		return false
 	}
+	active.Add(1)
+	return true
 }
 
 func releaseCentralQueueConsumer(ctx context.Context, active *atomic.Int64, queue *centralQueue) {

@@ -22,6 +22,62 @@ func TestTryAcquireCentralQueueConsumerBlocksWhenEffectiveConsumersAreFull(t *te
 	require.EqualValues(t, 2, active.Load())
 }
 
+func TestTryAcquireCentralQueueConsumerDoesNotRecoverOnFailedAcquire(t *testing.T) {
+	var active atomic.Int64
+	active.Store(5)
+	controller := &centralQueueConsumerController{
+		policy: centralQueueConsumerPolicy{
+			maxConsumers:               120,
+			minConsumers:               1,
+			targetCompressedBytes:      256 << 10,
+			maxInflightSendsPerBackend: 1,
+			pressureRecoveryStep:       1,
+		},
+		last: centralQueueConsumerResult{
+			effectiveConsumers: 4,
+			limitReason:        centralQueueConsumerLimitReasonBackendPressure,
+			pressureState:      centralQueueConsumerPressureReducing,
+		},
+	}
+	lb := centralQueueConsumerTestLoadBalancerWithRoutableBackendCount(16)
+
+	first := tryAcquireCentralQueueConsumer(t.Context(), &active, controller, nil, lb, 1<<30)
+	second := tryAcquireCentralQueueConsumer(t.Context(), &active, controller, nil, lb, 1<<30)
+
+	require.False(t, first)
+	require.False(t, second)
+	require.EqualValues(t, 5, active.Load())
+	require.Equal(t, 4, controller.last.effectiveConsumers)
+	require.Equal(t, centralQueueConsumerPressureReducing, controller.last.pressureState)
+}
+
+func TestTryAcquireCentralQueueConsumerCommitsPressureReductionOnFailedAcquire(t *testing.T) {
+	var active atomic.Int64
+	active.Store(8)
+	controller := &centralQueueConsumerController{
+		policy: centralQueueConsumerPolicy{
+			maxConsumers:               120,
+			minConsumers:               1,
+			targetCompressedBytes:      256 << 10,
+			maxInflightSendsPerBackend: 1,
+		},
+		last: centralQueueConsumerResult{
+			effectiveConsumers: 8,
+			limitReason:        centralQueueConsumerLimitReasonBackendCapacity,
+			pressureState:      centralQueueConsumerPressureStable,
+		},
+	}
+
+	result, acquired, changed := controller.tryAcquire(&active, 1<<30, 16, true)
+
+	require.False(t, acquired)
+	require.True(t, changed)
+	require.EqualValues(t, 8, active.Load())
+	require.Equal(t, 4, result.effectiveConsumers)
+	require.Equal(t, 4, controller.last.effectiveConsumers)
+	require.Equal(t, centralQueueConsumerPressureReducing, controller.last.pressureState)
+}
+
 func TestTryAcquireCentralQueueConsumerReleasesAndNotifies(t *testing.T) {
 	var active atomic.Int64
 	controller := newCentralQueueConsumerController(120, 256<<10, 1)
