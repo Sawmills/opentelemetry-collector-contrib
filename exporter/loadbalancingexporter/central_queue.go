@@ -179,7 +179,7 @@ func (q *centralQueue) leaseWithPollInterval(ctx context.Context, pollInterval t
 	return q.leaseWithPollIntervalAndAcquire(ctx, pollInterval, nil)
 }
 
-type centralQueueLeaseAcquireFunc func(queueCompressedBytes int64) (func(), bool)
+type centralQueueLeaseAcquireFunc func(queueCompressedBytes int64, window centralQueueWindow) (func(), bool)
 
 func (q *centralQueue) leaseWithAcquire(ctx context.Context, acquire centralQueueLeaseAcquireFunc) (*centralQueueLease, error) {
 	return q.leaseWithPollIntervalAndAcquire(ctx, centralQueueLeasePollInterval, acquire)
@@ -248,14 +248,23 @@ func (q *centralQueue) tryLeaseWithAcquire(now time.Time, acquire centralQueueLe
 			return lease, nil
 		}
 		queueCompressedBytes := q.currentCompressedBytes
+		selectedWindow := q.ready[0]
+		selectedWindow.routingKey = append([]byte(nil), selectedWindow.routingKey...)
 		q.mu.Unlock()
 
-		release, acquired := acquire(queueCompressedBytes)
+		release, acquired := acquire(queueCompressedBytes, selectedWindow)
 		if !acquired {
 			return nil, errCentralQueueConsumersFull
 		}
 
 		q.mu.Lock()
+		if len(q.ready) == 0 || string(q.ready[0].routingKey) != string(selectedWindow.routingKey) {
+			q.mu.Unlock()
+			if release != nil {
+				release()
+			}
+			continue
+		}
 		lease := q.leaseReadyWindowLocked()
 		q.mu.Unlock()
 		if lease == nil {
@@ -732,6 +741,34 @@ func (l *centralQueueLease) requeue(now time.Time) error {
 				nextAttempt := now.Add(centralQueueRetryDelayWithJitter(item))
 				item.attempt++
 				item.nextAttemptUnixNano = nextAttempt.UnixNano()
+				bucket := l.queue.bucketForItemLocked(item)
+				bucket.append(item)
+				l.queue.itemCount++
+				l.queue.updateReadyBucketLocked(bucket, now.UnixNano())
+				l.queue.trackOldestEnqueuedAtLocked(item)
+			}
+		}
+		snapshot := l.queue.snapshotLocked()
+		l.queue.mu.Unlock()
+		l.queue.notifyLeaseWaiters()
+		l.queue.settings.telemetry.record(context.Background(), snapshot)
+	})
+	return err
+}
+
+func (l *centralQueueLease) deferReady(now time.Time) error {
+	var err error
+	l.once.Do(func() {
+		l.queue.mu.Lock()
+		l.queue.currentInflightBytes -= int64(l.window.uncompressedBytes)
+		if l.queue.stopped {
+			l.queue.currentCompressedBytes -= int64(l.window.compressedBytes)
+			err = errCentralQueueStopped
+		} else {
+			nextAttemptUnixNano := now.Add(centralQueueLeasePollInterval).UnixNano()
+			for i := range l.window.items {
+				item := l.window.items[i]
+				item.nextAttemptUnixNano = nextAttemptUnixNano
 				bucket := l.queue.bucketForItemLocked(item)
 				bucket.append(item)
 				l.queue.itemCount++

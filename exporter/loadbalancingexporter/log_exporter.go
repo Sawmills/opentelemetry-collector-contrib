@@ -240,7 +240,7 @@ func (e *logExporterImp) observeCentralQueueLaneBytes(compressedBytes int, now t
 func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 	defer e.centralWG.Done()
 	for {
-		lease, err := e.centralQueue.leaseWithAcquire(ctx, func(queueCompressedBytes int64) (func(), bool) {
+		lease, err := e.centralQueue.leaseWithAcquire(ctx, func(queueCompressedBytes int64, _ centralQueueWindow) (func(), bool) {
 			if !tryAcquireCentralQueueConsumer(ctx, &e.centralActiveConsumers, e.centralQueueConsumers, e.centralQueue, e.loadBalancer, queueCompressedBytes) {
 				return nil, false
 			}
@@ -264,7 +264,15 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 			continue
 		}
 
-		err = e.consumeCentralQueueLogWindow(ctx, lease.window)
+		acquiredBackend, backendAvailable := tryAcquireCentralQueueBackendForWindow(e.loadBalancer, e.centralQueueBackendLimiter, lease.window)
+		if !backendAvailable {
+			lease.releaseConsumer()
+			if deferErr := lease.deferReady(time.Now()); deferErr != nil {
+				e.logger.Warn("failed to defer central log queue item while backend send slot is full", zap.Error(deferErr))
+			}
+			continue
+		}
+		err = e.consumeCentralQueueLogWindowWithBackend(ctx, lease.window, acquiredBackend)
 		if err == nil {
 			lease.done()
 			lease.releaseConsumer()
@@ -309,17 +317,31 @@ func (e *logExporterImp) consumeCentralQueueLogItem(ctx context.Context, item ce
 }
 
 func (e *logExporterImp) consumeCentralQueueLogWindow(ctx context.Context, window centralQueueWindow) error {
-	return e.consumeCentralQueueLogWindowAttempt(ctx, window, 0)
+	return e.consumeCentralQueueLogWindowWithBackend(ctx, window, nil)
 }
 
-func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context, window centralQueueWindow, rerouteAttempt int) error {
-	le, endpoint, err := e.loadBalancer.exporterAndEndpoint(window.routingKey)
-	if err != nil {
-		return err
-	}
-	backendLease, err := e.centralQueueBackendLimiter.acquire(ctx, endpoint)
-	if err != nil {
-		return err
+func (e *logExporterImp) consumeCentralQueueLogWindowWithBackend(ctx context.Context, window centralQueueWindow, acquiredBackend *centralQueueAcquiredBackend) error {
+	return e.consumeCentralQueueLogWindowAttempt(ctx, window, 0, acquiredBackend)
+}
+
+func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context, window centralQueueWindow, rerouteAttempt int, acquiredBackend *centralQueueAcquiredBackend) error {
+	var le *wrappedExporter
+	var endpoint string
+	var backendLease *centralQueueBackendLease
+	if acquiredBackend != nil {
+		le = acquiredBackend.exporter
+		endpoint = acquiredBackend.endpoint
+		backendLease = acquiredBackend.lease
+	} else {
+		var err error
+		le, endpoint, err = e.loadBalancer.exporterAndEndpoint(window.routingKey)
+		if err != nil {
+			return err
+		}
+		backendLease, err = e.centralQueueBackendLimiter.acquire(ctx, endpoint)
+		if err != nil {
+			return err
+		}
 	}
 
 	ld := plog.NewLogs()
@@ -361,7 +383,7 @@ func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context
 	decision, err := e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect, true, false, false)
 	backendLease.release()
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, le.endpoint, decision, rerouteAttempt) {
-		rerouteErr := e.consumeCentralQueueLogWindowAttempt(ctx, window, rerouteAttempt+1)
+		rerouteErr := e.consumeCentralQueueLogWindowAttempt(ctx, window, rerouteAttempt+1, nil)
 		e.loadBalancer.recordBackendReroute(ctx, "logs", decision.reason, rerouteErr)
 		return rerouteErr
 	}

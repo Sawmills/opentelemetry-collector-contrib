@@ -138,8 +138,9 @@ func TestCentralQueueTryLeaseWithAcquireBlocksWhenConsumersFull(t *testing.T) {
 	now := time.Unix(10, 0)
 	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
 
-	lease, err := q.tryLeaseWithAcquire(now, func(queueCompressedBytes int64) (func(), bool) {
+	lease, err := q.tryLeaseWithAcquire(now, func(queueCompressedBytes int64, window centralQueueWindow) (func(), bool) {
 		require.EqualValues(t, 10, queueCompressedBytes)
+		require.Equal(t, []byte("lane-a"), window.routingKey)
 		return nil, false
 	})
 
@@ -163,7 +164,7 @@ func TestCentralQueueTryLeaseWithAcquireDoesNotHoldQueueLockWhileAcquiring(t *te
 	releaseAcquire := make(chan struct{})
 	result := make(chan centralQueueLeaseResult, 1)
 	go func() {
-		lease, err := q.tryLeaseWithAcquire(now, func(int64) (func(), bool) {
+		lease, err := q.tryLeaseWithAcquire(now, func(int64, centralQueueWindow) (func(), bool) {
 			close(acquireStarted)
 			<-releaseAcquire
 			return nil, false
@@ -207,8 +208,9 @@ func TestCentralQueueTryLeaseWithAcquireSucceedsWhenConsumersAvailable(t *testin
 	now := time.Unix(10, 0)
 	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
 
-	lease, err := q.tryLeaseWithAcquire(now, func(queueCompressedBytes int64) (func(), bool) {
+	lease, err := q.tryLeaseWithAcquire(now, func(queueCompressedBytes int64, window centralQueueWindow) (func(), bool) {
 		require.EqualValues(t, 10, queueCompressedBytes)
+		require.Equal(t, []byte("lane-a"), window.routingKey)
 		return func() {}, true
 	})
 
@@ -238,7 +240,7 @@ func TestCentralQueueTryLeaseWithAcquirePreparesOnlyOneReadyWindow(t *testing.T)
 		}, now))
 	}
 
-	lease, err := q.tryLeaseWithAcquire(now, func(int64) (func(), bool) { return func() {}, true })
+	lease, err := q.tryLeaseWithAcquire(now, func(int64, centralQueueWindow) (func(), bool) { return func() {}, true })
 
 	require.NoError(t, err)
 	require.NotNil(t, lease)
@@ -268,7 +270,7 @@ func TestCentralQueueLeaseWithAcquireRetriesWhenConsumersBecomeAvailable(t *test
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	go func() {
-		lease, err := q.leaseWithPollIntervalAndAcquire(ctx, time.Hour, func(int64) (func(), bool) {
+		lease, err := q.leaseWithPollIntervalAndAcquire(ctx, time.Hour, func(int64, centralQueueWindow) (func(), bool) {
 			if attempts.Add(1) >= 2 {
 				return func() {}, true
 			}

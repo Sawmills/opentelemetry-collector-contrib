@@ -975,6 +975,98 @@ func TestLogsCentralQueueConsumersSerializeSameBackendWindows(t *testing.T) {
 	require.Eventually(t, func() bool { return calls.Load() == 2 }, time.Second, 10*time.Millisecond)
 }
 
+func TestLogsCentralQueueBackendWaitDoesNotHoldConsumerSlot(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := endpoint2Config()
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	started := make(chan string, 3)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockLogsExporter(func(context.Context, plog.Logs) error {
+			started <- endpoint
+			if endpoint == "endpoint-1:4317" {
+				<-release
+			}
+			return nil
+		}), nil
+	}
+	lb, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1:4317", "endpoint-2:4317"})
+	route1 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1:4317")
+	route2 := findRoutingIDForEndpoint(t, lb.ring, "endpoint-2:4317")
+
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1024 * 1024,
+			maxInflightUncompressedBytes: 1024 * 1024,
+			maxUncompressedBatchBytes:    1024 * 1024,
+			targetCompressedBytes:        1,
+			maxBatchDelay:                time.Second,
+			maxReadyWindows:              4,
+		}),
+		centralCodec:             codec,
+		loadBalancer:             lb,
+		logger:                   ts.Logger,
+		telemetry:                tb,
+		centralQueueNumConsumers: 3,
+		centralQueueBackendLimiter: newCentralQueueBackendLimiter(
+			defaultCentralQueueMaxInflightSendsPerBackend,
+		),
+	}
+	blockedBackendLease, err := p.centralQueueBackendLimiter.acquire(t.Context(), "endpoint-1:4317")
+	require.NoError(t, err)
+	t.Cleanup(blockedBackendLease.release)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	p.startCentralQueueConsumers(ctx)
+	cleanupCtx := context.WithoutCancel(t.Context())
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		p.centralQueue.stop()
+		cancel()
+		waitCtx, waitCancel := context.WithTimeout(cleanupCtx, time.Second)
+		defer waitCancel()
+		require.NoError(t, waitForInflight(waitCtx, &p.centralWG))
+	})
+
+	first, err := newCentralQueueLogsItem([]byte(route1), simpleLogs(), codec, time.Now())
+	require.NoError(t, err)
+	second, err := newCentralQueueLogsItem([]byte(route1), simpleLogs(), codec, time.Now())
+	require.NoError(t, err)
+	third, err := newCentralQueueLogsItem([]byte(route2), simpleLogs(), codec, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, p.centralQueue.enqueue(first))
+	require.NoError(t, p.centralQueue.enqueue(second))
+	time.Sleep(100 * time.Millisecond)
+	require.NoError(t, p.centralQueue.enqueue(third))
+
+	require.Eventually(t, func() bool {
+		return receivedEndpoint(started, "endpoint-2:4317")
+	}, time.Second, 10*time.Millisecond)
+	releaseOnce.Do(func() { close(release) })
+}
+
+func receivedEndpoint(started <-chan string, endpoint string) bool {
+	for {
+		select {
+		case got := <-started:
+			if got == endpoint {
+				return true
+			}
+		default:
+			return false
+		}
+	}
+}
+
 func TestLogsCentralQueueConsumersCapConcurrencyByRoutableBackends(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	cfg := endpoint2Config()

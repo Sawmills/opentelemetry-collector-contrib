@@ -21,6 +21,47 @@ type centralQueueBackendLease struct {
 	once     sync.Once
 }
 
+type centralQueueAcquiredBackend struct {
+	exporter *wrappedExporter
+	endpoint string
+	lease    *centralQueueBackendLease
+}
+
+func tryAcquireCentralQueueBackendForWindow(lb *loadBalancer, limiter *centralQueueBackendLimiter, window centralQueueWindow) (*centralQueueAcquiredBackend, bool) {
+	if lb == nil {
+		return nil, true
+	}
+	exp, endpoint, err := lb.exporterAndEndpoint(window.routingKey)
+	if err != nil {
+		return nil, true
+	}
+	if limiter == nil || endpoint == "" {
+		return &centralQueueAcquiredBackend{
+			exporter: exp,
+			endpoint: endpoint,
+			lease:    &centralQueueBackendLease{},
+		}, true
+	}
+	if !limiter.tryAcquire(endpoint) {
+		return nil, false
+	}
+	return &centralQueueAcquiredBackend{
+		exporter: exp,
+		endpoint: endpoint,
+		lease: &centralQueueBackendLease{
+			limiter:  limiter,
+			endpoint: endpoint,
+		},
+	}, true
+}
+
+func (b *centralQueueAcquiredBackend) release() {
+	if b == nil || b.lease == nil {
+		return
+	}
+	b.lease.release()
+}
+
 func newCentralQueueBackendLimiter(limit int) *centralQueueBackendLimiter {
 	if limit <= 0 {
 		limit = defaultCentralQueueMaxInflightSendsPerBackend
