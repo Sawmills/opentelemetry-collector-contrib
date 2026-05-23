@@ -38,12 +38,16 @@ func tryIncrementCentralQueueActiveConsumers(active *atomic.Int64, effectiveCons
 	if active == nil || effectiveConsumers <= 0 {
 		return false
 	}
-	current := active.Load()
-	if current >= int64(effectiveConsumers) {
-		return false
+	limit := int64(effectiveConsumers)
+	for {
+		current := active.Load()
+		if current >= limit {
+			return false
+		}
+		if active.CompareAndSwap(current, current+1) {
+			return true
+		}
 	}
-	active.Add(1)
-	return true
 }
 
 func releaseCentralQueueConsumer(ctx context.Context, active *atomic.Int64, queue *centralQueue) {

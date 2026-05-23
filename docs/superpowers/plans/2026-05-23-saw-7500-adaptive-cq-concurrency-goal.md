@@ -61,6 +61,11 @@ pressure_adjusted_consumers =
   reduce quickly when backend pressure is present;
   recover slowly when backend pressure is quiet
 
+min_consumers =
+  configured lower bound per LB pod, in concurrent central-queue send workers,
+  default 1; it is only honored when backend_safe_consumers_per_lb is nonzero,
+  so it cannot force drain activity when this LB has no safe backend share
+
 effective_consumers =
   clamp(
     min(min_consumers, backend_safe_consumers_per_lb),

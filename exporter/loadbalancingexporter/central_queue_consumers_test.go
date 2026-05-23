@@ -4,6 +4,8 @@
 package loadbalancingexporter
 
 import (
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -20,6 +22,33 @@ func TestTryAcquireCentralQueueConsumerBlocksWhenEffectiveConsumersAreFull(t *te
 
 	require.False(t, acquired)
 	require.EqualValues(t, 2, active.Load())
+}
+
+func TestTryIncrementCentralQueueActiveConsumersDoesNotOversubscribeConcurrentAcquires(t *testing.T) {
+	previousProcs := runtime.GOMAXPROCS(8)
+	t.Cleanup(func() {
+		runtime.GOMAXPROCS(previousProcs)
+	})
+
+	const goroutines = 64
+	for range 100 {
+		var active atomic.Int64
+		ready := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(goroutines)
+
+		for range goroutines {
+			go func() {
+				defer wg.Done()
+				<-ready
+				tryIncrementCentralQueueActiveConsumers(&active, 1)
+			}()
+		}
+
+		close(ready)
+		wg.Wait()
+		require.LessOrEqual(t, active.Load(), int64(1))
+	}
 }
 
 func TestTryAcquireCentralQueueConsumerDoesNotRecoverOnFailedAcquire(t *testing.T) {
