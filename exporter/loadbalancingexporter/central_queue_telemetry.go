@@ -34,8 +34,12 @@ type centralQueueTelemetry struct {
 	activeConsumers       metric.Int64Gauge
 	queueDemandConsumers  metric.Int64Gauge
 	backendSafeConsumers  metric.Int64Gauge
-	consumerLimitReason   metric.Int64Gauge
-	consumerPressure      metric.Int64Gauge
+	consumerLimitReason   metric.Int64ObservableGauge
+	consumerPressure      metric.Int64ObservableGauge
+	consumerDecisionReg   metric.Registration
+	consumerDecisionMu    sync.RWMutex
+	consumerDecision      centralQueueConsumerResult
+	consumerDecisionSet   bool
 	lanes                 metric.Int64Gauge
 	effectiveLanes        metric.Int64Gauge
 	windowCompressed      metric.Int64Histogram
@@ -216,18 +220,47 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 		metric.WithUnit("{workers}"),
 	)
 	errs = errors.Join(errs, err)
-	t.consumerLimitReason, err = meter.Int64Gauge(
+	t.consumerLimitReason, err = meter.Int64ObservableGauge(
 		"otelcol_loadbalancer_central_queue_consumer_limit_reason",
 		metric.WithDescription("Latest central queue drain-consumer limiting reason. The active reason is reported as 1 and other reasons as 0."),
 		metric.WithUnit("1"),
 	)
 	errs = errors.Join(errs, err)
-	t.consumerPressure, err = meter.Int64Gauge(
+	consumerDecisionErrs := err
+	t.consumerPressure, err = meter.Int64ObservableGauge(
 		"otelcol_loadbalancer_central_queue_consumer_pressure_state",
 		metric.WithDescription("Latest central queue drain-consumer pressure state. The active state is reported as 1 and other states as 0."),
 		metric.WithUnit("1"),
 	)
 	errs = errors.Join(errs, err)
+	consumerDecisionErrs = errors.Join(consumerDecisionErrs, err)
+	if consumerDecisionErrs == nil {
+		t.consumerDecisionReg, err = meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
+			t.consumerDecisionMu.RLock()
+			result := t.consumerDecision
+			decisionSet := t.consumerDecisionSet
+			t.consumerDecisionMu.RUnlock()
+			if !decisionSet {
+				return nil
+			}
+			for _, reason := range centralQueueConsumerLimitReasons {
+				value := int64(0)
+				if result.limitReason == reason {
+					value = 1
+				}
+				observer.ObserveInt64(t.consumerLimitReason, value, t.consumerReasonAttrs[reason])
+			}
+			for _, state := range centralQueueConsumerPressureStates {
+				value := int64(0)
+				if result.pressureState == state {
+					value = 1
+				}
+				observer.ObserveInt64(t.consumerPressure, value, t.consumerPressureAttrs[state])
+			}
+			return nil
+		}, t.consumerLimitReason, t.consumerPressure)
+		errs = errors.Join(errs, err)
+	}
 	t.lanes, err = meter.Int64Gauge(
 		"otelcol_loadbalancer_central_queue_lanes",
 		metric.WithDescription("Configured central queue lane_count override. Zero means dynamic lane policy is active."),
@@ -423,20 +456,10 @@ func (t *centralQueueTelemetry) recordConsumerDecision(ctx context.Context, resu
 	t.effectiveConsumers.Record(ctx, int64(result.effectiveConsumers), t.signalAttrs)
 	t.queueDemandConsumers.Record(ctx, int64(result.queueDemandConsumers), t.signalAttrs)
 	t.backendSafeConsumers.Record(ctx, int64(result.backendSafeConsumersPerLB), t.signalAttrs)
-	for _, reason := range centralQueueConsumerLimitReasons {
-		value := int64(0)
-		if result.limitReason == reason {
-			value = 1
-		}
-		t.consumerLimitReason.Record(ctx, value, t.consumerReasonAttrs[reason])
-	}
-	for _, state := range centralQueueConsumerPressureStates {
-		value := int64(0)
-		if result.pressureState == state {
-			value = 1
-		}
-		t.consumerPressure.Record(ctx, value, t.consumerPressureAttrs[state])
-	}
+	t.consumerDecisionMu.Lock()
+	t.consumerDecision = result
+	t.consumerDecisionSet = true
+	t.consumerDecisionMu.Unlock()
 }
 
 func (t *centralQueueTelemetry) recordActiveConsumers(ctx context.Context, consumers int64) {
