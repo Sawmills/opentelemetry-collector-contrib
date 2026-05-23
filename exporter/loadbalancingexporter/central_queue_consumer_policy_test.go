@@ -4,6 +4,7 @@
 package loadbalancingexporter
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -37,7 +38,23 @@ func TestCentralQueueConsumerControllerUsesConfiguredActiveLoadBalancerReplicas(
 	require.Equal(t, 2, decision.effectiveConsumers)
 }
 
-func TestCentralQueueConsumerPolicyDoesNotFloorZeroBackendSharePerLB(t *testing.T) {
+func TestCentralQueueConsumerControllerReportsDecisionChanges(t *testing.T) {
+	controller := newCentralQueueConsumerController(120, 256<<10, 1)
+
+	first, changed := controller.computeWithChange(1<<30, 2, false)
+	require.True(t, changed)
+	require.Equal(t, 2, first.effectiveConsumers)
+
+	second, changed := controller.computeWithChange(1<<30, 2, false)
+	require.False(t, changed)
+	require.Equal(t, first, second)
+
+	third, changed := controller.computeWithChange(1<<30, 3, false)
+	require.True(t, changed)
+	require.Equal(t, 3, third.effectiveConsumers)
+}
+
+func TestCentralQueueConsumerPolicyKeepsDrainingWhenBackendShareIsFractional(t *testing.T) {
 	policy := centralQueueConsumerPolicy{
 		maxConsumers:               120,
 		minConsumers:               1,
@@ -51,8 +68,8 @@ func TestCentralQueueConsumerPolicyDoesNotFloorZeroBackendSharePerLB(t *testing.
 		readyBackends:        3,
 	})
 
-	require.Equal(t, 0, decision.backendSafeConsumersPerLB)
-	require.Equal(t, 0, decision.effectiveConsumers)
+	require.Equal(t, 1, decision.backendSafeConsumersPerLB)
+	require.Equal(t, 1, decision.effectiveConsumers)
 	require.Equal(t, centralQueueConsumerLimitReasonBackendCapacity, decision.limitReason)
 }
 
@@ -140,4 +157,8 @@ func TestCentralQueueConsumerPolicyPressureRecoveryIsGradual(t *testing.T) {
 
 	require.Equal(t, centralQueueConsumerPressureRecovering, decision.pressureState)
 	require.Equal(t, 5, decision.effectiveConsumers)
+}
+
+func TestCeilDivInt64ToIntDoesNotOverflow(t *testing.T) {
+	require.Equal(t, int(math.MaxInt64/2+1), ceilDivInt64ToInt(math.MaxInt64, 2))
 }

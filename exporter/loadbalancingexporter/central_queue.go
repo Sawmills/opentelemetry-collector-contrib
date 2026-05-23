@@ -231,7 +231,11 @@ func (q *centralQueue) tryLeaseWithAcquire(now time.Time, acquire centralQueueLe
 		return nil, nil
 	}
 
-	state := q.prepareReadyWindowsLocked(now)
+	readyWindowLimit := q.settings.maxReadyWindows
+	if acquire != nil {
+		readyWindowLimit = 1
+	}
+	state := q.prepareReadyWindowsLocked(now, readyWindowLimit)
 	if lease, blocked := q.leaseReadyWindowLocked(acquire); lease != nil || blocked {
 		if blocked {
 			return nil, errCentralQueueConsumersFull
@@ -244,9 +248,12 @@ func (q *centralQueue) tryLeaseWithAcquire(now time.Time, acquire centralQueueLe
 	return nil, nil
 }
 
-func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSchedulerState {
+func (q *centralQueue) prepareReadyWindowsLocked(now time.Time, readyWindowLimit int) centralQueueSchedulerState {
+	if readyWindowLimit <= 0 {
+		readyWindowLimit = q.settings.maxReadyWindows
+	}
 	state := centralQueueSchedulerStateWaiting
-	for len(q.ready) < q.settings.maxReadyWindows {
+	for len(q.ready) < readyWindowLimit {
 		targetCandidates, fallbackCandidates := q.collectReadyWindowCandidatesLocked(now)
 		if len(targetCandidates) == 0 && len(fallbackCandidates) == 0 {
 			return state
@@ -260,7 +267,7 @@ func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSche
 		// windows in later groups may still fit, and the original code's
 		// blocked-target to InflightBytes signaling remains intact.
 		staleFallbacks, freshFallbacks := q.splitFallbackByStaleness(fallbackCandidates, now)
-		scheduledStale, _ := q.scheduleReadyWindowCandidatesLocked(staleFallbacks, now)
+		scheduledStale, _ := q.scheduleReadyWindowCandidatesLocked(staleFallbacks, now, readyWindowLimit)
 		if scheduledStale {
 			state = centralQueueSchedulerStateReady
 			// Items were removed from buckets, so the previously-collected
@@ -269,19 +276,19 @@ func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSche
 			targetCandidates, fallbackCandidates = q.collectReadyWindowCandidatesLocked(now)
 			_, freshFallbacks = q.splitFallbackByStaleness(fallbackCandidates, now)
 		}
-		if len(q.ready) >= q.settings.maxReadyWindows {
+		if len(q.ready) >= readyWindowLimit {
 			state = centralQueueSchedulerStateReady
 			continue
 		}
 
-		scheduledTarget, blocked := q.scheduleReadyWindowCandidatesLocked(targetCandidates, now)
+		scheduledTarget, blocked := q.scheduleReadyWindowCandidatesLocked(targetCandidates, now, readyWindowLimit)
 		if !scheduledTarget && !scheduledStale && blocked {
 			return centralQueueSchedulerStateInflightBytes
 		}
 		if scheduledTarget {
 			state = centralQueueSchedulerStateReady
 		}
-		if len(q.ready) >= q.settings.maxReadyWindows {
+		if len(q.ready) >= readyWindowLimit {
 			state = centralQueueSchedulerStateReady
 			continue
 		}
@@ -290,7 +297,7 @@ func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSche
 			_, freshFallbacks = q.splitFallbackByStaleness(fallbackCandidates, now)
 		}
 
-		scheduledFallback, blocked := q.scheduleReadyWindowCandidatesLocked(freshFallbacks, now)
+		scheduledFallback, blocked := q.scheduleReadyWindowCandidatesLocked(freshFallbacks, now, readyWindowLimit)
 		if blocked {
 			return centralQueueSchedulerStateInflightBytes
 		}
@@ -522,9 +529,12 @@ func sortCentralQueueWindowCandidates(candidates []centralQueueWindowCandidate) 
 	})
 }
 
-func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQueueWindowCandidate, now time.Time) (bool, bool) {
+func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQueueWindowCandidate, now time.Time, readyWindowLimit int) (bool, bool) {
 	if len(candidates) == 0 {
 		return false, false
+	}
+	if readyWindowLimit <= 0 {
+		readyWindowLimit = q.settings.maxReadyWindows
 	}
 
 	selected := make([]centralQueueWindowCandidate, 0, len(candidates))
@@ -532,7 +542,7 @@ func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQ
 	blocked := false
 	for i := range candidates {
 		candidate := &candidates[i]
-		if len(q.ready)+len(selected) >= q.settings.maxReadyWindows {
+		if len(q.ready)+len(selected) >= readyWindowLimit {
 			break
 		}
 		if q.windowInflightBlockedWithBase(candidate.window, pendingInflightBytes) {

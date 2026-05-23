@@ -144,6 +144,18 @@ func TestCentralQueueLaneControllerRateRollWithBackendChangeUsesStablePreviousLa
 	require.Equal(t, 10, controller.laneCount(5, now.Add(31*time.Second)))
 }
 
+func TestCentralQueueLaneControllerRecomputesWhenEffectiveConsumersChange(t *testing.T) {
+	cfg := createDefaultConfig().(*Config).CentralQueue
+	cfg.MinLanes = 1
+	cfg.MaxLanes = 64
+	cfg.LaneHysteresisFactor = 1
+	controller := newCentralQueueLaneController(cfg)
+	now := time.Unix(10, 0)
+
+	require.Equal(t, 2, controller.laneCountWithConsumers(8, 2, true, now))
+	require.Equal(t, 4, controller.laneCountWithConsumers(8, 4, true, now.Add(time.Second)))
+}
+
 func TestCentralQueueLaneControllerHonorsFixedOverride(t *testing.T) {
 	cfg := createDefaultConfig().(*Config).CentralQueue
 	cfg.LaneCount = 3

@@ -392,6 +392,86 @@ func TestEndpointHealthFailOpenWhenMaxQuarantinedPercentExceeded(t *testing.T) {
 	require.Equal(t, []string{"endpoint-1", "endpoint-2", "endpoint-3", "endpoint-4"}, second.eligible)
 }
 
+func TestEndpointHealthUnderPressureReportsActiveSignals(t *testing.T) {
+	t.Run("healthy", func(t *testing.T) {
+		manager := newEndpointHealthManager(endpointHealthSettings{
+			enabled:            true,
+			quarantineDuration: 30 * time.Second,
+			now:                func() time.Time { return time.Unix(100, 0) },
+		})
+		manager.reconcile([]string{"endpoint-1", "endpoint-2"})
+
+		require.False(t, manager.underPressure())
+	})
+
+	t.Run("transport quarantine", func(t *testing.T) {
+		now := time.Unix(100, 0)
+		manager := newEndpointHealthManager(endpointHealthSettings{
+			enabled:            true,
+			quarantineDuration: 30 * time.Second,
+			now:                func() time.Time { return now },
+		})
+		manager.reconcile([]string{"endpoint-1", "endpoint-2"})
+		manager.markFailure("endpoint-1", status.Error(codes.Unavailable, "backend unavailable"))
+
+		require.True(t, manager.underPressure())
+	})
+
+	t.Run("probe unhealthy", func(t *testing.T) {
+		now := time.Unix(100, 0)
+		manager := newEndpointHealthManager(endpointHealthSettings{
+			enabled:            true,
+			quarantineDuration: 30 * time.Second,
+			activeProbe: endpointHealthActiveProbeSettings{
+				enabled: true,
+				fall:    1,
+				rise:    1,
+			},
+			now: func() time.Time { return now },
+		})
+		manager.reconcile([]string{"endpoint-1", "endpoint-2"})
+		manager.markProbeFailure("endpoint-1")
+
+		require.True(t, manager.underPressure())
+	})
+
+	t.Run("cached fail open", func(t *testing.T) {
+		now := time.Unix(100, 0)
+		manager := newEndpointHealthManager(endpointHealthSettings{
+			enabled:            true,
+			quarantineDuration: 30 * time.Second,
+			now:                func() time.Time { return now },
+		})
+		manager.reconcile([]string{"endpoint-1", "endpoint-2"})
+		manager.markFailure("endpoint-1", status.Error(codes.Unavailable, "backend unavailable"))
+		manager.markFailure("endpoint-2", context.DeadlineExceeded)
+
+		require.True(t, manager.underPressure())
+	})
+}
+
+func TestEndpointHealthUnderPressureDoesNotRefreshExpiredQuarantine(t *testing.T) {
+	now := time.Unix(100, 0)
+	manager := newEndpointHealthManager(endpointHealthSettings{
+		enabled:            true,
+		quarantineDuration: 30 * time.Second,
+		now:                func() time.Time { return now },
+	})
+	manager.reconcile([]string{"endpoint-1", "endpoint-2"})
+	manager.markFailure("endpoint-1", status.Error(codes.Unavailable, "backend unavailable"))
+
+	now = now.Add(31 * time.Second)
+	require.False(t, manager.underPressure())
+
+	manager.mu.RLock()
+	state := manager.endpoints["endpoint-1"]
+	quarantinedUntil := state.quarantinedUntil
+	failureReason := state.failureReason
+	manager.mu.RUnlock()
+	require.True(t, quarantinedUntil.Before(now))
+	require.Equal(t, endpointFailureUnavailable, failureReason)
+}
+
 func TestEndpointHealthReconcileDeletesStateForRemovedEndpoint(t *testing.T) {
 	now := time.Unix(100, 0)
 	manager := newEndpointHealthManager(endpointHealthSettings{

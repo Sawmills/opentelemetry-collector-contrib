@@ -19,8 +19,8 @@ func tryAcquireCentralQueueConsumer(
 	if active == nil {
 		return false
 	}
-	result := controller.compute(queueCompressedBytes, centralQueueRoutableBackendCount(lb), centralQueueBackendPressure(lb))
-	if queue != nil {
+	result, decisionChanged := controller.computeWithChange(queueCompressedBytes, centralQueueRoutableBackendCount(lb), centralQueueBackendPressure(lb))
+	if queue != nil && decisionChanged {
 		queue.settings.telemetry.recordConsumerDecision(ctx, result)
 	}
 	if result.effectiveConsumers <= 0 {

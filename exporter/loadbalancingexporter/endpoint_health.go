@@ -371,12 +371,11 @@ func (m *endpointHealthManager) underPressure() bool {
 		return false
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
 	now := m.settings.now()
-	_, failOpen, _ := m.eligibleEndpointsLocked(now)
-	if failOpen {
+	if m.failOpenActive {
 		return true
 	}
 	for _, state := range m.endpoints {

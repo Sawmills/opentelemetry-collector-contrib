@@ -78,7 +78,7 @@ func TestLogExporterCentralQueueDynamicLanesUseLastEffectiveConsumers(t *testing
 	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
 }
 
-func TestLogExporterCentralQueueDynamicLanesCollapseOnKnownZeroEffectiveConsumers(t *testing.T) {
+func TestLogExporterCentralQueueDynamicLanesUseFractionalBackendShare(t *testing.T) {
 	controller := centralQueueLanePathTestController()
 	consumers := newCentralQueueConsumerController(120, 256<<10, 4)
 	p := &logExporterImp{
@@ -88,7 +88,7 @@ func TestLogExporterCentralQueueDynamicLanesCollapseOnKnownZeroEffectiveConsumer
 		ignoreTraceID:         true,
 	}
 	decision := consumers.compute(1<<30, 3, false)
-	require.Zero(t, decision.effectiveConsumers)
+	require.Equal(t, 1, decision.effectiveConsumers)
 
 	require.Equal(t, 1, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
 }

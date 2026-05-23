@@ -54,6 +54,8 @@ queue_demand_consumers =
 
 backend_safe_consumers_per_lb =
   floor(ready_worker_backends * max_inflight_sends_per_worker / active_lb_replicas)
+  with a minimum of 1 when fleet backend capacity is non-zero, so fractional
+  per-LB share does not deadlock all LBs
 
 pressure_adjusted_consumers =
   reduce quickly when backend pressure is present;
@@ -61,7 +63,7 @@ pressure_adjusted_consumers =
 
 effective_consumers =
   clamp(
-    min_consumers,
+    min(min_consumers, backend_safe_consumers_per_lb),
     min(configured_max_consumers, queue_demand_consumers, backend_safe_consumers_per_lb),
     configured_max_consumers
   )

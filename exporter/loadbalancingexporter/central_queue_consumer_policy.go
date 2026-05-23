@@ -109,7 +109,11 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 		if lbReplicas <= 0 {
 			lbReplicas = 1
 		}
-		backendSafe = inputs.readyBackends * inflightPerBackend / lbReplicas
+		totalBackendCapacity := inputs.readyBackends * inflightPerBackend
+		backendSafe = totalBackendCapacity / lbReplicas
+		if backendSafe <= 0 && totalBackendCapacity > 0 {
+			backendSafe = 1
+		}
 	}
 	if backendSafe <= 0 {
 		return centralQueueConsumerResult{
@@ -170,7 +174,10 @@ func ceilDivInt64ToInt(numerator, denominator int64) int {
 	if numerator <= 0 || denominator <= 0 {
 		return 0
 	}
-	quotient := (numerator + denominator - 1) / denominator
+	quotient := numerator / denominator
+	if numerator%denominator != 0 {
+		quotient++
+	}
 	if quotient > int64(math.MaxInt) {
 		return math.MaxInt
 	}
@@ -194,17 +201,24 @@ func newCentralQueueConsumerController(maxConsumers int, targetCompressedBytes i
 }
 
 func (c *centralQueueConsumerController) compute(queueCompressedBytes int64, readyBackends int, backendPressure bool) centralQueueConsumerResult {
+	result, _ := c.computeWithChange(queueCompressedBytes, readyBackends, backendPressure)
+	return result
+}
+
+func (c *centralQueueConsumerController) computeWithChange(queueCompressedBytes int64, readyBackends int, backendPressure bool) (centralQueueConsumerResult, bool) {
 	if c == nil {
 		return centralQueueConsumerPolicy{}.compute(centralQueueConsumerInputs{
 			queueCompressedBytes: queueCompressedBytes,
 			readyBackends:        readyBackends,
 			backendPressure:      backendPressure,
-		})
+		}), true
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	previous := c.last
+	previousOK := previous.limitReason != ""
 	policy := c.policy
 	if c.last.effectiveConsumers > 0 {
 		policy.previousEffectiveConsumers = c.last.effectiveConsumers
@@ -218,7 +232,7 @@ func (c *centralQueueConsumerController) compute(queueCompressedBytes int64, rea
 		backendPressure:      backendPressure,
 	})
 	c.last = result
-	return result
+	return result, !previousOK || result != previous
 }
 
 func (c *centralQueueConsumerController) lastEffectiveConsumers() (int, bool) {
