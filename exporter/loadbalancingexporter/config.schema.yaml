@@ -32,7 +32,31 @@ $defs:
       lane_count:
         type: integer
         minimum: 0
-        description: Optional advanced override for backend lanes used to coalesce routing keys before late endpoint selection. Leave unset or 0 to derive from num_consumers.
+        description: Optional advanced override for backend lanes used to coalesce routing keys before late endpoint selection. Leave unset or 0 to derive dynamically from backend count and ingest rate.
+      min_lanes:
+        type: integer
+        minimum: 0
+        default: 1
+        description: Minimum dynamically selected central queue lanes when lane_count is unset. Zero uses the default.
+      max_lanes:
+        type: integer
+        minimum: 0
+        default: 256
+        description: Maximum dynamically selected central queue lanes when lane_count is unset. Zero uses the default.
+      backend_lane_multiplier:
+        type: integer
+        minimum: 0
+        default: 2
+        description: Multiplier applied to healthy backend count when bounding dynamic central queue lanes. Zero uses the default.
+      target_lane_fill_duration:
+        type: string
+        format: duration
+        description: Target duration for a lane to accumulate target_compressed_bytes before dispatch. Zero derives from max_batch_delay.
+      lane_hysteresis_factor:
+        type: integer
+        minimum: 0
+        default: 2
+        description: Factor required before changing dynamic lane count. Zero uses the default.
       payload_compression:
         type: string
         enum:

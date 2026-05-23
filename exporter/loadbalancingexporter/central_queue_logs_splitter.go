@@ -20,6 +20,7 @@ type centralQueueLogSplitter struct {
 	hardLimit int
 	limit     int
 	now       time.Time
+	laneCount int
 
 	marshaler              *plog.ProtoMarshaler
 	emptyTraceFallbackKeys map[[2]int]pcommon.TraceID
@@ -60,6 +61,7 @@ func newCentralQueueLogSplitter(exporter *logExporterImp, limit int, now time.Ti
 		hardLimit:              limit,
 		limit:                  effectiveLimit,
 		now:                    now,
+		laneCount:              exporter.effectiveCentralQueueLaneCount(now),
 		marshaler:              &plog.ProtoMarshaler{},
 		emptyTraceFallbackKeys: make(map[[2]int]pcommon.TraceID),
 		lanes:                  make(map[string]*centralQueueLogLaneBuilder),
@@ -87,7 +89,7 @@ func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) err
 			for k := 0; k < sl.LogRecords().Len(); k++ {
 				rec := sl.LogRecords().At(k)
 				balancingKey := s.exporter.routingKeyForLogRecord(rec, [2]int{i, j}, s.emptyTraceFallbackKeys)
-				queueRoutingKey := centralQueueLaneRoutingKey(signalKindLogs, balancingKey[:], s.exporter.centralQueueLaneCount)
+				queueRoutingKey := centralQueueLaneRoutingKey(signalKindLogs, balancingKey[:], s.laneCount)
 				lane := s.lane(queueRoutingKey)
 				if !lane.empty() && !lane.canFit(rl, sl, rec, s.marshaler, s.limit) {
 					if err := s.flushLane(lane); err != nil {
@@ -189,7 +191,11 @@ func (s *centralQueueLogSplitter) flushLane(lane *centralQueueLogLaneBuilder) er
 		return err
 	}
 	if !s.itemExceedsLimit(item) {
-		return s.exporter.centralQueue.enqueue(item)
+		err := s.exporter.centralQueue.enqueue(item)
+		if err == nil {
+			s.exporter.observeCentralQueueLaneBytes(item.compressedBytes, s.now)
+		}
+		return err
 	}
 	if lane.records == 1 {
 		return errCentralQueueItemTooLarge
@@ -215,6 +221,9 @@ func (s *centralQueueLogSplitter) exactSplitAndEnqueue(routingKey []byte, logs p
 		}
 		if err == nil {
 			err = s.exporter.centralQueue.enqueue(item)
+			if err == nil {
+				s.exporter.observeCentralQueueLaneBytes(item.compressedBytes, s.now)
+			}
 		}
 		if err != nil {
 			return err

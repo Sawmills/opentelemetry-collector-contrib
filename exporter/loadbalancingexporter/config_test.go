@@ -221,8 +221,13 @@ func TestCentralQueueDefaultDisabled(t *testing.T) {
 	require.Equal(t, int64(256<<10), cfg.CentralQueue.TargetCompressedBytes)
 	require.Equal(t, 250*time.Millisecond, cfg.CentralQueue.MaxBatchDelay)
 	require.Zero(t, cfg.CentralQueue.LaneCount)
+	require.Equal(t, 1, cfg.CentralQueue.MinLanes)
+	require.Equal(t, 256, cfg.CentralQueue.MaxLanes)
+	require.Equal(t, 2, cfg.CentralQueue.BackendLaneMultiplier)
+	require.Zero(t, cfg.CentralQueue.TargetLaneFillDuration)
+	require.Equal(t, 2, cfg.CentralQueue.LaneHysteresisFactor)
 	require.Equal(t, 30, cfg.CentralQueue.NumConsumers)
-	require.Equal(t, 64, cfg.CentralQueue.effectiveLaneCount())
+	require.Equal(t, 30, cfg.CentralQueue.effectiveLaneCount())
 	require.NoError(t, cfg.Validate())
 }
 
@@ -295,13 +300,47 @@ func TestCentralQueueValidation(t *testing.T) {
 			expectedErr: "central_queue.max_inflight_uncompressed_bytes",
 		},
 		{
-			name: "explicit lane count below consumers",
+			name: "invalid min lanes",
 			mutate: func(c *CentralQueueConfig) {
-				c.NumConsumers = 65
-				c.MaxInflightUncompressedBytes = int64(c.NumConsumers * c.MaxUncompressedBatchBytes)
-				c.LaneCount = 64
+				c.MinLanes = -1
 			},
-			expectedErr: "central_queue.lane_count",
+			expectedErr: "central_queue.min_lanes",
+		},
+		{
+			name: "invalid max lanes",
+			mutate: func(c *CentralQueueConfig) {
+				c.MaxLanes = -1
+			},
+			expectedErr: "central_queue.max_lanes",
+		},
+		{
+			name: "max lanes below min lanes",
+			mutate: func(c *CentralQueueConfig) {
+				c.MinLanes = 4
+				c.MaxLanes = 2
+			},
+			expectedErr: "central_queue.max_lanes",
+		},
+		{
+			name: "invalid backend lane multiplier",
+			mutate: func(c *CentralQueueConfig) {
+				c.BackendLaneMultiplier = -1
+			},
+			expectedErr: "central_queue.backend_lane_multiplier",
+		},
+		{
+			name: "invalid target lane fill duration",
+			mutate: func(c *CentralQueueConfig) {
+				c.TargetLaneFillDuration = -time.Millisecond
+			},
+			expectedErr: "central_queue.target_lane_fill_duration",
+		},
+		{
+			name: "invalid lane hysteresis factor",
+			mutate: func(c *CentralQueueConfig) {
+				c.LaneHysteresisFactor = -1
+			},
+			expectedErr: "central_queue.lane_hysteresis_factor",
 		},
 	}
 
@@ -329,7 +368,13 @@ func TestCentralQueueValidation(t *testing.T) {
 	cfg.CentralQueue.LaneCount = 0
 	cfg.CentralQueue.MaxInflightUncompressedBytes = int64(cfg.CentralQueue.NumConsumers * cfg.CentralQueue.MaxUncompressedBatchBytes)
 	require.NoError(t, cfg.Validate())
-	require.Equal(t, 256, cfg.CentralQueue.effectiveLaneCount())
+	require.Equal(t, 65, cfg.CentralQueue.effectiveLaneCount())
+
+	cfg.CentralQueue.NumConsumers = 30
+	cfg.CentralQueue.LaneCount = 2
+	cfg.CentralQueue.MaxInflightUncompressedBytes = int64(cfg.CentralQueue.NumConsumers * cfg.CentralQueue.MaxUncompressedBatchBytes)
+	require.NoError(t, cfg.Validate())
+	require.Equal(t, 2, cfg.CentralQueue.effectiveLaneCount())
 }
 
 func TestCentralQueueRejectsChildOTLPQueue(t *testing.T) {
