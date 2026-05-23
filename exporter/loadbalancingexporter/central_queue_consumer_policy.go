@@ -110,9 +110,6 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 			lbReplicas = 1
 		}
 		backendSafe = inputs.readyBackends * inflightPerBackend / lbReplicas
-		if backendSafe < minConsumers {
-			backendSafe = minConsumers
-		}
 	}
 	if backendSafe <= 0 {
 		return centralQueueConsumerResult{
@@ -131,7 +128,7 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 	case queueDemand:
 		reason = centralQueueConsumerLimitReasonQueueDemand
 	}
-	effective = clampInt(effective, minConsumers, maxConsumers)
+	effective = clampInt(effective, min(minConsumers, backendSafe), maxConsumers)
 	pressureState := centralQueueConsumerPressureStable
 
 	if inputs.backendPressure {

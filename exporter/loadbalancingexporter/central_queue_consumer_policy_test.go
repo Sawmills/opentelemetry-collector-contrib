@@ -37,6 +37,25 @@ func TestCentralQueueConsumerControllerUsesConfiguredActiveLoadBalancerReplicas(
 	require.Equal(t, 2, decision.effectiveConsumers)
 }
 
+func TestCentralQueueConsumerPolicyDoesNotFloorZeroBackendSharePerLB(t *testing.T) {
+	policy := centralQueueConsumerPolicy{
+		maxConsumers:               120,
+		minConsumers:               1,
+		targetCompressedBytes:      256 << 10,
+		maxInflightSendsPerBackend: 1,
+		activeLoadBalancerReplicas: 4,
+	}
+
+	decision := policy.compute(centralQueueConsumerInputs{
+		queueCompressedBytes: 1 << 30,
+		readyBackends:        3,
+	})
+
+	require.Equal(t, 0, decision.backendSafeConsumersPerLB)
+	require.Equal(t, 0, decision.effectiveConsumers)
+	require.Equal(t, centralQueueConsumerLimitReasonBackendCapacity, decision.limitReason)
+}
+
 func TestCentralQueueConsumerPolicyQueueGrowthIncreasesDemandUntilBackendSafeCap(t *testing.T) {
 	policy := centralQueueConsumerPolicy{
 		maxConsumers:               120,
