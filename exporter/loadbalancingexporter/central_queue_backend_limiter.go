@@ -35,16 +35,19 @@ func (l *centralQueueBackendLimiter) acquire(ctx context.Context, endpoint strin
 	if l == nil || endpoint == "" {
 		return &centralQueueBackendLease{}, nil
 	}
+	if l.tryAcquire(endpoint) {
+		return &centralQueueBackendLease{limiter: l, endpoint: endpoint}, nil
+	}
 	ticker := time.NewTicker(centralQueueLeasePollInterval)
 	defer ticker.Stop()
 	for {
-		if l.tryAcquire(endpoint) {
-			return &centralQueueBackendLease{limiter: l, endpoint: endpoint}, nil
-		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-ticker.C:
+			if l.tryAcquire(endpoint) {
+				return &centralQueueBackendLease{limiter: l, endpoint: endpoint}, nil
+			}
 		}
 	}
 }
