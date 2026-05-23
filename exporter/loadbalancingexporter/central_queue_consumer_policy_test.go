@@ -55,7 +55,7 @@ func TestCentralQueueConsumerControllerReportsDecisionChanges(t *testing.T) {
 	require.Equal(t, 3, third.effectiveConsumers)
 }
 
-func TestCentralQueueConsumerPolicyKeepsDrainingWhenBackendShareIsFractional(t *testing.T) {
+func TestCentralQueueConsumerPolicyStopsWhenBackendShareIsFractional(t *testing.T) {
 	policy := centralQueueConsumerPolicy{
 		maxConsumers:               120,
 		minConsumers:               1,
@@ -69,8 +69,8 @@ func TestCentralQueueConsumerPolicyKeepsDrainingWhenBackendShareIsFractional(t *
 		readyBackends:        3,
 	})
 
-	require.Equal(t, 1, decision.backendSafeConsumersPerLB)
-	require.Equal(t, 1, decision.effectiveConsumers)
+	require.Equal(t, 0, decision.backendSafeConsumersPerLB)
+	require.Equal(t, 0, decision.effectiveConsumers)
 	require.Equal(t, centralQueueConsumerLimitReasonBackendCapacity, decision.limitReason)
 }
 

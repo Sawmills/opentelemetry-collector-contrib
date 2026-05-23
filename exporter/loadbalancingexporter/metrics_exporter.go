@@ -46,6 +46,7 @@ type metricExporterImp struct {
 	centralQueueLaneCount        int
 	centralQueueLanes            *centralQueueLaneController
 	centralQueueConsumers        *centralQueueConsumerController
+	centralQueueBackendLimiter   *centralQueueBackendLimiter
 	centralQueueNumConsumers     int
 	centralQueueActiveLBReplicas int
 	centralActiveConsumers       atomic.Int64
@@ -79,6 +80,7 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 		centralQueueLaneCount:        cfg.(*Config).CentralQueue.LaneCount,
 		centralQueueLanes:            newCentralQueueLaneController(cfg.(*Config).CentralQueue),
 		centralQueueConsumers:        newCentralQueueConsumerController(cfg.(*Config).CentralQueue.NumConsumers, cfg.(*Config).CentralQueue.TargetCompressedBytes, cfg.(*Config).CentralQueue.ActiveLoadBalancerReplicas),
+		centralQueueBackendLimiter:   newCentralQueueBackendLimiter(defaultCentralQueueMaxInflightSendsPerBackend),
 		centralQueueNumConsumers:     cfg.(*Config).CentralQueue.NumConsumers,
 		centralQueueActiveLBReplicas: cfg.(*Config).CentralQueue.ActiveLoadBalancerReplicas,
 	}
@@ -165,6 +167,9 @@ func (e *metricExporterImp) startCentralQueueConsumers(ctx context.Context) {
 	}
 	if e.centralQueueConsumers == nil && e.centralQueue != nil {
 		e.centralQueueConsumers = newCentralQueueConsumerController(consumers, e.centralQueue.settings.targetCompressedBytes, e.centralQueueActiveLBReplicas)
+	}
+	if e.centralQueueBackendLimiter == nil {
+		e.centralQueueBackendLimiter = newCentralQueueBackendLimiter(defaultCentralQueueMaxInflightSendsPerBackend)
 	}
 	e.centralQueue.settings.telemetry.recordConfiguredConsumers(ctx, int64(consumers))
 	e.centralQueue.settings.telemetry.recordActiveLoadBalancerReplicas(ctx, int64(configuredCentralQueueActiveLBReplicas(e.centralQueueActiveLBReplicas)))
@@ -328,6 +333,15 @@ func (e *metricExporterImp) consumeCentralQueueMetricWindow(ctx context.Context,
 }
 
 func (e *metricExporterImp) consumeCentralQueueMetricWindowAttempt(ctx context.Context, window centralQueueWindow, rerouteAttempt int) error {
+	exp, endpoint, err := e.loadBalancer.exporterAndEndpoint(window.routingKey)
+	if err != nil {
+		return err
+	}
+	backendLease, err := e.centralQueueBackendLimiter.acquire(ctx, endpoint)
+	if err != nil {
+		return err
+	}
+
 	md := pmetric.NewMetrics()
 	decodedAny := false
 	corruptPayloads := 0
@@ -361,11 +375,8 @@ func (e *metricExporterImp) consumeCentralQueueMetricWindowAttempt(ctx context.C
 		}
 	}
 	if !decodedAny {
+		backendLease.release()
 		return nil
-	}
-	exp, _, err := e.loadBalancer.exporterAndEndpoint(window.routingKey)
-	if err != nil {
-		return err
 	}
 
 	exp.forceStartConsume()
@@ -376,6 +387,7 @@ func (e *metricExporterImp) consumeCentralQueueMetricWindowAttempt(ctx context.C
 	err = exp.ConsumeMetrics(ctx, md)
 	duration := time.Since(start)
 	decision := e.recordBackendResultWithoutDrain(ctx, exp, duration, err, true)
+	backendLease.release()
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, exp.endpoint, decision, rerouteAttempt) {
 		rerouteErr := e.consumeCentralQueueMetricWindowAttempt(ctx, window, rerouteAttempt+1)
 		e.loadBalancer.recordBackendReroute(ctx, "metrics", decision.reason, rerouteErr)

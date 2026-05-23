@@ -54,8 +54,8 @@ queue_demand_consumers =
 
 backend_safe_consumers_per_lb =
   floor(ready_worker_backends * max_inflight_sends_per_worker / active_lb_replicas)
-  with a minimum of 1 when fleet backend capacity is non-zero, so fractional
-  per-LB share does not deadlock all LBs
+  with no fractional round-up unless a cross-LB coordinator exists; otherwise
+  every LB rounding up to 1 can overrun the same small worker fleet
 
 pressure_adjusted_consumers =
   reduce quickly when backend pressure is present;

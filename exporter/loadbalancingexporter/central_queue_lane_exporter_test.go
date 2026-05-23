@@ -108,7 +108,7 @@ func TestLogExporterCentralQueueDynamicLanesCapStaleEffectiveConsumersByCurrentB
 	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
 }
 
-func TestLogExporterCentralQueueDynamicLanesUseFractionalBackendShare(t *testing.T) {
+func TestLogExporterCentralQueueDynamicLanesKeepMinimumLaneWhenBackendShareIsFractional(t *testing.T) {
 	controller := centralQueueLanePathTestController()
 	consumers := newCentralQueueConsumerController(120, 256<<10, 4)
 	p := &logExporterImp{
@@ -118,7 +118,7 @@ func TestLogExporterCentralQueueDynamicLanesUseFractionalBackendShare(t *testing
 		ignoreTraceID:         true,
 	}
 	decision := consumers.compute(1<<30, 3, false)
-	require.Equal(t, 1, decision.effectiveConsumers)
+	require.Equal(t, 0, decision.effectiveConsumers)
 
 	require.Equal(t, 1, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
 }

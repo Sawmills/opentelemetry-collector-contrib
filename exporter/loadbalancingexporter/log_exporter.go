@@ -43,6 +43,7 @@ type logExporterImp struct {
 	centralQueueLaneCount        int
 	centralQueueLanes            *centralQueueLaneController
 	centralQueueConsumers        *centralQueueConsumerController
+	centralQueueBackendLimiter   *centralQueueBackendLimiter
 	centralQueueNumConsumers     int
 	centralQueueActiveLBReplicas int
 	centralActiveConsumers       atomic.Int64
@@ -79,6 +80,7 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 		centralQueueLaneCount:        cfg.(*Config).CentralQueue.LaneCount,
 		centralQueueLanes:            newCentralQueueLaneController(cfg.(*Config).CentralQueue),
 		centralQueueConsumers:        newCentralQueueConsumerController(cfg.(*Config).CentralQueue.NumConsumers, cfg.(*Config).CentralQueue.TargetCompressedBytes, cfg.(*Config).CentralQueue.ActiveLoadBalancerReplicas),
+		centralQueueBackendLimiter:   newCentralQueueBackendLimiter(defaultCentralQueueMaxInflightSendsPerBackend),
 		centralQueueNumConsumers:     cfg.(*Config).CentralQueue.NumConsumers,
 		centralQueueActiveLBReplicas: cfg.(*Config).CentralQueue.ActiveLoadBalancerReplicas,
 	}
@@ -150,6 +152,9 @@ func (e *logExporterImp) startCentralQueueConsumers(ctx context.Context) {
 	}
 	if e.centralQueueConsumers == nil && e.centralQueue != nil {
 		e.centralQueueConsumers = newCentralQueueConsumerController(consumers, e.centralQueue.settings.targetCompressedBytes, e.centralQueueActiveLBReplicas)
+	}
+	if e.centralQueueBackendLimiter == nil {
+		e.centralQueueBackendLimiter = newCentralQueueBackendLimiter(defaultCentralQueueMaxInflightSendsPerBackend)
 	}
 	e.centralQueue.settings.telemetry.recordConfiguredConsumers(ctx, int64(consumers))
 	e.centralQueue.settings.telemetry.recordActiveLoadBalancerReplicas(ctx, int64(configuredCentralQueueActiveLBReplicas(e.centralQueueActiveLBReplicas)))
@@ -303,6 +308,15 @@ func (e *logExporterImp) consumeCentralQueueLogWindow(ctx context.Context, windo
 }
 
 func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context, window centralQueueWindow, rerouteAttempt int) error {
+	le, endpoint, err := e.loadBalancer.exporterAndEndpoint(window.routingKey)
+	if err != nil {
+		return err
+	}
+	backendLease, err := e.centralQueueBackendLimiter.acquire(ctx, endpoint)
+	if err != nil {
+		return err
+	}
+
 	ld := plog.NewLogs()
 	decodedAny := false
 	corruptPayloads := 0
@@ -336,13 +350,11 @@ func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context
 		}
 	}
 	if !decodedAny {
+		backendLease.release()
 		return nil
 	}
-	le, _, err := e.loadBalancer.exporterAndEndpoint(window.routingKey)
-	if err != nil {
-		return err
-	}
 	decision, err := e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect, true, false, false)
+	backendLease.release()
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, le.endpoint, decision, rerouteAttempt) {
 		rerouteErr := e.consumeCentralQueueLogWindowAttempt(ctx, window, rerouteAttempt+1)
 		e.loadBalancer.recordBackendReroute(ctx, "logs", decision.reason, rerouteErr)
