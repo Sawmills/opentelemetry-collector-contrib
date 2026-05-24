@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCentralQueueLanePolicyCapsFewBackendsByFillRate(t *testing.T) {
+func TestCentralQueueLanePolicyKeepsFewBackendFloorWhenFillRateIsLow(t *testing.T) {
 	policy := centralQueueLanePolicy{
 		minLanes:           1,
 		maxLanes:           64,
@@ -27,7 +27,7 @@ func TestCentralQueueLanePolicyCapsFewBackendsByFillRate(t *testing.T) {
 		previousEffectiveLaneCountSet: true,
 	})
 
-	require.Equal(t, 1, lanes)
+	require.Equal(t, 2, lanes)
 }
 
 func TestCentralQueueLanePolicyAllowsManyBackendsWhenFillRateSupportsIt(t *testing.T) {
@@ -97,7 +97,7 @@ func TestCentralQueueLanePolicyUsesBackendCountWhenRateUnknown(t *testing.T) {
 	require.Equal(t, 4, lanes)
 }
 
-func TestCentralQueueLanePolicyUsesEffectiveConsumersForBackendLaneCap(t *testing.T) {
+func TestCentralQueueLanePolicyUsesHealthyBackendsForLaneCapWhenFillRateSupportsIt(t *testing.T) {
 	policy := centralQueueLanePolicy{
 		minLanes:           1,
 		maxLanes:           64,
@@ -112,6 +112,46 @@ func TestCentralQueueLanePolicyUsesEffectiveConsumersForBackendLaneCap(t *testin
 		effectiveConsumers:          4,
 		effectiveConsumersKnown:     true,
 		compressedIngestBytesPerSec: 64 << 20,
+	})
+
+	require.Equal(t, 64, lanes)
+}
+
+func TestCentralQueueLanePolicyKeepsBackendLaneFloorWhenConsumersBootstrapBelowBackends(t *testing.T) {
+	policy := centralQueueLanePolicy{
+		minLanes:           1,
+		maxLanes:           64,
+		backendMultiplier:  2,
+		targetFillDuration: 500 * time.Millisecond,
+		targetBytes:        256 << 10,
+		hysteresisFactor:   2,
+	}
+
+	lanes := policy.compute(centralQueueLaneInputs{
+		healthyBackends:             4,
+		effectiveConsumers:          1,
+		effectiveConsumersKnown:     true,
+		compressedIngestBytesPerSec: 0,
+	})
+
+	require.Equal(t, 4, lanes)
+}
+
+func TestCentralQueueLanePolicyKeepsBackendLaneFloorWhenFillRateIsLow(t *testing.T) {
+	policy := centralQueueLanePolicy{
+		minLanes:           1,
+		maxLanes:           64,
+		backendMultiplier:  2,
+		targetFillDuration: 500 * time.Millisecond,
+		targetBytes:        256 << 10,
+		hysteresisFactor:   2,
+	}
+
+	lanes := policy.compute(centralQueueLaneInputs{
+		healthyBackends:             8,
+		effectiveConsumers:          8,
+		effectiveConsumersKnown:     true,
+		compressedIngestBytesPerSec: 1,
 	})
 
 	require.Equal(t, 8, lanes)
@@ -152,8 +192,8 @@ func TestCentralQueueLaneControllerRecomputesWhenEffectiveConsumersChange(t *tes
 	controller := newCentralQueueLaneController(cfg)
 	now := time.Unix(10, 0)
 
-	require.Equal(t, 2, controller.laneCountWithConsumers(8, 2, true, now))
-	require.Equal(t, 4, controller.laneCountWithConsumers(8, 4, true, now.Add(time.Second)))
+	require.Equal(t, 2, controller.laneCountWithConsumers(0, 2, true, now))
+	require.Equal(t, 4, controller.laneCountWithConsumers(0, 4, true, now.Add(time.Second)))
 }
 
 func TestCentralQueueLaneControllerHonorsFixedOverride(t *testing.T) {
