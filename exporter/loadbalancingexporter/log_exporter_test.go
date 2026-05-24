@@ -715,6 +715,51 @@ func TestLogsCentralQueueFirstRetryUsesInitialDelay(t *testing.T) {
 	require.NoError(t, waitForInflight(t.Context(), &p.centralWG))
 }
 
+func TestLogsCentralQueueRetriesDeadlineExceededExportError(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+
+	endpoint := "endpoint-1:4317"
+	var calls atomic.Int64
+	var delivered atomic.Int64
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    1 << 20,
+		}),
+		centralCodec: codec,
+		loadBalancer: &loadBalancer{
+			ring: newHashRing([]string{endpoint}),
+			exporters: map[string]*wrappedExporter{endpoint: newWrappedExporter(newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+				if calls.Add(1) == 1 {
+					return context.DeadlineExceeded
+				}
+				delivered.Add(int64(ld.LogRecordCount()))
+				return nil
+			}), endpoint)},
+			endpointHealth: newEndpointHealthManager(endpointHealthSettings{}),
+			res:            &mockResolver{},
+		},
+		telemetry: tb,
+		logger:    ts.Logger,
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	p.centralWG.Add(1)
+	go p.runCentralQueue(ctx)
+	item, err := newCentralQueueLogsItem([]byte("route-a"), simpleLogs(), codec, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, p.centralQueue.enqueue(item))
+
+	require.Eventually(t, func() bool {
+		return calls.Load() == 2 && delivered.Load() == 1 && p.centralQueue.len() == 0
+	}, 2*time.Second, 20*time.Millisecond)
+	cancel()
+	require.NoError(t, waitForInflight(t.Context(), &p.centralWG))
+}
+
 func TestLogsCentralQueueReroutesFailedEndpointItem(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	cfg := endpoint2Config()
