@@ -1,0 +1,12 @@
+change_type: bug_fix
+
+component: exporter/loadbalancing
+
+note: Keep adaptive central queue lanes from collapsing below the healthy backend count while send consumers bootstrap conservatively.
+
+issues: [7500]
+
+subtext: |
+  Dynamic lanes now keep a healthy-backend floor instead of using the first conservative effective-consumer sample as a hard lane cap. This prevents backlog created during adaptive consumer ramp-up from being pinned to one hot lane/backend while still letting effective consumers gate actual send concurrency.
+
+change_logs: [user]
