@@ -1,0 +1,12 @@
+change_type: enhancement
+
+component: exporter/loadbalancing
+
+note: Allow the queue-drain proof harness to render active load balancer upper-bound configs independently from the actual LB pod count.
+
+issues: [7500]
+
+subtext: |
+  This lets local red/green runs reproduce customer HPA shapes where active_load_balancer_replicas is intentionally configured above the currently running LB replica count.
+
+change_logs: [user]

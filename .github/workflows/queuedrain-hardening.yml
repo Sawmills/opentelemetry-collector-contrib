@@ -59,6 +59,7 @@ jobs:
           (cd test/queuedrain/fakebackend && go test ./...)
           python3 test/queuedrain/analyze_test.py
           python3 test/queuedrain/test_analyze.py
+          python3 test/queuedrain/test_run_cli.py
           python3 test/queuedrain/test_sweep.py
           bash -n test/queuedrain/run.sh test/queuedrain/sweep.sh
 
