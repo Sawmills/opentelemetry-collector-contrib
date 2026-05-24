@@ -1030,14 +1030,73 @@ func centralQueueLaneRoutingKey(signal signalKind, routingKey []byte, laneCount 
 	if laneCount <= 0 {
 		return append([]byte(nil), routingKey...)
 	}
+	lane := centralQueueLaneIndex(signal, routingKey, laneCount)
+	return centralQueueLaneKey(signal, lane, 0)
+}
+
+func centralQueueBalancedLaneRoutingKeyForLoadBalancerLane(lb *loadBalancer, signal signalKind, lane uint32) []byte {
+	if lb == nil {
+		return centralQueueLaneKey(signal, lane, 0)
+	}
+	lb.updateLock.RLock()
+	defer lb.updateLock.RUnlock()
+	return centralQueueBalancedLaneRoutingKeyForRing(lb.ring, signal, lane)
+}
+
+func centralQueueBalancedLaneRoutingKeyForRing(ring *hashRing, signal signalKind, lane uint32) []byte {
+	base := centralQueueLaneKey(signal, lane, 0)
+	endpoints := centralQueueHashRingEndpoints(ring)
+	if len(endpoints) <= 1 {
+		return base
+	}
+	target := endpoints[int(lane)%len(endpoints)]
+	if endpointWithPort(ring.endpointFor(base)) == endpointWithPort(target) {
+		return base
+	}
+	for salt := uint32(1); salt <= 1024; salt++ {
+		candidate := centralQueueLaneKey(signal, lane, salt)
+		if endpointWithPort(ring.endpointFor(candidate)) == endpointWithPort(target) {
+			return candidate
+		}
+	}
+	return base
+}
+
+func centralQueueHashRingEndpoints(ring *hashRing) []string {
+	if ring == nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	for _, item := range ring.items {
+		endpoint := endpointWithPort(item.endpoint)
+		seen[endpoint] = struct{}{}
+	}
+	endpoints := make([]string, 0, len(seen))
+	for endpoint := range seen {
+		endpoints = append(endpoints, endpoint)
+	}
+	sort.Strings(endpoints)
+	return endpoints
+}
+
+func centralQueueLaneIndex(signal signalKind, routingKey []byte, laneCount int) uint32 {
 	hashInput := make([]byte, len(routingKey)+len(signal)+1)
 	copy(hashInput, string(signal))
 	hashInput[len(signal)] = 0
 	copy(hashInput[len(signal)+1:], routingKey)
-	lane := crc32.ChecksumIEEE(hashInput) % uint32(laneCount)
+	return crc32.ChecksumIEEE(hashInput) % uint32(laneCount)
+}
+
+func centralQueueLaneKey(signal signalKind, lane, salt uint32) []byte {
 	laneRoutingKey := make([]byte, len(signal)+1+4)
+	if salt > 0 {
+		laneRoutingKey = make([]byte, len(signal)+1+4+4)
+	}
 	copy(laneRoutingKey, string(signal))
 	laneRoutingKey[len(signal)] = 0
 	binary.BigEndian.PutUint32(laneRoutingKey[len(signal)+1:], lane)
+	if salt > 0 {
+		binary.BigEndian.PutUint32(laneRoutingKey[len(signal)+1+4:], salt)
+	}
 	return laneRoutingKey
 }

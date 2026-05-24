@@ -24,6 +24,7 @@ type centralQueueLogSplitter struct {
 
 	marshaler              *plog.ProtoMarshaler
 	emptyTraceFallbackKeys map[[2]int]pcommon.TraceID
+	laneRoutingKeys        map[uint32][]byte
 	lanes                  map[string]*centralQueueLogLaneBuilder
 }
 
@@ -64,6 +65,7 @@ func newCentralQueueLogSplitter(exporter *logExporterImp, limit int, now time.Ti
 		laneCount:              exporter.effectiveCentralQueueLaneCount(now),
 		marshaler:              &plog.ProtoMarshaler{},
 		emptyTraceFallbackKeys: make(map[[2]int]pcommon.TraceID),
+		laneRoutingKeys:        make(map[uint32][]byte),
 		lanes:                  make(map[string]*centralQueueLogLaneBuilder),
 	}
 }
@@ -89,7 +91,7 @@ func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) err
 			for k := 0; k < sl.LogRecords().Len(); k++ {
 				rec := sl.LogRecords().At(k)
 				balancingKey := s.exporter.routingKeyForLogRecord(rec, [2]int{i, j}, s.emptyTraceFallbackKeys)
-				queueRoutingKey := centralQueueLaneRoutingKey(signalKindLogs, balancingKey[:], s.laneCount)
+				queueRoutingKey := s.balancedLaneRoutingKey(balancingKey)
 				lane := s.lane(queueRoutingKey)
 				if !lane.empty() && !lane.canFit(rl, sl, rec, s.marshaler, s.limit) {
 					if err := s.flushLane(lane); err != nil {
@@ -105,6 +107,19 @@ func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) err
 		errs = multierr.Append(errs, s.flushLane(lane))
 	}
 	return errs
+}
+
+func (s *centralQueueLogSplitter) balancedLaneRoutingKey(balancingKey pcommon.TraceID) []byte {
+	if s.laneCount <= 0 {
+		return balancingKey[:]
+	}
+	lane := centralQueueLaneIndex(signalKindLogs, balancingKey[:], s.laneCount)
+	if key, ok := s.laneRoutingKeys[lane]; ok {
+		return key
+	}
+	key := centralQueueBalancedLaneRoutingKeyForLoadBalancerLane(s.exporter.loadBalancer, signalKindLogs, lane)
+	s.laneRoutingKeys[lane] = key
+	return key
 }
 
 func (s *centralQueueLogSplitter) rejectUnsplittableRecords(ctx context.Context, ld plog.Logs) error {
