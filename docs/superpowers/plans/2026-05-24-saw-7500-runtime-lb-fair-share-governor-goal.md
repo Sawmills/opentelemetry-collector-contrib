@@ -178,13 +178,14 @@ Expected: all targeted tests pass.
 - [x] Keep effective consumers as the send-concurrency gate.
 - [x] Keep stale consumer counts capped by the current healthy backend count.
 - [x] Prove the old behavior fails with `effective_lanes=1` or otherwise below the healthy backend floor.
+- [x] Prove low fill-rate estimates cannot shrink lane count below the healthy-backend floor.
 - [x] Prove the new behavior keeps the healthy-backend lane floor while the consumer controller can still report `effective_consumers=1`.
 
 Run:
 
 ```bash
 cd exporter/loadbalancingexporter
-go test . -run 'TestCentralQueueLanePolicyKeepsBackendLaneFloorWhenConsumersBootstrapBelowBackends|TestLogExporterCentralQueueLaneBootstrapUsesHealthyBackendFloor|TestLogExporterCentralQueueDynamicLanesDoNotCollapseToFractionalBackendShare' -count=1
+go test . -run 'TestCentralQueueLanePolicyKeepsBackendLaneFloorWhenFillRateIsLow|TestCentralQueueLanePolicyKeepsBackendLaneFloorWhenConsumersBootstrapBelowBackends|TestLogExporterCentralQueueLaneBootstrapUsesHealthyBackendFloor|TestLogExporterCentralQueueDynamicLanesDoNotCollapseToFractionalBackendShare' -count=1
 ```
 
 Expected before implementation: the new tests fail because lane count follows the conservative effective-consumer sample.
