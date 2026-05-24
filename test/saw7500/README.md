@@ -48,8 +48,8 @@ docker tag otelcontribcol otelcontribcol-dev:saw-7500
 test/saw7500/run.sh \
   --red-image public.ecr.aws/s7a5m1b4/sawmills-collector:1.936.0 \
   --green-image otelcontribcol-dev:saw-7500 \
-  --lb-replicas 2 \
-  --active-lb-replicas-config 2 \
+  --lb-replicas 4 \
+  --active-lb-replicas-config 10 \
   --workers 4 \
   --num-consumers 30 \
   --red-num-consumers 120 \
