@@ -6,6 +6,7 @@ package loadbalancingexporter
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -123,6 +124,170 @@ func TestCentralQueueDoneSignalsInflightWaiters(t *testing.T) {
 	secondLease := requireCentralQueueLeaseResult(t, waiter)
 	require.Equal(t, []byte("lane-b"), secondLease.window.routingKey)
 	secondLease.done()
+}
+
+func TestCentralQueueTryLeaseWithAcquireBlocksWhenConsumersFull(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    100,
+		targetCompressedBytes:        10,
+		maxBatchDelay:                time.Second,
+		maxReadyWindows:              4,
+	})
+	now := time.Unix(10, 0)
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
+
+	lease, err := q.tryLeaseWithAcquire(now, func(queueCompressedBytes int64, window centralQueueWindow) (func(), bool) {
+		require.EqualValues(t, 10, queueCompressedBytes)
+		require.Equal(t, []byte("lane-a"), window.routingKey)
+		return nil, false
+	})
+
+	require.ErrorIs(t, err, errCentralQueueConsumersFull)
+	require.Nil(t, lease)
+}
+
+func TestCentralQueueTryLeaseWithAcquireDoesNotHoldQueueLockWhileAcquiring(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    100,
+		targetCompressedBytes:        10,
+		maxBatchDelay:                time.Second,
+		maxReadyWindows:              4,
+	})
+	now := time.Unix(10, 0)
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
+
+	acquireStarted := make(chan struct{})
+	releaseAcquire := make(chan struct{})
+	result := make(chan centralQueueLeaseResult, 1)
+	go func() {
+		lease, err := q.tryLeaseWithAcquire(now, func(int64, centralQueueWindow) (func(), bool) {
+			close(acquireStarted)
+			<-releaseAcquire
+			return nil, false
+		})
+		result <- centralQueueLeaseResult{lease: lease, err: err}
+	}()
+
+	<-acquireStarted
+	enqueueDone := make(chan error, 1)
+	go func() {
+		enqueueDone <- q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-b"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now)
+	}()
+
+	select {
+	case err := <-enqueueDone:
+		require.NoError(t, err)
+	case <-time.After(200 * time.Millisecond):
+		close(releaseAcquire)
+		t.Fatal("enqueue blocked while acquire callback was waiting")
+	}
+
+	close(releaseAcquire)
+	select {
+	case leaseResult := <-result:
+		require.ErrorIs(t, leaseResult.err, errCentralQueueConsumersFull)
+		require.Nil(t, leaseResult.lease)
+	case <-time.After(time.Second):
+		t.Fatal("expected central queue acquire result")
+	}
+}
+
+func TestCentralQueueTryLeaseWithAcquireSucceedsWhenConsumersAvailable(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    100,
+		targetCompressedBytes:        10,
+		maxBatchDelay:                time.Second,
+		maxReadyWindows:              4,
+	})
+	now := time.Unix(10, 0)
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
+
+	lease, err := q.tryLeaseWithAcquire(now, func(queueCompressedBytes int64, window centralQueueWindow) (func(), bool) {
+		require.EqualValues(t, 10, queueCompressedBytes)
+		require.Equal(t, []byte("lane-a"), window.routingKey)
+		return func() {}, true
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.Equal(t, []byte("lane-a"), lease.window.routingKey)
+	lease.done()
+}
+
+func TestCentralQueueTryLeaseWithAcquirePreparesOnlyOneReadyWindow(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    100,
+		targetCompressedBytes:        10,
+		maxBatchDelay:                time.Second,
+		maxReadyWindows:              4,
+	})
+	now := time.Unix(10, 0)
+	for _, lane := range []string{"lane-a", "lane-b", "lane-c", "lane-d"} {
+		require.NoError(t, q.enqueueAt(centralQueueItem{
+			signal:            signalKindLogs,
+			routingKey:        []byte(lane),
+			compressedBytes:   10,
+			uncompressedBytes: 10,
+			count:             1,
+		}, now))
+	}
+
+	lease, err := q.tryLeaseWithAcquire(now, func(int64, centralQueueWindow) (func(), bool) { return func() {}, true })
+
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.EqualValues(t, 10, q.inflightUncompressedBytes())
+	requireCentralQueueReadyWindows(t, q, 0)
+	lease.done()
+}
+
+func TestCentralQueueLeaseWithAcquireRetriesWhenConsumersBecomeAvailable(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    100,
+		targetCompressedBytes:        10,
+		maxBatchDelay:                time.Second,
+		maxReadyWindows:              4,
+	})
+	now := time.Unix(10, 0)
+	require.NoError(t, q.enqueueAt(centralQueueItem{signal: signalKindLogs, routingKey: []byte("lane-a"), compressedBytes: 10, uncompressedBytes: 10, count: 1}, now))
+	select {
+	case <-q.notify:
+	default:
+	}
+
+	var attempts atomic.Int64
+	result := make(chan centralQueueLeaseResult, 1)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	go func() {
+		lease, err := q.leaseWithPollIntervalAndAcquire(ctx, time.Hour, func(int64, centralQueueWindow) (func(), bool) {
+			if attempts.Add(1) >= 2 {
+				return func() {}, true
+			}
+			return nil, false
+		})
+		result <- centralQueueLeaseResult{lease: lease, err: err}
+	}()
+
+	require.Eventually(t, func() bool {
+		return attempts.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+	requireNoCentralQueueLeaseResult(t, result)
+	q.notifyLeaseWaiters()
+
+	lease := requireCentralQueueLeaseResult(t, result)
+	require.Equal(t, []byte("lane-a"), lease.window.routingKey)
+	lease.done()
 }
 
 func TestCentralQueuePrunesEmptyBucketsAfterScheduling(t *testing.T) {
@@ -800,6 +965,40 @@ func TestCentralQueueStopUnregistersOldestItemAgeObserver(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		metric, err := reader.GetMetric("otelcol_loadbalancer_central_queue_oldest_item_age")
+		if err != nil {
+			return true
+		}
+		gauge, ok := metric.Data.(metricdata.Gauge[int64])
+		return ok && len(gauge.DataPoints) == 0
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestCentralQueueStopUnregistersConsumerDecisionObserver(t *testing.T) {
+	reader := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, reader.Shutdown(context.WithoutCancel(t.Context())))
+	})
+	telemetry, err := newCentralQueueTelemetry(reader.NewTelemetrySettings(), signalKindLogs)
+	require.NoError(t, err)
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    100,
+		telemetry:                    telemetry,
+	})
+	telemetry.recordConsumerDecision(t.Context(), centralQueueConsumerResult{
+		effectiveConsumers:        2,
+		queueDemandConsumers:      4,
+		backendSafeConsumersPerLB: 2,
+		limitReason:               centralQueueConsumerLimitReasonBackendCapacity,
+		pressureState:             centralQueueConsumerPressureStable,
+	})
+	requireCentralQueueConsumerLimitReason(t, reader, centralQueueConsumerLimitReasonBackendCapacity)
+
+	q.stop()
+
+	require.Eventually(t, func() bool {
+		metric, err := reader.GetMetric("otelcol_loadbalancer_central_queue_consumer_limit_reason")
 		if err != nil {
 			return true
 		}

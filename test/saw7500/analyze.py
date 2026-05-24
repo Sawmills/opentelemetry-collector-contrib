@@ -29,6 +29,10 @@ REJECTED = "otelcol_loadbalancer_central_queue_rejected_compressed_bytes"
 INFLIGHT_UNCOMPRESSED = "otelcol_loadbalancer_central_queue_inflight_uncompressed_bytes"
 ACTIVE_CONSUMERS = "otelcol_loadbalancer_central_queue_active_consumers"
 CONFIGURED_CONSUMERS = "otelcol_loadbalancer_central_queue_configured_consumers"
+ACTIVE_LB_REPLICAS = "otelcol_loadbalancer_central_queue_active_load_balancer_replicas"
+EFFECTIVE_CONSUMERS = "otelcol_loadbalancer_central_queue_effective_consumers"
+QUEUE_DEMAND_CONSUMERS = "otelcol_loadbalancer_central_queue_queue_demand_consumers"
+BACKEND_SAFE_CONSUMERS = "otelcol_loadbalancer_central_queue_backend_safe_consumers_per_lb"
 LANES = "otelcol_loadbalancer_central_queue_lanes"
 PROCESS_RSS = "otelcol_process_memory_rss_bytes"
 PROCESS_HEAP = "otelcol_process_runtime_heap_alloc_bytes"
@@ -380,6 +384,10 @@ def summarize(args: argparse.Namespace) -> dict[str, object]:
     inflight_uncompressed = [sum_metric(samples, INFLIGHT_UNCOMPRESSED) for samples in lb_ticks.values()]
     active_consumers = [sum_metric(samples, ACTIVE_CONSUMERS) for samples in lb_ticks.values()]
     configured_consumers = [sum_metric(samples, CONFIGURED_CONSUMERS) for samples in lb_ticks.values()]
+    active_lb_replicas = [max_metric(samples, ACTIVE_LB_REPLICAS) for samples in lb_ticks.values()]
+    effective_consumers = [sum_metric(samples, EFFECTIVE_CONSUMERS) for samples in lb_ticks.values()]
+    queue_demand_consumers = [sum_metric(samples, QUEUE_DEMAND_CONSUMERS) for samples in lb_ticks.values()]
+    backend_safe_consumers = [max_metric(samples, BACKEND_SAFE_CONSUMERS) for samples in lb_ticks.values()]
     lanes = [sum_metric(samples, LANES) for samples in lb_ticks.values()]
     tier_rss = [sum_metric(samples, PROCESS_RSS) for samples in lb_ticks.values()]
     pod_rss = [max_metric(samples, PROCESS_RSS) for samples in lb_ticks.values()]
@@ -504,6 +512,10 @@ def summarize(args: argparse.Namespace) -> dict[str, object]:
         "max_inflight_uncompressed_bytes": max(inflight_uncompressed) if inflight_uncompressed else 0.0,
         "max_active_consumers": max(active_consumers) if active_consumers else 0.0,
         "max_configured_consumers": max(configured_consumers) if configured_consumers else 0.0,
+        "max_active_load_balancer_replicas": max(active_lb_replicas) if active_lb_replicas else 0.0,
+        "max_effective_consumers": max(effective_consumers) if effective_consumers else 0.0,
+        "max_queue_demand_consumers": max(queue_demand_consumers) if queue_demand_consumers else 0.0,
+        "max_backend_safe_consumers_per_lb": max(backend_safe_consumers) if backend_safe_consumers else 0.0,
         "max_central_queue_lanes": max(lanes) if lanes else 0.0,
         "max_tier_rss_bytes": max(tier_rss) if tier_rss else 0.0,
         "max_pod_rss_bytes": max(pod_rss) if pod_rss else 0.0,
@@ -550,6 +562,10 @@ def write_outputs(directory: Path, summary: dict[str, object]) -> None:
         f"max_inflight_uncompressed_bytes: {summary['max_inflight_uncompressed_bytes']}",
         f"max_active_consumers: {summary['max_active_consumers']}",
         f"max_configured_consumers: {summary['max_configured_consumers']}",
+        f"max_active_load_balancer_replicas: {summary['max_active_load_balancer_replicas']}",
+        f"max_effective_consumers: {summary['max_effective_consumers']}",
+        f"max_queue_demand_consumers: {summary['max_queue_demand_consumers']}",
+        f"max_backend_safe_consumers_per_lb: {summary['max_backend_safe_consumers_per_lb']}",
         f"max_central_queue_lanes: {summary['max_central_queue_lanes']}",
         f"max_tier_rss_bytes: {summary['max_tier_rss_bytes']}",
         f"max_pod_rss_bytes: {summary['max_pod_rss_bytes']}",

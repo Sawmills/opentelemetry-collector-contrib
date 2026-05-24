@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ func TestLogExporterCentralQueueObservedBytesUpdateEffectiveLanes(t *testing.T) 
 		loadBalancer:             loadBalancerWithBackendCount(4),
 		centralQueue:             centralQueueLanePathTestQueue(telemetry),
 		centralQueueLanes:        controller,
-		centralQueueNumConsumers: 1,
+		centralQueueNumConsumers: 4,
 		ignoreTraceID:            true,
 	}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -61,6 +62,72 @@ func TestLogExporterCentralQueueUsesRoutableBackendCountForDynamicLanes(t *testi
 	}
 
 	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
+}
+
+func TestLogExporterCentralQueueLaneBootstrapUsesActiveLoadBalancerReplicas(t *testing.T) {
+	controller := centralQueueLanePathTestController()
+	consumers := newCentralQueueConsumerController(120, 256<<10, 3)
+	p := &logExporterImp{
+		loadBalancer:             loadBalancerWithRoutableBackendCount(6, 6),
+		centralQueueLanes:        controller,
+		centralQueueConsumers:    consumers,
+		centralQueueNumConsumers: 120,
+		ignoreTraceID:            true,
+	}
+
+	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
+}
+
+func TestLogExporterCentralQueueDynamicLanesUseLastEffectiveConsumers(t *testing.T) {
+	controller := centralQueueLanePathTestController()
+	consumers := newCentralQueueConsumerController(120, 256<<10, 3)
+	p := &logExporterImp{
+		loadBalancer:          loadBalancerWithRoutableBackendCount(6, 6),
+		centralQueueLanes:     controller,
+		centralQueueConsumers: consumers,
+		ignoreTraceID:         true,
+	}
+	var active atomic.Int64
+	decision, acquired, _ := consumers.tryAcquire(&active, 1<<30, 6, false)
+	require.True(t, acquired)
+	require.Equal(t, 2, decision.effectiveConsumers)
+
+	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
+}
+
+func TestLogExporterCentralQueueDynamicLanesCapStaleEffectiveConsumersByCurrentBackends(t *testing.T) {
+	controller := centralQueueLanePathTestController()
+	consumers := newCentralQueueConsumerController(120, 256<<10, 1)
+	var active atomic.Int64
+	decision, acquired, _ := consumers.tryAcquire(&active, 1<<30, 8, false)
+	require.True(t, acquired)
+	require.Equal(t, 8, decision.effectiveConsumers)
+
+	p := &logExporterImp{
+		loadBalancer:          loadBalancerWithRoutableBackendCount(2, 2),
+		centralQueueLanes:     controller,
+		centralQueueConsumers: consumers,
+		ignoreTraceID:         true,
+	}
+
+	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
+}
+
+func TestLogExporterCentralQueueDynamicLanesKeepMinimumLaneWhenBackendShareIsFractional(t *testing.T) {
+	controller := centralQueueLanePathTestController()
+	consumers := newCentralQueueConsumerController(120, 256<<10, 4)
+	p := &logExporterImp{
+		loadBalancer:          loadBalancerWithRoutableBackendCount(3, 3),
+		centralQueueLanes:     controller,
+		centralQueueConsumers: consumers,
+		ignoreTraceID:         true,
+	}
+	var active atomic.Int64
+	decision, acquired, _ := consumers.tryAcquire(&active, 1<<30, 3, false)
+	require.False(t, acquired)
+	require.Equal(t, 0, decision.effectiveConsumers)
+
+	require.Equal(t, 1, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
 }
 
 func TestLogExporterCentralQueueTraceIDRoutingUsesStableLaneCount(t *testing.T) {
@@ -94,7 +161,7 @@ func TestMetricExporterCentralQueueObservedBytesUpdateEffectiveLanes(t *testing.
 		loadBalancer:             loadBalancerWithBackendCount(4),
 		centralQueue:             centralQueueLanePathTestQueue(telemetry),
 		centralQueueLanes:        controller,
-		centralQueueNumConsumers: 1,
+		centralQueueNumConsumers: 4,
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	p.startCentralQueueConsumers(ctx)
@@ -149,6 +216,33 @@ func TestMetricExporterCentralQueueUsesRoutableBackendCountForDynamicLanes(t *te
 	p := &metricExporterImp{
 		loadBalancer:      loadBalancerWithRoutableBackendCount(2, 4),
 		centralQueueLanes: controller,
+	}
+
+	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
+}
+
+func TestMetricExporterCentralQueueDynamicLanesUseLastEffectiveConsumers(t *testing.T) {
+	controller := centralQueueLanePathTestController()
+	consumers := newCentralQueueConsumerController(120, 256<<10, 3)
+	p := &metricExporterImp{
+		loadBalancer:          loadBalancerWithRoutableBackendCount(6, 6),
+		centralQueueLanes:     controller,
+		centralQueueConsumers: consumers,
+	}
+	var active atomic.Int64
+	decision, acquired, _ := consumers.tryAcquire(&active, 1<<30, 6, false)
+	require.True(t, acquired)
+	require.Equal(t, 2, decision.effectiveConsumers)
+
+	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
+}
+
+func TestMetricExporterCentralQueueDynamicLanesUseConfiguredConsumerCapacity(t *testing.T) {
+	controller := centralQueueLanePathTestController()
+	p := &metricExporterImp{
+		loadBalancer:             loadBalancerWithRoutableBackendCount(4, 4),
+		centralQueueLanes:        controller,
+		centralQueueNumConsumers: 2,
 	}
 
 	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))

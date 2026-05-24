@@ -258,6 +258,7 @@ const (
 	defaultCentralQueueTargetCompressedBytes     = int64(256 << 10)
 	defaultCentralQueueMaxBatchDelay             = 250 * time.Millisecond
 	defaultCentralQueueNumConsumers              = 30
+	defaultCentralQueueActiveLBReplicas          = 1
 )
 
 type CentralQueueConfig struct {
@@ -275,6 +276,7 @@ type CentralQueueConfig struct {
 	TargetLaneFillDuration       time.Duration           `mapstructure:"target_lane_fill_duration"`
 	LaneHysteresisFactor         int                     `mapstructure:"lane_hysteresis_factor"`
 	NumConsumers                 int                     `mapstructure:"num_consumers"`
+	ActiveLoadBalancerReplicas   int                     `mapstructure:"active_load_balancer_replicas"`
 	// ForceScheduleAge bounds how long a fallback candidate (a routing-key
 	// lane whose accumulated window is under target_compressed_bytes) may wait
 	// before being promoted ahead of fresh target_reached candidates. This
@@ -418,6 +420,9 @@ func (c CentralQueueConfig) Validate() error {
 	}
 	if c.NumConsumers <= 0 {
 		return errors.New("central_queue.num_consumers must be greater than 0 when central_queue.enabled=true")
+	}
+	if c.ActiveLoadBalancerReplicas <= 0 {
+		return errors.New("central_queue.active_load_balancer_replicas must be greater than 0 when central_queue.enabled=true")
 	}
 	if c.MaxInflightUncompressedBytes/int64(c.NumConsumers) < int64(c.MaxUncompressedBatchBytes) {
 		return errors.New("central_queue.max_inflight_uncompressed_bytes must be greater than or equal to central_queue.num_consumers * central_queue.max_uncompressed_batch_bytes")

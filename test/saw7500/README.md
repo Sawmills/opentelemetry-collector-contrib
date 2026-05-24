@@ -48,12 +48,19 @@ test/saw7500/run.sh \
   --lb-replicas 2 \
   --workers 4 \
   --num-consumers 30 \
+  --red-num-consumers 120 \
   --target-compressed-bytes 262144 \
   --payload-profile repeated \
   --payload-size-bytes 262144
 ```
 
 Artifacts are written under `artifacts/saw-7500/<timestamp>/`.
+
+`--num-consumers` remains the green default. Use `--red-num-consumers` when the
+red image supports the setting and the proof needs to reproduce a high
+configured concurrency variation such as APSE2's previous 120-consumer config.
+Green renders `central_queue.active_load_balancer_replicas` from
+`--lb-replicas` so backend-safe drain concurrency is divided per LB pod.
 
 Payload profiles:
 

@@ -1,0 +1,12 @@
+change_type: bug_fix
+
+component: exporter/loadbalancing
+
+note: Bound central queue drain concurrency by queue demand, ready backend capacity, active load balancer replicas, and backend pressure.
+
+issues: [7500]
+
+subtext: |
+  Treats central_queue.num_consumers as the configured maximum instead of the unconditional send parallelism, and drives dynamic lanes from the runtime effective consumer count.
+
+change_logs: [user]

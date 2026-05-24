@@ -30,6 +30,8 @@ type centralQueueLanePolicy struct {
 type centralQueueLaneInputs struct {
 	healthyBackends               int
 	resolvedBackends              int
+	effectiveConsumers            int
+	effectiveConsumersKnown       bool
 	compressedIngestBytesPerSec   int64
 	previousEffectiveLaneCount    int
 	previousEffectiveLaneCountSet bool
@@ -83,8 +85,14 @@ func (p centralQueueLanePolicy) compute(inputs centralQueueLaneInputs) int {
 	minLanes := max(p.minLanes, 1)
 	maxLanes := max(p.maxLanes, minLanes)
 
-	backends := inputs.healthyBackends
-	if backends <= 0 {
+	backends := 0
+	if inputs.effectiveConsumersKnown {
+		backends = inputs.effectiveConsumers
+	}
+	if !inputs.effectiveConsumersKnown && backends <= 0 {
+		backends = inputs.healthyBackends
+	}
+	if !inputs.effectiveConsumersKnown && backends <= 0 {
 		backends = inputs.resolvedBackends
 	}
 	if backends <= 0 {
@@ -130,6 +138,8 @@ type centralQueueLaneController struct {
 	effectiveLaneCount int
 	effectiveSet       bool
 	lastBackendCount   int
+	lastConsumerCount  int
+	lastConsumerKnown  bool
 	bytesPerSec        int64
 	windowStart        time.Time
 	windowBytes        int64
@@ -144,6 +154,10 @@ func newCentralQueueLaneController(cfg CentralQueueConfig) *centralQueueLaneCont
 }
 
 func (c *centralQueueLaneController) laneCount(backendCount int, now time.Time) int {
+	return c.laneCountWithConsumers(backendCount, 0, false, now)
+}
+
+func (c *centralQueueLaneController) laneCountWithConsumers(backendCount, consumerCount int, consumerKnown bool, now time.Time) int {
 	if c == nil {
 		return defaultCentralQueueMaxLanes
 	}
@@ -153,8 +167,8 @@ func (c *centralQueueLaneController) laneCount(backendCount int, now time.Time) 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	rateRolled := c.rollRateWindowLocked(now)
-	if rateRolled || !c.effectiveSet || backendCount != c.lastBackendCount {
-		c.recomputeLocked(backendCount)
+	if rateRolled || !c.effectiveSet || backendCount != c.lastBackendCount || consumerCount != c.lastConsumerCount || consumerKnown != c.lastConsumerKnown {
+		c.recomputeLocked(backendCount, consumerCount, consumerKnown)
 	}
 	return c.effectiveLaneCount
 }
@@ -176,7 +190,7 @@ func (c *centralQueueLaneController) observeCompressedBytes(compressedBytes int,
 		c.windowBytes += int64(compressedBytes)
 	}
 	if rateRolled || !c.effectiveSet {
-		c.recomputeLocked(c.lastBackendCount)
+		c.recomputeLocked(c.lastBackendCount, c.lastConsumerCount, c.lastConsumerKnown)
 	}
 	return c.effectiveLaneCount
 }
@@ -200,20 +214,24 @@ func (c *centralQueueLaneController) rollRateWindowLocked(now time.Time) bool {
 	return true
 }
 
-func (c *centralQueueLaneController) recomputeLocked(backendCount int) {
+func (c *centralQueueLaneController) recomputeLocked(backendCount, consumerCount int, consumerKnown bool) {
 	c.effectiveLaneCount = c.policy.compute(centralQueueLaneInputs{
 		healthyBackends:               backendCount,
+		effectiveConsumers:            consumerCount,
+		effectiveConsumersKnown:       consumerKnown,
 		compressedIngestBytesPerSec:   c.bytesPerSec,
 		previousEffectiveLaneCount:    c.effectiveLaneCount,
 		previousEffectiveLaneCountSet: c.effectiveSet,
 	})
 	c.effectiveSet = true
 	c.lastBackendCount = backendCount
+	c.lastConsumerCount = consumerCount
+	c.lastConsumerKnown = consumerKnown
 }
 
-func centralQueueEffectiveLaneCount(controller *centralQueueLaneController, staticLaneCount int, lb *loadBalancer, now time.Time) int {
+func centralQueueEffectiveLaneCount(controller *centralQueueLaneController, staticLaneCount int, lb *loadBalancer, consumerCount int, consumerKnown bool, now time.Time) int {
 	if controller != nil {
-		return controller.laneCount(centralQueueRoutableBackendCount(lb), now)
+		return controller.laneCountWithConsumers(centralQueueRoutableBackendCount(lb), consumerCount, consumerKnown, now)
 	}
 	if staticLaneCount > 0 {
 		return staticLaneCount

@@ -4,6 +4,7 @@
 package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter"
 
 import (
+	"bytes"
 	"container/heap"
 	"context"
 	"encoding/binary"
@@ -20,6 +21,8 @@ const (
 	centralQueueMaxRetryDelay     = 5 * time.Second
 	centralQueueMaxRetryJitter    = 100 * time.Millisecond
 )
+
+var errCentralQueueConsumersFull = errors.New("central queue effective consumers full")
 
 // centralQueueDefaultForceScheduleAgeMultiplier bounds oldest_item_age under
 // continuous hot-key arrivals: once a fallback candidate has been waiting longer
@@ -72,10 +75,12 @@ type centralQueue struct {
 }
 
 type centralQueueLease struct {
-	queue  *centralQueue
-	window centralQueueWindow
-	item   centralQueueItem
-	once   sync.Once
+	queue               *centralQueue
+	window              centralQueueWindow
+	item                centralQueueItem
+	once                sync.Once
+	consumerRelease     func()
+	consumerReleaseOnce sync.Once
 }
 
 type centralQueueWindow struct {
@@ -172,6 +177,16 @@ func (q *centralQueue) lease(ctx context.Context) (*centralQueueLease, error) {
 }
 
 func (q *centralQueue) leaseWithPollInterval(ctx context.Context, pollInterval time.Duration) (*centralQueueLease, error) {
+	return q.leaseWithPollIntervalAndAcquire(ctx, pollInterval, nil)
+}
+
+type centralQueueLeaseAcquireFunc func(queueCompressedBytes int64, window centralQueueWindow) (func(), bool)
+
+func (q *centralQueue) leaseWithAcquire(ctx context.Context, acquire centralQueueLeaseAcquireFunc) (*centralQueueLease, error) {
+	return q.leaseWithPollIntervalAndAcquire(ctx, centralQueueLeasePollInterval, acquire)
+}
+
+func (q *centralQueue) leaseWithPollIntervalAndAcquire(ctx context.Context, pollInterval time.Duration, acquire centralQueueLeaseAcquireFunc) (*centralQueueLease, error) {
 	var ticker *time.Ticker
 	var poll <-chan time.Time
 	if pollInterval > 0 {
@@ -180,11 +195,11 @@ func (q *centralQueue) leaseWithPollInterval(ctx context.Context, pollInterval t
 		defer ticker.Stop()
 	}
 	for {
-		lease, err := q.tryLease(time.Now())
+		lease, err := q.tryLeaseWithAcquire(time.Now(), acquire)
 		if lease != nil {
 			return lease, nil
 		}
-		if err != nil && !errors.Is(err, errCentralQueueInflightFull) {
+		if err != nil && !errors.Is(err, errCentralQueueInflightFull) && !errors.Is(err, errCentralQueueConsumersFull) {
 			return nil, err
 		}
 
@@ -198,33 +213,78 @@ func (q *centralQueue) leaseWithPollInterval(ctx context.Context, pollInterval t
 }
 
 func (q *centralQueue) tryLease(now time.Time) (*centralQueueLease, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	if lease := q.leaseReadyWindowLocked(); lease != nil {
-		return lease, nil
-	}
-
-	if q.itemCount == 0 {
-		if q.stopped {
-			return nil, errCentralQueueStopped
-		}
-		return nil, nil
-	}
-
-	state := q.prepareReadyWindowsLocked(now)
-	if lease := q.leaseReadyWindowLocked(); lease != nil {
-		return lease, nil
-	}
-	if state == centralQueueSchedulerStateInflightBytes {
-		return nil, errCentralQueueInflightFull
-	}
-	return nil, nil
+	return q.tryLeaseWithAcquire(now, nil)
 }
 
-func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSchedulerState {
+func (q *centralQueue) tryLeaseWithAcquire(now time.Time, acquire centralQueueLeaseAcquireFunc) (*centralQueueLease, error) {
+	for {
+		q.mu.Lock()
+		if len(q.ready) == 0 && q.itemCount == 0 {
+			stopped := q.stopped
+			q.mu.Unlock()
+			if stopped {
+				return nil, errCentralQueueStopped
+			}
+			return nil, nil
+		}
+
+		state := centralQueueSchedulerStateReady
+		if len(q.ready) == 0 {
+			readyWindowLimit := q.settings.maxReadyWindows
+			if acquire != nil {
+				readyWindowLimit = 1
+			}
+			state = q.prepareReadyWindowsLocked(now, readyWindowLimit)
+		}
+		if len(q.ready) == 0 {
+			q.mu.Unlock()
+			if state == centralQueueSchedulerStateInflightBytes {
+				return nil, errCentralQueueInflightFull
+			}
+			return nil, nil
+		}
+		if acquire == nil {
+			lease := q.leaseReadyWindowLocked()
+			q.mu.Unlock()
+			return lease, nil
+		}
+		queueCompressedBytes := q.currentCompressedBytes
+		selectedWindow := q.ready[0]
+		selectedWindow.routingKey = append([]byte(nil), selectedWindow.routingKey...)
+		q.mu.Unlock()
+
+		release, acquired := acquire(queueCompressedBytes, selectedWindow)
+		if !acquired {
+			return nil, errCentralQueueConsumersFull
+		}
+
+		q.mu.Lock()
+		if len(q.ready) == 0 || !bytes.Equal(q.ready[0].routingKey, selectedWindow.routingKey) {
+			q.mu.Unlock()
+			if release != nil {
+				release()
+			}
+			continue
+		}
+		lease := q.leaseReadyWindowLocked()
+		q.mu.Unlock()
+		if lease == nil {
+			if release != nil {
+				release()
+			}
+			continue
+		}
+		lease.consumerRelease = release
+		return lease, nil
+	}
+}
+
+func (q *centralQueue) prepareReadyWindowsLocked(now time.Time, readyWindowLimit int) centralQueueSchedulerState {
+	if readyWindowLimit <= 0 {
+		readyWindowLimit = q.settings.maxReadyWindows
+	}
 	state := centralQueueSchedulerStateWaiting
-	for len(q.ready) < q.settings.maxReadyWindows {
+	for len(q.ready) < readyWindowLimit {
 		targetCandidates, fallbackCandidates := q.collectReadyWindowCandidatesLocked(now)
 		if len(targetCandidates) == 0 && len(fallbackCandidates) == 0 {
 			return state
@@ -238,7 +298,7 @@ func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSche
 		// windows in later groups may still fit, and the original code's
 		// blocked-target to InflightBytes signaling remains intact.
 		staleFallbacks, freshFallbacks := q.splitFallbackByStaleness(fallbackCandidates, now)
-		scheduledStale, _ := q.scheduleReadyWindowCandidatesLocked(staleFallbacks, now)
+		scheduledStale, _ := q.scheduleReadyWindowCandidatesLocked(staleFallbacks, now, readyWindowLimit)
 		if scheduledStale {
 			state = centralQueueSchedulerStateReady
 			// Items were removed from buckets, so the previously-collected
@@ -247,19 +307,19 @@ func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSche
 			targetCandidates, fallbackCandidates = q.collectReadyWindowCandidatesLocked(now)
 			_, freshFallbacks = q.splitFallbackByStaleness(fallbackCandidates, now)
 		}
-		if len(q.ready) >= q.settings.maxReadyWindows {
+		if len(q.ready) >= readyWindowLimit {
 			state = centralQueueSchedulerStateReady
 			continue
 		}
 
-		scheduledTarget, blocked := q.scheduleReadyWindowCandidatesLocked(targetCandidates, now)
+		scheduledTarget, blocked := q.scheduleReadyWindowCandidatesLocked(targetCandidates, now, readyWindowLimit)
 		if !scheduledTarget && !scheduledStale && blocked {
 			return centralQueueSchedulerStateInflightBytes
 		}
 		if scheduledTarget {
 			state = centralQueueSchedulerStateReady
 		}
-		if len(q.ready) >= q.settings.maxReadyWindows {
+		if len(q.ready) >= readyWindowLimit {
 			state = centralQueueSchedulerStateReady
 			continue
 		}
@@ -268,7 +328,7 @@ func (q *centralQueue) prepareReadyWindowsLocked(now time.Time) centralQueueSche
 			_, freshFallbacks = q.splitFallbackByStaleness(fallbackCandidates, now)
 		}
 
-		scheduledFallback, blocked := q.scheduleReadyWindowCandidatesLocked(freshFallbacks, now)
+		scheduledFallback, blocked := q.scheduleReadyWindowCandidatesLocked(freshFallbacks, now, readyWindowLimit)
 		if blocked {
 			return centralQueueSchedulerStateInflightBytes
 		}
@@ -500,9 +560,12 @@ func sortCentralQueueWindowCandidates(candidates []centralQueueWindowCandidate) 
 	})
 }
 
-func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQueueWindowCandidate, now time.Time) (bool, bool) {
+func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQueueWindowCandidate, now time.Time, readyWindowLimit int) (bool, bool) {
 	if len(candidates) == 0 {
 		return false, false
+	}
+	if readyWindowLimit <= 0 {
+		readyWindowLimit = q.settings.maxReadyWindows
 	}
 
 	selected := make([]centralQueueWindowCandidate, 0, len(candidates))
@@ -510,7 +573,7 @@ func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQ
 	blocked := false
 	for i := range candidates {
 		candidate := &candidates[i]
-		if len(q.ready)+len(selected) >= q.settings.maxReadyWindows {
+		if len(q.ready)+len(selected) >= readyWindowLimit {
 			break
 		}
 		if q.windowInflightBlockedWithBase(candidate.window, pendingInflightBytes) {
@@ -656,6 +719,13 @@ func (l *centralQueueLease) done() {
 	})
 }
 
+func (l *centralQueueLease) releaseConsumer() {
+	if l == nil || l.consumerRelease == nil {
+		return
+	}
+	l.consumerReleaseOnce.Do(l.consumerRelease)
+}
+
 func (l *centralQueueLease) requeue(now time.Time) error {
 	var err error
 	l.once.Do(func() {
@@ -687,6 +757,34 @@ func (l *centralQueueLease) requeue(now time.Time) error {
 	return err
 }
 
+func (l *centralQueueLease) deferReady(now time.Time) error {
+	var err error
+	l.once.Do(func() {
+		l.queue.mu.Lock()
+		l.queue.currentInflightBytes -= int64(l.window.uncompressedBytes)
+		if l.queue.stopped {
+			l.queue.currentCompressedBytes -= int64(l.window.compressedBytes)
+			err = errCentralQueueStopped
+		} else {
+			nextAttemptUnixNano := now.Add(centralQueueLeasePollInterval).UnixNano()
+			for i := range l.window.items {
+				item := l.window.items[i]
+				item.nextAttemptUnixNano = nextAttemptUnixNano
+				bucket := l.queue.bucketForItemLocked(item)
+				bucket.append(item)
+				l.queue.itemCount++
+				l.queue.updateReadyBucketLocked(bucket, now.UnixNano())
+				l.queue.trackOldestEnqueuedAtLocked(item)
+			}
+		}
+		snapshot := l.queue.snapshotLocked()
+		l.queue.mu.Unlock()
+		l.queue.notifyLeaseWaiters()
+		l.queue.settings.telemetry.record(context.Background(), snapshot)
+	})
+	return err
+}
+
 func (q *centralQueue) stop() {
 	q.mu.Lock()
 	q.stopped = true
@@ -698,6 +796,7 @@ func (q *centralQueue) stop() {
 	q.notifyLeaseWaiters()
 	q.settings.telemetry.stopObservingOldestItemAge()
 	q.settings.telemetry.stopObservingSchedulerState()
+	q.settings.telemetry.stopObservingConsumerDecision()
 }
 
 func (q *centralQueue) notifyLeaseWaiters() {
