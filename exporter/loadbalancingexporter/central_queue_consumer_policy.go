@@ -147,25 +147,16 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 		}
 		if p.pressureRecoveryActive && p.previousEffectiveConsumers < target {
 			effective = clampInt(candidate, minConsumers, maxConsumers)
-			if effective < target {
+			switch {
+			case effective < target:
 				reason = centralQueueConsumerLimitReasonRecovery
 				pressureState = centralQueueConsumerPressureRecovering
-			} else if effective > backendSafe {
-				reason = centralQueueConsumerLimitReasonHealthyRamp
-			} else if effective == queueDemand {
-				reason = centralQueueConsumerLimitReasonQueueDemand
-			} else {
-				reason = centralQueueConsumerLimitReasonConfiguredMax
+			default:
+				reason = centralQueueConsumerRampedLimitReason(effective, backendSafe, queueDemand)
 			}
 		} else if candidate > effective {
 			effective = clampInt(candidate, minConsumers, maxConsumers)
-			if effective > backendSafe {
-				reason = centralQueueConsumerLimitReasonHealthyRamp
-			} else if effective == queueDemand {
-				reason = centralQueueConsumerLimitReasonQueueDemand
-			} else {
-				reason = centralQueueConsumerLimitReasonConfiguredMax
-			}
+			reason = centralQueueConsumerRampedLimitReason(effective, backendSafe, queueDemand)
 		}
 	}
 
@@ -296,6 +287,17 @@ func (c *centralQueueConsumerController) commitLocked(result centralQueueConsume
 	}
 	c.last = result
 	return !previousOK || result != previous
+}
+
+func centralQueueConsumerRampedLimitReason(effective, backendSafe, queueDemand int) centralQueueConsumerLimitReason {
+	switch {
+	case effective > backendSafe:
+		return centralQueueConsumerLimitReasonHealthyRamp
+	case effective == queueDemand:
+		return centralQueueConsumerLimitReasonQueueDemand
+	default:
+		return centralQueueConsumerLimitReasonConfiguredMax
+	}
 }
 
 func (c *centralQueueConsumerController) lastEffectiveConsumers() (int, bool) {
