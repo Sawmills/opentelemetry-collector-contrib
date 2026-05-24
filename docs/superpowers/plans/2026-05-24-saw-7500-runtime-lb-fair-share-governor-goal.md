@@ -13,8 +13,56 @@
 ## Copy/paste `/goal`
 
 ```text
-/goal Create and follow docs/superpowers/plans/2026-05-24-saw-7500-runtime-lb-fair-share-governor-goal.md. Implement a runtime LB drain fair-share governor that removes the need for static active_load_balancer_replicas tuning. Prove red/green that APSE2-like traffic with 4 active LBs, activeLB upper bound 10, and few workers no longer stays artificially pinned at effective_consumers=1 when backends are healthy, while still backing off under backend pressure. Merge green PRs through contrib and sawmills-collector, release the collector, update any required LD/config flags, validate in staging, then deploy only production-mt-1-ap-southeast-2 and prove no liveness cascade, no refusals, no exporter failures, queue bounded/draining, KEDA scaling works, and backend p95/p99 stays below the agreed latency gate.
+/goal Create and follow docs/superpowers/plans/2026-05-24-saw-7500-runtime-lb-fair-share-governor-goal.md. Implement a runtime LB drain fair-share governor that removes the need for static active_load_balancer_replicas tuning. Prove red/green that APSE2-like traffic with 4 active LBs, activeLB upper bound 10, and few workers no longer stays artificially pinned at effective_consumers=1 when backends are healthy, while still backing off under backend pressure. Before marking any task done, validate it with an adversarial subagent review. Before marking the whole goal complete, validate the full goal with an adversarial subagent review. Merge green PRs through contrib and sawmills-collector, release the collector, update any required LD/config flags, validate in staging, then deploy only production-mt-1-ap-southeast-2 and prove no liveness cascade, no refusals, no exporter failures, queue bounded/draining, KEDA scaling works, and backend p95/p99 stays below the agreed latency gate.
 ```
+
+## Required Adversarial Review Gates
+
+These gates are mandatory and override the checkbox state in this plan, TodoWrite, PR descriptions, and Linear breadcrumbs.
+
+### Per-Task Gate
+
+Before marking any task as done, dispatch a fresh adversarial reviewer subagent that did not implement the task. The reviewer must inspect the task diff, tests, commands, rollout evidence, and any relevant live metrics/config readbacks, then try to falsify completion from first principles.
+
+The adversarial review must explicitly challenge:
+
+- whether the real limiting factor was identified instead of optimizing a symptom,
+- whether the red test fails on the old behavior and the green test proves the intended fix,
+- whether test coverage includes the unsafe edge case, not only the happy path,
+- whether runtime evidence matches code/config intent,
+- whether LaunchDarkly, rendered config, deployment, and live pod state agree when the task touches rollout behavior,
+- whether stale assumptions from earlier APSE2/BigID observations still hold,
+- whether the task introduced a new operator knob, rollout risk, or hidden dependency that the plan did not justify,
+- whether any evidence is missing, ambiguous, or based on comparison mode/extra work that should not be used as performance proof.
+
+If the reviewer finds a gap, leave the task unchecked or in progress, fix the gap or gather the missing evidence, then rerun the adversarial review. A task can be marked done only after the reviewer reports no blocking concerns.
+
+For tasks already marked complete before this plan update, run a retrospective adversarial review before final goal completion. Any retrospective blocker reopens the affected task.
+
+### Whole-Goal Gate
+
+After every task-level adversarial review passes, dispatch a final adversarial reviewer for the entire goal before calling the goal complete. This reviewer must audit every explicit acceptance gate:
+
+- local red/green proof for static active-LB upper-bound pinning,
+- local pressure backoff proof,
+- local dynamic lane healthy-backend floor proof,
+- contrib PR merged, released, and referenced,
+- `sawmills-collector` PR merged, released, and referenced,
+- LD/config readback matches intended values,
+- staging validation is green,
+- only `production-mt-1-ap-southeast-2` was deployed for BigID validation,
+- no liveness cascade,
+- no pod restarts/OOM caused by the rollout,
+- no receiver/processor refusals in the post-stabilization window,
+- no exporter send failures in the post-stabilization window,
+- queue is bounded or draining,
+- KEDA scales when queue target is crossed,
+- effective consumers rise above the conservative floor while backends are healthy,
+- effective consumers back off under backend pressure in local/staging proof,
+- backend p95/p99 remains below 2 seconds unless the user sets a different gate,
+- SAW-7500 has final evidence, PR links, release tags, rollback notes, and remaining risks.
+
+If the final reviewer finds any unresolved blocker, the goal remains incomplete. Do not close the goal by saying the evidence is "good enough"; either prove the missing gate, reopen the relevant task, or state the exact blocker.
 
 ## Intent
 

@@ -32,6 +32,9 @@ server, and exact-byte load generator:
 docker build -t saw7500-fakebackend:latest test/saw7500/fakebackend
 ```
 
+Use `--skip-fake-backend-build` when the image is already present locally and
+the run should avoid pulling builder base images again.
+
 When testing a local collector build:
 
 ```sh
@@ -45,7 +48,8 @@ docker tag otelcontribcol otelcontribcol-dev:saw-7500
 test/saw7500/run.sh \
   --red-image public.ecr.aws/s7a5m1b4/sawmills-collector:1.936.0 \
   --green-image otelcontribcol-dev:saw-7500 \
-  --lb-replicas 2 \
+  --lb-replicas 4 \
+  --active-lb-replicas-config 10 \
   --workers 4 \
   --num-consumers 30 \
   --red-num-consumers 120 \
@@ -60,7 +64,11 @@ Artifacts are written under `artifacts/saw-7500/<timestamp>/`.
 red image supports the setting and the proof needs to reproduce a high
 configured concurrency variation such as APSE2's previous 120-consumer config.
 Green renders `central_queue.active_load_balancer_replicas` from
-`--lb-replicas` so backend-safe drain concurrency is divided per LB pod.
+`--lb-replicas` by default so backend-safe drain concurrency is divided per LB
+pod. Use `--active-lb-replicas-config`, `--red-active-lb-replicas`, or
+`--green-active-lb-replicas` when reproducing an HPA upper-bound config that is
+larger than the actual LB pod count, such as APSE2 running 4 LBs while config
+uses `active_load_balancer_replicas=10`.
 
 Payload profiles:
 
