@@ -227,6 +227,7 @@ func TestCentralQueueDefaultDisabled(t *testing.T) {
 	require.Zero(t, cfg.CentralQueue.TargetLaneFillDuration)
 	require.Equal(t, 2, cfg.CentralQueue.LaneHysteresisFactor)
 	require.Equal(t, 30, cfg.CentralQueue.NumConsumers)
+	require.Equal(t, 1, cfg.CentralQueue.ActiveLoadBalancerReplicas)
 	require.Equal(t, 30, cfg.CentralQueue.effectiveLaneCount())
 	require.NoError(t, cfg.Validate())
 }
@@ -289,6 +290,11 @@ func TestCentralQueueValidation(t *testing.T) {
 			name:        "missing consumers",
 			mutate:      func(c *CentralQueueConfig) { c.NumConsumers = 0 },
 			expectedErr: "central_queue.num_consumers",
+		},
+		{
+			name:        "missing active load balancer replicas",
+			mutate:      func(c *CentralQueueConfig) { c.ActiveLoadBalancerReplicas = 0 },
+			expectedErr: "central_queue.active_load_balancer_replicas",
 		},
 		{
 			name: "inflight budget cannot cover all consumers",

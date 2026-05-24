@@ -40,15 +40,18 @@ type metricExporterImp struct {
 	centralCodec *queuePayloadCodec
 	routingKey   routingKey
 
-	logger                   *zap.Logger
-	started                  atomic.Bool
-	telemetry                *metadata.TelemetryBuilder
-	centralQueueLaneCount    int
-	centralQueueLanes        *centralQueueLaneController
-	centralQueueNumConsumers int
-	centralActiveConsumers   atomic.Int64
-	centralCancel            context.CancelFunc
-	centralWG                sync.WaitGroup
+	logger                       *zap.Logger
+	started                      atomic.Bool
+	telemetry                    *metadata.TelemetryBuilder
+	centralQueueLaneCount        int
+	centralQueueLanes            *centralQueueLaneController
+	centralQueueConsumers        *centralQueueConsumerController
+	centralQueueBackendLimiter   *centralQueueBackendLimiter
+	centralQueueNumConsumers     int
+	centralQueueActiveLBReplicas int
+	centralActiveConsumers       atomic.Int64
+	centralCancel                context.CancelFunc
+	centralWG                    sync.WaitGroup
 }
 
 func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metricExporterImp, error) {
@@ -70,13 +73,16 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 	}
 
 	metricExporter := metricExporterImp{
-		loadBalancer:             lb,
-		routingKey:               svcRouting,
-		telemetry:                telemetry,
-		logger:                   params.Logger,
-		centralQueueLaneCount:    cfg.(*Config).CentralQueue.LaneCount,
-		centralQueueLanes:        newCentralQueueLaneController(cfg.(*Config).CentralQueue),
-		centralQueueNumConsumers: cfg.(*Config).CentralQueue.NumConsumers,
+		loadBalancer:                 lb,
+		routingKey:                   svcRouting,
+		telemetry:                    telemetry,
+		logger:                       params.Logger,
+		centralQueueLaneCount:        cfg.(*Config).CentralQueue.LaneCount,
+		centralQueueLanes:            newCentralQueueLaneController(cfg.(*Config).CentralQueue),
+		centralQueueConsumers:        newCentralQueueConsumerController(cfg.(*Config).CentralQueue.NumConsumers, cfg.(*Config).CentralQueue.TargetCompressedBytes, cfg.(*Config).CentralQueue.ActiveLoadBalancerReplicas),
+		centralQueueBackendLimiter:   newCentralQueueBackendLimiter(),
+		centralQueueNumConsumers:     cfg.(*Config).CentralQueue.NumConsumers,
+		centralQueueActiveLBReplicas: cfg.(*Config).CentralQueue.ActiveLoadBalancerReplicas,
 	}
 	if cfg.(*Config).CentralQueue.Enabled {
 		centralCfg := cfg.(*Config).CentralQueue
@@ -159,7 +165,14 @@ func (e *metricExporterImp) startCentralQueueConsumers(ctx context.Context) {
 	if consumers <= 0 {
 		consumers = defaultCentralQueueNumConsumers
 	}
+	if e.centralQueueConsumers == nil && e.centralQueue != nil {
+		e.centralQueueConsumers = newCentralQueueConsumerController(consumers, e.centralQueue.settings.targetCompressedBytes, e.centralQueueActiveLBReplicas)
+	}
+	if e.centralQueueBackendLimiter == nil {
+		e.centralQueueBackendLimiter = newCentralQueueBackendLimiter()
+	}
 	e.centralQueue.settings.telemetry.recordConfiguredConsumers(ctx, int64(consumers))
+	e.centralQueue.settings.telemetry.recordActiveLoadBalancerReplicas(ctx, int64(configuredCentralQueueActiveLBReplicas(e.centralQueueActiveLBReplicas)))
 	e.centralQueue.settings.telemetry.recordActiveConsumers(ctx, e.centralActiveConsumers.Load())
 	e.centralQueue.settings.telemetry.recordConfiguredLanes(ctx, int64(e.centralQueueLaneCount))
 	e.centralQueue.settings.telemetry.recordEffectiveLanes(ctx, int64(e.effectiveCentralQueueLaneCount(time.Now())))
@@ -238,7 +251,8 @@ func (e *metricExporterImp) consumeMetricsCentralQueue(batches map[string]pmetri
 }
 
 func (e *metricExporterImp) effectiveCentralQueueLaneCount(now time.Time) int {
-	return centralQueueEffectiveLaneCount(e.centralQueueLanes, e.centralQueueLaneCount, e.loadBalancer, now)
+	consumerCount, consumerKnown := centralQueueEffectiveConsumersForLanes(e.centralQueueConsumers, e.centralQueueNumConsumers, centralQueueRoutableBackendCount(e.loadBalancer))
+	return centralQueueEffectiveLaneCount(e.centralQueueLanes, e.centralQueueLaneCount, e.loadBalancer, consumerCount, consumerKnown, now)
 }
 
 func (e *metricExporterImp) observeCentralQueueLaneBytes(compressedBytes int, now time.Time) {
@@ -251,7 +265,14 @@ func (e *metricExporterImp) observeCentralQueueLaneBytes(compressedBytes int, no
 func (e *metricExporterImp) runCentralQueue(ctx context.Context) {
 	defer e.centralWG.Done()
 	for {
-		lease, err := e.centralQueue.lease(ctx)
+		lease, err := e.centralQueue.leaseWithAcquire(ctx, func(queueCompressedBytes int64, _ centralQueueWindow) (func(), bool) {
+			if !tryAcquireCentralQueueConsumer(ctx, &e.centralActiveConsumers, e.centralQueueConsumers, e.centralQueue, e.loadBalancer, queueCompressedBytes) {
+				return nil, false
+			}
+			return func() {
+				releaseCentralQueueConsumer(ctx, &e.centralActiveConsumers, e.centralQueue)
+			}, true
+		})
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, errCentralQueueStopped) {
 				return
@@ -268,34 +289,36 @@ func (e *metricExporterImp) runCentralQueue(ctx context.Context) {
 			continue
 		}
 
-		err = e.consumeActiveCentralQueueMetricWindow(ctx, lease.window)
+		acquiredBackend, backendAvailable := tryAcquireCentralQueueBackendForWindow(e.loadBalancer, e.centralQueueBackendLimiter, lease.window)
+		if !backendAvailable {
+			lease.releaseConsumer()
+			if deferErr := lease.deferReady(time.Now()); deferErr != nil {
+				e.logger.Warn("failed to defer central metric queue item while backend send slot is full", zap.Error(deferErr))
+			}
+			continue
+		}
+		err = e.consumeCentralQueueMetricWindowWithBackend(ctx, lease.window, acquiredBackend)
 		if err == nil {
 			lease.done()
+			lease.releaseConsumer()
 			continue
 		}
 		if ctx.Err() != nil {
 			lease.done()
+			lease.releaseConsumer()
 			return
 		}
 		if consumererror.IsPermanent(err) {
 			e.logger.Warn("dropping central metric queue item after permanent export error", zap.Error(err))
 			lease.done()
+			lease.releaseConsumer()
 			continue
 		}
 		if requeueErr := lease.requeue(time.Now()); requeueErr != nil {
 			e.logger.Warn("failed to requeue central metric queue item", zap.Error(requeueErr), zap.Error(err))
 		}
+		lease.releaseConsumer()
 	}
-}
-
-func (e *metricExporterImp) consumeActiveCentralQueueMetricWindow(ctx context.Context, window centralQueueWindow) error {
-	active := e.centralActiveConsumers.Add(1)
-	e.centralQueue.settings.telemetry.recordActiveConsumers(ctx, active)
-	defer func() {
-		active := e.centralActiveConsumers.Add(-1)
-		e.centralQueue.settings.telemetry.recordActiveConsumers(ctx, active)
-	}()
-	return e.consumeCentralQueueMetricWindow(ctx, window)
 }
 
 func (e *metricExporterImp) consumeCentralQueueMetricItem(ctx context.Context, item centralQueueItem) error {
@@ -309,10 +332,32 @@ func (e *metricExporterImp) consumeCentralQueueMetricItem(ctx context.Context, i
 }
 
 func (e *metricExporterImp) consumeCentralQueueMetricWindow(ctx context.Context, window centralQueueWindow) error {
-	return e.consumeCentralQueueMetricWindowAttempt(ctx, window, 0)
+	return e.consumeCentralQueueMetricWindowWithBackend(ctx, window, nil)
 }
 
-func (e *metricExporterImp) consumeCentralQueueMetricWindowAttempt(ctx context.Context, window centralQueueWindow, rerouteAttempt int) error {
+func (e *metricExporterImp) consumeCentralQueueMetricWindowWithBackend(ctx context.Context, window centralQueueWindow, acquiredBackend *centralQueueAcquiredBackend) error {
+	return e.consumeCentralQueueMetricWindowAttempt(ctx, window, 0, acquiredBackend)
+}
+
+func (e *metricExporterImp) consumeCentralQueueMetricWindowAttempt(ctx context.Context, window centralQueueWindow, rerouteAttempt int, acquiredBackend *centralQueueAcquiredBackend) error {
+	var exp *wrappedExporter
+	var backendLease *centralQueueBackendLease
+	if acquiredBackend != nil {
+		exp = acquiredBackend.exporter
+		backendLease = acquiredBackend.lease
+	} else {
+		var err error
+		var endpoint string
+		exp, endpoint, err = e.loadBalancer.exporterAndEndpoint(window.routingKey)
+		if err != nil {
+			return err
+		}
+		backendLease, err = e.centralQueueBackendLimiter.acquire(ctx, endpoint)
+		if err != nil {
+			return err
+		}
+	}
+
 	md := pmetric.NewMetrics()
 	decodedAny := false
 	corruptPayloads := 0
@@ -346,11 +391,8 @@ func (e *metricExporterImp) consumeCentralQueueMetricWindowAttempt(ctx context.C
 		}
 	}
 	if !decodedAny {
+		backendLease.release()
 		return nil
-	}
-	exp, _, err := e.loadBalancer.exporterAndEndpoint(window.routingKey)
-	if err != nil {
-		return err
 	}
 
 	exp.forceStartConsume()
@@ -358,11 +400,12 @@ func (e *metricExporterImp) consumeCentralQueueMetricWindowAttempt(ctx context.C
 
 	recordMetricBackendRequest(ctx, e.telemetry, exp.metricSignalAttr, exp.metricRequestAttr, md)
 	start := time.Now()
-	err = exp.ConsumeMetrics(ctx, md)
+	err := exp.ConsumeMetrics(ctx, md)
 	duration := time.Since(start)
 	decision := e.recordBackendResultWithoutDrain(ctx, exp, duration, err, true)
+	backendLease.release()
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, exp.endpoint, decision, rerouteAttempt) {
-		rerouteErr := e.consumeCentralQueueMetricWindowAttempt(ctx, window, rerouteAttempt+1)
+		rerouteErr := e.consumeCentralQueueMetricWindowAttempt(ctx, window, rerouteAttempt+1, nil)
 		e.loadBalancer.recordBackendReroute(ctx, "metrics", decision.reason, rerouteErr)
 		return rerouteErr
 	}

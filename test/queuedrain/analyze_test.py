@@ -54,6 +54,10 @@ class AnalyzeTest(unittest.TestCase):
             self.assertEqual(summary["red_required"], {})
             self.assertTrue(summary["green_checks"]["generated_vs_received_match"])
             self.assertEqual(summary["max_queue_capacity_bytes"], 100.0)
+            self.assertEqual(summary["max_effective_consumers"], 1.0)
+            self.assertEqual(summary["max_queue_demand_consumers"], 4.0)
+            self.assertEqual(summary["max_backend_safe_consumers_per_lb"], 2.0)
+            self.assertEqual(summary["max_active_load_balancer_replicas"], 2.0)
 
     def test_summarize_strict_red_requires_liveness_and_failure_signatures(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -161,6 +165,10 @@ otelcol_receiver_refused_log_records {refused}
 otelcol_loadbalancer_central_queue_inflight_uncompressed_bytes 10
 otelcol_loadbalancer_central_queue_active_consumers 1
 otelcol_loadbalancer_central_queue_configured_consumers 1
+otelcol_loadbalancer_central_queue_active_load_balancer_replicas 2
+otelcol_loadbalancer_central_queue_effective_consumers 1
+otelcol_loadbalancer_central_queue_queue_demand_consumers 4
+otelcol_loadbalancer_central_queue_backend_safe_consumers_per_lb 2
 otelcol_loadbalancer_central_queue_lanes 64
 otelcol_process_memory_rss_bytes 10
 otelcol_process_runtime_heap_alloc_bytes 10

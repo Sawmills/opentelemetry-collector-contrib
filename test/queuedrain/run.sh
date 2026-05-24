@@ -23,6 +23,8 @@ MAX_COMPRESSED_BYTES="16777216"
 MAX_UNCOMPRESSED_BATCH_BYTES="16777216"
 MAX_INFLIGHT_UNCOMPRESSED_BYTES="536870912"
 NUM_CONSUMERS="30"
+RED_NUM_CONSUMERS=""
+GREEN_NUM_CONSUMERS=""
 RECEIVER_MAX_RECV_MSG_SIZE_MIB="32"
 BACKEND_MAX_RECV_MSG_SIZE_MIB="64"
 LOAD_DURATION_SECONDS="720"
@@ -89,6 +91,8 @@ while [[ $# -gt 0 ]]; do
     --max-uncompressed-batch-bytes) MAX_UNCOMPRESSED_BATCH_BYTES="$2"; shift 2 ;;
     --max-inflight-uncompressed-bytes) MAX_INFLIGHT_UNCOMPRESSED_BYTES="$2"; shift 2 ;;
     --num-consumers) NUM_CONSUMERS="$2"; shift 2 ;;
+    --red-num-consumers) RED_NUM_CONSUMERS="$2"; shift 2 ;;
+    --green-num-consumers) GREEN_NUM_CONSUMERS="$2"; shift 2 ;;
     --receiver-max-recv-msg-size-mib) RECEIVER_MAX_RECV_MSG_SIZE_MIB="$2"; shift 2 ;;
     --backend-max-recv-msg-size-mib) BACKEND_MAX_RECV_MSG_SIZE_MIB="$2"; shift 2 ;;
     --load-duration-seconds) LOAD_DURATION_SECONDS="$2"; shift 2 ;;
@@ -191,10 +195,25 @@ render_templates() {
   export MAX_COMPRESSED_BYTES
   export MAX_UNCOMPRESSED_BATCH_BYTES
   export MAX_INFLIGHT_UNCOMPRESSED_BYTES
-  export NUM_CONSUMERS
+  local phase_num_consumers="${NUM_CONSUMERS}"
+  local render_num_consumers="false"
+  if [[ "${phase}" == "red" && -n "${RED_NUM_CONSUMERS}" ]]; then
+    phase_num_consumers="${RED_NUM_CONSUMERS}"
+    render_num_consumers="true"
+  elif [[ "${phase}" == "green" ]]; then
+    if [[ -n "${GREEN_NUM_CONSUMERS}" ]]; then
+      phase_num_consumers="${GREEN_NUM_CONSUMERS}"
+    fi
+    render_num_consumers="true"
+  fi
+  export NUM_CONSUMERS="${phase_num_consumers}"
   export NUM_CONSUMERS_CONFIG=""
+  export ACTIVE_LB_REPLICAS_CONFIG=""
+  if [[ "${render_num_consumers}" == "true" ]]; then
+    NUM_CONSUMERS_CONFIG="          num_consumers: ${phase_num_consumers}"
+  fi
   if [[ "${phase}" == "green" ]]; then
-    NUM_CONSUMERS_CONFIG="          num_consumers: ${NUM_CONSUMERS}"
+    ACTIVE_LB_REPLICAS_CONFIG="          active_load_balancer_replicas: ${LB_REPLICAS}"
   fi
   export RECEIVER_MAX_RECV_MSG_SIZE_MIB
   export BACKEND_MAX_RECV_MSG_SIZE_MIB
@@ -266,6 +285,7 @@ render_templates() {
       s/__MAX_UNCOMPRESSED_BATCH_BYTES__/$ENV{MAX_UNCOMPRESSED_BATCH_BYTES}/g;
       s/__MAX_INFLIGHT_UNCOMPRESSED_BYTES__/$ENV{MAX_INFLIGHT_UNCOMPRESSED_BYTES}/g;
       s#__NUM_CONSUMERS_CONFIG__#$ENV{NUM_CONSUMERS_CONFIG}#g;
+      s#__ACTIVE_LB_REPLICAS_CONFIG__#$ENV{ACTIVE_LB_REPLICAS_CONFIG}#g;
       s/__RECEIVER_MAX_RECV_MSG_SIZE_MIB__/$ENV{RECEIVER_MAX_RECV_MSG_SIZE_MIB}/g;
       s/__BACKEND_MAX_RECV_MSG_SIZE_MIB__/$ENV{BACKEND_MAX_RECV_MSG_SIZE_MIB}/g;
       s/__BACKEND_SLOW_SLEEP__/$ENV{BACKEND_SLOW_SLEEP}/g;
