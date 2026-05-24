@@ -96,11 +96,12 @@ func (p centralQueueLanePolicy) compute(inputs centralQueueLaneInputs) int {
 		backends = minLanes
 	}
 
-	candidate := clampInt(backends, minLanes, maxLanes)
+	backendFloor := clampInt(backends, minLanes, maxLanes)
+	candidate := backendFloor
 	if inputs.compressedIngestBytesPerSec > 0 && p.targetFillDuration > 0 && p.targetBytes > 0 {
 		backendLanes := backends * max(p.backendMultiplier, 1)
 		fillLanes := int(math.Ceil(float64(inputs.compressedIngestBytesPerSec) * p.targetFillDuration.Seconds() / float64(p.targetBytes)))
-		candidate = min(backendLanes, fillLanes, maxLanes)
+		candidate = max(backendFloor, min(backendLanes, fillLanes, maxLanes))
 		candidate = clampInt(candidate, minLanes, maxLanes)
 	}
 
