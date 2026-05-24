@@ -1,0 +1,12 @@
+change_type: bug_fix
+
+component: exporter/loadbalancing
+
+note: Balance central queue log lane routing across healthy backends.
+
+issues: [7500]
+
+subtext: |
+  Central queue log lanes now use ring-aware routing keys so low lane counts distribute across available backends instead of concentrating backlog on one hot backend during bootstrap.
+
+change_logs: [user]
