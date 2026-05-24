@@ -83,6 +83,25 @@ func TestCentralQueueConsumerPolicyKeepsOneConsumerWhenBackendShareIsFractional(
 	require.Equal(t, centralQueueConsumerLimitReasonBackendCapacity, decision.limitReason)
 }
 
+func TestCentralQueueConsumerPolicyDoesNotRoundUpNonZeroBackendShare(t *testing.T) {
+	policy := centralQueueConsumerPolicy{
+		maxConsumers:               120,
+		minConsumers:               1,
+		targetCompressedBytes:      256 << 10,
+		maxInflightSendsPerBackend: 1,
+		activeLoadBalancerReplicas: 3,
+	}
+
+	decision := policy.compute(centralQueueConsumerInputs{
+		queueCompressedBytes: 1 << 30,
+		readyBackends:        7,
+	})
+
+	require.Equal(t, 2, decision.backendSafeConsumersPerLB)
+	require.Equal(t, 2, decision.effectiveConsumers)
+	require.Equal(t, centralQueueConsumerLimitReasonBackendCapacity, decision.limitReason)
+}
+
 func TestCentralQueueConsumerPolicyQueueGrowthIncreasesDemandUntilBackendSafeCap(t *testing.T) {
 	policy := centralQueueConsumerPolicy{
 		maxConsumers:               120,
