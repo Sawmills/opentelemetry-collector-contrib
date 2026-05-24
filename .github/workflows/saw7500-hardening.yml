@@ -59,6 +59,7 @@ jobs:
           (cd test/saw7500/fakebackend && go test ./...)
           python3 test/saw7500/analyze_test.py
           python3 test/saw7500/test_analyze.py
+          python3 test/saw7500/test_run_cli.py
           python3 test/saw7500/test_sweep.py
           bash -n test/saw7500/run.sh test/saw7500/sweep.sh
 

@@ -80,6 +80,12 @@ die() {
   exit 1
 }
 
+validate_non_negative_int() {
+  local flag="$1"
+  local value="$2"
+  [[ "${value}" =~ ^[0-9]+$ ]] || die "${flag} replica values must be non-negative integers, got '${value}'"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --red-image) RED_IMAGE="$2"; shift 2 ;;
@@ -88,7 +94,7 @@ while [[ $# -gt 0 ]]; do
     --loadgen-image) LOADGEN_IMAGE="$2"; shift 2 ;;
     --telemetrygen-image) LOADGEN_IMAGE="$2"; shift 2 ;;
     --skip-fake-backend-build) BUILD_FAKE_BACKEND="false"; shift ;;
-    --lb-replicas) LB_REPLICAS="$2"; shift 2 ;;
+    --lb-replicas) validate_non_negative_int "$1" "$2"; LB_REPLICAS="$2"; shift 2 ;;
     --workers) WORKERS="$2"; shift 2 ;;
     --target-compressed-bytes) TARGET_COMPRESSED_BYTES="$2"; shift 2 ;;
     --max-compressed-bytes) MAX_COMPRESSED_BYTES="$2"; shift 2 ;;
@@ -97,9 +103,9 @@ while [[ $# -gt 0 ]]; do
     --num-consumers) NUM_CONSUMERS="$2"; shift 2 ;;
     --red-num-consumers) RED_NUM_CONSUMERS="$2"; shift 2 ;;
     --green-num-consumers) GREEN_NUM_CONSUMERS="$2"; shift 2 ;;
-    --active-lb-replicas-config) RED_ACTIVE_LB_REPLICAS="$2"; GREEN_ACTIVE_LB_REPLICAS="$2"; shift 2 ;;
-    --red-active-lb-replicas) RED_ACTIVE_LB_REPLICAS="$2"; shift 2 ;;
-    --green-active-lb-replicas) GREEN_ACTIVE_LB_REPLICAS="$2"; shift 2 ;;
+    --active-lb-replicas-config) validate_non_negative_int "$1" "$2"; RED_ACTIVE_LB_REPLICAS="$2"; GREEN_ACTIVE_LB_REPLICAS="$2"; shift 2 ;;
+    --red-active-lb-replicas) validate_non_negative_int "$1" "$2"; RED_ACTIVE_LB_REPLICAS="$2"; shift 2 ;;
+    --green-active-lb-replicas) validate_non_negative_int "$1" "$2"; GREEN_ACTIVE_LB_REPLICAS="$2"; shift 2 ;;
     --receiver-max-recv-msg-size-mib) RECEIVER_MAX_RECV_MSG_SIZE_MIB="$2"; shift 2 ;;
     --backend-max-recv-msg-size-mib) BACKEND_MAX_RECV_MSG_SIZE_MIB="$2"; shift 2 ;;
     --load-duration-seconds) LOAD_DURATION_SECONDS="$2"; shift 2 ;;
