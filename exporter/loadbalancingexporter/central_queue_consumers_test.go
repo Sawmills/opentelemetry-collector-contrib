@@ -24,6 +24,20 @@ func TestTryAcquireCentralQueueConsumerBlocksWhenEffectiveConsumersAreFull(t *te
 	require.EqualValues(t, 2, active.Load())
 }
 
+func TestTryAcquireCentralQueueConsumerAllowsProgressWhenBackendShareIsFractional(t *testing.T) {
+	var active atomic.Int64
+	controller := newCentralQueueConsumerController(120, 256<<10, 10)
+	lb := centralQueueConsumerTestLoadBalancerWithRoutableBackendCount(4)
+
+	acquired := tryAcquireCentralQueueConsumer(t.Context(), &active, controller, nil, lb, 1<<30)
+
+	require.True(t, acquired)
+	require.EqualValues(t, 1, active.Load())
+	require.Equal(t, 1, controller.last.backendSafeConsumersPerLB)
+	require.Equal(t, 1, controller.last.effectiveConsumers)
+	require.Equal(t, centralQueueConsumerLimitReasonBackendCapacity, controller.last.limitReason)
+}
+
 func TestTryIncrementCentralQueueActiveConsumersDoesNotOversubscribeConcurrentAcquires(t *testing.T) {
 	previousProcs := runtime.GOMAXPROCS(8)
 	t.Cleanup(func() {
