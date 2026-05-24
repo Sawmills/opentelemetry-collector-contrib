@@ -168,8 +168,8 @@ func (p centralQueueConsumerPolicy) backendSafeConsumersPerLB(readyBackends int)
 	if lbReplicas <= 0 {
 		lbReplicas = 1
 	}
-	totalBackendCapacity := readyBackends * inflightPerBackend
-	return totalBackendCapacity / lbReplicas
+	totalBackendCapacity := int64(readyBackends) * int64(inflightPerBackend)
+	return ceilDivInt64ToInt(totalBackendCapacity, int64(lbReplicas))
 }
 
 func ceilDivInt64ToInt(numerator, denominator int64) int {

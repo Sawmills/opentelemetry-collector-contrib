@@ -124,8 +124,8 @@ func TestLogExporterCentralQueueDynamicLanesKeepMinimumLaneWhenBackendShareIsFra
 	}
 	var active atomic.Int64
 	decision, acquired, _ := consumers.tryAcquire(&active, 1<<30, 3, false)
-	require.False(t, acquired)
-	require.Equal(t, 0, decision.effectiveConsumers)
+	require.True(t, acquired)
+	require.Equal(t, 1, decision.effectiveConsumers)
 
 	require.Equal(t, 1, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
 }
