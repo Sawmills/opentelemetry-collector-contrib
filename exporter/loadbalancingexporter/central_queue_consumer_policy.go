@@ -18,6 +18,7 @@ const (
 	centralQueueConsumerLimitReasonConfiguredMax   centralQueueConsumerLimitReason = "configured_max"
 	centralQueueConsumerLimitReasonBackendPressure centralQueueConsumerLimitReason = "backend_pressure"
 	centralQueueConsumerLimitReasonRecovery        centralQueueConsumerLimitReason = "recovery"
+	centralQueueConsumerLimitReasonHealthyRamp     centralQueueConsumerLimitReason = "healthy_ramp"
 	defaultCentralQueueMinConsumers                                                = 1
 	defaultCentralQueueMaxInflightSendsPerBackend                                  = 1
 )
@@ -29,6 +30,7 @@ var centralQueueConsumerLimitReasons = []centralQueueConsumerLimitReason{
 	centralQueueConsumerLimitReasonConfiguredMax,
 	centralQueueConsumerLimitReasonBackendPressure,
 	centralQueueConsumerLimitReasonRecovery,
+	centralQueueConsumerLimitReasonHealthyRamp,
 }
 
 type centralQueueConsumerPressureState string
@@ -110,7 +112,9 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 		}
 	}
 
-	effective := min(maxConsumers, queueDemand, backendSafe)
+	backendMax := p.maxBackendConsumers(inputs.readyBackends)
+	target := min(maxConsumers, queueDemand, backendMax)
+	effective := min(target, backendSafe)
 	reason := centralQueueConsumerLimitReasonConfiguredMax
 	switch effective {
 	case backendSafe:
@@ -127,23 +131,32 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 			pressureBase = p.previousEffectiveConsumers
 		}
 		pressureLimit := max(minConsumers, pressureBase/2)
-		if pressureLimit < effective {
-			effective = pressureLimit
-			reason = centralQueueConsumerLimitReasonBackendPressure
-			pressureState = centralQueueConsumerPressureReducing
-		}
+		effective = clampInt(min(target, pressureLimit), minConsumers, maxConsumers)
+		reason = centralQueueConsumerLimitReasonBackendPressure
+		pressureState = centralQueueConsumerPressureReducing
 	}
 
-	if !inputs.backendPressure && p.pressureRecoveryActive && p.previousEffectiveConsumersOK && p.previousEffectiveConsumers > 0 && effective > p.previousEffectiveConsumers {
+	if !inputs.backendPressure && p.previousEffectiveConsumersOK && p.previousEffectiveConsumers > 0 {
 		step := p.pressureRecoveryStep
 		if step <= 0 {
 			step = max(1, maxConsumers/10)
 		}
-		recoveryLimit := p.previousEffectiveConsumers + step
-		if recoveryLimit < effective {
-			effective = recoveryLimit
-			reason = centralQueueConsumerLimitReasonRecovery
-			pressureState = centralQueueConsumerPressureRecovering
+		candidate := target
+		if p.previousEffectiveConsumers < target {
+			candidate = min(target, p.previousEffectiveConsumers+step)
+		}
+		if p.pressureRecoveryActive && p.previousEffectiveConsumers < target {
+			effective = clampInt(candidate, minConsumers, maxConsumers)
+			switch {
+			case effective < target:
+				reason = centralQueueConsumerLimitReasonRecovery
+				pressureState = centralQueueConsumerPressureRecovering
+			default:
+				reason = centralQueueConsumerRampedLimitReason(effective, backendSafe, queueDemand)
+			}
+		} else if candidate > effective {
+			effective = clampInt(candidate, minConsumers, maxConsumers)
+			reason = centralQueueConsumerRampedLimitReason(effective, backendSafe, queueDemand)
 		}
 	}
 
@@ -177,6 +190,21 @@ func (p centralQueueConsumerPolicy) backendSafeConsumersPerLB(readyBackends int)
 		return math.MaxInt
 	}
 	return int(backendSafe)
+}
+
+func (p centralQueueConsumerPolicy) maxBackendConsumers(readyBackends int) int {
+	if readyBackends <= 0 {
+		return 0
+	}
+	inflightPerBackend := p.maxInflightSendsPerBackend
+	if inflightPerBackend <= 0 {
+		inflightPerBackend = defaultCentralQueueMaxInflightSendsPerBackend
+	}
+	maxBackendConsumers := int64(readyBackends) * int64(inflightPerBackend)
+	if maxBackendConsumers > int64(math.MaxInt) {
+		return math.MaxInt
+	}
+	return int(maxBackendConsumers)
 }
 
 func ceilDivInt64ToInt(numerator, denominator int64) int {
@@ -253,12 +281,23 @@ func (c *centralQueueConsumerController) commitLocked(result centralQueueConsume
 	previousOK := previous.limitReason != ""
 	if !allowRecoveryAdvance &&
 		previousOK &&
-		result.pressureState == centralQueueConsumerPressureRecovering &&
+		result.pressureState != centralQueueConsumerPressureReducing &&
 		result.effectiveConsumers > previous.effectiveConsumers {
 		return false
 	}
 	c.last = result
 	return !previousOK || result != previous
+}
+
+func centralQueueConsumerRampedLimitReason(effective, backendSafe, queueDemand int) centralQueueConsumerLimitReason {
+	switch {
+	case effective > backendSafe:
+		return centralQueueConsumerLimitReasonHealthyRamp
+	case effective == queueDemand:
+		return centralQueueConsumerLimitReasonQueueDemand
+	default:
+		return centralQueueConsumerLimitReasonConfiguredMax
+	}
 }
 
 func (c *centralQueueConsumerController) lastEffectiveConsumers() (int, bool) {
@@ -312,10 +351,7 @@ func centralQueueEffectiveConsumersForLanes(controller *centralQueueConsumerCont
 		return 0, false
 	}
 	if effectiveConsumers, ok := controller.lastEffectiveConsumers(); ok {
-		if backendSafe, backendSafeKnown := controller.backendSafeConsumersForLanes(readyBackends); backendSafeKnown {
-			return min(effectiveConsumers, backendSafe), true
-		}
-		return effectiveConsumers, true
+		return min(effectiveConsumers, readyBackends), true
 	}
 	if effectiveConsumers, ok := controller.backendSafeConsumersForLanes(readyBackends); ok {
 		return effectiveConsumers, true

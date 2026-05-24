@@ -83,6 +83,75 @@ func TestCentralQueueConsumerPolicyKeepsOneConsumerWhenBackendShareIsFractional(
 	require.Equal(t, centralQueueConsumerLimitReasonBackendCapacity, decision.limitReason)
 }
 
+func TestCentralQueueConsumerPolicyRampsAboveStaticActiveLBUpperBoundWhenHealthy(t *testing.T) {
+	policy := centralQueueConsumerPolicy{
+		maxConsumers:                 30,
+		minConsumers:                 1,
+		targetCompressedBytes:        256 << 10,
+		maxInflightSendsPerBackend:   1,
+		activeLoadBalancerReplicas:   10,
+		previousEffectiveConsumers:   1,
+		previousEffectiveConsumersOK: true,
+	}
+
+	decision := policy.compute(centralQueueConsumerInputs{
+		queueCompressedBytes: 9 << 20,
+		readyBackends:        4,
+		backendPressure:      false,
+	})
+
+	require.Equal(t, 36, decision.queueDemandConsumers)
+	require.Equal(t, 1, decision.backendSafeConsumersPerLB)
+	require.Equal(t, 4, decision.effectiveConsumers)
+	require.NotEqual(t, centralQueueConsumerLimitReasonBackendCapacity, decision.limitReason)
+}
+
+func TestCentralQueueConsumerPolicyBackendPressureReducesRampedUpperBound(t *testing.T) {
+	policy := centralQueueConsumerPolicy{
+		maxConsumers:                 30,
+		minConsumers:                 1,
+		targetCompressedBytes:        256 << 10,
+		maxInflightSendsPerBackend:   1,
+		activeLoadBalancerReplicas:   10,
+		previousEffectiveConsumers:   4,
+		previousEffectiveConsumersOK: true,
+	}
+
+	decision := policy.compute(centralQueueConsumerInputs{
+		queueCompressedBytes: 9 << 20,
+		readyBackends:        4,
+		backendPressure:      true,
+	})
+
+	require.Equal(t, centralQueueConsumerPressureReducing, decision.pressureState)
+	require.Equal(t, centralQueueConsumerLimitReasonBackendPressure, decision.limitReason)
+	require.Equal(t, 2, decision.effectiveConsumers)
+}
+
+func TestCentralQueueConsumerPolicyRecoversGraduallyAfterRampedUpperBoundPressure(t *testing.T) {
+	policy := centralQueueConsumerPolicy{
+		maxConsumers:                 30,
+		minConsumers:                 1,
+		targetCompressedBytes:        256 << 10,
+		maxInflightSendsPerBackend:   1,
+		activeLoadBalancerReplicas:   10,
+		pressureRecoveryStep:         1,
+		previousEffectiveConsumers:   2,
+		previousEffectiveConsumersOK: true,
+		pressureRecoveryActive:       true,
+	}
+
+	decision := policy.compute(centralQueueConsumerInputs{
+		queueCompressedBytes: 9 << 20,
+		readyBackends:        4,
+		backendPressure:      false,
+	})
+
+	require.Equal(t, centralQueueConsumerPressureRecovering, decision.pressureState)
+	require.Equal(t, centralQueueConsumerLimitReasonRecovery, decision.limitReason)
+	require.Equal(t, 3, decision.effectiveConsumers)
+}
+
 func TestCentralQueueConsumerPolicyDoesNotRoundUpNonZeroBackendShare(t *testing.T) {
 	policy := centralQueueConsumerPolicy{
 		maxConsumers:               120,

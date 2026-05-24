@@ -1,0 +1,12 @@
+change_type: bug_fix
+
+component: exporter/loadbalancing
+
+note: Ramp adaptive central queue consumers above the conservative active load balancer fair-share floor while backends stay healthy.
+
+issues: [7500]
+
+subtext: |
+  The runtime governor keeps the configured active load balancer replica count as a safe starting floor, then increases effective consumers with queue demand and backs off on backend pressure so conservative HPA upper-bound values do not pin healthy queues at one consumer per load balancer.
+
+change_logs: [user]
