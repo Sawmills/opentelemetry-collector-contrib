@@ -1,6 +1,6 @@
 change_type: enhancement
 
-component: test/saw7500
+component: exporter/loadbalancing
 
 note: Allow the SAW-7500 proof harness to render active load balancer upper-bound configs independently from the actual LB pod count.
 
