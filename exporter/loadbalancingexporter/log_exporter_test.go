@@ -295,6 +295,38 @@ func TestConsumeLogsCentralQueueUsesLaneRoutingForIgnoredTraceIDs(t *testing.T) 
 	require.Equal(t, first.LogRecordCount(), merged.LogRecordCount())
 }
 
+func TestConsumeLogsCentralQueueBalancesAPSE2LanesAcrossHealthyBackends(t *testing.T) {
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	const laneCount = 5
+	endpoints := centralQueueAPSE2TestEndpoints()
+	ring := newHashRing(endpoints)
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    1 << 20,
+			targetCompressedBytes:        1 << 20,
+		}),
+		centralCodec:          codec,
+		centralQueueLaneCount: laneCount,
+		loadBalancer:          &loadBalancer{ring: ring},
+	}
+	p.started.Store(true)
+
+	for _, traceID := range distinctCentralQueueLaneTraceIDs(t, laneCount, laneCount) {
+		require.NoError(t, p.ConsumeLogs(t.Context(), simpleLogWithID(traceID)))
+	}
+
+	routingKeys := make([][]byte, 0, laneCount)
+	for _, item := range p.centralQueue.queuedItems() {
+		routingKeys = append(routingKeys, item.routingKey)
+	}
+	require.Len(t, routingKeys, laneCount)
+	distribution := centralQueueRoutingKeyEndpointDistribution(endpoints, ring, routingKeys)
+	require.LessOrEqual(t, maxLaneEndpointCount(distribution)-minLaneEndpointCount(distribution), 1, "distribution=%v", distribution)
+}
+
 func TestConsumeLogsCentralQueueSplitsOversizedLogBatchByUncompressedBytes(t *testing.T) {
 	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
 	t.Cleanup(func() { require.NoError(t, codec.Close()) })

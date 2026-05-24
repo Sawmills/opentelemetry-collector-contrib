@@ -30,6 +30,14 @@ func TestCentralQueueLanePolicyKeepsFewBackendFloorWhenFillRateIsLow(t *testing.
 	require.Equal(t, 2, lanes)
 }
 
+func centralQueueAPSE2TestEndpoints() []string {
+	return []string{
+		"10.157.26.60:10418",
+		"10.157.38.82:10418",
+		"10.157.4.62:10418",
+	}
+}
+
 func TestCentralQueueLanePolicyAllowsManyBackendsWhenFillRateSupportsIt(t *testing.T) {
 	policy := centralQueueLanePolicy{
 		minLanes:           1,
@@ -46,6 +54,37 @@ func TestCentralQueueLanePolicyAllowsManyBackendsWhenFillRateSupportsIt(t *testi
 	})
 
 	require.Equal(t, 64, lanes)
+}
+
+func centralQueueRoutingKeyEndpointDistribution(endpoints []string, ring *hashRing, routingKeys [][]byte) map[string]int {
+	distribution := make(map[string]int, len(endpoints))
+	for _, endpoint := range endpoints {
+		distribution[endpoint] = 0
+	}
+	for _, routingKey := range routingKeys {
+		distribution[ring.endpointFor(routingKey)]++
+	}
+	return distribution
+}
+
+func maxLaneEndpointCount(distribution map[string]int) int {
+	var maxCount int
+	for _, count := range distribution {
+		if count > maxCount {
+			maxCount = count
+		}
+	}
+	return maxCount
+}
+
+func minLaneEndpointCount(distribution map[string]int) int {
+	minCount := int(^uint(0) >> 1)
+	for _, count := range distribution {
+		if count < minCount {
+			minCount = count
+		}
+	}
+	return minCount
 }
 
 func TestCentralQueueLanePolicyDefaultAllowsBigIDScaleWhenFillRateSupportsIt(t *testing.T) {

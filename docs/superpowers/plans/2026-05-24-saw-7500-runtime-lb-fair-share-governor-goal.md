@@ -363,6 +363,7 @@ git diff --check
 The goal is complete only when:
 
 - the runtime fair-share governor is implemented,
+- every checked task has a passing adversarial subagent review recorded with the task evidence,
 - red/green tests prove static upper-bound pinning is fixed,
 - pressure backoff is proven,
 - effective consumers gate send concurrency while dynamic lanes keep a healthy-backend floor,
@@ -371,4 +372,5 @@ The goal is complete only when:
 - LD/config readback is documented,
 - staging validation is green,
 - APSE2-only live validation is green,
+- a final adversarial subagent review of the entire goal passes after all code, release, config, staging, and APSE2 live evidence is collected,
 - SAW-7500 has final evidence and rollback/tuning notes.
