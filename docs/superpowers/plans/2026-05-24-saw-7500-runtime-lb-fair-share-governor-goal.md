@@ -26,6 +26,8 @@ The previous SAW-7500 fix made the APSE2 zero-drain failure safe by ensuring a f
 - KEDA did eventually scale workers when queue pressure crossed target, and the cluster stayed healthy.
 - The queue still had to build before KEDA compensated because the LB side stayed pinned at the conservative floor.
 
+The first live APSE2 attempt with `v1.1026.0` proved the consumer fair-share governor could ramp above that floor, but also exposed a second limiter: lane routing was allowed to collapse to the first conservative `effective_consumers` sample. Backlog enqueued during bootstrap could therefore stay concentrated on one lane/backend even after consumers and workers became available.
+
 The follow-up fix should preserve the safety property but avoid making static active-LB tuning the only way to get useful drain concurrency.
 
 ## Current Limiting Factor
@@ -51,7 +53,7 @@ Implement a runtime fair-share governor:
 5. After pressure, recover gradually.
 6. Never exceed configured `num_consumers`.
 7. Never acquire consumers when there are zero ready backends.
-8. Keep dynamic lanes derived from `effective_consumers`.
+8. Keep send concurrency derived from `effective_consumers`, but keep dynamic lane partitioning from falling below the healthy backend count so bootstrap backlog is not pinned to one hot lane/backend.
 9. Do not require Kubernetes API permissions.
 
 Approximate policy:
@@ -153,7 +155,7 @@ Expected: all policy and acquire tests pass.
 
 - [x] Add or update a test where backend pressure reduces a ramped value quickly.
 - [x] Add or update a test where pressure clears and consumers recover gradually, not all at once.
-- [x] Confirm `central_queue.effective_lanes` tracks `effective_consumers`, not configured `num_consumers`.
+- [x] Confirm `central_queue.effective_lanes` remains dynamic and not tied to configured `num_consumers`; send concurrency is still gated by `effective_consumers`, while lane partitioning keeps a healthy-backend floor.
 - [x] If a new limit reason is added, update telemetry tests to assert it is exported.
 
 Run:
@@ -165,7 +167,31 @@ go test . -run 'TestCentralQueueConsumerPolicy|TestCentralQueueConsumerTelemetry
 
 Expected: all targeted tests pass.
 
-## Task 4: Full Contrib Verification And PR
+## Task 4: Live APSE2 Follow-Up Lane Floor
+
+**Files:**
+- Modify: `exporter/loadbalancingexporter/central_queue_lane_policy.go`
+- Modify: `exporter/loadbalancingexporter/central_queue_lane_policy_test.go`
+- Modify: `exporter/loadbalancingexporter/central_queue_lane_exporter_test.go`
+
+- [x] Add red tests proving a low bootstrap `effective_consumers` sample does not cap dynamic lanes below healthy backend count.
+- [x] Keep effective consumers as the send-concurrency gate.
+- [x] Keep stale consumer counts capped by the current healthy backend count.
+- [x] Prove the old behavior fails with `effective_lanes=1` or otherwise below the healthy backend floor.
+- [x] Prove the new behavior keeps the healthy-backend lane floor while the consumer controller can still report `effective_consumers=1`.
+
+Run:
+
+```bash
+cd exporter/loadbalancingexporter
+go test . -run 'TestCentralQueueLanePolicyKeepsBackendLaneFloorWhenConsumersBootstrapBelowBackends|TestLogExporterCentralQueueLaneBootstrapUsesHealthyBackendFloor|TestLogExporterCentralQueueDynamicLanesDoNotCollapseToFractionalBackendShare' -count=1
+```
+
+Expected before implementation: the new tests fail because lane count follows the conservative effective-consumer sample.
+
+Expected after implementation: the tests pass and queue routing has enough lanes to distribute backlog across healthy backends, while send acquisition remains limited by the consumer policy.
+
+## Task 5: Full Contrib Verification And PR
 
 **Files:**
 - Commit only touched files.
@@ -191,7 +217,7 @@ git commit -m "fix(loadbalancingexporter): ramp central queue consumers when bac
 - [ ] Publish or confirm the next `exporter/loadbalancingexporter/v0.149.0-sawmills.N` tag.
 - [ ] Update SAW-7500 Linear comment with PR link, commit SHA, tests, and release tag.
 
-## Task 5: Bump `sawmills-collector`
+## Task 6: Bump `sawmills-collector`
 
 **Files:**
 - Modify: `builder-config.yaml`
@@ -216,7 +242,7 @@ git diff --check
 - [ ] Confirm `sawmills-collector` release tag exists.
 - [ ] Update SAW-7500 Linear comment.
 
-## Task 6: Config And LD Review
+## Task 7: Config And LD Review
 
 **Files/Systems:**
 - LaunchDarkly production/staging flags
@@ -232,7 +258,7 @@ git diff --check
 - [ ] Dry-run APSE2 generated config before live deploy.
 - [ ] Read back exact LD variation IDs/values into SAW-7500.
 
-## Task 7: Staging Validation
+## Task 8: Staging Validation
 
 **Systems:**
 - Sawmills staging collector deployment suitable for LB central queue validation.
@@ -248,7 +274,7 @@ git diff --check
   - backend p95/p99 remains below 2 seconds unless a stricter live gate is established.
 - [ ] Update SAW-7500 with staging evidence.
 
-## Task 8: APSE2-Only BigID Validation
+## Task 9: APSE2-Only BigID Validation
 
 **Target only:**
 - BigID `production-mt-1-ap-southeast-2`
@@ -290,7 +316,7 @@ The goal is complete only when:
 - the runtime fair-share governor is implemented,
 - red/green tests prove static upper-bound pinning is fixed,
 - pressure backoff is proven,
-- dynamic lanes still follow effective consumers,
+- effective consumers gate send concurrency while dynamic lanes keep a healthy-backend floor,
 - contrib PR is merged and released,
 - `sawmills-collector` PR is merged and released,
 - LD/config readback is documented,

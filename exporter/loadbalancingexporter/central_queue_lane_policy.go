@@ -85,14 +85,11 @@ func (p centralQueueLanePolicy) compute(inputs centralQueueLaneInputs) int {
 	minLanes := max(p.minLanes, 1)
 	maxLanes := max(p.maxLanes, minLanes)
 
-	backends := 0
-	if inputs.effectiveConsumersKnown {
+	backends := inputs.healthyBackends
+	if backends <= 0 && inputs.effectiveConsumersKnown {
 		backends = inputs.effectiveConsumers
 	}
-	if !inputs.effectiveConsumersKnown && backends <= 0 {
-		backends = inputs.healthyBackends
-	}
-	if !inputs.effectiveConsumersKnown && backends <= 0 {
+	if backends <= 0 {
 		backends = inputs.resolvedBackends
 	}
 	if backends <= 0 {

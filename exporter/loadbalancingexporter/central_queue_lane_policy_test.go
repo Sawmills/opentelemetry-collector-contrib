@@ -97,7 +97,7 @@ func TestCentralQueueLanePolicyUsesBackendCountWhenRateUnknown(t *testing.T) {
 	require.Equal(t, 4, lanes)
 }
 
-func TestCentralQueueLanePolicyUsesEffectiveConsumersForBackendLaneCap(t *testing.T) {
+func TestCentralQueueLanePolicyUsesHealthyBackendsForLaneCapWhenFillRateSupportsIt(t *testing.T) {
 	policy := centralQueueLanePolicy{
 		minLanes:           1,
 		maxLanes:           64,
@@ -114,7 +114,27 @@ func TestCentralQueueLanePolicyUsesEffectiveConsumersForBackendLaneCap(t *testin
 		compressedIngestBytesPerSec: 64 << 20,
 	})
 
-	require.Equal(t, 8, lanes)
+	require.Equal(t, 64, lanes)
+}
+
+func TestCentralQueueLanePolicyKeepsBackendLaneFloorWhenConsumersBootstrapBelowBackends(t *testing.T) {
+	policy := centralQueueLanePolicy{
+		minLanes:           1,
+		maxLanes:           64,
+		backendMultiplier:  2,
+		targetFillDuration: 500 * time.Millisecond,
+		targetBytes:        256 << 10,
+		hysteresisFactor:   2,
+	}
+
+	lanes := policy.compute(centralQueueLaneInputs{
+		healthyBackends:             4,
+		effectiveConsumers:          1,
+		effectiveConsumersKnown:     true,
+		compressedIngestBytesPerSec: 0,
+	})
+
+	require.Equal(t, 4, lanes)
 }
 
 func TestCentralQueueLaneControllerRecomputesFromBackendCountAndRate(t *testing.T) {
@@ -152,8 +172,8 @@ func TestCentralQueueLaneControllerRecomputesWhenEffectiveConsumersChange(t *tes
 	controller := newCentralQueueLaneController(cfg)
 	now := time.Unix(10, 0)
 
-	require.Equal(t, 2, controller.laneCountWithConsumers(8, 2, true, now))
-	require.Equal(t, 4, controller.laneCountWithConsumers(8, 4, true, now.Add(time.Second)))
+	require.Equal(t, 2, controller.laneCountWithConsumers(0, 2, true, now))
+	require.Equal(t, 4, controller.laneCountWithConsumers(0, 4, true, now.Add(time.Second)))
 }
 
 func TestCentralQueueLaneControllerHonorsFixedOverride(t *testing.T) {
