@@ -1,0 +1,12 @@
+change_type: bug_fix
+
+component: exporter/loadbalancing
+
+note: Keep adaptive central queue consumers draining when ready backend capacity is fractional across active load balancers.
+
+issues: [7500]
+
+subtext: |
+  Positive ready backend capacity now rounds up to one bounded central queue consumer per load balancer instead of flooring to zero, preventing many-LB/few-worker deployments from deadlocking the central queue while workers scale.
+
+change_logs: [user]
