@@ -202,31 +202,6 @@ func newCentralQueueConsumerController(maxConsumers int, targetCompressedBytes i
 	}
 }
 
-func (c *centralQueueConsumerController) compute(queueCompressedBytes int64, readyBackends int, backendPressure bool) centralQueueConsumerResult {
-	result, _ := c.computeWithChange(queueCompressedBytes, readyBackends, backendPressure)
-	return result
-}
-
-func (c *centralQueueConsumerController) computeWithChange(queueCompressedBytes int64, readyBackends int, backendPressure bool) (centralQueueConsumerResult, bool) {
-	if c == nil {
-		return centralQueueConsumerPolicy{}.compute(centralQueueConsumerInputs{
-			queueCompressedBytes: queueCompressedBytes,
-			readyBackends:        readyBackends,
-			backendPressure:      backendPressure,
-		}), true
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	result := c.computeLocked(centralQueueConsumerInputs{
-		queueCompressedBytes: queueCompressedBytes,
-		readyBackends:        readyBackends,
-		backendPressure:      backendPressure,
-	})
-	return result, c.commitLocked(result, true)
-}
-
 func (c *centralQueueConsumerController) tryAcquire(
 	active *atomic.Int64,
 	queueCompressedBytes int64,

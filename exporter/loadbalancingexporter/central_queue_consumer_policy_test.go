@@ -6,6 +6,7 @@ package loadbalancingexporter
 import (
 	"math"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -32,25 +33,33 @@ func TestCentralQueueConsumerPolicyCapsFewBackendsAcrossLBReplicas(t *testing.T)
 
 func TestCentralQueueConsumerControllerUsesConfiguredActiveLoadBalancerReplicas(t *testing.T) {
 	controller := newCentralQueueConsumerController(120, 256<<10, 3)
+	var active atomic.Int64
 
-	decision := controller.compute(1<<30, 6, false)
+	decision, acquired, _ := controller.tryAcquire(&active, 1<<30, 6, false)
 
+	require.True(t, acquired)
 	require.Equal(t, 2, decision.backendSafeConsumersPerLB)
 	require.Equal(t, 2, decision.effectiveConsumers)
 }
 
 func TestCentralQueueConsumerControllerReportsDecisionChanges(t *testing.T) {
 	controller := newCentralQueueConsumerController(120, 256<<10, 1)
+	var active atomic.Int64
 
-	first, changed := controller.computeWithChange(1<<30, 2, false)
+	first, acquired, changed := controller.tryAcquire(&active, 1<<30, 2, false)
+	require.True(t, acquired)
 	require.True(t, changed)
 	require.Equal(t, 2, first.effectiveConsumers)
+	active.Store(0)
 
-	second, changed := controller.computeWithChange(1<<30, 2, false)
+	second, acquired, changed := controller.tryAcquire(&active, 1<<30, 2, false)
+	require.True(t, acquired)
 	require.False(t, changed)
 	require.Equal(t, first, second)
+	active.Store(0)
 
-	third, changed := controller.computeWithChange(1<<30, 3, false)
+	third, acquired, changed := controller.tryAcquire(&active, 1<<30, 3, false)
+	require.True(t, acquired)
 	require.True(t, changed)
 	require.Equal(t, 3, third.effectiveConsumers)
 }

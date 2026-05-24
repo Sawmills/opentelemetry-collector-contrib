@@ -55,20 +55,10 @@ func tryAcquireCentralQueueBackendForWindow(lb *loadBalancer, limiter *centralQu
 	}, true
 }
 
-func (b *centralQueueAcquiredBackend) release() {
-	if b == nil || b.lease == nil {
-		return
-	}
-	b.lease.release()
-}
-
-func newCentralQueueBackendLimiter(limit int) *centralQueueBackendLimiter {
-	if limit <= 0 {
-		limit = defaultCentralQueueMaxInflightSendsPerBackend
-	}
+func newCentralQueueBackendLimiter() *centralQueueBackendLimiter {
 	return &centralQueueBackendLimiter{
 		active: make(map[string]int),
-		limit:  limit,
+		limit:  defaultCentralQueueMaxInflightSendsPerBackend,
 	}
 }
 

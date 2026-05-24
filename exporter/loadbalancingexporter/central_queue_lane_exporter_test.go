@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -86,7 +87,9 @@ func TestLogExporterCentralQueueDynamicLanesUseLastEffectiveConsumers(t *testing
 		centralQueueConsumers: consumers,
 		ignoreTraceID:         true,
 	}
-	decision := consumers.compute(1<<30, 6, false)
+	var active atomic.Int64
+	decision, acquired, _ := consumers.tryAcquire(&active, 1<<30, 6, false)
+	require.True(t, acquired)
 	require.Equal(t, 2, decision.effectiveConsumers)
 
 	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
@@ -95,7 +98,9 @@ func TestLogExporterCentralQueueDynamicLanesUseLastEffectiveConsumers(t *testing
 func TestLogExporterCentralQueueDynamicLanesCapStaleEffectiveConsumersByCurrentBackends(t *testing.T) {
 	controller := centralQueueLanePathTestController()
 	consumers := newCentralQueueConsumerController(120, 256<<10, 1)
-	decision := consumers.compute(1<<30, 8, false)
+	var active atomic.Int64
+	decision, acquired, _ := consumers.tryAcquire(&active, 1<<30, 8, false)
+	require.True(t, acquired)
 	require.Equal(t, 8, decision.effectiveConsumers)
 
 	p := &logExporterImp{
@@ -117,7 +122,9 @@ func TestLogExporterCentralQueueDynamicLanesKeepMinimumLaneWhenBackendShareIsFra
 		centralQueueConsumers: consumers,
 		ignoreTraceID:         true,
 	}
-	decision := consumers.compute(1<<30, 3, false)
+	var active atomic.Int64
+	decision, acquired, _ := consumers.tryAcquire(&active, 1<<30, 3, false)
+	require.False(t, acquired)
 	require.Equal(t, 0, decision.effectiveConsumers)
 
 	require.Equal(t, 1, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
@@ -222,7 +229,9 @@ func TestMetricExporterCentralQueueDynamicLanesUseLastEffectiveConsumers(t *test
 		centralQueueLanes:     controller,
 		centralQueueConsumers: consumers,
 	}
-	decision := consumers.compute(1<<30, 6, false)
+	var active atomic.Int64
+	decision, acquired, _ := consumers.tryAcquire(&active, 1<<30, 6, false)
+	require.True(t, acquired)
 	require.Equal(t, 2, decision.effectiveConsumers)
 
 	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))

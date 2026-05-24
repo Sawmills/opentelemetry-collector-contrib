@@ -754,14 +754,12 @@ func TestMetricsCentralQueueBackendWaitDoesNotHoldConsumerSlot(t *testing.T) {
 			maxBatchDelay:                time.Second,
 			maxReadyWindows:              4,
 		}),
-		centralCodec:             codec,
-		loadBalancer:             lb,
-		logger:                   ts.Logger,
-		telemetry:                tb,
-		centralQueueNumConsumers: 3,
-		centralQueueBackendLimiter: newCentralQueueBackendLimiter(
-			defaultCentralQueueMaxInflightSendsPerBackend,
-		),
+		centralCodec:               codec,
+		loadBalancer:               lb,
+		logger:                     ts.Logger,
+		telemetry:                  tb,
+		centralQueueNumConsumers:   3,
+		centralQueueBackendLimiter: newCentralQueueBackendLimiter(),
 	}
 	blockedBackendLease, err := p.centralQueueBackendLimiter.acquire(t.Context(), "endpoint-1:4317")
 	require.NoError(t, err)

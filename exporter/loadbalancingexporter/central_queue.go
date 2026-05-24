@@ -4,6 +4,7 @@
 package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter"
 
 import (
+	"bytes"
 	"container/heap"
 	"context"
 	"encoding/binary"
@@ -258,7 +259,7 @@ func (q *centralQueue) tryLeaseWithAcquire(now time.Time, acquire centralQueueLe
 		}
 
 		q.mu.Lock()
-		if len(q.ready) == 0 || string(q.ready[0].routingKey) != string(selectedWindow.routingKey) {
+		if len(q.ready) == 0 || !bytes.Equal(q.ready[0].routingKey, selectedWindow.routingKey) {
 			q.mu.Unlock()
 			if release != nil {
 				release()

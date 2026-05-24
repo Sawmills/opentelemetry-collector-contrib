@@ -80,7 +80,7 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 		centralQueueLaneCount:        cfg.(*Config).CentralQueue.LaneCount,
 		centralQueueLanes:            newCentralQueueLaneController(cfg.(*Config).CentralQueue),
 		centralQueueConsumers:        newCentralQueueConsumerController(cfg.(*Config).CentralQueue.NumConsumers, cfg.(*Config).CentralQueue.TargetCompressedBytes, cfg.(*Config).CentralQueue.ActiveLoadBalancerReplicas),
-		centralQueueBackendLimiter:   newCentralQueueBackendLimiter(defaultCentralQueueMaxInflightSendsPerBackend),
+		centralQueueBackendLimiter:   newCentralQueueBackendLimiter(),
 		centralQueueNumConsumers:     cfg.(*Config).CentralQueue.NumConsumers,
 		centralQueueActiveLBReplicas: cfg.(*Config).CentralQueue.ActiveLoadBalancerReplicas,
 	}
@@ -169,7 +169,7 @@ func (e *metricExporterImp) startCentralQueueConsumers(ctx context.Context) {
 		e.centralQueueConsumers = newCentralQueueConsumerController(consumers, e.centralQueue.settings.targetCompressedBytes, e.centralQueueActiveLBReplicas)
 	}
 	if e.centralQueueBackendLimiter == nil {
-		e.centralQueueBackendLimiter = newCentralQueueBackendLimiter(defaultCentralQueueMaxInflightSendsPerBackend)
+		e.centralQueueBackendLimiter = newCentralQueueBackendLimiter()
 	}
 	e.centralQueue.settings.telemetry.recordConfiguredConsumers(ctx, int64(consumers))
 	e.centralQueue.settings.telemetry.recordActiveLoadBalancerReplicas(ctx, int64(configuredCentralQueueActiveLBReplicas(e.centralQueueActiveLBReplicas)))
@@ -321,16 +321,6 @@ func (e *metricExporterImp) runCentralQueue(ctx context.Context) {
 	}
 }
 
-func (e *metricExporterImp) consumeActiveCentralQueueMetricWindow(ctx context.Context, window centralQueueWindow) error {
-	active := e.centralActiveConsumers.Add(1)
-	e.centralQueue.settings.telemetry.recordActiveConsumers(ctx, active)
-	defer func() {
-		active := e.centralActiveConsumers.Add(-1)
-		e.centralQueue.settings.telemetry.recordActiveConsumers(ctx, active)
-	}()
-	return e.consumeCentralQueueMetricWindow(ctx, window)
-}
-
 func (e *metricExporterImp) consumeCentralQueueMetricItem(ctx context.Context, item centralQueueItem) error {
 	return e.consumeCentralQueueMetricWindow(ctx, centralQueueWindow{
 		routingKey:        item.routingKey,
@@ -351,14 +341,13 @@ func (e *metricExporterImp) consumeCentralQueueMetricWindowWithBackend(ctx conte
 
 func (e *metricExporterImp) consumeCentralQueueMetricWindowAttempt(ctx context.Context, window centralQueueWindow, rerouteAttempt int, acquiredBackend *centralQueueAcquiredBackend) error {
 	var exp *wrappedExporter
-	var endpoint string
 	var backendLease *centralQueueBackendLease
 	if acquiredBackend != nil {
 		exp = acquiredBackend.exporter
-		endpoint = acquiredBackend.endpoint
 		backendLease = acquiredBackend.lease
 	} else {
 		var err error
+		var endpoint string
 		exp, endpoint, err = e.loadBalancer.exporterAndEndpoint(window.routingKey)
 		if err != nil {
 			return err
