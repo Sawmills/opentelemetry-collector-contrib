@@ -348,14 +348,13 @@ jobs:
           # its integration tests `go test -exec sudo -run Sudo -tags=integration`
           - extension/cgroupruntimeextension
           - receiver/icmpcheckreceiver
-    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     needs: [setup-environment]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
-          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'true' || 'false' }}
       - name: Cache Docker images.
         uses: AndreKurait/docker-cache@0fe76702a40db986d9663c24954fc14c6a6031b7 # 0.6.0
         with:
