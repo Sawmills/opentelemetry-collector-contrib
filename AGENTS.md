@@ -21,6 +21,27 @@ Make sure to follow CONTRIBUTING.md on any contributions.
 Non-exhaustively, the important points are:
 
 * Whenever applicable, all code changes should have tests that actually validate the changes.
+## Sawmills fork CI gate
+
+In the `Sawmills/opentelemetry-collector-contrib` fork:
+
+* `scoped-tests` is the only required PR status check on `main`.
+* `scoped-tests` is intentionally fail-closed:
+  * docs-only PRs pass fast
+  * narrow pure-Go PRs run the blocking Ubuntu scoped lane
+  * broad or non-Go PRs fail the fast gate instead of silently falling back
+* The Windows scoped lanes are advisory PR signal only; they are not merge-blocking.
+* Full `build-and-test` and `build-and-test-arm` still run on PRs for signal and on `main` / `merge_group` for full coverage.
+* Namespace runner/cache behavior in workflows must stay repo-guarded so upstream `open-telemetry/opentelemetry-collector-contrib` continues to use GitHub-hosted runners.
+* Privileged/sudo test jobs must stay on GitHub-hosted Linux runners unless the replacement runner is explicitly verified to support them.
+
+Key files:
+
+* `.github/workflows/scoped-test.yaml`
+* `.github/workflows/build-and-test.yml`
+* `.github/workflows/build-and-test-arm.yml`
+* `.github/actions/setup-go-tools/action.yml`
+* `Makefile.Common`
 
 ## Commit formatting
 

@@ -36,7 +36,7 @@ permissions: read-all
 jobs:
   harness:
     if: github.repository == 'Sawmills/opentelemetry-collector-contrib'
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-sawmills-runner
     timeout-minutes: 35
     env:
       ARTIFACT_ROOT: /tmp/queuedrain-artifacts
@@ -50,6 +50,7 @@ jobs:
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
+          use-namespace-cache: "true"
 
       - name: Install kind
         run: go install sigs.k8s.io/kind@v0.30.0

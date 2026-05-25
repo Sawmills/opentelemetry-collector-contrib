@@ -14,6 +14,10 @@ inputs:
     description: Pattern(s) for actions/setup-go cache-dependency-path, relative to repo-path.
     required: false
     default: "**/*.sum"
+  use-namespace-cache:
+    description: Whether to use Namespace's persistent Go cache volume instead of actions/setup-go cache.
+    required: false
+    default: "false"
   gomoddownload:
     description: Whether to run `make -j2 gomoddownload` when Go cache is cold.
     required: false
@@ -37,11 +41,20 @@ runs:
       with:
         go-version: ${{ inputs.go-version }}
         # Always format the path. "./pattern" is valid, handling both root (.) and subdirs.
+        cache: ${{ inputs.use-namespace-cache != 'true' }}
         cache-dependency-path: ${{ format('{0}/{1}', inputs.repo-path, inputs.cache-dependency-path) }}
+    - name: Set up Namespace Go cache
+      if: inputs.use-namespace-cache == 'true'
+      uses: namespacelabs/nscloud-cache-action@15799a6b54e5765f85b2aac25b3f0df43ed571c0 # v1.4.3
+      with:
+        path: |
+          /home/runner/go/pkg/mod
+          /home/runner/.cache/go-build
+        cache: go
 
     - name: Install dependencies (gomoddownload)
       # Only download if setup-go didn't restore a cache.
-      if: inputs.gomoddownload == 'true' && steps.go-setup.outputs.cache-hit != 'true'
+      if: inputs.gomoddownload == 'true' && inputs.use-namespace-cache != 'true' && steps.go-setup.outputs.cache-hit != 'true'
       shell: bash
       working-directory: ${{ inputs.repo-path }}
       run: make -j2 gomoddownload

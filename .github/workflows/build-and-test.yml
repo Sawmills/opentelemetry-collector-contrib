@@ -23,13 +23,14 @@ concurrency:
 jobs:
   setup-environment:
     timeout-minutes: 30
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     if: ${{ github.actor != 'dependabot[bot]' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
+          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'true' || 'false' }}
       - run: ./.github/workflows/scripts/check-disk-space.sh
   check-collector-module-version:
     runs-on: ubuntu-24.04
@@ -63,13 +64,14 @@ jobs:
           - pkg
           - cmd-0
           - other
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (matrix.group == 'internal' || matrix.group == 'receiver-1' || matrix.group == 'receiver-3' || (matrix.goos == 'linux' && matrix.group == 'extension')) && 'namespace-profile-sawmills-runner-xlarge' || 'ubuntu-24.04' }}
     needs: [setup-environment]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
+          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (matrix.group == 'internal' || matrix.group == 'receiver-1' || matrix.group == 'receiver-3' || (matrix.goos == 'linux' && matrix.group == 'extension')) && 'true' || 'false' }}
       - name: Lint
         run: GOOS=${{ matrix.goos }} GOARCH=amd64 make -j2 golint GROUP=${{ matrix.group }}
       - run: ./.github/workflows/scripts/check-disk-space.sh
@@ -122,13 +124,14 @@ jobs:
         run: make gogovulncheck GROUP=${{ matrix.group }}
       - run: ./.github/workflows/scripts/check-disk-space.sh
   checks:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [setup-environment]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
+          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'true' || 'false' }}
       - run: make genotelcontribcol
       - name: CheckDoc
         run: make checkdoc
@@ -375,36 +378,39 @@ jobs:
           fi
 
   correctness-traces:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner-xlarge' || 'ubuntu-24.04' }}
     needs: [setup-environment]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
+          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'true' || 'false' }}
       - name: Correctness
         run: make -C testbed run-correctness-traces-tests
       - run: ./.github/workflows/scripts/check-disk-space.sh
   correctness-metrics:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner-xlarge' || 'ubuntu-24.04' }}
     needs: [setup-environment]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
+          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'true' || 'false' }}
       - name: Correctness
         run: make -C testbed run-correctness-metrics-tests
       - run: ./.github/workflows/scripts/check-disk-space.sh
 
   build-examples:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [setup-environment]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
+          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'true' || 'false' }}
           gomoddownload: "false"
       - run: make genotelcontribcol
       - name: Build Examples

@@ -1,6 +1,9 @@
 self-hosted-runner:
   labels:
     - oracle-bare-metal-64cpu-1024gb-x86-64-ubuntu-24
+    - namespace-profile-sawmills-runner
+    - namespace-profile-sawmills-runner-arm64
+    - namespace-profile-sawmills-runner-xlarge
 
 config-variables: null
 
