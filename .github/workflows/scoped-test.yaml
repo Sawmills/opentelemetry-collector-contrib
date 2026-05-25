@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PR_HEAD: ${{ github.event.pull_request.head.sha }}
+      PR_BASE: ${{ github.event.pull_request.base.ref }}
     outputs:
       mode: ${{ steps.changes.outputs.mode }}
       go_sources: ${{ steps.changes.outputs.go_sources }}
@@ -25,8 +26,9 @@ jobs:
         id: changes
         env:
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
         run: |
-          changed_files="$(git diff --name-only --diff-filter=ACDMRTUXB "$(git merge-base origin/main "$PR_HEAD")" "$PR_HEAD")"
+          changed_files="$(git diff --name-only --diff-filter=ACDMRTUXB "$(git merge-base "origin/${PR_BASE}" "$PR_HEAD")" "$PR_HEAD")"
           echo changed_files
           echo "$changed_files"
           LIMIT=50
@@ -36,7 +38,19 @@ jobs:
             exit 0
           fi
 
-          non_docs_changes=$(printf '%s\n' "$changed_files" | grep -vE '^(.+\.md|docs/.+\.md|\.github/ISSUE_TEMPLATE/.+|LICENSE)$' || true)
+          renamed_or_copied_paths="$(git diff -M -C -C --name-only --diff-filter=RC "$(git merge-base "origin/${PR_BASE}" "$PR_HEAD")" "$PR_HEAD")"
+          if [[ -n "$renamed_or_copied_paths" ]]; then
+            echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          deleted_go_files="$(git diff --name-only --diff-filter=D "$(git merge-base "origin/${PR_BASE}" "$PR_HEAD")" "$PR_HEAD" | grep -E '\.go$' || true)"
+          if [[ -n "$deleted_go_files" ]]; then
+            echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          non_docs_changes=$(printf '%s\n' "$changed_files" | grep -vE '^(.+\.md|docs/.+\.md|LICENSE)$' || true)
           if [[ -z "$non_docs_changes" ]]; then
             echo "mode=docs_only" >> "$GITHUB_OUTPUT"
             exit 0
@@ -44,16 +58,6 @@ jobs:
 
           non_go_changes=$(printf '%s\n' "$changed_files" | grep -vE '.*\.go$' || true)
           if [[ -n "$non_go_changes" ]]; then
-            echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          renamed_or_copied_paths="$(git diff -M -C --name-only --diff-filter=RC "$(git merge-base origin/main "$PR_HEAD")" "$PR_HEAD")"
-          if [[ -n "$renamed_or_copied_paths" ]]; then
-            echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          deleted_go_files="$(git diff --name-only --diff-filter=D "$(git merge-base origin/main "$PR_HEAD")" "$PR_HEAD" | grep -E '\.go$' || true)"
-          if [[ -n "$deleted_go_files" ]]; then
             echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -96,7 +100,7 @@ jobs:
     strategy:
       matrix:
         runner: [windows-2022, windows-2025, windows-11-arm, ubuntu-latest]
-    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository && matrix.runner == 'ubuntu-latest' && 'namespace-profile-sawmills-runner' || matrix.runner }}
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository && matrix.runner == 'ubuntu-latest' && 'namespace-profile-sawmills-runner' || matrix.runner }}
     env:
       # The gcc installed on the Windows arm64 runner doesn't ship native ARM libraries so we need to disable CGO.
       CGO_ENABLED: ${{ matrix.runner == 'windows-11-arm' && '0' || '' }}
@@ -111,7 +115,7 @@ jobs:
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
-          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository && matrix.runner == 'ubuntu-latest' && 'true' || 'false' }}
+          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository && matrix.runner == 'ubuntu-latest' && 'true' || 'false' }}
 
       - name: Run changed tests
         if: needs.changedfiles.outputs.go_tests
@@ -129,10 +133,10 @@ jobs:
         run: |
           if [[ "${{ matrix.runner }}" == "windows-2025" ]]; then
             make run-changed-source-package-tests
-            make for-affected-components CMD="make lint test-twice"
+            make run-changed-dependent-module-tests CMD="make lint test-twice"
           else
             make run-changed-source-package-tests
-            make for-affected-components CMD="make test-twice"
+            make run-changed-dependent-module-tests CMD="make test-twice"
           fi
 
       - run: ./.github/workflows/scripts/check-disk-space.sh

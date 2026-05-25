@@ -337,9 +337,12 @@ run-changed-source-package-tests:
 			dir="$$(dirname "$$path")"; \
 			current="$$dir"; \
 			found=""; \
-			while [ "$$current" != "." ] && [ "$$current" != "/" ]; do \
+			while true; do \
 				if [ -f "$$current/go.mod" ]; then \
 					found="$$current"; \
+					break; \
+				fi; \
+				if [ "$$current" = "." ] || [ "$$current" = "/" ]; then \
 					break; \
 				fi; \
 				current="$$(dirname "$$current")"; \
@@ -358,6 +361,57 @@ run-changed-source-package-tests:
 			(cd "$${dir}" && \
 				echo "running source package tests in $${dir}" && \
 				$(GOTESTSUM) --packages="./..." -- $(GOTEST_OPT) ); \
+			done \
+		fi \
+	fi
+.PHONY: run-changed-dependent-module-tests
+run-changed-dependent-module-tests:
+	@echo "Checking for changed dependent module tests..."
+	@if [ -z '$${CHANGED_GOLANG_SOURCES}' ]; then \
+		echo "No go source changes detected in shippable code."; \
+	else \
+		cd $(SRC_ROOT); \
+		CHANGED_MODULE_DIRS=$$(for path in $${CHANGED_GOLANG_SOURCES}; do \
+			dir="$$(dirname "$$path")"; \
+			current="$$dir"; \
+			found=""; \
+			while true; do \
+				if [ -f "$$current/go.mod" ]; then \
+					found="$$current"; \
+					break; \
+				fi; \
+				if [ "$$current" = "." ] || [ "$$current" = "/" ]; then \
+					break; \
+				fi; \
+				current="$$(dirname "$$current")"; \
+			done; \
+			if [ -n "$$found" ]; then \
+				echo "$$found"; \
+			fi; \
+		done | awk '!seen[$$0]++'); \
+		CHANGED_MODULE_PATHS=$$(for dir in $${CHANGED_MODULE_DIRS}; do \
+			awk '/^module / { print $$2; exit }' "$$dir/go.mod"; \
+		done | awk '!seen[$$0]++'); \
+		DEPENDENT_MODULE_DIRS=$$(for module_path in $${CHANGED_MODULE_PATHS}; do \
+			grep --include=go.mod -rl "$$module_path" .; \
+		done | xargs -r dirname | awk '!seen[$$0]++'); \
+		if [ -z "$${DEPENDENT_MODULE_DIRS}" ]; then \
+			echo "No dependent modules found for the changed source modules."; \
+		else \
+			set -e; for dir in $$(echo $${DEPENDENT_MODULE_DIRS}); do \
+				skip=""; \
+				for changed_dir in $${CHANGED_MODULE_DIRS}; do \
+					if [ "$$dir" = "$$changed_dir" ]; then \
+						skip="1"; \
+						break; \
+					fi; \
+				done; \
+				if [ -n "$$skip" ]; then \
+					continue; \
+				fi; \
+				(cd "$${dir}" && \
+					echo "running dependent module command in $${dir}" && \
+					$${CMD} ); \
 			done \
 		fi \
 	fi
