@@ -11,6 +11,7 @@ import (
 	"strings"
 )
 
+// ExtractDescriptionFromComment normalizes comment text before schema generation.
 func ExtractDescriptionFromComment(group *ast.CommentGroup) (string, bool) {
 	if group == nil {
 		return "", false
