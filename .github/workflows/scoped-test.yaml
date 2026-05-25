@@ -94,13 +94,47 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
-  scoped-tests-matrix:
+  scoped-tests-ubuntu:
+    needs: changedfiles
+    if: needs.changedfiles.outputs.mode == 'scoped'
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository && 'namespace-profile-sawmills-runner' || 'ubuntu-latest' }}
+    steps:
+      - name: Echo changed files
+        shell: bash
+        run: |
+          echo "mode: ${{ needs.changedfiles.outputs.mode }}"
+          echo "go_sources: ${{ needs.changedfiles.outputs.go_sources }}"
+          echo "go_tests: ${{ needs.changedfiles.outputs.go_tests }}"
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: ./.github/actions/setup-go-tools
+        with:
+          go-version: oldstable
+          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository && 'true' || 'false' }}
+
+      - name: Run changed tests
+        if: needs.changedfiles.outputs.go_tests
+        env:
+          CHANGED_GOLANG_TESTS: ${{ needs.changedfiles.outputs.go_tests }}
+        run: |
+          make run-changed-tests
+
+      - name: Run tests on dependent components
+        if: needs.changedfiles.outputs.go_sources
+        env:
+          CHANGED_GOLANG_SOURCES: ${{ needs.changedfiles.outputs.go_sources }}
+        run: |
+          make run-changed-source-package-tests
+          make run-changed-dependent-module-tests CMD="make lint test-twice"
+
+      - run: ./.github/workflows/scripts/check-disk-space.sh
+
+  scoped-tests-cross-platform:
     needs: changedfiles
     if: needs.changedfiles.outputs.mode == 'scoped'
     strategy:
       matrix:
-        runner: [windows-2022, windows-2025, windows-11-arm, ubuntu-latest]
-    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository && matrix.runner == 'ubuntu-latest' && 'namespace-profile-sawmills-runner' || matrix.runner }}
+        runner: [windows-2022, windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.runner }}
     env:
       # The gcc installed on the Windows arm64 runner doesn't ship native ARM libraries so we need to disable CGO.
       CGO_ENABLED: ${{ matrix.runner == 'windows-11-arm' && '0' || '' }}
@@ -115,7 +149,6 @@ jobs:
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
-          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository && matrix.runner == 'ubuntu-latest' && 'true' || 'false' }}
 
       - name: Run changed tests
         if: needs.changedfiles.outputs.go_tests
@@ -129,15 +162,9 @@ jobs:
         env:
           CHANGED_GOLANG_SOURCES: ${{ needs.changedfiles.outputs.go_sources }}
         shell: bash
-        # Only run linter on windows-2025 to avoid redundant runs
         run: |
-          if [[ "${{ matrix.runner }}" == "windows-2025" ]]; then
-            make run-changed-source-package-tests
-            make run-changed-dependent-module-tests CMD="make lint test-twice"
-          else
-            make run-changed-source-package-tests
-            make run-changed-dependent-module-tests CMD="make test-twice"
-          fi
+          make run-changed-source-package-tests
+          make run-changed-dependent-module-tests CMD="make test-twice"
 
       - run: ./.github/workflows/scripts/check-disk-space.sh
 
@@ -146,12 +173,12 @@ jobs:
     # wait for all runners completion
     if: ${{ always() }}
     runs-on: ubuntu-24.04
-    needs: [changedfiles, scoped-tests-matrix]
+    needs: [changedfiles, scoped-tests-ubuntu]
     steps:
       - name: Print result
         run: |
           echo "mode=${{ needs.changedfiles.outputs.mode }}"
-          echo "scoped_result=${{ needs.scoped-tests-matrix.result }}"
+          echo "scoped_ubuntu_result=${{ needs.scoped-tests-ubuntu.result }}"
       - name: Interpret result
         run: |
           mode="${{ needs.changedfiles.outputs.mode }}"
@@ -160,10 +187,10 @@ jobs:
               echo "Docs-only PR; scoped-tests passes."
               ;;
             scoped)
-              if [[ success == "${{ needs.scoped-tests-matrix.result }}" ]]; then
-                echo "Scoped matrix passed."
+              if [[ success == "${{ needs.scoped-tests-ubuntu.result }}" ]]; then
+                echo "Scoped Ubuntu gate passed."
               else
-                echo "Scoped matrix failed."
+                echo "Scoped Ubuntu gate failed."
                 exit 1
               fi
               ;;
