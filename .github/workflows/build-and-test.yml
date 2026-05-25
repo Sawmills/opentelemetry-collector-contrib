@@ -64,7 +64,7 @@ jobs:
           - pkg
           - cmd-0
           - other
-    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner-xlarge' || 'ubuntu-24.04' }}
     needs: [setup-environment]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -111,7 +111,7 @@ jobs:
           - internal
           - pkg
           - cmd-0
-    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [setup-environment]
     steps:
@@ -120,7 +120,6 @@ jobs:
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
-          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'true' || 'false' }}
       - name: Run `govulncheck`
         run: make gogovulncheck GROUP=${{ matrix.group }}
       - run: ./.github/workflows/scripts/check-disk-space.sh
@@ -218,16 +217,14 @@ jobs:
           - pkg
           - cmd-0
           - other
-    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || matrix.runner }}
+    runs-on: ${{ matrix.runner }}
     needs: [setup-environment]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
-          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'true' || 'false' }}
       - name: Cache Test Build
-        if: github.repository != 'Sawmills/opentelemetry-collector-contrib'
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
         with:
           path: ~/.cache/go-build
@@ -323,14 +320,13 @@ jobs:
           - internal
           - pkg
           - cmd-0
-    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     needs: [setup-environment]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
-          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'true' || 'false' }}
       - name: Cache Docker images.
         uses: AndreKurait/docker-cache@0fe76702a40db986d9663c24954fc14c6a6031b7 # 0.6.0
         with:
@@ -422,7 +418,7 @@ jobs:
       - run: ./.github/workflows/scripts/check-disk-space.sh
 
   cross-compile:
-    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner-xlarge' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     needs: [setup-environment]
     strategy:
       fail-fast: false
@@ -467,7 +463,6 @@ jobs:
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
-          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'true' || 'false' }}
       - name: Generate collector files
         run: make genotelcontribcol
       - name: Build Collector ${{ matrix.os }} ${{ matrix.arch }} ${{ matrix.arm }}
