@@ -21,13 +21,14 @@ concurrency:
 
 jobs:
   setup-environment:
-    runs-on: ubuntu-22.04-arm
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner-arm64' || 'ubuntu-22.04-arm' }}
     if: ${{ github.actor != 'dependabot[bot]' && (!contains(github.event.pull_request.labels.*.name, 'Skip ARM') || github.event_name == 'push' || github.event_name == 'merge_group') }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
+          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'true' || 'false' }}
       - run: ./.github/workflows/scripts/check-disk-space.sh
   arm-unittest-matrix:
     needs: [setup-environment]
@@ -53,12 +54,13 @@ jobs:
           - cmd-0
           - other
     timeout-minutes: 30
-    runs-on: ubuntu-22.04-arm
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner-arm64' || 'ubuntu-22.04-arm' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
+          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'true' || 'false' }}
       # Unit tests without JUnit output are much faster, so it's fine to run on every PR.
       # The only time we don't run them is when we already ran them with JUnit output.
       - name: Run Unit Tests
