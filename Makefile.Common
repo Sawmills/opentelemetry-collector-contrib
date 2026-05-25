@@ -326,6 +326,41 @@ for-affected-components:
 # Do not pass GOTESTSUM_OPT so that we do not re-run failures
 # and run each changed test three times.
 # This helps us catch flakes more easily before they land on main.
+.PHONY: run-changed-source-package-tests
+run-changed-source-package-tests:
+	@echo "Checking for changed source package tests..."
+	@if [ -z '$${CHANGED_GOLANG_SOURCES}' ]; then \
+		echo "No go source changes detected in shippable code."; \
+	else \
+		cd $(SRC_ROOT); \
+		AFFECTED_SOURCE_DIRS=$$(for path in $${CHANGED_GOLANG_SOURCES}; do \
+			dir="$$(dirname "$$path")"; \
+			current="$$dir"; \
+			found=""; \
+			while [ "$$current" != "." ] && [ "$$current" != "/" ]; do \
+				if [ -f "$$current/go.mod" ]; then \
+					found="$$current"; \
+					break; \
+				fi; \
+				current="$$(dirname "$$current")"; \
+			done; \
+			if [ -n "$$found" ]; then \
+				echo "$$found"; \
+			else \
+				echo "$$dir"; \
+			fi; \
+		done | awk '!seen[$$0]++'); \
+		if [ -z '$${AFFECTED_SOURCE_DIRS}' ]; then \
+			echo "Failed to find the affected source directories."; \
+			exit 1; \
+		else \
+			set -e; for dir in $$(echo $${AFFECTED_SOURCE_DIRS}); do \
+			(cd "$${dir}" && \
+				echo "running source package tests in $${dir}" && \
+				$(GOTESTSUM) --packages="./..." -- $(GOTEST_OPT) ); \
+			done \
+		fi \
+	fi
 CHANGED_GOLANG_TESTS?=$(shell git diff main --name-only | grep -E '.*_test\.go$$')
 .PHONY: run-changed-tests
 run-changed-tests:
