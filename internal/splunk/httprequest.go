@@ -5,15 +5,20 @@ package splunk // import "github.com/open-telemetry/opentelemetry-collector-cont
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 )
 
-const HeaderRetryAfter = "Retry-After"
+const (
+	HeaderRetryAfter            = "Retry-After"
+	maxHTTPErrorResponseBodyLen = 8 * 1024
+)
 
 // HandleHTTPCode handles an http response and returns the right type of error in case of a failure.
 func HandleHTTPCode(resp *http.Response) error {
@@ -28,6 +33,12 @@ func HandleHTTPCode(resp *http.Response) error {
 		resp.StatusCode,
 		http.StatusText(resp.StatusCode),
 	)
+	if shouldReadHTTPErrorResponseBody(resp.StatusCode) {
+		body := readHTTPErrorResponseBody(resp)
+		if body != "" {
+			err = fmt.Errorf("%w: response body: %s", err, body)
+		}
+	}
 
 	switch resp.StatusCode {
 	// Check for responses that may include "Retry-After" header.
@@ -48,4 +59,27 @@ func HandleHTTPCode(resp *http.Response) error {
 	}
 
 	return err
+}
+
+func shouldReadHTTPErrorResponseBody(statusCode int) bool {
+	switch statusCode {
+	case http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusForbidden:
+		return true
+	default:
+		return false
+	}
+}
+
+func readHTTPErrorResponseBody(resp *http.Response) string {
+	if resp.Body == nil {
+		return ""
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxHTTPErrorResponseBodyLen))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(body))
 }

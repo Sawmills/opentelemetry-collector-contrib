@@ -1,0 +1,5 @@
+change_type: enhancement
+component: exporter/splunk_hec
+note: Include bounded Splunk HEC response bodies in actionable export errors.
+issues: [92]
+change_logs: [user]

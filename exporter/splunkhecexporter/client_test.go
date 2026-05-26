@@ -189,6 +189,7 @@ type capturingData struct {
 	testing          *testing.T
 	receivedRequest  chan receivedRequest
 	statusCode       int
+	responseBody     string
 	checkCompression bool
 }
 
@@ -208,6 +209,7 @@ func (c *capturingData) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	w.WriteHeader(c.statusCode)
+	_, _ = w.Write([]byte(c.responseBody))
 }
 
 func runMetricsExport(t *testing.T, cfg *Config, metrics pmetric.Metrics, expectedBatchesNum int, useMultiMetricsFormat bool) ([]receivedRequest, error) {
@@ -1343,7 +1345,8 @@ func TestErrorReceived(t *testing.T) {
 
 func TestErrorReceivedForbidden(t *testing.T) {
 	rr := make(chan receivedRequest)
-	capture := capturingData{receivedRequest: rr, statusCode: 403}
+	responseBody := `{"text":"Invalid token","code":4}`
+	capture := capturingData{receivedRequest: rr, statusCode: 403, responseBody: responseBody}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		panic(err)
@@ -1386,9 +1389,10 @@ func TestErrorReceivedForbidden(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Should have received request")
 	}
-	errMsg := fmt.Sprintf("Permanent error: HTTP \"/services/collector\" %d %q",
+	errMsg := fmt.Sprintf("Permanent error: HTTP \"/services/collector\" %d %q: response body: %s",
 		http.StatusForbidden,
 		http.StatusText(http.StatusForbidden),
+		responseBody,
 	)
 	assert.EqualError(t, err, errMsg)
 	assert.True(t, consumererror.IsPermanent(err))
@@ -1437,7 +1441,8 @@ func TestInvalidURL(t *testing.T) {
 }
 
 func TestHeartbeatStartupFailed(t *testing.T) {
-	capture := capturingData{statusCode: 403}
+	responseBody := `{"text":"Invalid token","code":4}`
+	capture := capturingData{statusCode: 403, responseBody: responseBody}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		panic(err)
@@ -1469,8 +1474,9 @@ func TestHeartbeatStartupFailed(t *testing.T) {
 	assert.NoError(t, err)
 	assert.EqualError(t,
 		exporter.Start(t.Context(), componenttest.NewNopHost()),
-		fmt.Sprintf("%s: heartbeat on startup failed: Permanent error: HTTP \"/services/collector\" 403 \"Forbidden\"",
+		fmt.Sprintf("%s: heartbeat on startup failed: Permanent error: HTTP \"/services/collector\" 403 \"Forbidden\": response body: %s",
 			params.ID.String(),
+			responseBody,
 		),
 	)
 	assert.NoError(t, exporter.Shutdown(t.Context()))
@@ -1674,7 +1680,7 @@ func Test_pushLogData_ShouldAddResponseTo400Error(t *testing.T) {
 	splunkClient := newLogsClient(exportertest.NewNopSettings(metadata.Type), NewFactory().CreateDefaultConfig().(*Config))
 	logs := createLogData(1, 1, 1)
 
-	responseBody := `some error occurred`
+	responseBody := `{"text":"Invalid data format","code":6}`
 
 	// An HTTP client that returns status code 400 and response body responseBody.
 	httpClient, _ := newTestClient(400, responseBody)
@@ -1682,8 +1688,7 @@ func Test_pushLogData_ShouldAddResponseTo400Error(t *testing.T) {
 	// Sending logs using the client.
 	err := splunkClient.pushLogData(t.Context(), logs)
 	require.True(t, consumererror.IsPermanent(err), "Expecting permanent error")
-	require.EqualError(t, err, "Permanent error: HTTP \"/v1/endpoint\" 400 \"Bad Request\"")
-	// The returned error should contain the response body responseBody.
+	require.EqualError(t, err, "Permanent error: HTTP \"/v1/endpoint\" 400 \"Bad Request\": response body: "+responseBody)
 
 	// An HTTP client that returns some other status code other than 400 and response body responseBody.
 	httpClient, _ = newTestClient(500, responseBody)
@@ -1692,7 +1697,6 @@ func Test_pushLogData_ShouldAddResponseTo400Error(t *testing.T) {
 	err = splunkClient.pushLogData(t.Context(), logs)
 	require.False(t, consumererror.IsPermanent(err), "Expecting non-permanent error")
 	require.EqualError(t, err, "HTTP \"/v1/endpoint\" 500 \"Internal Server Error\"")
-	// The returned error should not contain the response body responseBody.
 	assert.NotContains(t, err.Error(), responseBody)
 }
 
