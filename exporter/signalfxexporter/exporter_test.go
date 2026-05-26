@@ -229,6 +229,7 @@ func TestConsumeMetrics(t *testing.T) {
 				errMsg = "Permanent error: " + errMsg
 				assert.Error(t, err)
 				assert.True(t, consumererror.IsPermanent(err))
+				errMsg += ": response body: response content"
 				assert.EqualError(t, err, errMsg)
 				return
 			}
@@ -2052,6 +2053,7 @@ func TestConsumeMixedMetrics(t *testing.T) {
 				errMsg = "Permanent error: " + errMsg
 				assert.Error(t, err)
 				assert.True(t, consumererror.IsPermanent(err))
+				errMsg += ": response body: response content"
 				assert.EqualError(t, err, errMsg)
 				return
 			}

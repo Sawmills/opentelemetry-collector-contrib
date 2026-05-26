@@ -5,9 +5,11 @@ package splunk
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +22,7 @@ func TestConsumeMetrics(t *testing.T) {
 	tests := []struct {
 		name             string
 		httpResponseCode int
+		responseBody     string
 		retryAfter       int
 		wantErr          bool
 		wantPermanentErr bool
@@ -28,11 +31,13 @@ func TestConsumeMetrics(t *testing.T) {
 		{
 			name:             "response_forbidden",
 			httpResponseCode: http.StatusForbidden,
-			wantErr:          true,
+			responseBody:     `{"text":"Invalid token","code":4}`,
+			wantPermanentErr: true,
 		},
 		{
 			name:             "response_bad_request",
 			httpResponseCode: http.StatusBadRequest,
+			responseBody:     `{"text":"Invalid data format","code":6}`,
 			wantPermanentErr: true,
 		},
 		{
@@ -44,6 +49,7 @@ func TestConsumeMetrics(t *testing.T) {
 			name:             "response_throttle_with_header",
 			retryAfter:       123,
 			httpResponseCode: http.StatusServiceUnavailable,
+			responseBody:     `{"text":"Server busy","code":9}`,
 			wantThrottleErr:  true,
 		},
 		{
@@ -58,6 +64,9 @@ func TestConsumeMetrics(t *testing.T) {
 					URL: &url.URL{Scheme: "http", Host: "splunk.com", Path: "/endpoint"},
 				},
 				StatusCode: tt.httpResponseCode,
+			}
+			if tt.responseBody != "" {
+				resp.Body = io.NopCloser(strings.NewReader(tt.responseBody))
 			}
 			if tt.retryAfter != 0 {
 				resp.Header = map[string][]string{
@@ -74,17 +83,51 @@ func TestConsumeMetrics(t *testing.T) {
 			if tt.wantPermanentErr {
 				assert.Error(t, err)
 				assert.True(t, consumererror.IsPermanent(err))
+				if tt.responseBody != "" {
+					assert.ErrorContains(t, err, "response body: "+tt.responseBody)
+				}
 				return
 			}
 
 			if tt.wantThrottleErr {
 				expected := fmt.Errorf("HTTP \"/endpoint\" %d %q", tt.httpResponseCode, http.StatusText(tt.httpResponseCode))
 				expected = exporterhelper.NewThrottleRetry(expected, time.Duration(tt.retryAfter)*time.Second)
-				assert.Equal(t, expected, err)
+				assert.EqualError(t, err, expected.Error())
+				assert.NotContains(t, err.Error(), "response body:")
 				return
 			}
 
 			assert.NoError(t, err)
 		})
 	}
+}
+
+func TestHandleHTTPCodeLimitsResponseBody(t *testing.T) {
+	responseBody := strings.Repeat("a", maxHTTPErrorResponseBodyLen+1)
+	resp := &http.Response{
+		Request: &http.Request{
+			URL: &url.URL{Scheme: "http", Host: "splunk.com", Path: "/endpoint"},
+		},
+		StatusCode: http.StatusBadRequest,
+		Body:       io.NopCloser(strings.NewReader(responseBody)),
+	}
+
+	err := HandleHTTPCode(resp)
+	assert.EqualError(t, err, fmt.Sprintf(
+		"Permanent error: HTTP \"/endpoint\" 400 \"Bad Request\": response body: %s",
+		strings.Repeat("a", maxHTTPErrorResponseBodyLen),
+	))
+}
+
+func TestHandleHTTPCodeOmitsResponseBodyForInternalServerError(t *testing.T) {
+	resp := &http.Response{
+		Request: &http.Request{
+			URL: &url.URL{Scheme: "http", Host: "splunk.com", Path: "/endpoint"},
+		},
+		StatusCode: http.StatusInternalServerError,
+		Body:       io.NopCloser(strings.NewReader(`{"text":"Internal server error","code":8}`)),
+	}
+
+	err := HandleHTTPCode(resp)
+	assert.EqualError(t, err, `HTTP "/endpoint" 500 "Internal Server Error"`)
 }
