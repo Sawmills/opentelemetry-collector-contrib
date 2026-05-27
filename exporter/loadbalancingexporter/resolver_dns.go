@@ -207,9 +207,7 @@ func (r *dnsResolver) recordStaleAge(ctx context.Context) {
 		return
 	}
 	age := time.Since(lastResolvedAt).Milliseconds()
-	if age < 0 {
-		age = 0
-	}
+	age = max(age, 0)
 	r.resolverStaleAge.Record(ctx, age, metric.WithAttributeSet(dnsResolverAttrSet))
 }
 
