@@ -56,7 +56,8 @@ jobs:
             exit 0
           fi
 
-          non_go_changes=$(printf '%s\n' "$changed_files" | grep -vE '.*\.go$' || true)
+          metadata_changes=$(printf '%s\n' "$changed_files" | grep -E '(^|/)go\.(mod|sum)$|^\.github/workflows/scoped-test\.yaml$' || true)
+          non_go_changes=$(printf '%s\n' "$changed_files" | grep -vE '.*\.go$|(^|/)go\.(mod|sum)$|^\.github/workflows/scoped-test\.yaml$' || true)
           if [[ -n "$non_go_changes" ]]; then
             echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
             exit 0
@@ -67,6 +68,10 @@ jobs:
 
           go_count=$(printf '%s\n%s\n' "$go_sources" "$go_tests" | awk 'NF { count++ } END { print count + 0 }')
           if (( go_count == 0 )); then
+            if [[ -n "$metadata_changes" ]]; then
+              echo "mode=metadata_only" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -185,6 +190,9 @@ jobs:
           case "$mode" in
             docs_only)
               echo "Docs-only PR; scoped-tests passes."
+              ;;
+            metadata_only)
+              echo "Metadata-only PR; full matrix handles non-source changes."
               ;;
             scoped)
               if [[ success == "${{ needs.scoped-tests-ubuntu.result }}" ]]; then
