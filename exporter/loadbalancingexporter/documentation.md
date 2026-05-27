@@ -202,17 +202,3 @@ Number of times the resolver has triggered new resolutions.
 | ---- | ----------- | ------ | ------------------- |
 | success | Whether an outcome was successful | Any Bool | - |
 | resolver | Resolver used | Str: ``aws``, ``dns``, ``k8s``, ``static`` | - |
-
-### otelcol_loadbalancer_resolver_stale_age
-
-Age in milliseconds of the last successful resolver result currently kept after a resolver failure.
-
-| Unit | Metric Type | Value Type | Stability |
-| ---- | ----------- | ---------- | --------- |
-| ms | Gauge | Int | Development |
-
-#### Attributes
-
-| Name | Description | Values | Semantic Convention |
-| ---- | ----------- | ------ | ------------------- |
-| resolver | Resolver used | Str: ``aws``, ``dns``, ``k8s``, ``static`` | - |

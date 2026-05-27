@@ -53,6 +53,7 @@ type dnsResolver struct {
 	shutdownWg         sync.WaitGroup
 	changeCallbackLock sync.RWMutex
 	telemetry          *metadata.TelemetryBuilder
+	resolverStaleAge   metric.Int64Gauge
 }
 
 type netResolver interface {
@@ -77,15 +78,21 @@ func newDNSResolver(
 		timeout = defaultResTimeout
 	}
 
+	resolverStaleAge, err := metadata.NewLoadbalancerResolverStaleAgeGauge(tb)
+	if err != nil {
+		return nil, err
+	}
+
 	return &dnsResolver{
-		logger:      logger,
-		hostname:    hostname,
-		port:        port,
-		resolver:    &net.Resolver{},
-		resInterval: interval,
-		resTimeout:  timeout,
-		stopCh:      make(chan struct{}),
-		telemetry:   tb,
+		logger:           logger,
+		hostname:         hostname,
+		port:             port,
+		resolver:         &net.Resolver{},
+		resInterval:      interval,
+		resTimeout:       timeout,
+		stopCh:           make(chan struct{}),
+		telemetry:        tb,
+		resolverStaleAge: resolverStaleAge,
 	}, nil
 }
 
@@ -142,7 +149,7 @@ func (r *dnsResolver) resolve(ctx context.Context) ([]string, error) {
 	}
 
 	r.telemetry.LoadbalancerNumResolutions.Add(ctx, 1, metric.WithAttributeSet(dnsResolverSuccessAttrSet))
-	r.telemetry.LoadbalancerResolverStaleAge.Record(ctx, 0, metric.WithAttributeSet(dnsResolverAttrSet))
+	r.resolverStaleAge.Record(ctx, 0, metric.WithAttributeSet(dnsResolverAttrSet))
 
 	backends := make([]string, len(addrs))
 	for i, ip := range addrs {
@@ -203,7 +210,7 @@ func (r *dnsResolver) recordStaleAge(ctx context.Context) {
 	if age < 0 {
 		age = 0
 	}
-	r.telemetry.LoadbalancerResolverStaleAge.Record(ctx, age, metric.WithAttributeSet(dnsResolverAttrSet))
+	r.resolverStaleAge.Record(ctx, age, metric.WithAttributeSet(dnsResolverAttrSet))
 }
 
 func (r *dnsResolver) onChange(f func([]string)) {

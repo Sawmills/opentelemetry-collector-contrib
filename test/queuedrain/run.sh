@@ -70,7 +70,6 @@ REQUIRE_RED_LIVENESS_RESTART="false"
 STRICT_RED="false"
 ARTIFACT_ROOT="${ROOT_DIR}/artifacts/queue-drain/$(date -u +%Y%m%dT%H%M%SZ)"
 PHASE="both"
-RENDER_ONLY="false"
 
 usage() {
   sed -n '1,80p' "${HARNESS_DIR}/README.md"
@@ -144,7 +143,6 @@ while [[ $# -gt 0 ]]; do
     --lb-gogc) LB_GOGC="$2"; shift 2 ;;
     --artifacts) ARTIFACT_ROOT="$2"; shift 2 ;;
     --phase) PHASE="$2"; shift 2 ;;
-    --render-only) RENDER_ONLY="true"; shift ;;
     --require-red-liveness-restart) REQUIRE_RED_LIVENESS_RESTART="true"; shift ;;
     --no-red-liveness-restart-required) REQUIRE_RED_LIVENESS_RESTART="false"; shift ;;
     --strict-red) STRICT_RED="true"; shift ;;
@@ -221,6 +219,7 @@ render_templates() {
     fi
     render_num_consumers="true"
   fi
+  export NUM_CONSUMERS="${phase_num_consumers}"
   export NUM_CONSUMERS_CONFIG=""
   export ACTIVE_LB_REPLICAS_CONFIG=""
   local phase_active_lb_replicas=""
@@ -335,7 +334,7 @@ render_templates() {
     "${phase}" "${collector_image}" "${endpoint_health_enabled}" "${active_probe_enabled}" \
     "${WORKERS}" "${LB_REPLICAS}" "${phase_active_lb_replicas}" "${TARGET_COMPRESSED_BYTES}" "${MAX_COMPRESSED_BYTES}" \
     "${MAX_UNCOMPRESSED_BATCH_BYTES}" "${MAX_INFLIGHT_UNCOMPRESSED_BYTES}" \
-    "${phase_num_consumers}" \
+    "${NUM_CONSUMERS}" \
     "${RECEIVER_MAX_RECV_MSG_SIZE_MIB}" "${BACKEND_MAX_RECV_MSG_SIZE_MIB}" \
     "${LOAD_DURATION_SECONDS}" "${WARMUP_SECONDS}" "${SETTLE_SECONDS}" "${SCRAPE_INTERVAL_SECONDS}" \
     "${LOAD_RATE}" "${LOAD_WORKERS}" "${BATCH_SIZE}" "${LOAD_SIZE_MB}" \
@@ -539,31 +538,6 @@ LOADGEN_IMAGE="${LOADGEN_IMAGE:-${FAKE_BACKEND_IMAGE}}"
 if [[ "${LOAD_SIZE_MB}" != "0" && "${PAYLOAD_SIZE_BYTES}" == "0" ]]; then
   PAYLOAD_SIZE_BYTES=$((LOAD_SIZE_MB * 1024 * 1024))
 fi
-red_backend_timeout="${RED_BACKEND_TIMEOUT:-${BACKEND_TIMEOUT}}"
-green_backend_timeout="${GREEN_BACKEND_TIMEOUT:-${BACKEND_TIMEOUT}}"
-red_liveness_timeout="${RED_LIVENESS_TIMEOUT_SECONDS:-${LIVENESS_TIMEOUT_SECONDS}}"
-red_liveness_failure="${RED_LIVENESS_FAILURE_THRESHOLD:-${LIVENESS_FAILURE_THRESHOLD}}"
-green_liveness_timeout="${GREEN_LIVENESS_TIMEOUT_SECONDS:-${LIVENESS_TIMEOUT_SECONDS}}"
-green_liveness_failure="${GREEN_LIVENESS_FAILURE_THRESHOLD:-${LIVENESS_FAILURE_THRESHOLD}}"
-if [[ "${RENDER_ONLY}" == "true" ]]; then
-  case "${PHASE}" in
-    red)
-      render_templates red "${RED_IMAGE}" "false" "false" "${red_backend_timeout}" "${red_liveness_timeout}" "${red_liveness_failure}" "${ARTIFACT_ROOT}/red/rendered"
-      ;;
-    green)
-      render_templates green "${GREEN_IMAGE}" "true" "true" "${green_backend_timeout}" "${green_liveness_timeout}" "${green_liveness_failure}" "${ARTIFACT_ROOT}/green/rendered"
-      ;;
-    both)
-      render_templates red "${RED_IMAGE}" "false" "false" "${red_backend_timeout}" "${red_liveness_timeout}" "${red_liveness_failure}" "${ARTIFACT_ROOT}/red/rendered"
-      render_templates green "${GREEN_IMAGE}" "true" "true" "${green_backend_timeout}" "${green_liveness_timeout}" "${green_liveness_failure}" "${ARTIFACT_ROOT}/green/rendered"
-      ;;
-    *)
-      die "unknown phase ${PHASE}; expected red, green, or both"
-      ;;
-  esac
-  echo "artifacts: ${ARTIFACT_ROOT}"
-  exit 0
-fi
 ensure_cluster
 if [[ "${BUILD_FAKE_BACKEND}" == "true" ]]; then
   docker build -t "${FAKE_BACKEND_IMAGE}" "${HARNESS_DIR}/fakebackend"
@@ -576,6 +550,12 @@ load_image_if_local "${RED_IMAGE}"
 load_image_if_local "${GREEN_IMAGE}"
 
 set +e
+red_backend_timeout="${RED_BACKEND_TIMEOUT:-${BACKEND_TIMEOUT}}"
+green_backend_timeout="${GREEN_BACKEND_TIMEOUT:-${BACKEND_TIMEOUT}}"
+red_liveness_timeout="${RED_LIVENESS_TIMEOUT_SECONDS:-${LIVENESS_TIMEOUT_SECONDS}}"
+red_liveness_failure="${RED_LIVENESS_FAILURE_THRESHOLD:-${LIVENESS_FAILURE_THRESHOLD}}"
+green_liveness_timeout="${GREEN_LIVENESS_TIMEOUT_SECONDS:-${LIVENESS_TIMEOUT_SECONDS}}"
+green_liveness_failure="${GREEN_LIVENESS_FAILURE_THRESHOLD:-${LIVENESS_FAILURE_THRESHOLD}}"
 case "${PHASE}" in
   red)
     run_phase red "${RED_IMAGE}" "false" "false" "${red_backend_timeout}" "${red_liveness_timeout}" "${red_liveness_failure}"
