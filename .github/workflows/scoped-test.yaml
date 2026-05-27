@@ -68,10 +68,6 @@ jobs:
 
           go_count=$(printf '%s\n%s\n' "$go_sources" "$go_tests" | awk 'NF { count++ } END { print count + 0 }')
           if (( go_count == 0 )); then
-            if [[ -n "$metadata_changes" ]]; then
-              echo "mode=metadata_only" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
             echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -190,9 +186,6 @@ jobs:
           case "$mode" in
             docs_only)
               echo "Docs-only PR; scoped-tests passes."
-              ;;
-            metadata_only)
-              echo "Metadata-only PR; full matrix handles non-source changes."
               ;;
             scoped)
               if [[ success == "${{ needs.scoped-tests-ubuntu.result }}" ]]; then
