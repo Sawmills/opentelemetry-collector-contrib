@@ -490,6 +490,84 @@ func TestMetricsCentralQueueReroutesFailedEndpointItem(t *testing.T) {
 	assert.NotContains(t, lb.exporters, "endpoint-1:4317")
 }
 
+func TestMetricsCentralQueueReroutesDeadlineExceededEndpoint(t *testing.T) {
+	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
+	cfg := endpoint2Config()
+	enableEndpointHealth(cfg)
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+
+	var callsMu sync.Mutex
+	calls := map[string]int{}
+	var delivered atomic.Int64
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockMetricsExporter(func(_ context.Context, md pmetric.Metrics) error {
+			callsMu.Lock()
+			calls[endpoint]++
+			callsMu.Unlock()
+			if endpoint == "endpoint-1:4317" {
+				return context.DeadlineExceeded
+			}
+			delivered.Add(int64(md.DataPointCount()))
+			return nil
+		}), nil
+	}
+	lb, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.ring = newHashRing([]string{"endpoint-1:4317", "endpoint-2:4317"})
+	lb.addMissingExporters(t.Context(), []string{"endpoint-1:4317", "endpoint-2:4317"})
+
+	failedRoute := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1:4317")
+	p := &metricExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    1 << 20,
+		}),
+		centralCodec: codec,
+		loadBalancer: lb,
+		logger:       ts.Logger,
+		telemetry:    tb,
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	p.centralWG.Add(1)
+	go p.runCentralQueue(ctx)
+
+	md := metricsWithServiceDataPoints(failedRoute)
+	expectedDelivered := md.DataPointCount()
+	require.Positive(t, expectedDelivered)
+	item, err := newCentralQueueMetricsItem([]byte(failedRoute), md, codec, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, p.centralQueue.enqueue(item))
+
+	require.Eventually(t, func() bool {
+		callsMu.Lock()
+		defer callsMu.Unlock()
+		return calls["endpoint-1:4317"] == 1 &&
+			calls["endpoint-2:4317"] == 1 &&
+			delivered.Load() == int64(expectedDelivered) &&
+			p.centralQueue.len() == 0
+	}, time.Second, time.Millisecond)
+	cancel()
+	require.NoError(t, waitForInflight(t.Context(), &p.centralWG))
+	assert.NotContains(t, lb.exporters, "endpoint-1:4317")
+	metadatatest.AssertEqualLoadbalancerBackendQuarantineTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("reason", "timeout")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+	metadatatest.AssertEqualLoadbalancerBackendRerouteTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("signal", "metrics"), attribute.String("result", "success"), attribute.String("reason", "timeout")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+}
+
 func TestConsumeMetricsByExporterAggregatesFailedEndpointSubsets(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 

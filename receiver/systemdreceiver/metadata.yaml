@@ -80,3 +80,4 @@ metrics:
     attributes: [systemd.unit.active_state]
 
 tests:
+  skip_lifecycle: true

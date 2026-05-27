@@ -62,6 +62,7 @@ func TestScrape(t *testing.T) {
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
 			scraper := newPagingScraper(t.Context(), scrapertest.NewNopSettings(metadata.Type), test.config)
+			setPagingScraperTestFixtures(scraper)
 			if test.mutateScraper != nil {
 				test.mutateScraper(scraper)
 			}

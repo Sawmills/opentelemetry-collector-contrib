@@ -21,6 +21,31 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/hostmetricsreceiver/internal/testmocks"
 )
 
+func setPagingScraperTestFixtures(scraper *pagingScraper) {
+	scraper.pageFileStats = func() ([]*pageFileStats, error) {
+		return []*pageFileStats{{
+			deviceName: "C:\\pagefile.sys",
+			usedBytes:  200,
+			freeBytes:  800,
+			totalBytes: 1000,
+		}}, nil
+	}
+	scraper.perfCounterFactory = func(_, _, counter string) (winperfcounters.PerfCounterWatcher, error) {
+		perfCounterMock := &testmocks.PerfCounterWatcherMock{}
+		switch counter {
+		case pageReadsPerSec:
+			perfCounterMock.Val = 1
+		case pageWritesPerSec:
+			perfCounterMock.Val = 2
+		case pageFaultsPerSec:
+			perfCounterMock.Val = 7
+		case pageMajPerSec:
+			perfCounterMock.Val = 5
+		}
+		return perfCounterMock, nil
+	}
+}
+
 func TestScrape_Errors(t *testing.T) {
 	type testCase struct {
 		name                         string
