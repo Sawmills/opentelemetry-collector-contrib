@@ -45,6 +45,7 @@ type dnsResolver struct {
 	resTimeout  time.Duration
 
 	endpoints         []string
+	lastResolvedAt    time.Time
 	onChangeCallbacks []func([]string)
 
 	stopCh             chan struct{}
@@ -136,10 +137,12 @@ func (r *dnsResolver) resolve(ctx context.Context) ([]string, error) {
 	addrs, err := r.resolver.LookupIPAddr(ctx, r.hostname)
 	if err != nil {
 		r.telemetry.LoadbalancerNumResolutions.Add(ctx, 1, metric.WithAttributeSet(dnsResolverFailureAttrSet))
+		r.recordStaleAge(ctx)
 		return nil, err
 	}
 
 	r.telemetry.LoadbalancerNumResolutions.Add(ctx, 1, metric.WithAttributeSet(dnsResolverSuccessAttrSet))
+	r.telemetry.LoadbalancerResolverStaleAge.Record(ctx, 0, metric.WithAttributeSet(dnsResolverAttrSet))
 
 	backends := make([]string, len(addrs))
 	for i, ip := range addrs {
@@ -162,13 +165,17 @@ func (r *dnsResolver) resolve(ctx context.Context) ([]string, error) {
 	// keep it always in the same order
 	sort.Strings(backends)
 
+	r.updateLock.Lock()
+	r.lastResolvedAt = time.Now()
 	if equalStringSlice(r.endpoints, backends) {
-		return r.endpoints, nil
+		endpoints := append([]string(nil), r.endpoints...)
+		r.updateLock.Unlock()
+		return endpoints, nil
 	}
 
 	// the list has changed!
-	r.updateLock.Lock()
 	r.endpoints = backends
+	endpoints := append([]string(nil), r.endpoints...)
 	r.updateLock.Unlock()
 	r.telemetry.LoadbalancerNumBackends.Record(ctx, int64(len(backends)), metric.WithAttributeSet(dnsResolverAttrSet))
 	r.telemetry.LoadbalancerNumBackendUpdates.Add(ctx, 1, metric.WithAttributeSet(dnsResolverAttrSet))
@@ -176,11 +183,27 @@ func (r *dnsResolver) resolve(ctx context.Context) ([]string, error) {
 	// propagate the change
 	r.changeCallbackLock.RLock()
 	for _, callback := range r.onChangeCallbacks {
-		callback(r.endpoints)
+		callback(endpoints)
 	}
 	r.changeCallbackLock.RUnlock()
 
-	return r.endpoints, nil
+	return endpoints, nil
+}
+
+func (r *dnsResolver) recordStaleAge(ctx context.Context) {
+	r.updateLock.Lock()
+	lastResolvedAt := r.lastResolvedAt
+	hasEndpoints := len(r.endpoints) > 0
+	r.updateLock.Unlock()
+
+	if !hasEndpoints || lastResolvedAt.IsZero() {
+		return
+	}
+	age := time.Since(lastResolvedAt).Milliseconds()
+	if age < 0 {
+		age = 0
+	}
+	r.telemetry.LoadbalancerResolverStaleAge.Record(ctx, age, metric.WithAttributeSet(dnsResolverAttrSet))
 }
 
 func (r *dnsResolver) onChange(f func([]string)) {

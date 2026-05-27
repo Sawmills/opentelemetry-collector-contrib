@@ -14,6 +14,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.uber.org/zap"
 )
 
@@ -285,6 +288,43 @@ func TestPeriodicallyResolveFailure(t *testing.T) {
 	assert.Len(t, res.endpoints, 1) // no change to the list of endpoints
 }
 
+func TestDNSResolverKeepsLastKnownGoodAndRecordsStaleAgeOnFailure(t *testing.T) {
+	_, tb, telemetry := getTelemetryAssetsWithReader(t)
+	res, err := newDNSResolver(zap.NewNop(), "service-1", "4317", 5*time.Second, 1*time.Second, tb)
+	require.NoError(t, err)
+
+	resolveErr := errors.New("lookup timeout")
+	resolve := []net.IPAddr{{IP: net.IPv4(127, 0, 0, 1)}}
+	failLookup := false
+	res.resolver = &mockDNSResolver{
+		onLookupIPAddr: func(context.Context, string) ([]net.IPAddr, error) {
+			if failLookup {
+				return nil, resolveErr
+			}
+			return resolve, nil
+		},
+	}
+
+	var callbacks atomic.Int64
+	res.onChange(func([]string) {
+		callbacks.Add(1)
+	})
+
+	resolved, err := res.resolve(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, []string{"127.0.0.1:4317"}, resolved)
+	require.Equal(t, int64(1), callbacks.Load())
+
+	time.Sleep(10 * time.Millisecond)
+	failLookup = true
+	resolved, err = res.resolve(t.Context())
+	require.ErrorIs(t, err, resolveErr)
+	require.Nil(t, resolved)
+	require.Equal(t, []string{"127.0.0.1:4317"}, res.endpoints)
+	require.Equal(t, int64(1), callbacks.Load())
+	requireResolverStaleAgeAtLeast(t, telemetry, 1)
+}
+
 func TestShutdownClearsCallbacks(t *testing.T) {
 	// prepare
 	_, tb := getTelemetryAssets(t)
@@ -322,4 +362,20 @@ func (m *mockDNSResolver) LookupIPAddr(ctx context.Context, hostname string) ([]
 		return m.onLookupIPAddr(ctx, hostname)
 	}
 	return nil, nil
+}
+
+func requireResolverStaleAgeAtLeast(t *testing.T, telemetry *componenttest.Telemetry, minimumMillis int64) {
+	t.Helper()
+
+	got, err := telemetry.GetMetric("otelcol_loadbalancer_resolver_stale_age")
+	require.NoError(t, err)
+	gauge, ok := got.Data.(metricdata.Gauge[int64])
+	require.True(t, ok)
+	require.Len(t, gauge.DataPoints, 1)
+	require.Equal(
+		t,
+		attribute.NewSet(attribute.String("resolver", "dns")),
+		gauge.DataPoints[0].Attributes,
+	)
+	require.GreaterOrEqual(t, gauge.DataPoints[0].Value, minimumMillis)
 }

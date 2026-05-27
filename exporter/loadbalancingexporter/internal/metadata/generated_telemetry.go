@@ -6,9 +6,10 @@ import (
 	"errors"
 	"sync"
 
-	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
+
+	"go.opentelemetry.io/collector/component"
 )
 
 func Meter(settings component.TelemetrySettings) metric.Meter {
@@ -39,6 +40,7 @@ type TelemetryBuilder struct {
 	LoadbalancerNumBackendUpdates        metric.Int64Counter
 	LoadbalancerNumBackends              metric.Int64Gauge
 	LoadbalancerNumResolutions           metric.Int64Counter
+	LoadbalancerResolverStaleAge         metric.Int64Gauge
 }
 
 // TelemetryBuilderOption applies changes to default builder.
@@ -155,6 +157,12 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 		"otelcol_loadbalancer_num_resolutions",
 		metric.WithDescription("Number of times the resolver has triggered new resolutions. [Development]"),
 		metric.WithUnit("{resolutions}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerResolverStaleAge, err = builder.meter.Int64Gauge(
+		"otelcol_loadbalancer_resolver_stale_age",
+		metric.WithDescription("Age in milliseconds of the last successful resolver result currently kept after a resolver failure. [Development]"),
+		metric.WithUnit("ms"),
 	)
 	errs = errors.Join(errs, err)
 	return &builder, errs

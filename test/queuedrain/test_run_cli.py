@@ -7,6 +7,7 @@
 import os
 import pathlib
 import subprocess
+import tempfile
 import unittest
 
 
@@ -42,6 +43,39 @@ class RunCliTest(unittest.TestCase):
                     "replica values must be non-negative integers",
                     result.stderr,
                 )
+
+    def test_red_num_consumers_does_not_leak_to_green_render(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(RUN_SH),
+                    "--render-only",
+                    "--artifacts",
+                    tmp,
+                    "--red-num-consumers",
+                    "120",
+                    "--num-consumers",
+                    "30",
+                    "--green-active-lb-replicas",
+                    "4",
+                ],
+                cwd=ROOT_DIR,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            red_vars = pathlib.Path(tmp, "red", "rendered", "render-vars.txt").read_text()
+            green_vars = pathlib.Path(tmp, "green", "rendered", "render-vars.txt").read_text()
+            green_config = pathlib.Path(tmp, "green", "rendered", "lb-config.yaml").read_text()
+
+            self.assertIn("num_consumers=120", red_vars)
+            self.assertIn("num_consumers=30", green_vars)
+            self.assertIn("num_consumers: 30", green_config)
+            self.assertIn("active_load_balancer_replicas: 4", green_config)
 
 
 if __name__ == "__main__":

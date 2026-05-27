@@ -1,0 +1,5 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Add resolver stale-age telemetry and queue-drain resilience proof for backend timeout reroutes.
+issues: [7500]
+change_logs: [user]

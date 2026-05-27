@@ -185,6 +185,14 @@ telemetry:
       sum:
         value_type: int
         monotonic: true
+    loadbalancer_resolver_stale_age:
+      attributes: [resolver]
+      enabled: true
+      stability: development
+      description: Age in milliseconds of the last successful resolver result currently kept after a resolver failure.
+      unit: ms
+      gauge:
+        value_type: int
 
 tests:
   config:
