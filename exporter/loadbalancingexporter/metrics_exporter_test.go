@@ -536,8 +536,9 @@ func TestMetricsCentralQueueReroutesDeadlineExceededEndpoint(t *testing.T) {
 	p.centralWG.Add(1)
 	go p.runCentralQueue(ctx)
 
-	md := metricsWithServiceNames(failedRoute)
+	md := metricsWithServiceDataPoints(failedRoute)
 	expectedDelivered := md.DataPointCount()
+	require.Positive(t, expectedDelivered)
 	item, err := newCentralQueueMetricsItem([]byte(failedRoute), md, codec, time.Now())
 	require.NoError(t, err)
 	require.NoError(t, p.centralQueue.enqueue(item))
