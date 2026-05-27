@@ -56,7 +56,6 @@ jobs:
             exit 0
           fi
 
-          metadata_changes=$(printf '%s\n' "$changed_files" | grep -E '(^|/)go\.(mod|sum)$|^\.github/workflows/scoped-test\.yaml$' || true)
           non_go_changes=$(printf '%s\n' "$changed_files" | grep -vE '.*\.go$|(^|/)go\.(mod|sum)$|^\.github/workflows/scoped-test\.yaml$' || true)
           if [[ -n "$non_go_changes" ]]; then
             echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
