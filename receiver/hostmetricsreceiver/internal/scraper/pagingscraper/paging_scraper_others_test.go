@@ -20,6 +20,29 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/hostmetricsreceiver/internal/scraper/pagingscraper/internal/metadata"
 )
 
+func setPagingScraperTestFixtures(scraper *pagingScraper) {
+	scraper.getPageFileStats = func() ([]*pageFileStats, error) {
+		cachedBytes := uint64(0)
+		return []*pageFileStats{{
+			deviceName:  "/dev/swap",
+			usedBytes:   200,
+			freeBytes:   800,
+			totalBytes:  1000,
+			cachedBytes: &cachedBytes,
+		}}, nil
+	}
+	scraper.swapMemory = func(context.Context) (*mem.SwapMemoryStat, error) {
+		return &mem.SwapMemoryStat{
+			Sin:        1,
+			Sout:       2,
+			PgIn:       3,
+			PgOut:      4,
+			PgFault:    7,
+			PgMajFault: 5,
+		}, nil
+	}
+}
+
 func TestScrape_Errors(t *testing.T) {
 	type testCase struct {
 		name              string

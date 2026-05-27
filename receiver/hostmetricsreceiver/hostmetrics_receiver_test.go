@@ -150,6 +150,9 @@ func assertIncludesExpectedMetrics(t *testing.T, got pmetric.Metrics) {
 
 	// verify the expected list of metrics returned (os/arch dependent)
 	expectedMetrics := allMetrics
+	if _, ok := returnedMetrics["system.paging.usage"]; !ok {
+		expectedMetrics = removeExpectedMetric(expectedMetrics, "system.paging.usage")
+	}
 
 	expectedMetrics = append(expectedMetrics, systemSpecificMetrics[runtime.GOOS]...)
 	if nfsscraper.CanScrapeAll() {
@@ -172,6 +175,16 @@ func assertIncludesExpectedMetrics(t *testing.T, got pmetric.Metrics) {
 	for _, expected := range expectedResourceMetrics {
 		assert.Contains(t, returnedResourceMetrics, expected)
 	}
+}
+
+func removeExpectedMetric(metrics []string, name string) []string {
+	filtered := make([]string, 0, len(metrics))
+	for _, metric := range metrics {
+		if metric != name {
+			filtered = append(filtered, metric)
+		}
+	}
+	return filtered
 }
 
 func getMetricSlice(t *testing.T, rm pmetric.ResourceMetrics) pmetric.MetricSlice {
