@@ -16,6 +16,7 @@ jobs:
       mode: ${{ steps.changes.outputs.mode }}
       go_sources: ${{ steps.changes.outputs.go_sources }}
       go_tests: ${{ steps.changes.outputs.go_tests }}
+      go_modules: ${{ steps.changes.outputs.go_modules }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -64,9 +65,11 @@ jobs:
 
           go_sources=$(printf '%s\n' "$changed_files" | grep -E '\.go$' | grep -vE '.*_test\.go$' || true)
           go_tests=$(printf '%s\n' "$changed_files" | grep -E '.*_test\.go$' || true)
+          go_modules=$(printf '%s\n' "$changed_files" | grep -E '(^|/)go\.(mod|sum)$' || true)
 
           go_count=$(printf '%s\n%s\n' "$go_sources" "$go_tests" | awk 'NF { count++ } END { print count + 0 }')
-          if (( go_count == 0 )); then
+          go_module_count=$(printf '%s\n' "$go_modules" | awk 'NF { count++ } END { print count + 0 }')
+          if (( go_count == 0 && go_module_count == 0 )); then
             echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -94,6 +97,14 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
+          if (( go_count == 0 && go_module_count > 0 )); then
+            {
+              echo 'go_modules<<EOF'
+              echo "$go_modules"
+              echo EOF
+            } >> "$GITHUB_OUTPUT"
+          fi
+
   scoped-tests-ubuntu:
     needs: changedfiles
     if: needs.changedfiles.outputs.mode == 'scoped'
@@ -105,6 +116,7 @@ jobs:
           echo "mode: ${{ needs.changedfiles.outputs.mode }}"
           echo "go_sources: ${{ needs.changedfiles.outputs.go_sources }}"
           echo "go_tests: ${{ needs.changedfiles.outputs.go_tests }}"
+          echo "go_modules: ${{ needs.changedfiles.outputs.go_modules }}"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
         with:
@@ -117,6 +129,20 @@ jobs:
           CHANGED_GOLANG_TESTS: ${{ needs.changedfiles.outputs.go_tests }}
         run: |
           make run-changed-tests
+
+      - name: Run tests on changed Go modules
+        if: needs.changedfiles.outputs.go_modules
+        env:
+          CHANGED_GO_MODULES: ${{ needs.changedfiles.outputs.go_modules }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$CHANGED_GO_MODULES" |
+            xargs -r dirname |
+            awk '!seen[$0]++' |
+            while read -r dir; do
+              echo "running module tests in ${dir}"
+              (cd "$dir" && make test)
+            done
 
       - name: Run tests on dependent components
         if: needs.changedfiles.outputs.go_sources
