@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component/componenttest"
@@ -62,6 +63,26 @@ func TestScrape(t *testing.T) {
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
 			scraper := newPagingScraper(t.Context(), scrapertest.NewNopSettings(metadata.Type), test.config)
+			scraper.getPageFileStats = func() ([]*pageFileStats, error) {
+				cachedBytes := uint64(0)
+				return []*pageFileStats{{
+					deviceName:  "/dev/swap",
+					usedBytes:   200,
+					freeBytes:   800,
+					totalBytes:  1000,
+					cachedBytes: &cachedBytes,
+				}}, nil
+			}
+			scraper.swapMemory = func(context.Context) (*mem.SwapMemoryStat, error) {
+				return &mem.SwapMemoryStat{
+					Sin:        1,
+					Sout:       2,
+					PgIn:       3,
+					PgOut:      4,
+					PgFault:    7,
+					PgMajFault: 5,
+				}, nil
+			}
 			if test.mutateScraper != nil {
 				test.mutateScraper(scraper)
 			}
