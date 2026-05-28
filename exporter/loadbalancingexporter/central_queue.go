@@ -1083,13 +1083,6 @@ func centralQueueBalancedLaneRoutingKeyForRingUncached(ring *hashRing, signal si
 	return base
 }
 
-func centralQueueHashRingEndpoints(ring *hashRing) []string {
-	if ring == nil {
-		return nil
-	}
-	return append([]string(nil), ring.endpoints...)
-}
-
 func centralQueueLaneIndex(signal signalKind, routingKey []byte, laneCount int) uint32 {
 	hashInput := make([]byte, len(routingKey)+len(signal)+1)
 	copy(hashInput, string(signal))
