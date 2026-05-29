@@ -1083,12 +1083,34 @@ func centralQueueBalancedLaneRoutingKeyForRingUncached(ring *hashRing, signal si
 	return base
 }
 
-func centralQueueLaneIndex(signal signalKind, routingKey []byte, laneCount int) uint32 {
-	hashInput := make([]byte, len(routingKey)+len(signal)+1)
+var (
+	centralQueueLogsLaneHashSeed    = centralQueueLaneHashSeed(signalKindLogs)
+	centralQueueMetricsLaneHashSeed = centralQueueLaneHashSeed(signalKindMetrics)
+)
+
+func centralQueueLaneHashSeed(signal signalKind) uint32 {
+	hashInput := make([]byte, len(signal)+1)
 	copy(hashInput, string(signal))
-	hashInput[len(signal)] = 0
-	copy(hashInput[len(signal)+1:], routingKey)
-	return crc32.ChecksumIEEE(hashInput) % uint32(laneCount)
+	return crc32.ChecksumIEEE(hashInput)
+}
+
+func centralQueueLaneIndex(signal signalKind, routingKey []byte, laneCount int) uint32 {
+	var crc uint32
+	switch signal {
+	case signalKindLogs:
+		crc = centralQueueLogsLaneHashSeed
+	case signalKindMetrics:
+		crc = centralQueueMetricsLaneHashSeed
+	default:
+		hashInput := make([]byte, len(routingKey)+len(signal)+1)
+		copy(hashInput, string(signal))
+		hashInput[len(signal)] = 0
+		copy(hashInput[len(signal)+1:], routingKey)
+		return crc32.ChecksumIEEE(hashInput) % uint32(laneCount)
+	}
+
+	crc = crc32.Update(crc, crc32.IEEETable, routingKey)
+	return crc % uint32(laneCount)
 }
 
 func centralQueueLaneKey(signal signalKind, lane, salt uint32) []byte {
