@@ -1084,9 +1084,15 @@ func centralQueueBalancedLaneRoutingKeyForRingUncached(ring *hashRing, signal si
 }
 
 var (
-	centralQueueLogsLaneHashSeed    = crc32.ChecksumIEEE([]byte("logs\x00"))
-	centralQueueMetricsLaneHashSeed = crc32.ChecksumIEEE([]byte("metrics\x00"))
+	centralQueueLogsLaneHashSeed    = centralQueueLaneHashSeed(signalKindLogs)
+	centralQueueMetricsLaneHashSeed = centralQueueLaneHashSeed(signalKindMetrics)
 )
+
+func centralQueueLaneHashSeed(signal signalKind) uint32 {
+	hashInput := make([]byte, len(signal)+1)
+	copy(hashInput, string(signal))
+	return crc32.ChecksumIEEE(hashInput)
+}
 
 func centralQueueLaneIndex(signal signalKind, routingKey []byte, laneCount int) uint32 {
 	var crc uint32
