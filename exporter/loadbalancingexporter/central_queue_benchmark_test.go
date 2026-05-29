@@ -7,7 +7,63 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
+
+func TestCentralQueueBalancedLaneRoutingKeyColdMissUsesCachedEndpointSnapshot(t *testing.T) {
+	endpoints := centralQueueBenchmarkBigIDEndpoints()
+	ring := newHashRing(endpoints)
+	lane := centralQueueBenchmarkBaseHitLane(t, ring)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		coldRing := &hashRing{
+			items:     ring.items,
+			endpoints: ring.endpoints,
+		}
+		_ = centralQueueBalancedLaneRoutingKeyForRing(coldRing, signalKindLogs, lane)
+	})
+
+	require.LessOrEqual(t, allocs, 16.0)
+}
+
+func TestCentralQueueBalancedLaneRoutingKeyCacheHitAvoidsAllocations(t *testing.T) {
+	endpoints := centralQueueBenchmarkBigIDEndpoints()
+	ring := newHashRing(endpoints)
+	lane := centralQueueBenchmarkBaseHitLane(t, ring)
+
+	_ = centralQueueBalancedLaneRoutingKeyForRing(ring, signalKindLogs, lane)
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = centralQueueBalancedLaneRoutingKeyForRing(ring, signalKindLogs, lane)
+	})
+
+	require.LessOrEqual(t, allocs, 1.0)
+}
+
+func TestCentralQueueBalancedLaneRoutingKeyCacheMatchesUncached(t *testing.T) {
+	endpoints := centralQueueBenchmarkBigIDEndpoints()
+	ring := newHashRing(endpoints)
+
+	for _, signal := range []signalKind{signalKindLogs, signalKindMetrics} {
+		for lane := range uint32(512) {
+			expected := append([]byte(nil), centralQueueBalancedLaneRoutingKeyForRingUncached(ring, signal, lane)...)
+			require.Equal(t, expected, centralQueueBalancedLaneRoutingKeyForRing(ring, signal, lane))
+			require.Equal(t, expected, centralQueueBalancedLaneRoutingKeyForRing(ring, signal, lane))
+		}
+	}
+}
+
+func BenchmarkCentralQueueBalancedLaneRoutingKeyBigIDTopology(b *testing.B) {
+	endpoints := centralQueueBenchmarkBigIDEndpoints()
+	ring := newHashRing(endpoints)
+	const laneCount = 256
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := range b.N {
+		_ = centralQueueBalancedLaneRoutingKeyForRing(ring, signalKindLogs, uint32(i%laneCount))
+	}
+}
 
 func BenchmarkCentralQueueCollectManyLanesManyItems(b *testing.B) {
 	const laneCount = 64
@@ -49,4 +105,28 @@ func BenchmarkCentralQueueCollectManyLanesManyItems(b *testing.B) {
 			b.Fatal("expected ready candidates")
 		}
 	}
+}
+
+func centralQueueBenchmarkBigIDEndpoints() []string {
+	const endpointCount = 240
+	endpoints := make([]string, endpointCount)
+	for i := range endpointCount {
+		endpoints[i] = fmt.Sprintf("10.%d.%d.%d:4317", 141+(i/65_536)%256, (i/256)%256, i%256)
+	}
+	return endpoints
+}
+
+func centralQueueBenchmarkBaseHitLane(tb testing.TB, ring *hashRing) uint32 {
+	tb.Helper()
+
+	for lane := range uint32(100_000) {
+		base := centralQueueLaneKey(signalKindLogs, lane, 0)
+		target := ring.endpoints[int(lane)%len(ring.endpoints)]
+		if endpointWithPort(ring.endpointFor(base)) == endpointWithPort(target) {
+			return lane
+		}
+	}
+
+	require.FailNow(tb, "failed to find base-hit lane")
+	return 0
 }

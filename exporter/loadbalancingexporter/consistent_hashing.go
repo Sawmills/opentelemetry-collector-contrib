@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 	"sort"
+	"sync"
 )
 
 const (
@@ -29,13 +30,18 @@ type ringItem struct {
 type hashRing struct {
 	// ringItems holds all the positions, used for the lookup the position for the closest next ring item
 	items []ringItem
+	// endpoints holds the normalized unique endpoints represented by items.
+	endpoints []string
+	// balancedLaneRoutingKeys caches central queue routing keys for this immutable ring.
+	balancedLaneRoutingKeys sync.Map
 }
 
 // newHashRing builds a new immutable consistent hash ring based on the given endpoints.
 func newHashRing(endpoints []string) *hashRing {
 	items := positionsForEndpoints(endpoints, defaultWeight)
 	return &hashRing{
-		items: items,
+		items:     items,
+		endpoints: hashRingEndpoints(items),
 	}
 }
 
@@ -154,6 +160,23 @@ func positionsForEndpoints(endpoints []string, weight int) []ringItem {
 	return items
 }
 
+func hashRingEndpoints(items []ringItem) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	for _, item := range items {
+		endpoint := endpointWithPort(item.endpoint)
+		seen[endpoint] = struct{}{}
+	}
+	endpoints := make([]string, 0, len(seen))
+	for endpoint := range seen {
+		endpoints = append(endpoints, endpoint)
+	}
+	sort.Strings(endpoints)
+	return endpoints
+}
+
 func (h *hashRing) equal(candidate *hashRing) bool {
 	if candidate == nil {
 		return false
@@ -161,6 +184,14 @@ func (h *hashRing) equal(candidate *hashRing) bool {
 
 	if len(h.items) != len(candidate.items) {
 		return false
+	}
+	if len(h.endpoints) != len(candidate.endpoints) {
+		return false
+	}
+	for i := range candidate.endpoints {
+		if h.endpoints[i] != candidate.endpoints[i] {
+			return false
+		}
 	}
 	for i := range candidate.items {
 		if h.items[i].endpoint != candidate.items[i].endpoint {

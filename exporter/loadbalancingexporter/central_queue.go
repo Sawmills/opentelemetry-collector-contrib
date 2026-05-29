@@ -1044,8 +1044,29 @@ func centralQueueBalancedLaneRoutingKeyForLoadBalancerLane(lb *loadBalancer, sig
 }
 
 func centralQueueBalancedLaneRoutingKeyForRing(ring *hashRing, signal signalKind, lane uint32) []byte {
+	if ring == nil {
+		return centralQueueLaneKey(signal, lane, 0)
+	}
+	cacheKey := centralQueueBalancedLaneCacheKey{signal: signal, lane: lane}
+	if routingKey, ok := ring.balancedLaneRoutingKeys.Load(cacheKey); ok {
+		return routingKey.([]byte)
+	}
+	routingKey := centralQueueBalancedLaneRoutingKeyForRingUncached(ring, signal, lane)
+	actual, _ := ring.balancedLaneRoutingKeys.LoadOrStore(cacheKey, routingKey)
+	return actual.([]byte)
+}
+
+type centralQueueBalancedLaneCacheKey struct {
+	signal signalKind
+	lane   uint32
+}
+
+func centralQueueBalancedLaneRoutingKeyForRingUncached(ring *hashRing, signal signalKind, lane uint32) []byte {
 	base := centralQueueLaneKey(signal, lane, 0)
-	endpoints := centralQueueHashRingEndpoints(ring)
+	var endpoints []string
+	if ring != nil {
+		endpoints = ring.endpoints
+	}
 	if len(endpoints) <= 1 {
 		return base
 	}
@@ -1060,23 +1081,6 @@ func centralQueueBalancedLaneRoutingKeyForRing(ring *hashRing, signal signalKind
 		}
 	}
 	return base
-}
-
-func centralQueueHashRingEndpoints(ring *hashRing) []string {
-	if ring == nil {
-		return nil
-	}
-	seen := make(map[string]struct{})
-	for _, item := range ring.items {
-		endpoint := endpointWithPort(item.endpoint)
-		seen[endpoint] = struct{}{}
-	}
-	endpoints := make([]string, 0, len(seen))
-	for endpoint := range seen {
-		endpoints = append(endpoints, endpoint)
-	}
-	sort.Strings(endpoints)
-	return endpoints
 }
 
 func centralQueueLaneIndex(signal signalKind, routingKey []byte, laneCount int) uint32 {
