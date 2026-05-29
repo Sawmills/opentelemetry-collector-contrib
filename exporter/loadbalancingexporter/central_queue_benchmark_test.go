@@ -5,6 +5,7 @@ package loadbalancingexporter
 
 import (
 	"fmt"
+	"hash/crc32"
 	"testing"
 	"time"
 
@@ -53,6 +54,31 @@ func TestCentralQueueBalancedLaneRoutingKeyCacheMatchesUncached(t *testing.T) {
 	}
 }
 
+func TestCentralQueueLaneIndexAvoidsAllocations(t *testing.T) {
+	routingKey := []byte("0123456789abcdef")
+
+	for _, signal := range []signalKind{signalKindLogs, signalKindMetrics} {
+		allocs := testing.AllocsPerRun(100, func() {
+			centralQueueLaneIndexBenchmarkSink = centralQueueLaneIndex(signal, routingKey, 256)
+		})
+
+		require.Zero(t, allocs)
+	}
+}
+
+func TestCentralQueueLaneIndexMatchesConcatenatedHash(t *testing.T) {
+	routingKey := []byte("0123456789abcdef")
+
+	for _, signal := range []signalKind{signalKindLogs, signalKindMetrics} {
+		hashInput := make([]byte, len(routingKey)+len(signal)+1)
+		copy(hashInput, string(signal))
+		hashInput[len(signal)] = 0
+		copy(hashInput[len(signal)+1:], routingKey)
+
+		require.Equal(t, crc32.ChecksumIEEE(hashInput)%256, centralQueueLaneIndex(signal, routingKey, 256))
+	}
+}
+
 func BenchmarkCentralQueueBalancedLaneRoutingKeyBigIDTopology(b *testing.B) {
 	endpoints := centralQueueBenchmarkBigIDEndpoints()
 	ring := newHashRing(endpoints)
@@ -62,6 +88,23 @@ func BenchmarkCentralQueueBalancedLaneRoutingKeyBigIDTopology(b *testing.B) {
 	b.ResetTimer()
 	for i := range b.N {
 		_ = centralQueueBalancedLaneRoutingKeyForRing(ring, signalKindLogs, uint32(i%laneCount))
+	}
+}
+
+var centralQueueLaneIndexBenchmarkSink uint32
+
+func BenchmarkCentralQueueLaneIndex(b *testing.B) {
+	routingKeys := [][]byte{
+		[]byte("0123456789abcdef"),
+		[]byte("fedcba9876543210"),
+		[]byte("bigid-production-mt3-a"),
+		[]byte("bigid-production-mt3-b"),
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := range b.N {
+		centralQueueLaneIndexBenchmarkSink = centralQueueLaneIndex(signalKindLogs, routingKeys[i&3], 256)
 	}
 }
 

@@ -1,0 +1,15 @@
+change_type: enhancement
+
+component: exporter/loadbalancing
+
+note: Avoid per-record allocation when hashing central queue routing keys into dynamic lanes.
+
+issues: [7500]
+
+subtext: |
+  The lane indexer now hashes the signal prefix and routing key incrementally
+  instead of allocating a temporary concatenated buffer for every log or metric
+  lane decision. The routing hash remains byte-for-byte equivalent to the
+  previous `signal + NUL + routing_key` input.
+
+change_logs: [user]
