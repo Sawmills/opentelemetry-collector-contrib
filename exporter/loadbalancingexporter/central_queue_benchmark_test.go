@@ -11,8 +11,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCentralQueueBalancedLaneRoutingKeyUsesCachedEndpointSnapshot(t *testing.T) {
-	endpoints := centralQueueBenchmarkEndpoints(240)
+func TestCentralQueueBalancedLaneRoutingKeyColdMissUsesCachedEndpointSnapshot(t *testing.T) {
+	endpoints := centralQueueBenchmarkBigIDEndpoints()
+	ring := newHashRing(endpoints)
+	lane := centralQueueBenchmarkBaseHitLane(t, ring)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		coldRing := &hashRing{
+			items:     ring.items,
+			endpoints: ring.endpoints,
+		}
+		_ = centralQueueBalancedLaneRoutingKeyForRing(coldRing, signalKindLogs, lane)
+	})
+
+	require.LessOrEqual(t, allocs, 16.0)
+}
+
+func TestCentralQueueBalancedLaneRoutingKeyCacheHitAvoidsAllocations(t *testing.T) {
+	endpoints := centralQueueBenchmarkBigIDEndpoints()
 	ring := newHashRing(endpoints)
 	lane := centralQueueBenchmarkBaseHitLane(t, ring)
 
@@ -25,7 +41,7 @@ func TestCentralQueueBalancedLaneRoutingKeyUsesCachedEndpointSnapshot(t *testing
 }
 
 func TestCentralQueueBalancedLaneRoutingKeyCacheMatchesUncached(t *testing.T) {
-	endpoints := centralQueueBenchmarkEndpoints(240)
+	endpoints := centralQueueBenchmarkBigIDEndpoints()
 	ring := newHashRing(endpoints)
 
 	for _, signal := range []signalKind{signalKindLogs, signalKindMetrics} {
@@ -38,7 +54,7 @@ func TestCentralQueueBalancedLaneRoutingKeyCacheMatchesUncached(t *testing.T) {
 }
 
 func BenchmarkCentralQueueBalancedLaneRoutingKeyBigIDTopology(b *testing.B) {
-	endpoints := centralQueueBenchmarkEndpoints(240)
+	endpoints := centralQueueBenchmarkBigIDEndpoints()
 	ring := newHashRing(endpoints)
 	const laneCount = 256
 
@@ -91,9 +107,10 @@ func BenchmarkCentralQueueCollectManyLanesManyItems(b *testing.B) {
 	}
 }
 
-func centralQueueBenchmarkEndpoints(count int) []string {
-	endpoints := make([]string, count)
-	for i := range count {
+func centralQueueBenchmarkBigIDEndpoints() []string {
+	const endpointCount = 240
+	endpoints := make([]string, endpointCount)
+	for i := range endpointCount {
 		endpoints[i] = fmt.Sprintf("10.%d.%d.%d:4317", 141+(i/65_536)%256, (i/256)%256, i%256)
 	}
 	return endpoints

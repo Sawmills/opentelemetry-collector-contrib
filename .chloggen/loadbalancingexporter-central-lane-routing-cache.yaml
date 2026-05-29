@@ -3,5 +3,5 @@ component: exporter/loadbalancing
 note: Reduce central queue balanced lane routing CPU by caching hash-ring endpoint snapshots and lane routing keys.
 issues: [7500]
 subtext: |-
-  This avoids rebuilding endpoint maps and re-searching salted lane keys on every large log request when a load-balanced backend ring is stable.
+  This avoids rebuilding endpoint maps and re-searching salted lane keys for requests when a load-balanced backend ring is stable.
 change_logs: [user]
