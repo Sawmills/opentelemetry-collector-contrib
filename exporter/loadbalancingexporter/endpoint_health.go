@@ -57,8 +57,15 @@ type endpointHealthManager struct {
 	mu                 sync.RWMutex
 	settings           endpointHealthSettings
 	endpoints          map[string]*endpointHealthState
+	pressureSnapshot   endpointHealthPressureSnapshot
 	failOpenActive     bool
 	nextExpiryUnixNano atomic.Int64
+}
+
+type endpointHealthPressureSnapshot struct {
+	present   int
+	eligible  int
+	pressured int
 }
 
 type endpointHealthState struct {
@@ -379,20 +386,9 @@ func (m *endpointHealthManager) underPressure() bool {
 	if m.failOpenActive {
 		return true
 	}
-	present := 0
-	eligible := 0
-	pressured := 0
-	for _, state := range m.endpoints {
-		if !state.present {
-			continue
-		}
-		present++
-		if state.probeUnhealthy || !state.quarantinedUntil.IsZero() {
-			pressured++
-			continue
-		}
-		eligible++
-	}
+	present := m.pressureSnapshot.present
+	eligible := m.pressureSnapshot.eligible
+	pressured := m.pressureSnapshot.pressured
 	if pressured == 0 {
 		return false
 	}
@@ -543,6 +539,11 @@ func (m *endpointHealthManager) eligibleEndpointsLockedWithRefresh(now time.Time
 
 	sort.Strings(present)
 	sort.Strings(eligible)
+	m.pressureSnapshot = endpointHealthPressureSnapshot{
+		present:   len(present),
+		eligible:  len(eligible),
+		pressured: quarantined,
+	}
 	failOpen := m.shouldFailOpenLocked(len(present), len(eligible), quarantined)
 	failOpenStarted := failOpen && !m.failOpenActive
 	m.failOpenActive = failOpen
