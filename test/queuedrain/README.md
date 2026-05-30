@@ -60,6 +60,13 @@ test/queuedrain/run.sh \
 
 Artifacts are written under `artifacts/queue-drain/<timestamp>/`.
 
+Use `--render-only` to validate red and green manifests without requiring
+Docker, kind, or Kubernetes:
+
+```sh
+test/queuedrain/run.sh --render-only --phase both --artifacts /tmp/queue-drain-render
+```
+
 `--num-consumers` remains the green default. Use `--red-num-consumers` when the
 red image supports the setting and the proof needs to reproduce a high
 configured concurrency variation such as targetCluster's previous 120-consumer config.
