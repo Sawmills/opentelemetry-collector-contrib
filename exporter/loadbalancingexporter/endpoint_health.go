@@ -376,7 +376,6 @@ func (m *endpointHealthManager) underPressure() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	now := m.settings.now()
 	if m.failOpenActive {
 		return true
 	}
@@ -388,7 +387,7 @@ func (m *endpointHealthManager) underPressure() bool {
 			continue
 		}
 		present++
-		if state.probeUnhealthy || state.hasActiveTransportQuarantine(now) {
+		if state.probeUnhealthy || !state.quarantinedUntil.IsZero() {
 			pressured++
 			continue
 		}
