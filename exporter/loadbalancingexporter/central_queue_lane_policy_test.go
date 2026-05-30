@@ -136,7 +136,7 @@ func TestCentralQueueLanePolicyUsesBackendCountWhenRateUnknown(t *testing.T) {
 	require.Equal(t, 4, lanes)
 }
 
-func TestCentralQueueLanePolicyUsesConsumerParallelismForLaneCapWhenFillRateSupportsIt(t *testing.T) {
+func TestCentralQueueLanePolicyUsesHealthyBackendsForLaneCapWhenFillRateSupportsIt(t *testing.T) {
 	policy := centralQueueLanePolicy{
 		minLanes:           1,
 		maxLanes:           64,
@@ -153,10 +153,10 @@ func TestCentralQueueLanePolicyUsesConsumerParallelismForLaneCapWhenFillRateSupp
 		compressedIngestBytesPerSec: 64 << 20,
 	})
 
-	require.Equal(t, 8, lanes)
+	require.Equal(t, 64, lanes)
 }
 
-func TestCentralQueueLanePolicyCapsManyBackendsByEffectiveConsumers(t *testing.T) {
+func TestCentralQueueLanePolicyKeepsWorkerFanoutWhenConsumersAreBelowBackends(t *testing.T) {
 	policy := centralQueueLanePolicy{
 		minLanes:           1,
 		maxLanes:           64,
@@ -175,29 +175,7 @@ func TestCentralQueueLanePolicyCapsManyBackendsByEffectiveConsumers(t *testing.T
 		previousEffectiveLaneCountSet: true,
 	})
 
-	require.Equal(t, 14, lanes)
-}
-
-func TestCentralQueueLanePolicyDoesNotKeepPreviousCountAboveConsumerLaneCap(t *testing.T) {
-	policy := centralQueueLanePolicy{
-		minLanes:           1,
-		maxLanes:           64,
-		backendMultiplier:  2,
-		targetFillDuration: 500 * time.Millisecond,
-		targetBytes:        256 << 10,
-		hysteresisFactor:   2,
-	}
-
-	lanes := policy.compute(centralQueueLaneInputs{
-		healthyBackends:               110,
-		effectiveConsumers:            20,
-		effectiveConsumersKnown:       true,
-		compressedIngestBytesPerSec:   64 << 20,
-		previousEffectiveLaneCount:    64,
-		previousEffectiveLaneCountSet: true,
-	})
-
-	require.Equal(t, 40, lanes)
+	require.Equal(t, 64, lanes)
 }
 
 func TestCentralQueueLanePolicyKeepsBackendLaneFloorWhenConsumersBootstrapBelowBackends(t *testing.T) {
