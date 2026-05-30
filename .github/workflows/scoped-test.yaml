@@ -57,6 +57,12 @@ jobs:
             exit 0
           fi
 
+          queuedrain_harness_changes=$(printf '%s\n' "$changed_files" | grep -vE '^(test/queuedrain/(README\.md|run\.sh|sweep\.sh|analyze\.py|analyze_test\.py|test_run_cli\.py|templates/.+\.yaml\.tmpl|kind\.yaml)|\.github/workflows/scoped-test\.yaml)$' || true)
+          if [[ -z "$queuedrain_harness_changes" ]]; then
+            echo "mode=queuedrain_harness" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           non_go_changes=$(printf '%s\n' "$changed_files" | grep -vE '.*\.go$|(^|/)go\.(mod|sum)$|(^|/)metadata\.yaml$|^\.chloggen/.+\.yaml$|^\.github/workflows/scoped-test\.yaml$' || true)
           if [[ -n "$non_go_changes" ]]; then
             echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
@@ -154,6 +160,20 @@ jobs:
 
       - run: ./.github/workflows/scripts/check-disk-space.sh
 
+  queuedrain-harness:
+    needs: changedfiles
+    if: needs.changedfiles.outputs.mode == 'queuedrain_harness'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Validate queuedrain shell harness
+        run: |
+          bash -n test/queuedrain/run.sh
+          bash -n test/queuedrain/sweep.sh
+      - name: Run queuedrain Python tests
+        run: |
+          python3 -m unittest discover -s test/queuedrain -p '*test.py'
+
   scoped-tests-cross-platform:
     needs: changedfiles
     if: needs.changedfiles.outputs.mode == 'scoped'
@@ -199,7 +219,7 @@ jobs:
     # wait for all runners completion
     if: ${{ always() }}
     runs-on: ubuntu-24.04
-    needs: [changedfiles, scoped-tests-ubuntu]
+    needs: [changedfiles, scoped-tests-ubuntu, queuedrain-harness]
     steps:
       - name: Print result
         run: |
@@ -211,6 +231,14 @@ jobs:
           case "$mode" in
             docs_only)
               echo "Docs-only PR; scoped-tests passes."
+              ;;
+            queuedrain_harness)
+              if [[ success == "${{ needs.queuedrain-harness.result }}" ]]; then
+                echo "Queuedrain harness gate passed."
+              else
+                echo "Queuedrain harness gate failed."
+                exit 1
+              fi
               ;;
             scoped)
               if [[ success == "${{ needs.scoped-tests-ubuntu.result }}" ]]; then
