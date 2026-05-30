@@ -116,7 +116,7 @@ func (p centralQueueLanePolicy) compute(inputs centralQueueLaneInputs) int {
 	}
 
 	if inputs.previousEffectiveLaneCountSet {
-		previous := clampInt(inputs.previousEffectiveLaneCount, minLanes, maxLanes)
+		previous := clampInt(inputs.previousEffectiveLaneCount, minLanes, laneCap)
 		if previous > 0 && p.hysteresisFactor > 1 {
 			factor := p.hysteresisFactor
 			if candidate > previous/factor && candidate < previous*factor {
