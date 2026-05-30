@@ -428,7 +428,7 @@ func TestEndpointHealthUnderPressureReportsActiveSignals(t *testing.T) {
 			now:                   func() time.Time { return now },
 		})
 		endpoints := make([]string, 0, 110)
-		for i := 0; i < 110; i++ {
+		for i := range 110 {
 			endpoints = append(endpoints, fmt.Sprintf("endpoint-%d", i))
 		}
 		manager.reconcile(endpoints)
@@ -447,11 +447,11 @@ func TestEndpointHealthUnderPressureReportsActiveSignals(t *testing.T) {
 			now:                   func() time.Time { return now },
 		})
 		endpoints := make([]string, 0, 110)
-		for i := 0; i < 110; i++ {
+		for i := range 110 {
 			endpoints = append(endpoints, fmt.Sprintf("endpoint-%d", i))
 		}
 		manager.reconcile(endpoints)
-		for i := 0; i < 11; i++ {
+		for i := range 11 {
 			manager.markFailure(fmt.Sprintf("endpoint-%d", i), status.Error(codes.Unavailable, "backend unavailable"))
 		}
 
