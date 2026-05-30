@@ -6,6 +6,7 @@ package loadbalancingexporter
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"syscall"
@@ -413,6 +414,46 @@ func TestEndpointHealthUnderPressureReportsActiveSignals(t *testing.T) {
 		})
 		manager.reconcile([]string{"endpoint-1", "endpoint-2"})
 		manager.markFailure("endpoint-1", status.Error(codes.Unavailable, "backend unavailable"))
+
+		require.True(t, manager.underPressure())
+	})
+
+	t.Run("isolated transport quarantine in large backend set", func(t *testing.T) {
+		now := time.Unix(100, 0)
+		manager := newEndpointHealthManager(endpointHealthSettings{
+			enabled:               true,
+			quarantineDuration:    30 * time.Second,
+			maxQuarantinedPercent: defaultEndpointHealthMaxQuarantinedPercent,
+			minEligibleBackends:   defaultEndpointHealthMinEligibleBackends,
+			now:                   func() time.Time { return now },
+		})
+		endpoints := make([]string, 0, 110)
+		for i := 0; i < 110; i++ {
+			endpoints = append(endpoints, fmt.Sprintf("endpoint-%d", i))
+		}
+		manager.reconcile(endpoints)
+		manager.markFailure("endpoint-0", status.Error(codes.Unavailable, "backend unavailable"))
+
+		require.False(t, manager.underPressure())
+	})
+
+	t.Run("systemic transport quarantine in large backend set", func(t *testing.T) {
+		now := time.Unix(100, 0)
+		manager := newEndpointHealthManager(endpointHealthSettings{
+			enabled:               true,
+			quarantineDuration:    30 * time.Second,
+			maxQuarantinedPercent: defaultEndpointHealthMaxQuarantinedPercent,
+			minEligibleBackends:   defaultEndpointHealthMinEligibleBackends,
+			now:                   func() time.Time { return now },
+		})
+		endpoints := make([]string, 0, 110)
+		for i := 0; i < 110; i++ {
+			endpoints = append(endpoints, fmt.Sprintf("endpoint-%d", i))
+		}
+		manager.reconcile(endpoints)
+		for i := 0; i < 11; i++ {
+			manager.markFailure(fmt.Sprintf("endpoint-%d", i), status.Error(codes.Unavailable, "backend unavailable"))
+		}
 
 		require.True(t, manager.underPressure())
 	})

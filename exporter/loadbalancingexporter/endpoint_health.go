@@ -45,6 +45,8 @@ type endpointHealthSettings struct {
 	now                   func() time.Time
 }
 
+const endpointHealthBackendPressurePercent = 10
+
 type endpointHealthActiveProbeSettings struct {
 	enabled bool
 	fall    int
@@ -378,15 +380,27 @@ func (m *endpointHealthManager) underPressure() bool {
 	if m.failOpenActive {
 		return true
 	}
+	present := 0
+	eligible := 0
+	pressured := 0
 	for _, state := range m.endpoints {
 		if !state.present {
 			continue
 		}
+		present++
 		if state.probeUnhealthy || state.hasActiveTransportQuarantine(now) {
-			return true
+			pressured++
+			continue
 		}
+		eligible++
 	}
-	return false
+	if pressured == 0 {
+		return false
+	}
+	if m.shouldFailOpenLocked(present, eligible, pressured) {
+		return true
+	}
+	return pressured*100 >= present*endpointHealthBackendPressurePercent
 }
 
 func (m *endpointHealthManager) eligibleEndpoints() []string {

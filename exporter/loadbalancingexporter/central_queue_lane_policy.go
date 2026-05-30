@@ -96,13 +96,23 @@ func (p centralQueueLanePolicy) compute(inputs centralQueueLaneInputs) int {
 		backends = minLanes
 	}
 
-	backendFloor := clampInt(backends, minLanes, maxLanes)
+	backendLaneMultiplier := max(p.backendMultiplier, 1)
+	laneCap := maxLanes
+	if inputs.effectiveConsumersKnown && inputs.effectiveConsumers > 0 && inputs.compressedIngestBytesPerSec > 0 {
+		// Once both demand and drain parallelism are known, do not keep one
+		// lane per backend when only a much smaller set of consumers can drain.
+		// Too many ready lanes with few consumers makes old low-traffic lanes
+		// wait behind backend pressure without increasing real throughput.
+		laneCap = clampInt(inputs.effectiveConsumers*backendLaneMultiplier, minLanes, maxLanes)
+	}
+
+	backendFloor := clampInt(backends, minLanes, laneCap)
 	candidate := backendFloor
 	if inputs.compressedIngestBytesPerSec > 0 && p.targetFillDuration > 0 && p.targetBytes > 0 {
-		backendLanes := backends * max(p.backendMultiplier, 1)
+		backendLanes := min(backends*backendLaneMultiplier, laneCap)
 		fillLanes := int(math.Ceil(float64(inputs.compressedIngestBytesPerSec) * p.targetFillDuration.Seconds() / float64(p.targetBytes)))
-		candidate = max(backendFloor, min(backendLanes, fillLanes, maxLanes))
-		candidate = clampInt(candidate, minLanes, maxLanes)
+		candidate = max(backendFloor, min(backendLanes, fillLanes, laneCap))
+		candidate = clampInt(candidate, minLanes, laneCap)
 	}
 
 	if inputs.previousEffectiveLaneCountSet {
