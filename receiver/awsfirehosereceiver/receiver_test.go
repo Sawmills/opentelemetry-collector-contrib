@@ -124,8 +124,13 @@ func TestFirehoseRequest(t *testing.T) {
 	var noRecords []firehoseRecord
 	testCases := map[string]struct {
 		headers          map[string]string
+		method           string
+		path             string
+		contentType      *string
 		commonAttributes map[string]string
+		commonHeader     string
 		body             any
+		config           *Config
 		consumer         firehoseConsumer
 		wantStatusCode   int
 		wantErr          error
@@ -154,6 +159,23 @@ func TestFirehoseRequest(t *testing.T) {
 			wantStatusCode: http.StatusUnauthorized,
 			wantErr:        errInvalidAccessKey,
 		},
+		"WithInvalidMethod": {
+			method:         http.MethodGet,
+			body:           testFirehoseRequest(testFirehoseRequestID, noRecords),
+			wantStatusCode: http.StatusMethodNotAllowed,
+			wantErr:        errInvalidMethod,
+		},
+		"WithInvalidContentType": {
+			contentType:    ptr("text/plain"),
+			body:           testFirehoseRequest(testFirehoseRequestID, noRecords),
+			wantStatusCode: http.StatusUnsupportedMediaType,
+			wantErr:        errInvalidContentType,
+		},
+		"WithMissingContentType": {
+			contentType:    ptr(""),
+			body:           testFirehoseRequest(testFirehoseRequestID, noRecords),
+			wantStatusCode: http.StatusOK,
+		},
 		"WithoutRequestId/Body": {
 			headers: map[string]string{
 				headerFirehoseRequestID: testFirehoseRequestID,
@@ -169,6 +191,11 @@ func TestFirehoseRequest(t *testing.T) {
 			body:           testFirehoseRequest("otherId", noRecords),
 			wantStatusCode: http.StatusBadRequest,
 			wantErr:        errInBodyDiffRequestID,
+		},
+		"WithAnyPath": {
+			path:           "/firehose/custom/path",
+			body:           testFirehoseRequest(testFirehoseRequestID, noRecords),
+			wantStatusCode: http.StatusOK,
 		},
 		"WithNoRecords": {
 			body:           testFirehoseRequest(testFirehoseRequestID, noRecords),
@@ -208,6 +235,23 @@ func TestFirehoseRequest(t *testing.T) {
 			},
 			wantStatusCode: http.StatusOK,
 		},
+		"WithInvalidCommonAttributesIgnored": {
+			commonHeader:   "{",
+			body:           testFirehoseRequest(testFirehoseRequestID, noRecords),
+			wantStatusCode: http.StatusOK,
+		},
+		"WithInvalidCommonAttributesError": {
+			config: &Config{
+				AccessKey: testFirehoseAccessKey,
+				CommonAttributes: CommonAttributesConfig{
+					OnInvalid: commonAttributesOnInvalidError,
+				},
+			},
+			commonHeader:   "{",
+			body:           testFirehoseRequest(testFirehoseRequestID, noRecords),
+			wantStatusCode: http.StatusBadRequest,
+			wantErr:        errors.New("unexpected end of JSON input"),
+		},
 	}
 	for name, testCase := range testCases {
 		t.Run(name, func(t *testing.T) {
@@ -215,6 +259,19 @@ func TestFirehoseRequest(t *testing.T) {
 			require.NoError(t, err)
 
 			request := newTestRequest(body)
+			if testCase.method != "" {
+				request.Method = testCase.method
+			}
+			if testCase.path != "" {
+				request.URL.Path = testCase.path
+			}
+			if testCase.contentType != nil {
+				if *testCase.contentType == "" {
+					request.Header.Del(headerContentType)
+				} else {
+					request.Header.Set(headerContentType, *testCase.contentType)
+				}
+			}
 			if testCase.headers != nil {
 				for k, v := range testCase.headers {
 					request.Header.Set(k, v)
@@ -227,22 +284,31 @@ func TestFirehoseRequest(t *testing.T) {
 				require.NoError(t, err)
 				request.Header.Set(headerFirehoseCommonAttributes, string(attrs))
 			}
+			if testCase.commonHeader != "" {
+				request.Header.Set(headerFirehoseCommonAttributes, testCase.commonHeader)
+			}
 
 			consumer := testCase.consumer
 			if consumer == nil {
 				consumer = defaultConsumer
 			}
-			r := testFirehoseReceiver(cfg, consumer)
+			testConfig := cfg
+			if testCase.config != nil {
+				testConfig = testCase.config
+			}
+			r := testFirehoseReceiver(testConfig, consumer)
 
 			got := httptest.NewRecorder()
 			r.ServeHTTP(got, request)
 
 			require.Equal(t, testCase.wantStatusCode, got.Code)
+			require.Equal(t, "application/json", got.Header().Get(headerContentType))
 			var gotResponse firehoseResponse
 			require.NoError(t, json.Unmarshal(got.Body.Bytes(), &gotResponse))
 			require.Equal(t, request.Header.Get(headerFirehoseRequestID), gotResponse.RequestID)
+			require.Positive(t, gotResponse.Timestamp)
 			if testCase.wantErr != nil {
-				require.Equal(t, testCase.wantErr.Error(), gotResponse.ErrorMessage)
+				require.Contains(t, gotResponse.ErrorMessage, testCase.wantErr.Error())
 			} else {
 				require.Empty(t, gotResponse.ErrorMessage)
 			}
@@ -267,6 +333,62 @@ func TestFirehoseRequestInvalidJSON(t *testing.T) {
 	require.Regexp(t, gotResponse.ErrorMessage, `awsfirehosereceiver\.firehoseRequest\.ReadStringAsSlice: expects .*`)
 }
 
+func TestFirehoseRequestWithEncodingExtensionAndNestedCommonAttributes(t *testing.T) {
+	logs := plog.NewLogs()
+	resourceLogs := logs.ResourceLogs().AppendEmpty()
+	scopeLogs := resourceLogs.ScopeLogs().AppendEmpty()
+	scopeLogs.LogRecords().AppendEmpty().Body().SetStr("decoded cloudfront row")
+
+	extension := &capturePlogUnmarshalerExtension{logs: logs}
+	rc := logsRecordConsumer{}
+	cfg := &Config{
+		AccessKey: testFirehoseAccessKey,
+		Encoding:  "cloudfront_realtime_logs/test",
+		CommonAttributes: CommonAttributesConfig{
+			MapKey:    "firehose",
+			OnInvalid: commonAttributesOnInvalidError,
+		},
+	}
+	gotReceiver, err := newLogsReceiver(
+		cfg,
+		receivertest.NewNopSettings(metadata.Type),
+		&rc,
+	)
+	require.NoError(t, err)
+	receiver := gotReceiver.(*firehoseReceiver)
+	require.NoError(t, receiver.consumer.Start(t.Context(), hostWithExtensions{
+		extensions: map[component.ID]component.Component{
+			component.MustNewIDWithName("cloudfront_realtime_logs", "test"): extension,
+		},
+	}))
+
+	body, err := json.Marshal(testFirehoseRequest(testFirehoseRequestID, []firehoseRecord{
+		testFirehoseRecord("decoded-record-bytes"),
+	}))
+	require.NoError(t, err)
+	request := newTestRequest(body)
+	attrs, err := json.Marshal(firehoseCommonAttributes{
+		CommonAttributes: map[string]string{
+			"source":         "cloudfront",
+			"distributionId": "EDFDVBD6EXAMPLE",
+		},
+	})
+	require.NoError(t, err)
+	request.Header.Set(headerFirehoseCommonAttributes, string(attrs))
+
+	got := httptest.NewRecorder()
+	receiver.ServeHTTP(got, request)
+	require.Equal(t, http.StatusOK, got.Code)
+	require.Equal(t, [][]byte{[]byte("decoded-record-bytes")}, extension.records)
+	require.Len(t, rc.results, 1)
+
+	firehose, found := rc.results[0].ResourceLogs().At(0).Resource().Attributes().Get("firehose")
+	require.True(t, found)
+	require.Equal(t, "cloudfront", getStringValue(t, firehose.Map(), "source"))
+	require.Equal(t, "EDFDVBD6EXAMPLE", getStringValue(t, firehose.Map(), "distributionId"))
+	require.Equal(t, "decoded cloudfront row", rc.results[0].ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Body().Str())
+}
+
 // testFirehoseReceiver is a convenience function for creating a test firehoseReceiver
 func testFirehoseReceiver(config *Config, consumer firehoseConsumer) *firehoseReceiver {
 	return &firehoseReceiver{
@@ -283,6 +405,10 @@ func newTestRequest(requestBody []byte) *http.Request {
 	request.Header.Set(headerFirehoseRequestID, testFirehoseRequestID)
 	request.Header.Set(headerFirehoseAccessKey, testFirehoseAccessKey)
 	return request
+}
+
+func ptr[T any](v T) *T {
+	return &v
 }
 
 func testFirehoseRequest(requestID string, records []firehoseRecord) firehoseRequest {
@@ -331,6 +457,24 @@ func (plogUnmarshalerExtension) Shutdown(context.Context) error {
 }
 
 func (e plogUnmarshalerExtension) UnmarshalLogs([]byte) (plog.Logs, error) {
+	return e.logs, nil
+}
+
+type capturePlogUnmarshalerExtension struct {
+	logs    plog.Logs
+	records [][]byte
+}
+
+func (*capturePlogUnmarshalerExtension) Start(context.Context, component.Host) error {
+	return nil
+}
+
+func (*capturePlogUnmarshalerExtension) Shutdown(context.Context) error {
+	return nil
+}
+
+func (e *capturePlogUnmarshalerExtension) UnmarshalLogs(data []byte) (plog.Logs, error) {
+	e.records = append(e.records, append([]byte(nil), data...))
 	return e.logs, nil
 }
 

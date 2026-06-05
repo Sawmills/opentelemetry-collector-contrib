@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +35,8 @@ const (
 
 var (
 	errInvalidAccessKey         = errors.New("invalid firehose access key")
+	errInvalidContentType       = errors.New("invalid content type")
+	errInvalidMethod            = errors.New("invalid HTTP method")
 	errInHeaderMissingRequestID = errors.New("missing request id in header")
 	errInBodyMissingRequestID   = errors.New("missing request id in body")
 	errInBodyDiffRequestID      = errors.New("different request id in body")
@@ -198,6 +202,10 @@ func (fmr *firehoseReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"Unable to get common attributes from request header. Will not attach attributes.",
 			zap.Error(err),
 		)
+		if fmr.config.CommonAttributes.onInvalid() == commonAttributesOnInvalidError {
+			fmr.sendResponse(w, requestID, http.StatusBadRequest, err)
+			return
+		}
 	}
 
 	var recordIndex int
@@ -232,6 +240,15 @@ func (fmr *firehoseReceiver) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // validate checks the Firehose access key in the header against
 // the one passed into the Config
 func (fmr *firehoseReceiver) validate(r *http.Request) (int, error) {
+	if r.Method != http.MethodPost {
+		return http.StatusMethodNotAllowed, errInvalidMethod
+	}
+	if contentType := r.Header.Get(headerContentType); contentType != "" {
+		mediaType, _, err := mime.ParseMediaType(contentType)
+		if err != nil || !strings.EqualFold(mediaType, "application/json") {
+			return http.StatusUnsupportedMediaType, errInvalidContentType
+		}
+	}
 	if string(fmr.config.AccessKey) == "" {
 		// No access key is configured - accept all requests.
 		return http.StatusAccepted, nil

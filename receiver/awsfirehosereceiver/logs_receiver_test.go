@@ -174,6 +174,86 @@ func TestLogsConsumer(t *testing.T) {
 		require.Equal(t, 1, gotRms.Len())
 		gotRm := gotRms.At(0)
 		require.Equal(t, 1, gotRm.Resource().Attributes().Len())
+		got, found := gotRm.Resource().Attributes().Get("CommonAttributes")
+		require.True(t, found)
+		require.Equal(t, "Test", got.Str())
+	})
+	t.Run("WithNestedCommonAttributes", func(t *testing.T) {
+		base := plog.NewLogs()
+		base.ResourceLogs().AppendEmpty()
+		rc := logsRecordConsumer{}
+		lc := &logsConsumer{
+			config: &Config{
+				CommonAttributes: CommonAttributesConfig{MapKey: "firehose"},
+			},
+			settings:    receivertest.NewNopSettings(metadata.Type),
+			unmarshaler: unmarshalertest.NewWithLogs(base),
+			consumer:    &rc,
+		}
+		gotStatus, gotErr := lc.Consume(t.Context(), newNextRecordFunc([][]byte{{}}), map[string]string{
+			"source": "cloudfront",
+			"group":  "cs",
+		})
+		require.Equal(t, http.StatusOK, gotStatus)
+		require.NoError(t, gotErr)
+		require.Len(t, rc.results, 1)
+
+		attrs := rc.results[0].ResourceLogs().At(0).Resource().Attributes()
+		firehose, found := attrs.Get("firehose")
+		require.True(t, found)
+		require.Equal(t, pcommon.ValueTypeMap, firehose.Type())
+		require.Equal(t, "cloudfront", getStringValue(t, firehose.Map(), "source"))
+		require.Equal(t, "cs", getStringValue(t, firehose.Map(), "group"))
+	})
+	t.Run("WithNestedCommonAttributesPreservesExistingValues", func(t *testing.T) {
+		base := plog.NewLogs()
+		attrs := base.ResourceLogs().AppendEmpty().Resource().Attributes()
+		firehose := attrs.PutEmptyMap("firehose")
+		firehose.PutStr("source", "existing")
+		rc := logsRecordConsumer{}
+		lc := &logsConsumer{
+			config: &Config{
+				CommonAttributes: CommonAttributesConfig{MapKey: "firehose"},
+			},
+			settings:    receivertest.NewNopSettings(metadata.Type),
+			unmarshaler: unmarshalertest.NewWithLogs(base),
+			consumer:    &rc,
+		}
+		gotStatus, gotErr := lc.Consume(t.Context(), newNextRecordFunc([][]byte{{}}), map[string]string{
+			"source": "cloudfront",
+			"group":  "cs",
+		})
+		require.Equal(t, http.StatusOK, gotStatus)
+		require.NoError(t, gotErr)
+
+		gotFirehose, found := rc.results[0].ResourceLogs().At(0).Resource().Attributes().Get("firehose")
+		require.True(t, found)
+		require.Equal(t, "existing", getStringValue(t, gotFirehose.Map(), "source"))
+		require.Equal(t, "cs", getStringValue(t, gotFirehose.Map(), "group"))
+	})
+	t.Run("WithNestedCommonAttributesPreservesNonMapTarget", func(t *testing.T) {
+		base := plog.NewLogs()
+		attrs := base.ResourceLogs().AppendEmpty().Resource().Attributes()
+		attrs.PutStr("firehose", "existing")
+		rc := logsRecordConsumer{}
+		lc := &logsConsumer{
+			config: &Config{
+				CommonAttributes: CommonAttributesConfig{MapKey: "firehose"},
+			},
+			settings:    receivertest.NewNopSettings(metadata.Type),
+			unmarshaler: unmarshalertest.NewWithLogs(base),
+			consumer:    &rc,
+		}
+		gotStatus, gotErr := lc.Consume(t.Context(), newNextRecordFunc([][]byte{{}}), map[string]string{
+			"source": "cloudfront",
+		})
+		require.Equal(t, http.StatusOK, gotStatus)
+		require.NoError(t, gotErr)
+
+		firehose, found := rc.results[0].ResourceLogs().At(0).Resource().Attributes().Get("firehose")
+		require.True(t, found)
+		require.Equal(t, pcommon.ValueTypeStr, firehose.Type())
+		require.Equal(t, "existing", firehose.Str())
 	})
 	t.Run("WithMultipleRecords", func(t *testing.T) {
 		logs0, logRecords0 := newLogs("service0", "scope0")
@@ -201,6 +281,13 @@ func TestLogsConsumer(t *testing.T) {
 		assert.NoError(t, plogtest.CompareLogs(logs0, rc.results[0]))
 		assert.NoError(t, plogtest.CompareLogs(logs1, rc.results[1]))
 	})
+}
+
+func getStringValue(t *testing.T, attrs pcommon.Map, key string) string {
+	value, found := attrs.Get(key)
+	require.True(t, found)
+	require.Equal(t, pcommon.ValueTypeStr, value.Type())
+	return value.Str()
 }
 
 func newLogs(serviceName, scopeName string) (plog.Logs, plog.LogRecordSlice) {

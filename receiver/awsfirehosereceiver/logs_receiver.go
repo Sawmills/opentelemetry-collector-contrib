@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/receiver"
+	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awsfirehosereceiver/internal/unmarshaler/cwlog"
 )
@@ -24,8 +25,9 @@ const defaultLogsEncoding = cwlog.TypeStr
 // logsConsumer implements the firehoseConsumer
 // to use a logs consumer and unmarshaler.
 type logsConsumer struct {
-	config   *Config
-	settings receiver.Settings
+	config                 *Config
+	settings               receiver.Settings
+	commonAttributesLogger *zap.Logger
 
 	// consumer passes the translated logs on to the
 	// next consumer.
@@ -45,9 +47,10 @@ func newLogsReceiver(
 	nextConsumer consumer.Logs,
 ) (receiver.Logs, error) {
 	c := &logsConsumer{
-		config:   config,
-		settings: set,
-		consumer: nextConsumer,
+		config:                 config,
+		settings:               set,
+		commonAttributesLogger: newCommonAttributesLogger(set.Logger),
+		consumer:               nextConsumer,
 	}
 	return &firehoseReceiver{
 		settings: set,
@@ -86,10 +89,14 @@ func (c *logsConsumer) Start(_ context.Context, host component.Host) error {
 // with each resulting plog.Logs being sent to the next consumer as
 // they are unmarshalled.
 func (c *logsConsumer) Consume(ctx context.Context, nextRecord nextRecordFunc, commonAttributes map[string]string) (int, error) {
+	warnOnNonMapTarget := true
 	for {
 		record, err := nextRecord()
 		if errors.Is(err, io.EOF) {
 			break
+		}
+		if err != nil {
+			return nextRecordErrorStatus(err), err
 		}
 		logs, err := c.unmarshaler.UnmarshalLogs(record)
 		if err != nil {
@@ -99,10 +106,8 @@ func (c *logsConsumer) Consume(ctx context.Context, nextRecord nextRecordFunc, c
 		if commonAttributes != nil {
 			for i := 0; i < logs.ResourceLogs().Len(); i++ {
 				rm := logs.ResourceLogs().At(i)
-				for k, v := range commonAttributes {
-					if _, found := rm.Resource().Attributes().Get(k); !found {
-						rm.Resource().Attributes().PutStr(k, v)
-					}
+				if attachCommonAttributes(rm.Resource().Attributes(), commonAttributes, commonAttributesConfig(c.config), c.commonAttributesLogger, warnOnNonMapTarget) {
+					warnOnNonMapTarget = false
 				}
 			}
 		}

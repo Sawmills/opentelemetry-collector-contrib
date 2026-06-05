@@ -39,6 +39,9 @@ func createDefaultConfig() component.Config {
 		ServerConfig: confighttp.ServerConfig{
 			NetAddr: netAddr,
 		},
+		CommonAttributes: CommonAttributesConfig{
+			OnInvalid: commonAttributesOnInvalidIgnore,
+		},
 	}
 }
 

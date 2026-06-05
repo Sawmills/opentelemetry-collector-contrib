@@ -5,6 +5,7 @@ package awsfirehosereceiver // import "github.com/open-telemetry/opentelemetry-c
 
 import (
 	"errors"
+	"fmt"
 
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/config/configopaque"
@@ -12,6 +13,11 @@ import (
 )
 
 var errRecordTypeEncodingSet = errors.New("record_type must not be set when encoding is set")
+
+const (
+	commonAttributesOnInvalidIgnore = "ignore"
+	commonAttributesOnInvalidError  = "error"
+)
 
 type Config struct {
 	// ServerConfig is used to set up the Firehose delivery
@@ -35,6 +41,18 @@ type Config struct {
 	// This can be set when creating or updating the Firehose delivery
 	// stream.
 	AccessKey configopaque.String `mapstructure:"access_key"`
+	// CommonAttributes controls how Firehose common attributes are parsed
+	// and attached to resource attributes.
+	CommonAttributes CommonAttributesConfig `mapstructure:"common_attributes"`
+}
+
+type CommonAttributesConfig struct {
+	// MapKey stores Firehose common attributes as a nested resource attribute
+	// map. If empty, common attributes are attached as flat resource attributes.
+	MapKey string `mapstructure:"map_key"`
+	// OnInvalid controls malformed X-Amz-Firehose-Common-Attributes handling.
+	// Supported values are "ignore" and "error".
+	OnInvalid string `mapstructure:"on_invalid"`
 }
 
 // Validate checks that the endpoint and record type exist and
@@ -46,7 +64,26 @@ func (c *Config) Validate() error {
 	if c.RecordType != "" && c.Encoding != "" {
 		return errRecordTypeEncodingSet
 	}
+	if err := c.CommonAttributes.Validate(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (c CommonAttributesConfig) Validate() error {
+	switch c.OnInvalid {
+	case "", commonAttributesOnInvalidIgnore, commonAttributesOnInvalidError:
+		return nil
+	default:
+		return fmt.Errorf("common_attributes.on_invalid must be one of %q or %q", commonAttributesOnInvalidIgnore, commonAttributesOnInvalidError)
+	}
+}
+
+func (c CommonAttributesConfig) onInvalid() string {
+	if c.OnInvalid == "" {
+		return commonAttributesOnInvalidIgnore
+	}
+	return c.OnInvalid
 }
 
 func handleDeprecatedConfig(cfg *Config, logger *zap.Logger) {

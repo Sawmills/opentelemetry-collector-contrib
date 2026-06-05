@@ -41,6 +41,9 @@ func TestLoadConfig(t *testing.T) {
 			require.Equal(t, &Config{
 				RecordType: configType,
 				AccessKey:  "some_access_key",
+				CommonAttributes: CommonAttributesConfig{
+					OnInvalid: commonAttributesOnInvalidIgnore,
+				},
 				ServerConfig: confighttp.ServerConfig{
 					NetAddr: confignet.AddrConfig{
 						Transport: "tcp",
@@ -71,4 +74,43 @@ func TestLoadConfigInvalid(t *testing.T) {
 
 	err = xconfmap.Validate(cfg)
 	assert.ErrorIs(t, err, errRecordTypeEncodingSet)
+}
+
+func TestValidate(t *testing.T) {
+	testCases := map[string]struct {
+		mutate  func(*Config)
+		wantErr string
+	}{
+		"Default": {},
+		"CommonAttributesOnInvalidIgnore": {
+			mutate: func(cfg *Config) {
+				cfg.CommonAttributes.OnInvalid = commonAttributesOnInvalidIgnore
+			},
+		},
+		"CommonAttributesOnInvalidError": {
+			mutate: func(cfg *Config) {
+				cfg.CommonAttributes.OnInvalid = commonAttributesOnInvalidError
+			},
+		},
+		"CommonAttributesOnInvalidInvalid": {
+			mutate: func(cfg *Config) {
+				cfg.CommonAttributes.OnInvalid = "invalid"
+			},
+			wantErr: `common_attributes.on_invalid must be one of "ignore" or "error"`,
+		},
+	}
+	for name, testCase := range testCases {
+		t.Run(name, func(t *testing.T) {
+			cfg := createDefaultConfig().(*Config)
+			if testCase.mutate != nil {
+				testCase.mutate(cfg)
+			}
+			err := cfg.Validate()
+			if testCase.wantErr != "" {
+				require.EqualError(t, err, testCase.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }

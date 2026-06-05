@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/collector/extension"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/receiver"
+	"go.uber.org/zap"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/encoding/awscloudwatchmetricstreamsencodingextension"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awsfirehosereceiver/internal/unmarshaler/cwmetricstream"
@@ -26,8 +27,9 @@ const defaultMetricsEncoding = cwmetricstream.TypeStr
 // The metricsConsumer implements the firehoseConsumer
 // to use a metrics consumer and unmarshaler.
 type metricsConsumer struct {
-	config   *Config
-	settings receiver.Settings
+	config                 *Config
+	settings               receiver.Settings
+	commonAttributesLogger *zap.Logger
 	// consumer passes the translated metrics on to the
 	// next consumer.
 	consumer consumer.Metrics
@@ -46,9 +48,10 @@ func newMetricsReceiver(
 	nextConsumer consumer.Metrics,
 ) (receiver.Metrics, error) {
 	c := &metricsConsumer{
-		config:   config,
-		settings: set,
-		consumer: nextConsumer,
+		config:                 config,
+		settings:               set,
+		commonAttributesLogger: newCommonAttributesLogger(set.Logger),
+		consumer:               nextConsumer,
 	}
 	return &firehoseReceiver{
 		settings: set,
@@ -121,10 +124,14 @@ func (c *metricsConsumer) newUnmarshalerFromEncoding(
 // with each resulting pmetric.Metrics being sent to the next consumer
 // as they are unmarshalled.
 func (c *metricsConsumer) Consume(ctx context.Context, nextRecord nextRecordFunc, commonAttributes map[string]string) (int, error) {
+	warnOnNonMapTarget := true
 	for {
 		record, err := nextRecord()
 		if errors.Is(err, io.EOF) {
 			break
+		}
+		if err != nil {
+			return nextRecordErrorStatus(err), err
 		}
 		metrics, err := c.unmarshaler.UnmarshalMetrics(record)
 		if err != nil {
@@ -134,10 +141,8 @@ func (c *metricsConsumer) Consume(ctx context.Context, nextRecord nextRecordFunc
 		if commonAttributes != nil {
 			for i := 0; i < metrics.ResourceMetrics().Len(); i++ {
 				rm := metrics.ResourceMetrics().At(i)
-				for k, v := range commonAttributes {
-					if _, found := rm.Resource().Attributes().Get(k); !found {
-						rm.Resource().Attributes().PutStr(k, v)
-					}
+				if attachCommonAttributes(rm.Resource().Attributes(), commonAttributes, commonAttributesConfig(c.config), c.commonAttributesLogger, warnOnNonMapTarget) {
+					warnOnNonMapTarget = false
 				}
 			}
 		}
