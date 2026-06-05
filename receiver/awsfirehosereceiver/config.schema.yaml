@@ -1,8 +1,21 @@
+$defs:
+  common_attributes_config:
+    type: object
+    properties:
+      map_key:
+        description: MapKey stores Firehose common attributes as a nested resource attribute map. If empty, common attributes are attached as flat resource attributes.
+        type: string
+      on_invalid:
+        description: OnInvalid controls malformed X-Amz-Firehose-Common-Attributes handling. Supported values are "ignore" and "error".
+        type: string
 type: object
 properties:
   access_key:
     description: AccessKey is checked against the one received with each request. This can be set when creating or updating the Firehose delivery stream.
     $ref: go.opentelemetry.io/collector/config/configopaque.string
+  common_attributes:
+    description: CommonAttributes controls how Firehose common attributes are parsed and attached to resource attributes.
+    $ref: common_attributes_config
   encoding:
     description: 'Encoding identifies the encoding of records received from Firehose. Defaults to telemetry-specific encodings: "cwlog" for logs, and "cwmetrics" for metrics. This default behavior is deprecated as of v0.149.0, and in the future it will be required to specify the encoding explicitly.'
     type: string

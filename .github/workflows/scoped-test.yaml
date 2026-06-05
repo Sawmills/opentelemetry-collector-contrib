@@ -63,7 +63,7 @@ jobs:
             exit 0
           fi
 
-          non_go_changes=$(printf '%s\n' "$changed_files" | grep -vE '.*\.go$|(^|/)go\.(mod|sum)$|(^|/)metadata\.yaml$|^\.chloggen/.+\.yaml$|^\.github/workflows/scoped-test\.yaml$' || true)
+          non_go_changes=$(printf '%s\n' "$changed_files" | grep -vE '.*\.go$|(^|/)go\.(mod|sum)$|(^|/)metadata\.yaml$|(^|/)config\.schema\.yaml$|(^|/)README\.md$|^\.chloggen/.+\.yaml$|^\.github/workflows/scoped-test\.yaml$' || true)
           if [[ -n "$non_go_changes" ]]; then
             echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
             exit 0

@@ -27,6 +27,9 @@ receivers:
     endpoint: 0.0.0.0:4433
     encoding: awscloudwatchmetricstreams_encoding
     access_key: "some_access_key"
+    common_attributes:
+      map_key: firehose
+      on_invalid: error
     tls:
       cert_file: server.crt
       key_file: server.key
@@ -70,10 +73,53 @@ Deprecated, use `encoding` instead. `record_type` will be removed in a future re
 The access key to be checked on each request received. This can be set when creating or updating the delivery stream.
 See [documentation](https://docs.aws.amazon.com/firehose/latest/dev/create-destination.html#create-destination-http) for details.
 
+### common\_attributes:
+
+Controls how the receiver handles the `X-Amz-Firehose-Common-Attributes` request header.
+
+By default, common attributes are attached as flat resource attributes and invalid common attributes are ignored after logging.
+For example, a Firehose common attribute named `source` is added as `resource.attributes["source"]`.
+
+Set `map_key` to attach common attributes as a nested resource attribute map:
+
+```yaml
+receivers:
+  awsfirehose:
+    common_attributes:
+      map_key: firehose
+```
+
+With this setting, a Firehose common attribute named `source` is added as `resource.attributes["firehose"]["source"]`.
+Existing attributes are not overwritten. If `map_key` already exists and is not a map, the receiver leaves it unchanged and logs a warning.
+
+The `on_invalid` setting controls malformed common attributes:
+
+- `ignore` logs the parsing error and continues without attaching common attributes. This is the default for compatibility.
+- `error` returns a non-200 Firehose response. Use this when common attributes are required for downstream processing.
+
+## HTTP request handling
+
+The receiver accepts Firehose HTTP endpoint requests using the [Amazon Data Firehose request and response format](https://docs.aws.amazon.com/firehose/latest/dev/httpdeliveryrequestresponse.html).
+Firehose sends JSON requests with `Content-Type: application/json`.
+
+The receiver validates:
+
+- `POST` method.
+- `Content-Type: application/json` when the header is present.
+- `X-Amz-Firehose-Request-Id`.
+- Optional `X-Amz-Firehose-Access-Key`.
+- Matching body `requestId`.
+
+Every receiver-side rejection returns a Firehose-shaped JSON response containing `requestId`, `timestamp`, and `errorMessage`.
+Path routing is intentionally flexible: any path that reaches this receiver is accepted when the method, headers, and body are valid.
+
 ## Encodings
 
 Any encoding extension can be used with this receiver. There are additionally built-in encodings, which are deprecated.
 In the future it will be required to specify an encoding extension, and the built-in encodings will be removed.
+
+CloudFront real-time log schemas, or any other schema-aware parsing rules, belong in the configured encoding extension.
+This receiver loads the extension by component ID at runtime and does not depend on any specific private extension package.
 
 ### cwmetrics (deprecated)
 

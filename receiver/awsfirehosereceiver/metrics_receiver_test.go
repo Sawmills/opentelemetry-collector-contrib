@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/consumer/consumertest"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/receiver/receivertest"
 
@@ -189,6 +190,40 @@ func TestMetricsConsumer(t *testing.T) {
 		require.Equal(t, 1, gotRms.Len())
 		gotRm := gotRms.At(0)
 		require.Equal(t, 1, gotRm.Resource().Attributes().Len())
+		got, found := gotRm.Resource().Attributes().Get("CommonAttributes")
+		require.True(t, found)
+		require.Equal(t, "Test", got.Str())
+	})
+	t.Run("WithNestedCommonAttributes", func(t *testing.T) {
+		base := pmetric.NewMetrics()
+		base.ResourceMetrics().AppendEmpty()
+		rc := metricsRecordConsumer{}
+		mc := &metricsConsumer{
+			config: &Config{
+				CommonAttributes: CommonAttributesConfig{MapKey: "firehose"},
+			},
+			settings:    receivertest.NewNopSettings(metadata.Type),
+			unmarshaler: unmarshalertest.NewWithMetrics(base),
+			consumer:    &rc,
+		}
+		gotStatus, gotErr := mc.Consume(
+			t.Context(),
+			newNextRecordFunc([][]byte{{}}),
+			map[string]string{
+				"source": "cloudfront",
+				"group":  "cs",
+			},
+		)
+		require.Equal(t, http.StatusOK, gotStatus)
+		require.NoError(t, gotErr)
+		require.Len(t, rc.results, 1)
+
+		attrs := rc.results[0].ResourceMetrics().At(0).Resource().Attributes()
+		firehose, found := attrs.Get("firehose")
+		require.True(t, found)
+		require.Equal(t, pcommon.ValueTypeMap, firehose.Type())
+		require.Equal(t, "cloudfront", getStringValue(t, firehose.Map(), "source"))
+		require.Equal(t, "cs", getStringValue(t, firehose.Map(), "group"))
 	})
 	t.Run("WithMultipleRecords", func(t *testing.T) {
 		metrics0, metricSlice0 := newMetrics("service0", "scope0")
