@@ -679,10 +679,13 @@ func buildHTTPHeaders(config *Config, buildInfo component.BuildInfo) map[string]
 
 // marshalEvent marshals an event to JSON
 func marshalEvent(event *translator.Event, sizeLimit uint) ([]byte, error) {
-	b, err := json.Marshal(event)
-	if err != nil {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(event); err != nil {
 		return nil, err
 	}
+	b := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 	if uint(len(b)) > sizeLimit {
 		return nil, fmt.Errorf("event size %d exceeds limit %d", len(b), sizeLimit)
 	}
