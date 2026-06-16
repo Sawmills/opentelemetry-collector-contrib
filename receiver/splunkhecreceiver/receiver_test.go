@@ -32,6 +32,8 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/receiver/receivertest"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/splunkhecexporter"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/common/testutil"
@@ -53,6 +55,74 @@ func assertHecSuccessResponseWithAckID(t *testing.T, resp *http.Response, body a
 	assert.Equal(t, http.StatusOK, status)
 	assert.Equal(t, "application/json", resp.Header.Get(httpContentTypeHeader))
 	assert.Equal(t, map[string]any{"code": float64(0), "text": "Success", "ackId": float64(ackID)}, body)
+}
+
+func Test_splunkhecReceiver_handleReq_LogsBadRequestAtWarn(t *testing.T) {
+	observedCore, observedLogs := observer.New(zap.WarnLevel)
+	settings := receivertest.NewNopSettings(metadata.Type)
+	settings.Logger = zap.New(observedCore)
+	config := createDefaultConfig().(*Config)
+	config.NetAddr.Endpoint = "localhost:0"
+
+	rcv, err := newReceiver(settings, *config)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://localhost/foo", strings.NewReader("{"))
+	rcv.handleReq(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	respBytes, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.JSONEq(t, responseInvalidDataFormat, string(respBytes))
+
+	require.Equal(t, 1, observedLogs.Len())
+	entry := observedLogs.All()[0]
+	assert.Equal(t, zap.WarnLevel, entry.Level)
+	assert.Equal(t, "Splunk HEC receiver request failed", entry.Message)
+	context := entry.ContextMap()
+	assert.Equal(t, int64(http.StatusBadRequest), context["http_status_code"])
+	assert.Equal(t, responseInvalidDataFormat, context["msg"])
+	assert.Contains(t, context["error"], "invalid character")
+}
+
+func Test_splunkhecReceiver_failRequest_SamplesRepeatedWarnings(t *testing.T) {
+	observedCore, observedLogs := observer.New(zap.WarnLevel)
+	settings := receivertest.NewNopSettings(metadata.Type)
+	settings.Logger = zap.New(observedCore)
+	config := createDefaultConfig().(*Config)
+
+	rcv, err := newReceiver(settings, *config)
+	require.NoError(t, err)
+
+	for range requestFailureLogSamplingFirst + requestFailureLogSamplingThereafter + 1 {
+		rcv.failRequest(httptest.NewRecorder(), http.StatusBadRequest, invalidFormatRespBody, errors.New("bad request"))
+	}
+
+	assert.Equal(t, requestFailureLogSamplingFirst+1, observedLogs.Len())
+}
+
+func Test_splunkhecReceiver_failRequest_LogsInternalServerErrorAtError(t *testing.T) {
+	observedCore, observedLogs := observer.New(zap.ErrorLevel)
+	settings := receivertest.NewNopSettings(metadata.Type)
+	settings.Logger = zap.New(observedCore)
+	config := createDefaultConfig().(*Config)
+
+	rcv, err := newReceiver(settings, *config)
+	require.NoError(t, err)
+
+	rcv.failRequest(httptest.NewRecorder(), http.StatusInternalServerError, errInternalServerError, errors.New("consumer failed"))
+
+	require.Equal(t, 1, observedLogs.Len())
+	entry := observedLogs.All()[0]
+	assert.Equal(t, zap.ErrorLevel, entry.Level)
+	assert.Equal(t, "Splunk HEC receiver request failed", entry.Message)
+	context := entry.ContextMap()
+	assert.Equal(t, int64(http.StatusInternalServerError), context["http_status_code"])
+	assert.Equal(t, responseErrInternalServerError, context["msg"])
+	assert.Equal(t, "consumer failed", context["error"])
 }
 
 func Test_splunkhecreceiver_NewReceiver(t *testing.T) {

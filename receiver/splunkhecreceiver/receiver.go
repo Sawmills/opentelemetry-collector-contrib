@@ -25,6 +25,7 @@ import (
 	"go.opentelemetry.io/collector/receiver"
 	"go.opentelemetry.io/collector/receiver/receiverhelper"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/extension/ackextension"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/internal/splunk"
@@ -58,6 +59,10 @@ const (
 	httpContentEncodingHeader = "Content-Encoding"
 	httpContentTypeHeader     = "Content-Type"
 	httpJSONTypeHeader        = "application/json"
+
+	requestFailureLogSamplingTick       = time.Second
+	requestFailureLogSamplingFirst      = 10
+	requestFailureLogSamplingThereafter = 100
 )
 
 var (
@@ -92,6 +97,8 @@ type splunkReceiver struct {
 	obsrecv         *receiverhelper.ObsReport
 	gzipReaderPool  *sync.Pool
 	ackExt          ackextension.AckExtension
+
+	requestFailureLogger *zap.Logger
 }
 
 var (
@@ -119,13 +126,25 @@ func newReceiver(settings receiver.Settings, config Config) (*splunkReceiver, er
 		return nil, err
 	}
 	r := &splunkReceiver{
-		settings:       settings,
-		config:         &config,
-		obsrecv:        obsrecv,
-		gzipReaderPool: &sync.Pool{New: func() any { return new(gzip.Reader) }},
+		settings:             settings,
+		config:               &config,
+		obsrecv:              obsrecv,
+		gzipReaderPool:       &sync.Pool{New: func() any { return new(gzip.Reader) }},
+		requestFailureLogger: newRequestFailureLogger(settings.Logger),
 	}
 
 	return r, nil
+}
+
+func newRequestFailureLogger(logger *zap.Logger) *zap.Logger {
+	return logger.WithOptions(zap.WrapCore(func(core zapcore.Core) zapcore.Core {
+		return zapcore.NewSamplerWithOptions(
+			core,
+			requestFailureLogSamplingTick,
+			requestFailureLogSamplingFirst,
+			requestFailureLogSamplingThereafter,
+		)
+	}))
 }
 
 // Start tells the receiver to start its processing.
@@ -569,15 +588,20 @@ func (r *splunkReceiver) failRequest(
 		}
 	}
 
-	if r.settings.Logger.Core().Enabled(zap.DebugLevel) {
-		msg := string(jsonResponse)
-		r.settings.Logger.Debug(
-			"Splunk HEC receiver request failed",
-			zap.Int("http_status_code", httpStatusCode),
-			zap.String("msg", msg),
-			zap.Error(err), // It handles nil error
-		)
+	logger := r.requestFailureLogger
+	if logger == nil {
+		logger = r.settings.Logger
 	}
+	fields := []zap.Field{
+		zap.Int("http_status_code", httpStatusCode),
+		zap.String("msg", string(jsonResponse)),
+		zap.Error(err), // It handles nil error.
+	}
+	if httpStatusCode >= http.StatusInternalServerError {
+		logger.Error("Splunk HEC receiver request failed", fields...)
+		return
+	}
+	logger.Warn("Splunk HEC receiver request failed", fields...)
 }
 
 func (*splunkReceiver) handleHealthReq(writer http.ResponseWriter, _ *http.Request) {
