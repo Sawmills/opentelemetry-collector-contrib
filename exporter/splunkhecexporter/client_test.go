@@ -956,6 +956,34 @@ func TestReceiveLogEvent(t *testing.T) {
 	compareWithTestData(t, actual[0].body, "testdata/hec_log_event.json")
 }
 
+func TestReceiveLogEventDoesNotHTMLEscapeMessageField(t *testing.T) {
+	logs := plog.NewLogs()
+	logRecord := logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+	body := logRecord.Body().SetEmptyMap()
+	body.PutStr("message", "Q2_PMT INFO - <isomsg>\n  <header>abc</header>\n</isomsg>")
+	body.PutStr("project", "switch-pmt")
+
+	cfg := NewFactory().CreateDefaultConfig().(*Config)
+	cfg.DisableCompression = true
+
+	actual, err := runLogExport(t, cfg, logs, 1)
+	assert.NoError(t, err)
+	require.Len(t, actual, 1)
+
+	requestBody := string(actual[0].body)
+	assert.Contains(t, requestBody, `<isomsg>`)
+	assert.Contains(t, requestBody, `</header>`)
+	assert.NotContains(t, requestBody, `\u003c`)
+	assert.NotContains(t, requestBody, `\u003e`)
+
+	payload := map[string]any{}
+	require.NoError(t, json.Unmarshal(actual[0].body, &payload))
+	event, ok := payload["event"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "switch-pmt", event["project"])
+	assert.Contains(t, event["message"], "<isomsg>")
+}
+
 func TestLogEventTimestampMicrosecondPrecision(t *testing.T) {
 	// Verify that nanosecond timestamp precision is turned to microseconds in the HEC payload
 	logs := plog.NewLogs()
