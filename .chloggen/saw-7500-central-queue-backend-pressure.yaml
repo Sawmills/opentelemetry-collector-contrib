@@ -1,0 +1,13 @@
+change_type: bug_fix
+
+component: exporter/loadbalancing
+
+note: Keep central queue drain concurrency from collapsing on isolated backend failures in large backend sets.
+
+issues: [7500]
+
+subtext: |
+  Endpoint-health pressure now distinguishes local backend quarantine from
+  systemic backend pressure before throttling central queue consumers.
+
+change_logs: [user]

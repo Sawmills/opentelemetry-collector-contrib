@@ -45,6 +45,8 @@ type endpointHealthSettings struct {
 	now                   func() time.Time
 }
 
+const endpointHealthBackendPressurePercent = 10
+
 type endpointHealthActiveProbeSettings struct {
 	enabled bool
 	fall    int
@@ -55,8 +57,15 @@ type endpointHealthManager struct {
 	mu                 sync.RWMutex
 	settings           endpointHealthSettings
 	endpoints          map[string]*endpointHealthState
+	pressureSnapshot   endpointHealthPressureSnapshot
 	failOpenActive     bool
 	nextExpiryUnixNano atomic.Int64
+}
+
+type endpointHealthPressureSnapshot struct {
+	present   int
+	eligible  int
+	pressured int
 }
 
 type endpointHealthState struct {
@@ -374,19 +383,19 @@ func (m *endpointHealthManager) underPressure() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	now := m.settings.now()
 	if m.failOpenActive {
 		return true
 	}
-	for _, state := range m.endpoints {
-		if !state.present {
-			continue
-		}
-		if state.probeUnhealthy || state.hasActiveTransportQuarantine(now) {
-			return true
-		}
+	present := m.pressureSnapshot.present
+	eligible := m.pressureSnapshot.eligible
+	pressured := m.pressureSnapshot.pressured
+	if pressured == 0 {
+		return false
 	}
-	return false
+	if m.shouldFailOpenLocked(present, eligible, pressured) {
+		return true
+	}
+	return pressured*100 >= present*endpointHealthBackendPressurePercent
 }
 
 func (m *endpointHealthManager) eligibleEndpoints() []string {
@@ -530,6 +539,11 @@ func (m *endpointHealthManager) eligibleEndpointsLockedWithRefresh(now time.Time
 
 	sort.Strings(present)
 	sort.Strings(eligible)
+	m.pressureSnapshot = endpointHealthPressureSnapshot{
+		present:   len(present),
+		eligible:  len(eligible),
+		pressured: quarantined,
+	}
 	failOpen := m.shouldFailOpenLocked(len(present), len(eligible), quarantined)
 	failOpenStarted := failOpen && !m.failOpenActive
 	m.failOpenActive = failOpen
