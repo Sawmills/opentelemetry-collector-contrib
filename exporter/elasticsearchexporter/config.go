@@ -127,6 +127,10 @@ type TelemetrySettings struct {
 	LogRequestBody  bool `mapstructure:"log_request_body"`
 	LogResponseBody bool `mapstructure:"log_response_body"`
 
+	// LogFailedDocsInput includes the bulk input (action line and document line)
+	// for sampled failed documents in the exporter's own logs.
+	// WARNING: enabling this may expose sensitive data and should only be used
+	// temporarily for debugging.
 	LogFailedDocsInput          bool          `mapstructure:"log_failed_docs_input"`
 	LogFailedDocsInputRateLimit time.Duration `mapstructure:"log_failed_docs_input_rate_limit"`
 	PreserveErrorReason         bool          `mapstructure:"preserve_error_reason"`

@@ -27,7 +27,6 @@ import (
 	conventions "go.opentelemetry.io/otel/semconv/v1.38.0"
 	"go.uber.org/zap"
 
-	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/logging"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metadata"
 )
 
@@ -182,30 +181,30 @@ func newSyncBulkIndexer(
 		}
 	}
 	return &syncBulkIndexer{
-		config:                bulkIndexerConfig(client, config, false, logger),
-		maxFlushBytes:         maxFlushBytes,
-		flushTimeout:          config.Timeout,
-		retryConfig:           config.Retry,
-		metadataKeys:          config.MetadataKeys,
-		telemetryBuilder:      tb,
-		logger:                logger,
-		failedDocsInputLogger: newFailedDocsInputLogger(logger, config),
-		getErrorHintFunc:      getErrorHintFunc,
-		requireDataStream:     requireDataStream,
+		config:                 bulkIndexerConfig(client, config, false, logger),
+		maxFlushBytes:          maxFlushBytes,
+		flushTimeout:           config.Timeout,
+		retryConfig:            config.Retry,
+		metadataKeys:           config.MetadataKeys,
+		telemetryBuilder:       tb,
+		logger:                 logger,
+		failedDocsInputSampler: newFailedDocsInputSampler(config),
+		getErrorHintFunc:       getErrorHintFunc,
+		requireDataStream:      requireDataStream,
 	}
 }
 
 type syncBulkIndexer struct {
-	config                docappender.BulkIndexerConfig
-	maxFlushBytes         int64
-	flushTimeout          time.Duration
-	retryConfig           RetrySettings
-	metadataKeys          []string
-	telemetryBuilder      *metadata.TelemetryBuilder
-	logger                *zap.Logger
-	failedDocsInputLogger *zap.Logger
-	getErrorHintFunc      func(index, errorType string) string
-	requireDataStream     bool
+	config                 docappender.BulkIndexerConfig
+	maxFlushBytes          int64
+	flushTimeout           time.Duration
+	retryConfig            RetrySettings
+	metadataKeys           []string
+	telemetryBuilder       *metadata.TelemetryBuilder
+	logger                 *zap.Logger
+	failedDocsInputSampler *failedDocsInputSampler
+	getErrorHintFunc       func(index, errorType string) string
+	requireDataStream      bool
 }
 
 // StartSession creates a new docappender.BulkIndexer, and wraps
@@ -280,7 +279,7 @@ func (s *syncBulkIndexerSession) Flush(ctx context.Context) error {
 			s.s.metadataKeys,
 			s.s.telemetryBuilder,
 			s.s.logger,
-			s.s.failedDocsInputLogger,
+			s.s.failedDocsInputSampler,
 			s.s.getErrorHintFunc,
 		); err != nil {
 			return err
@@ -316,7 +315,7 @@ func flushBulkIndexer(
 	tMetaKeys []string,
 	tb *metadata.TelemetryBuilder,
 	logger *zap.Logger,
-	failedDocsInputLogger *zap.Logger,
+	failedDocsInputSampler *failedDocsInputSampler,
 	getErrorHintFunc func(index, errorType string) string,
 ) error {
 	itemsCount := bi.Items()
@@ -348,19 +347,19 @@ func flushBulkIndexer(
 		tb.ElasticsearchDocsRetriedHTTPRequest.Add(ctx, int64(retryCount*itemsCount), metric.WithAttributeSet(defaultAttrsSet))
 	}
 
-	var fields []zap.Field
+	var baseFields []zap.Field
 	// append metadata attributes to error log fields
 	for _, kv := range defaultMetaAttrs {
 		switch kv.Value.Type() {
 		case attribute.STRINGSLICE:
-			fields = append(fields, zap.Strings(string(kv.Key), kv.Value.AsStringSlice()))
+			baseFields = append(baseFields, zap.Strings(string(kv.Key), kv.Value.AsStringSlice()))
 		default:
 			// For other types, convert to string
-			fields = append(fields, zap.String(string(kv.Key), kv.Value.AsString()))
+			baseFields = append(baseFields, zap.String(string(kv.Key), kv.Value.AsString()))
 		}
 	}
 	if err != nil {
-		logger.Error("bulk indexer flush error", append(fields, zap.Error(err))...)
+		logger.Error("bulk indexer flush error", append(baseFields, zap.Error(err))...)
 		var bulkFailedErr docappender.ErrorFlushFailed
 		switch {
 		case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
@@ -428,13 +427,21 @@ func flushBulkIndexer(
 			continue
 		}
 
-		// Log failed docs
+		// Log failed docs.
+		fields := append([]zap.Field{}, baseFields...)
 		fields = append(fields,
 			zap.String("index", resp.Index),
 			zap.String("error.type", resp.Error.Type),
 			zap.String("error.reason", resp.Error.Reason),
 			zap.Int("http.response.status_code", resp.Status),
 		)
+		errorField, expectedType := parseFailedDocErrorReason(resp.Error.Reason)
+		if errorField != "" {
+			fields = append(fields, zap.String("error.field", errorField))
+		}
+		if expectedType != "" {
+			fields = append(fields, zap.String("error.expected_type", expectedType))
+		}
 
 		if getErrorHintFunc != nil {
 			if hint := getErrorHintFunc(resp.Index, resp.Error.Type); hint != "" {
@@ -443,10 +450,23 @@ func flushBulkIndexer(
 		}
 		logger.Error("failed to index document", fields...)
 
-		if resp.Input != "" {
-			fields = append(fields, zap.String("input", resp.Input))
+		if resp.Input != "" && failedDocsInputSampler != nil {
+			sampleKey := failedDocInputSampleKey{
+				index:        resp.Index,
+				errorType:    resp.Error.Type,
+				errorField:   errorField,
+				expectedType: expectedType,
+				status:       resp.Status,
+			}
+			if failedDocsInputSampler.allow(sampleKey) {
+				inputFields := append([]zap.Field{}, fields...)
+				inputFields = append(inputFields,
+					zap.String("document.hash", failedDocInputHash(resp.Input)),
+					zap.String("input", resp.Input),
+				)
+				logger.Error("failed to index document; sampled input", inputFields...)
+			}
 		}
-		failedDocsInputLogger.Debug("failed to index document; input may contain sensitive data", fields...)
 	}
 	if stat.Indexed > 0 {
 		tb.ElasticsearchDocsProcessed.Add(
@@ -528,13 +548,6 @@ func getErrorHint(mode MappingMode, index, errorType string) string {
 		}
 	}
 	return ""
-}
-
-func newFailedDocsInputLogger(logger *zap.Logger, config *Config) *zap.Logger {
-	if !config.LogFailedDocsInput {
-		return zap.NewNop()
-	}
-	return logger.WithOptions(logging.WithRateLimit(config.LogFailedDocsInputRateLimit))
 }
 
 type bulkIndexers struct {
