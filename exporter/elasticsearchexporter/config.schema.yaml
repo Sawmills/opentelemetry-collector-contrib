@@ -104,8 +104,10 @@ $defs:
     type: object
     properties:
       log_failed_docs_input:
+        description: 'LogFailedDocsInput includes the bulk input (action line and document line) for sampled failed documents in the exporter''s own logs. WARNING: enabling this may expose sensitive data and should only be used temporarily for debugging.'
         type: boolean
       log_failed_docs_input_rate_limit:
+        description: 'LogFailedDocsInputRateLimit configures per-error-key rate limiting for failed document input logs. A zero or negative value disables rate limiting.'
         type: string
         format: duration
       log_request_body:

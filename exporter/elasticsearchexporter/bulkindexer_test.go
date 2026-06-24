@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/elastic/elastic-transport-go/v8/elastictransport"
 	"github.com/elastic/go-docappender/v2"
@@ -374,6 +375,127 @@ func TestBulkIndexerLogsStatusCode(t *testing.T) {
 			continue
 		}
 		assert.Equal(t, int64(status), statusCode, "http.response.status_code does not match at index %d; msg: %s", i, msg.Message)
+	}
+}
+
+func TestBulkIndexerLogsFailedDocsInputWithoutDebugLevel(t *testing.T) {
+	responseBody := `{"errors": true, "items":[
+		{"create":{"_index":"logs-bhn-default","status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [http.response.status_code] of type [long] in document with id 'abc'"}}}
+	]}`
+
+	cfg := Config{
+		QueueBatchConfig: configoptional.Default(exporterhelper.QueueBatchConfig{
+			NumConsumers: 1,
+		}),
+		TelemetrySettings: TelemetrySettings{
+			LogFailedDocsInput:          true,
+			LogFailedDocsInputRateLimit: time.Second,
+			PreserveErrorReason:         true,
+		},
+	}
+	esClient, err := elastictransport.New(elastictransport.Config{
+		URLs: []*url.URL{{Scheme: "http", Host: "localhost:9200"}},
+		Transport: &mockTransport{
+			RoundTripFunc: func(*http.Request) (*http.Response, error) {
+				return &http.Response{
+					Header:     http.Header{"X-Elastic-Product": []string{"Elasticsearch"}},
+					Body:       io.NopCloser(strings.NewReader(responseBody)),
+					StatusCode: http.StatusOK,
+				}, nil
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	ct := componenttest.NewTelemetry()
+	tb, err := metadata.NewTelemetryBuilder(
+		metadatatest.NewSettings(ct).TelemetrySettings,
+	)
+	require.NoError(t, err)
+
+	core, observed := observer.New(zap.NewAtomicLevelAt(zapcore.InfoLevel))
+	bi := newSyncBulkIndexer(esClient, &cfg, false, tb, zap.New(core), nil)
+
+	ctx := t.Context()
+	session := bi.StartSession(ctx)
+	require.NoError(t, session.Add(ctx, "logs-bhn-default", "", "", strings.NewReader(`{"http.response.status_code":"not-a-number"}`), nil, docappender.ActionCreate))
+	require.NoError(t, session.Flush(ctx))
+	session.End()
+	assert.NoError(t, bi.Close(ctx))
+
+	inputLogs := observed.FilterMessage("failed to index document; sampled input")
+	require.Equal(t, 1, inputLogs.Len(), "input log not found; observed.All()=%v", observed.All())
+	contextMap := inputLogs.All()[0].ContextMap()
+	assert.Contains(t, contextMap["input"], `"http.response.status_code":"not-a-number"`)
+	assert.NotEmpty(t, contextMap["document.hash"])
+	assert.Equal(t, "http.response.status_code", contextMap["error.field"])
+	assert.Equal(t, "long", contextMap["error.expected_type"])
+}
+
+func TestBulkIndexerSamplesFailedDocsInputByIndex(t *testing.T) {
+	responseBody := `{"errors": true, "items":[
+		{"create":{"_index":"logs-a","status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [status] of type [long]"}}},
+		{"create":{"_index":"logs-b","status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [status] of type [long]"}}},
+		{"create":{"_index":"logs-a","status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [status] of type [long]"}}}
+	]}`
+
+	cfg := Config{
+		QueueBatchConfig: configoptional.Default(exporterhelper.QueueBatchConfig{
+			NumConsumers: 1,
+		}),
+		TelemetrySettings: TelemetrySettings{
+			LogFailedDocsInput:          true,
+			LogFailedDocsInputRateLimit: time.Hour,
+			PreserveErrorReason:         true,
+		},
+	}
+	esClient, err := elastictransport.New(elastictransport.Config{
+		URLs: []*url.URL{{Scheme: "http", Host: "localhost:9200"}},
+		Transport: &mockTransport{
+			RoundTripFunc: func(*http.Request) (*http.Response, error) {
+				return &http.Response{
+					Header:     http.Header{"X-Elastic-Product": []string{"Elasticsearch"}},
+					Body:       io.NopCloser(strings.NewReader(responseBody)),
+					StatusCode: http.StatusOK,
+				}, nil
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	ct := componenttest.NewTelemetry()
+	tb, err := metadata.NewTelemetryBuilder(
+		metadatatest.NewSettings(ct).TelemetrySettings,
+	)
+	require.NoError(t, err)
+
+	core, observed := observer.New(zap.NewAtomicLevelAt(zapcore.InfoLevel))
+	bi := newSyncBulkIndexer(esClient, &cfg, false, tb, zap.New(core), nil)
+
+	ctx := t.Context()
+	session := bi.StartSession(ctx)
+	for i := 0; i < 3; i++ {
+		require.NoError(t, session.Add(ctx, "logs-a", "", "", strings.NewReader(`{"status":"bad"}`), nil, docappender.ActionCreate))
+	}
+	require.NoError(t, session.Flush(ctx))
+	session.End()
+	assert.NoError(t, bi.Close(ctx))
+
+	inputLogs := observed.FilterMessage("failed to index document; sampled input")
+	require.Equal(t, 2, inputLogs.Len(), "expected one sampled input per index; observed.All()=%v", observed.All())
+	assert.Equal(t, 1, inputLogs.FilterField(zap.String("index", "logs-a")).Len())
+	assert.Equal(t, 1, inputLogs.FilterField(zap.String("index", "logs-b")).Len())
+
+	failureLogs := observed.FilterMessage("failed to index document")
+	require.Equal(t, 3, failureLogs.Len(), "expected all failures to keep normal error logs; observed.All()=%v", observed.All())
+	for _, entry := range failureLogs.All() {
+		var indexFields int
+		for _, field := range entry.Context {
+			if field.Key == "index" {
+				indexFields++
+			}
+		}
+		assert.Equal(t, 1, indexFields, "failed-doc fields should not accumulate between log entries")
 	}
 }
 

@@ -411,8 +411,8 @@ The Elasticsearch Exporter's own telemetry settings for testing and debugging pu
   - `preserve_error_reason` (default=true): Preserves backend-provided bulk item `error.reason` in failed document logs without asking Elasticsearch/OpenSearch to include source snippets. This keeps mapper parsing details visible for debugging while avoiding the `include_source_on_error` bulk request parameter that some OpenSearch versions reject. WARNING: backend error reasons may still include field names, rejected values, or other sensitive details.
   - `log_request_body` (default=false): Logs Elasticsearch client request body as a field in a log line at DEBUG level. It requires `service::telemetry::logs::level` to be set to `debug`. WARNING: Enabling this config may expose sensitive data.
   - `log_response_body` (default=false): Logs Elasticsearch client response body as a field in a log line at DEBUG level. It requires `service::telemetry::logs::level` to be set to `debug`. WARNING: Enabling this config may expose sensitive data.
-  - `log_failed_docs_input` (default=false): Include the input (action line and document line) causing indexing error under `input` field in a log line at DEBUG level. It requires `service::telemetry::logs::level` to be set to `debug`. WARNING: Enabling this config may expose sensitive data.
-  - `log_failed_docs_input_rate_limit` (default="1s"): Rate limiting of logs emitted by `log_failed_docs_input` config, e.g. "1s" means roughly 1 log line per second. A zero or negative value disables rate limiting.
+  - `log_failed_docs_input` (default=false): Include sampled bulk input (action line and document line) causing indexing errors under the `input` field in the exporter's own error logs. This does not require `service::telemetry::logs::level` to be set to `debug`. WARNING: Enabling this config may expose sensitive data.
+  - `log_failed_docs_input_rate_limit` (default="1s"): Per-error-key rate limiting of logs emitted by `log_failed_docs_input` config. The key includes index, error type, parsed error field, parsed expected type, and status code. A zero or negative value disables rate limiting.
 
 ### Metadata keys
 
