@@ -298,6 +298,7 @@ func (doc *Document) Dedup(protectedSet map[string]struct{}) {
 
 func newJSONVisitor(w io.Writer) *json.Visitor {
 	v := json.NewVisitor(w)
+	v.SetEscapeHTML(false)
 	// Enable ExplicitRadixPoint such that 1.0 is encoded as 1.0 instead of 1.
 	// This is required to generate the correct dynamic mapping in ES.
 	v.SetExplicitRadixPoint(true)

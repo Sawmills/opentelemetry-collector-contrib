@@ -5,9 +5,12 @@ package elasticsearchexporter // import "github.com/open-telemetry/opentelemetry
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"time"
 
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -262,11 +265,71 @@ func (ecsModeEncoder) encodeLog(
 
 	document.AddString("log.level", record.SeverityText())
 
-	if record.Body().Type() == pcommon.ValueTypeStr {
-		document.AddAttribute("message", record.Body())
+	message, ok, err := encodeBodyAsMessage(record.Body())
+	if err != nil {
+		return err
+	}
+	if ok {
+		document.Add("message", objmodel.StringValue(message))
 	}
 
 	return document.Serialize(buf, true, logProtectedFields)
+}
+
+func encodeBodyAsMessage(body pcommon.Value) (string, bool, error) {
+	// ECS models log.message as a string. When upstream processors parse a JSON
+	// log body into OTLP map/slice/scalar values, preserve the original body as
+	// a string in message instead of omitting it or indexing it as mixed types.
+	switch body.Type() {
+	case pcommon.ValueTypeEmpty:
+		return "", false, nil
+	case pcommon.ValueTypeStr:
+		return body.Str(), true, nil
+	case pcommon.ValueTypeInt:
+		return strconv.FormatInt(body.Int(), 10), true, nil
+	case pcommon.ValueTypeDouble:
+		return strconv.FormatFloat(body.Double(), 'g', -1, 64), true, nil
+	case pcommon.ValueTypeBool:
+		return strconv.FormatBool(body.Bool()), true, nil
+	case pcommon.ValueTypeBytes:
+		return hex.EncodeToString(body.Bytes().AsRaw()), true, nil
+	case pcommon.ValueTypeMap, pcommon.ValueTypeSlice:
+		message, err := encodeStructuredBodyAsMessage(body)
+		return message, true, err
+	}
+	return "", false, nil
+}
+
+func encodeStructuredBodyAsMessage(body pcommon.Value) (string, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(sanitizeStructuredBodyForJSON(body.AsRaw())); err != nil {
+		return "", err
+	}
+	return string(bytes.TrimSuffix(buf.Bytes(), []byte("\n"))), nil
+}
+
+func sanitizeStructuredBodyForJSON(v any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		sanitized := make(map[string]any, len(v))
+		for key, value := range v {
+			sanitized[key] = sanitizeStructuredBodyForJSON(value)
+		}
+		return sanitized
+	case []any:
+		sanitized := make([]any, len(v))
+		for i, value := range v {
+			sanitized[i] = sanitizeStructuredBodyForJSON(value)
+		}
+		return sanitized
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return nil
+		}
+	}
+	return v
 }
 
 func mergeMapsByPriority(lowerPriority, higherPriority pcommon.Map) pcommon.Map {
