@@ -200,6 +200,180 @@ func TestEncodeLog(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, expectedLogBodyWithEmptyTimestamp, buf.String())
 	})
+
+	t.Run("does not html escape log strings", func(t *testing.T) {
+		encoder, err := newEncoder(MappingNone)
+		require.NoError(t, err)
+
+		record := plog.NewLogRecord()
+		record.Body().SetStr("Q2_PMT INFO - <isomsg><header>a&b</header></isomsg>")
+
+		var buf bytes.Buffer
+		err = encoder.encodeLog(
+			encodingContext{
+				resource: pcommon.NewResource(),
+				scope:    pcommon.NewInstrumentationScope(),
+			},
+			record,
+			elasticsearch.Index{},
+			&buf,
+		)
+		require.NoError(t, err)
+
+		assert.Contains(t, buf.String(), "<isomsg>")
+		assert.Contains(t, buf.String(), "a&b")
+		assert.NotContains(t, buf.String(), `\u003c`)
+		assert.NotContains(t, buf.String(), `\u003e`)
+		assert.NotContains(t, buf.String(), `\u0026`)
+	})
+
+	t.Run("ecs mode serializes provided body values as message", func(t *testing.T) {
+		encoder, err := newEncoder(MappingECS)
+		require.NoError(t, err)
+
+		tests := []struct {
+			name          string
+			setBody       func(t *testing.T, body pcommon.Value)
+			wantMessage   string
+			wantExists    bool
+			wantJSONEqual bool
+		}{
+			{
+				name:       "unset body omitted",
+				wantExists: false,
+			},
+			{
+				name: "empty string body preserved",
+				setBody: func(_ *testing.T, body pcommon.Value) {
+					body.SetStr("")
+				},
+				wantMessage: "",
+				wantExists:  true,
+			},
+			{
+				name: "string body preserves xml tags",
+				setBody: func(_ *testing.T, body pcommon.Value) {
+					body.SetStr("Q2_PMT INFO - <isomsg><header>a&b</header></isomsg>")
+				},
+				wantMessage: "Q2_PMT INFO - <isomsg><header>a&b</header></isomsg>",
+				wantExists:  true,
+			},
+			{
+				name: "map body serialized as json string",
+				setBody: func(t *testing.T, body pcommon.Value) {
+					require.NoError(t, body.SetEmptyMap().FromRaw(map[string]any{
+						"ampersand": "a&b",
+						"msg":       "bhn shape probe message 20260629T234549Z-$-13",
+						"nested": map[string]any{
+							"child": "value",
+						},
+						"tags":  []any{"shape", "probe"},
+						"value": "<xmltag></xmltag>",
+					}))
+				},
+				wantMessage:   `{"ampersand":"a&b","msg":"bhn shape probe message 20260629T234549Z-$-13","nested":{"child":"value"},"tags":["shape","probe"],"value":"<xmltag></xmltag>"}`,
+				wantExists:    true,
+				wantJSONEqual: true,
+			},
+			{
+				name: "empty map body preserved",
+				setBody: func(_ *testing.T, body pcommon.Value) {
+					body.SetEmptyMap()
+				},
+				wantMessage:   `{}`,
+				wantExists:    true,
+				wantJSONEqual: true,
+			},
+			{
+				name: "slice body serialized as json string",
+				setBody: func(_ *testing.T, body pcommon.Value) {
+					slice := body.SetEmptySlice()
+					slice.AppendEmpty().SetStr("1")
+					slice.AppendEmpty().SetStr("<xmltag></xmltag>")
+					slice.AppendEmpty().SetStr("a&b")
+				},
+				wantMessage:   `["1","<xmltag></xmltag>","a&b"]`,
+				wantExists:    true,
+				wantJSONEqual: true,
+			},
+			{
+				name: "empty slice body preserved",
+				setBody: func(_ *testing.T, body pcommon.Value) {
+					body.SetEmptySlice()
+				},
+				wantMessage:   `[]`,
+				wantExists:    true,
+				wantJSONEqual: true,
+			},
+			{
+				name: "int body serialized as string",
+				setBody: func(_ *testing.T, body pcommon.Value) {
+					body.SetInt(42)
+				},
+				wantMessage: "42",
+				wantExists:  true,
+			},
+			{
+				name: "double body serialized as string",
+				setBody: func(_ *testing.T, body pcommon.Value) {
+					body.SetDouble(1.25)
+				},
+				wantMessage: "1.25",
+				wantExists:  true,
+			},
+			{
+				name: "bool body serialized as string",
+				setBody: func(_ *testing.T, body pcommon.Value) {
+					body.SetBool(true)
+				},
+				wantMessage: "true",
+				wantExists:  true,
+			},
+			{
+				name: "bytes body serialized as hex string",
+				setBody: func(_ *testing.T, body pcommon.Value) {
+					body.SetEmptyBytes().FromRaw([]byte{0xde, 0xad, 0xbe, 0xef})
+				},
+				wantMessage: "deadbeef",
+				wantExists:  true,
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				record := plog.NewLogRecord()
+				if tc.setBody != nil {
+					tc.setBody(t, record.Body())
+				}
+
+				var buf bytes.Buffer
+				err := encoder.encodeLog(
+					encodingContext{
+						resource: pcommon.NewResource(),
+						scope:    pcommon.NewInstrumentationScope(),
+					},
+					record,
+					elasticsearch.Index{},
+					&buf,
+				)
+				require.NoError(t, err)
+
+				message := gjson.Get(buf.String(), "message")
+				assert.Equal(t, tc.wantExists, message.Exists())
+				if !tc.wantExists {
+					return
+				}
+
+				if tc.wantJSONEqual {
+					require.JSONEq(t, tc.wantMessage, message.String())
+				}
+				assert.Equal(t, tc.wantMessage, message.String())
+				assert.NotContains(t, buf.String(), `\u003c`)
+				assert.NotContains(t, buf.String(), `\u003e`)
+				assert.NotContains(t, buf.String(), `\u0026`)
+			})
+		}
+	})
 }
 
 func TestEncodeMetric(t *testing.T) {
