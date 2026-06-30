@@ -288,9 +288,6 @@ func encodeBodyAsMessage(body pcommon.Value) (string, bool, error) {
 	case pcommon.ValueTypeInt:
 		return strconv.FormatInt(body.Int(), 10), true, nil
 	case pcommon.ValueTypeDouble:
-		if math.IsNaN(body.Double()) || math.IsInf(body.Double(), 0) {
-			return "null", true, nil
-		}
 		return strconv.FormatFloat(body.Double(), 'g', -1, 64), true, nil
 	case pcommon.ValueTypeBool:
 		return strconv.FormatBool(body.Bool()), true, nil
@@ -307,10 +304,32 @@ func encodeStructuredBodyAsMessage(body pcommon.Value) (string, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(body.AsRaw()); err != nil {
+	if err := enc.Encode(sanitizeStructuredBodyForJSON(body.AsRaw())); err != nil {
 		return "", err
 	}
 	return string(bytes.TrimSuffix(buf.Bytes(), []byte("\n"))), nil
+}
+
+func sanitizeStructuredBodyForJSON(v any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		sanitized := make(map[string]any, len(v))
+		for key, value := range v {
+			sanitized[key] = sanitizeStructuredBodyForJSON(value)
+		}
+		return sanitized
+	case []any:
+		sanitized := make([]any, len(v))
+		for i, value := range v {
+			sanitized[i] = sanitizeStructuredBodyForJSON(value)
+		}
+		return sanitized
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return nil
+		}
+	}
+	return v
 }
 
 func mergeMapsByPriority(lowerPriority, higherPriority pcommon.Map) pcommon.Map {

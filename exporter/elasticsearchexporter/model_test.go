@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -285,6 +286,20 @@ func TestEncodeLog(t *testing.T) {
 				wantJSONEqual: true,
 			},
 			{
+				name: "map body with non-finite doubles serializes null",
+				setBody: func(_ *testing.T, body pcommon.Value) {
+					bodyMap := body.SetEmptyMap()
+					bodyMap.PutDouble("finite", 1.25)
+					bodyMap.PutDouble("nan", math.NaN())
+					nested := bodyMap.PutEmptyMap("nested")
+					nested.PutDouble("positive_inf", math.Inf(1))
+					nested.PutDouble("negative_inf", math.Inf(-1))
+				},
+				wantMessage:   `{"finite":1.25,"nan":null,"nested":{"negative_inf":null,"positive_inf":null}}`,
+				wantExists:    true,
+				wantJSONEqual: true,
+			},
+			{
 				name: "slice body serialized as json string",
 				setBody: func(_ *testing.T, body pcommon.Value) {
 					slice := body.SetEmptySlice()
@@ -293,6 +308,21 @@ func TestEncodeLog(t *testing.T) {
 					slice.AppendEmpty().SetStr("a&b")
 				},
 				wantMessage:   `["1","<xmltag></xmltag>","a&b"]`,
+				wantExists:    true,
+				wantJSONEqual: true,
+			},
+			{
+				name: "slice body with non-finite doubles serializes null",
+				setBody: func(_ *testing.T, body pcommon.Value) {
+					slice := body.SetEmptySlice()
+					slice.AppendEmpty().SetDouble(math.NaN())
+					slice.AppendEmpty().SetDouble(math.Inf(1))
+					slice.AppendEmpty().SetDouble(math.Inf(-1))
+					nested := slice.AppendEmpty().SetEmptyMap()
+					nested.PutDouble("finite", 2.5)
+					nested.PutDouble("nan", math.NaN())
+				},
+				wantMessage:   `[null,null,null,{"finite":2.5,"nan":null}]`,
 				wantExists:    true,
 				wantJSONEqual: true,
 			},
@@ -319,6 +349,30 @@ func TestEncodeLog(t *testing.T) {
 					body.SetDouble(1.25)
 				},
 				wantMessage: "1.25",
+				wantExists:  true,
+			},
+			{
+				name: "nan double body serialized as string",
+				setBody: func(_ *testing.T, body pcommon.Value) {
+					body.SetDouble(math.NaN())
+				},
+				wantMessage: "NaN",
+				wantExists:  true,
+			},
+			{
+				name: "positive infinity double body serialized as string",
+				setBody: func(_ *testing.T, body pcommon.Value) {
+					body.SetDouble(math.Inf(1))
+				},
+				wantMessage: "+Inf",
+				wantExists:  true,
+			},
+			{
+				name: "negative infinity double body serialized as string",
+				setBody: func(_ *testing.T, body pcommon.Value) {
+					body.SetDouble(math.Inf(-1))
+				},
+				wantMessage: "-Inf",
 				wantExists:  true,
 			},
 			{
