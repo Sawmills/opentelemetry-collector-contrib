@@ -536,9 +536,13 @@ func (e *logExporterImp) rerouteDrainBatch(ctx context.Context, ld plog.Logs, re
 }
 
 func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string, updateEndpointHealth, drainRemoved, healthOnly bool) (endpointHealthFailureDecision, error) {
+	var started bool
 	if reason == logFlushReasonDirect || reason == logFlushReasonResolverChange || reason == logFlushReasonShutdown {
-		le.forceStartConsume()
-	} else if !le.tryStartConsume() {
+		started = le.forceStartConsume()
+	} else {
+		started = le.tryStartConsume()
+	}
+	if !started {
 		return endpointHealthFailureDecision{}, errLogBatcherExporterStopping
 	}
 	defer le.doneConsume()

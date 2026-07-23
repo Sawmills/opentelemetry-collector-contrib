@@ -24,10 +24,11 @@ var errExporterIsStopping = errors.New("exporter is stopping")
 // consumeWG has to be incremented explicitly by the consumer of the wrapped exporter.
 type wrappedExporter struct {
 	component.Component
-	consumeWG sync.WaitGroup
-	consumeMu sync.Mutex
-	stopping  atomic.Bool
-	endpoint  string
+	consumeWG       sync.WaitGroup
+	consumeMu       sync.Mutex
+	stopping        atomic.Bool
+	shutdownStarted bool
+	endpoint        string
 
 	// we store the attributes here for both cases, to avoid new allocations on the hot path
 	endpointAttr      attribute.Set
@@ -58,6 +59,7 @@ func newWrappedExporter(exp component.Component, identifier string) *wrappedExpo
 func (we *wrappedExporter) Shutdown(ctx context.Context) error {
 	we.consumeMu.Lock()
 	we.stopping.Store(true)
+	we.shutdownStarted = true
 	we.consumeMu.Unlock()
 	we.consumeWG.Wait()
 	return we.Component.Shutdown(ctx)
@@ -77,14 +79,14 @@ func (we *wrappedExporter) tryStartConsume() bool {
 	return we.startConsume(false)
 }
 
-func (we *wrappedExporter) forceStartConsume() {
-	we.startConsume(true)
+func (we *wrappedExporter) forceStartConsume() bool {
+	return we.startConsume(true)
 }
 
 func (we *wrappedExporter) startConsume(allowStopping bool) bool {
 	we.consumeMu.Lock()
 	defer we.consumeMu.Unlock()
-	if !allowStopping && we.stopping.Load() {
+	if we.shutdownStarted || (!allowStopping && we.stopping.Load()) {
 		return false
 	}
 	we.consumeWG.Add(1)
