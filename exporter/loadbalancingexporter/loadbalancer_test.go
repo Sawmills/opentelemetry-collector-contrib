@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -293,6 +294,92 @@ func TestOnBackendChanges(t *testing.T) {
 
 	// verify
 	assert.Len(t, p.ring.items, 2*defaultWeight)
+}
+
+func TestLoadBalancerBackendSubsetBoundsExporterChurn(t *testing.T) {
+	p, creates, shutdowns := newBackendSubsetTestLoadBalancer(t, 2)
+	resolved := backendSubsetTestEndpoints(500, 10417)
+
+	p.onBackendChanges(resolved)
+	require.Len(t, p.exporters, 2)
+	require.Len(t, p.ring.endpoints, 2)
+	require.Equal(t, int64(2), creates.Load())
+	require.Equal(t, 2, p.routableBackendCount())
+
+	selected := slices.Clone(p.ring.endpoints)
+	var unselectedAddition string
+	for i := 500; i < 1000; i++ {
+		candidate := backendSubsetTestEndpoints(i+1, 10417)[i]
+		if slices.Equal(selected, p.endpointHealth.settings.backendSubset.selectEndpoints(append(slices.Clone(resolved), candidate))) {
+			unselectedAddition = candidate
+			break
+		}
+	}
+	require.NotEmpty(t, unselectedAddition)
+
+	resolved = append(resolved, unselectedAddition)
+	p.onBackendChanges(resolved)
+	require.Equal(t, int64(2), creates.Load())
+	require.Zero(t, countComponentEvents(shutdowns))
+	require.Equal(t, selected, p.ring.endpoints)
+
+	removedSelected := selected[0]
+	resolved = slices.DeleteFunc(resolved, func(endpoint string) bool {
+		return endpoint == removedSelected
+	})
+	p.onBackendChanges(resolved)
+	require.Len(t, p.exporters, 2)
+	require.Len(t, p.ring.endpoints, 2)
+	require.Equal(t, int64(3), creates.Load())
+	require.Eventually(t, func() bool {
+		return countComponentEvents(shutdowns) == 1
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestLoadBalancerBackendSubsetRecoveryDrainsDisplacedExporter(t *testing.T) {
+	p, _, shutdowns := newBackendSubsetTestLoadBalancer(t, 2)
+	resolved := backendSubsetTestEndpoints(10, 10417)
+	p.onBackendChanges(resolved)
+
+	recoveredEndpoint := p.ring.endpoints[0]
+	for range 10 {
+		decision := p.handleBackendFailure(
+			t.Context(),
+			recoveredEndpoint,
+			status.Error(codes.Unavailable, "backend unavailable"),
+		)
+		require.True(t, decision.quarantined)
+		require.Len(t, p.exporters, 2)
+		require.NotContains(t, p.exporters, recoveredEndpoint)
+
+		p.handleBackendSuccess(recoveredEndpoint)
+		require.Len(t, p.exporters, 2)
+		require.Contains(t, p.exporters, recoveredEndpoint)
+	}
+
+	require.Eventually(t, func() bool {
+		return countComponentEvents(shutdowns) == 20
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestLoadBalancerBackendSubsetFailOpenRemainsBounded(t *testing.T) {
+	p, _, _ := newBackendSubsetTestLoadBalancer(t, 2)
+	resolved := backendSubsetTestEndpoints(10, 10417)
+	p.onBackendChanges(resolved)
+
+	var decision endpointHealthFailureDecision
+	for _, endpoint := range resolved {
+		decision = p.handleBackendFailure(
+			t.Context(),
+			endpoint,
+			status.Error(codes.Unavailable, "backend unavailable"),
+		)
+	}
+
+	require.True(t, decision.failOpen)
+	require.LessOrEqual(t, len(p.exporters), 2)
+	require.LessOrEqual(t, len(p.ring.endpoints), 2)
+	require.Equal(t, 2, p.routableBackendCount())
 }
 
 func TestRemoveExtraExporters(t *testing.T) {
@@ -1572,6 +1659,38 @@ func enableBackendSubset(cfg *Config, maxEndpoints int) {
 		Enabled:      true,
 		MaxEndpoints: maxEndpoints,
 	}
+}
+
+func newBackendSubsetTestLoadBalancer(t *testing.T, maxEndpoints int) (*loadBalancer, *atomic.Int64, *sync.Map) {
+	t.Helper()
+
+	ts, telemetry := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableBackendSubset(cfg, maxEndpoints)
+	seed := "gateway-1"
+	cfg.BackendSubset.Seed = &seed
+
+	creates := &atomic.Int64{}
+	shutdowns := &sync.Map{}
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		creates.Add(1)
+		return &countingComponent{endpoint: endpoint, shutdowns: shutdowns}, nil
+	}
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, telemetry)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, p.Shutdown(context.Background()))
+	})
+	return p, creates, shutdowns
+}
+
+func countComponentEvents(events *sync.Map) int64 {
+	var total int64
+	events.Range(func(_, value any) bool {
+		total += value.(*atomic.Int64).Load()
+		return true
+	})
+	return total
 }
 
 func listenTCPForProbe(t *testing.T, address string) net.Listener {
