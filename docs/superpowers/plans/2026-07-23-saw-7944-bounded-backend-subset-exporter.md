@@ -52,7 +52,7 @@ require.ErrorContains(t, cfg.Validate(), "backend_subset.seed")
 Run:
 
 ```bash
-go test ./exporter/loadbalancingexporter -run 'TestConfigValidateBackendSubset' -count=1
+(cd exporter/loadbalancingexporter && go test ./... -run 'TestConfigValidateBackendSubset' -count=1)
 ```
 
 Expected: build failure because `BackendSubsetConfig` and `Config.BackendSubset`
@@ -142,7 +142,7 @@ if c.BackendSubset.Enabled && !c.LogRouting.IgnoreTraceID {
 Run:
 
 ```bash
-go test ./exporter/loadbalancingexporter -run 'TestConfigValidateBackendSubset|Test.*Exporter.*BackendSubset' -count=1
+(cd exporter/loadbalancingexporter && go test ./... -run 'TestConfigValidateBackendSubset|Test.*Exporter.*BackendSubset' -count=1)
 ```
 
 Expected: PASS.
@@ -196,7 +196,7 @@ different seeds produce more than one subset across a 100-seed simulation.
 Run:
 
 ```bash
-go test ./exporter/loadbalancingexporter -run 'TestBackendSubset' -count=1
+(cd exporter/loadbalancingexporter && go test ./... -run 'TestBackendSubset' -count=1)
 ```
 
 Expected: build failure because `backendSubsetSelector` does not exist.
@@ -267,7 +267,7 @@ so the test detects algorithm changes without becoming flaky.
 Run:
 
 ```bash
-go test ./exporter/loadbalancingexporter -run 'TestBackendSubset' -count=10
+(cd exporter/loadbalancingexporter && go test ./... -run 'TestBackendSubset' -count=10)
 ```
 
 Expected: PASS on every run.
@@ -307,7 +307,7 @@ endpoints, never ten. Verify `pressureSnapshot.present`, `.eligible`, and
 Run:
 
 ```bash
-go test ./exporter/loadbalancingexporter -run 'TestEndpointHealth.*BackendSubset' -count=1
+(cd exporter/loadbalancingexporter && go test ./... -run 'TestEndpointHealth.*BackendSubset' -count=1)
 ```
 
 Expected: FAIL because endpoint health returns the full eligible or present set.
@@ -356,7 +356,7 @@ No caller performs its own subset filtering.
 Run:
 
 ```bash
-go test ./exporter/loadbalancingexporter -run 'TestEndpointHealth' -count=1
+(cd exporter/loadbalancingexporter && go test ./... -run 'TestEndpointHealth' -count=1)
 ```
 
 Expected: PASS, including all pre-existing guardrail and pressure tests.
@@ -397,7 +397,7 @@ Use a counting component factory and endpoint health with `K=2` to prove:
 Run:
 
 ```bash
-go test ./exporter/loadbalancingexporter -run 'TestLoadBalancerBackendSubset' -count=1
+(cd exporter/loadbalancingexporter && go test ./... -run 'TestLoadBalancerBackendSubset' -count=1)
 ```
 
 Expected: FAIL because resolver reconciliation removes against full membership
@@ -442,9 +442,8 @@ in `replace` only when a forced replacement was created. Success paths pass
 Run:
 
 ```bash
-go test ./exporter/loadbalancingexporter \
-  -run 'TestLoadBalancerBackendSubset|TestCentralQueue.*Backend' \
-  -count=1
+(cd exporter/loadbalancingexporter && \
+  go test ./... -run 'TestLoadBalancerBackendSubset|TestCentralQueue.*Backend' -count=1)
 ```
 
 Expected: PASS.
@@ -454,9 +453,10 @@ Expected: PASS.
 Run:
 
 ```bash
-go test -race ./exporter/loadbalancingexporter \
-  -run 'TestLoadBalancerBackendSubset.*Churn|TestLoadBalancerShutdown' \
-  -count=5
+(cd exporter/loadbalancingexporter && \
+  go test -race ./... \
+    -run 'TestLoadBalancerBackendSubset.*Churn|TestLoadBalancerShutdown' \
+    -count=5)
 ```
 
 Expected: PASS with no race report or leaked goroutine.
@@ -609,7 +609,7 @@ Expected: PASS. After the PR opens, the hosted required check named
 Run:
 
 ```bash
-go test -race ./exporter/loadbalancingexporter/... -count=1
+(cd exporter/loadbalancingexporter && go test -race ./... -count=1)
 ```
 
 Expected: PASS.
@@ -620,7 +620,7 @@ Run:
 
 ```bash
 autoreview --fast --thinking high --local \
-  --parallel-tests "go test ./exporter/loadbalancingexporter/... -count=1"
+  --parallel-tests "cd exporter/loadbalancingexporter && go test ./... -count=1"
 ```
 
 Accept only findings verified in the real code. Fix verified defects, rerun the
