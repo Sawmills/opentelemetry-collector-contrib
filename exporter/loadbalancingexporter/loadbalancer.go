@@ -156,9 +156,15 @@ func newLoadBalancer(logger *zap.Logger, cfg component.Config, factory component
 		return nil, errNoResolver
 	}
 
+	backendSubset, err := newBackendSubsetSelector(oCfg.BackendSubset)
+	if err != nil {
+		return nil, err
+	}
+	endpointHealthSettings := endpointHealthSettingsFromConfig(oCfg.EndpointHealth)
+	endpointHealthSettings.backendSubset = backendSubset
+
 	activeProbeJitter := 0.0
 	if oCfg.EndpointHealth.ActiveProbe.Enabled {
-		var err error
 		activeProbeJitter, err = parseEndpointHealthActiveProbeJitter(oCfg.EndpointHealth.ActiveProbe.Jitter)
 		if err != nil {
 			return nil, err
@@ -171,7 +177,7 @@ func newLoadBalancer(logger *zap.Logger, cfg component.Config, factory component
 		componentFactory:  factory,
 		exporters:         map[string]*wrappedExporter{},
 		telemetry:         telemetry,
-		endpointHealth:    newEndpointHealthManager(endpointHealthSettingsFromConfig(oCfg.EndpointHealth)),
+		endpointHealth:    newEndpointHealthManager(endpointHealthSettings),
 		activeProbe:       oCfg.EndpointHealth.ActiveProbe,
 		activeProbeJitter: activeProbeJitter,
 	}, nil

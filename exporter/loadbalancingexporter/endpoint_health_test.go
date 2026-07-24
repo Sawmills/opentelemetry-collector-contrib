@@ -19,6 +19,61 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+func TestEndpointHealthBackendSubsetBoundsEligibleEndpoints(t *testing.T) {
+	selector := &backendSubsetSelector{seed: "gateway-1", maxEndpoints: 3}
+	manager := newEndpointHealthManager(endpointHealthSettings{
+		enabled:               true,
+		quarantineDuration:    30 * time.Second,
+		minEligibleBackends:   1,
+		maxQuarantinedPercent: 100,
+		backendSubset:         selector,
+	})
+	resolved := backendSubsetTestEndpoints(10, 4317)
+
+	result := manager.reconcile(resolved)
+	require.Equal(t, selector.selectEndpoints(resolved), result.eligible)
+	require.Len(t, result.eligible, 3)
+
+	manager.mu.RLock()
+	pressure := manager.pressureSnapshot
+	manager.mu.RUnlock()
+	require.Equal(t, endpointHealthPressureSnapshot{
+		present:  10,
+		eligible: 10,
+	}, pressure)
+}
+
+func TestEndpointHealthBackendSubsetBoundsFailOpen(t *testing.T) {
+	selector := &backendSubsetSelector{seed: "gateway-1", maxEndpoints: 3}
+	manager := newEndpointHealthManager(endpointHealthSettings{
+		enabled:               true,
+		quarantineDuration:    30 * time.Second,
+		minEligibleBackends:   1,
+		maxQuarantinedPercent: 100,
+		backendSubset:         selector,
+	})
+	resolved := backendSubsetTestEndpoints(10, 4317)
+	manager.reconcile(resolved)
+
+	var decision endpointHealthFailureDecision
+	for _, endpoint := range resolved {
+		decision = manager.markFailure(endpoint, status.Error(codes.Unavailable, "backend unavailable"))
+	}
+
+	require.True(t, decision.failOpen)
+	require.Equal(t, selector.selectEndpoints(resolved), decision.eligible)
+	require.Len(t, decision.eligible, 3)
+
+	manager.mu.RLock()
+	pressure := manager.pressureSnapshot
+	manager.mu.RUnlock()
+	require.Equal(t, endpointHealthPressureSnapshot{
+		present:   10,
+		eligible:  0,
+		pressured: 10,
+	}, pressure)
+}
+
 func TestEndpointHealthReconcileMarksStaleAndEligible(t *testing.T) {
 	now := time.Unix(100, 0)
 	manager := newEndpointHealthManager(endpointHealthSettings{
