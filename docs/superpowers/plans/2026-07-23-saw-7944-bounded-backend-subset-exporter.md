@@ -553,8 +553,11 @@ change_logs: [user]
 Run:
 
 ```bash
-make check-metadata
-go test ./exporter/loadbalancingexporter/... -count=1
+make -C exporter/loadbalancingexporter mdatagen
+git diff --exit-code -- \
+  exporter/loadbalancingexporter/internal/metadata/generated_telemetry.go \
+  exporter/loadbalancingexporter/internal/metadata/generated_telemetry_test.go
+(cd exporter/loadbalancingexporter && make test)
 git diff --check
 ```
 
@@ -585,20 +588,21 @@ git commit -m "docs(loadbalancingexporter): expose bounded subset telemetry" \
 Run:
 
 ```bash
-make gofmt
+make -C exporter/loadbalancingexporter fmt
 ```
 
 Expected: no unrelated files changed.
 
-- [ ] **Step 2: Run the required Sawmills scoped gate**
+- [ ] **Step 2: Run the local equivalent of the Sawmills scoped gate**
 
 Run:
 
 ```bash
-make scoped-tests
+make -C exporter/loadbalancingexporter lint test-twice
 ```
 
-Expected: PASS.
+Expected: PASS. After the PR opens, the hosted required check named
+`scoped-tests` must also pass on Linux and Windows.
 
 - [ ] **Step 3: Run the component race suite**
 
