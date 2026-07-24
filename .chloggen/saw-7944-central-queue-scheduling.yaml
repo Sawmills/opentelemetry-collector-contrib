@@ -1,0 +1,13 @@
+change_type: enhancement
+
+component: exporter/loadbalancing
+
+note: Reduce central queue scheduling CPU and allocations by selecting ready windows in one pass.
+
+issues: [7944]
+
+subtext: |
+  The scheduler now avoids repeatedly materializing candidate windows while
+  preserving stale fallback, fairness, and lease behavior under backlog.
+
+change_logs: [user]

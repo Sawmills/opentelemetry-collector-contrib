@@ -1,0 +1,13 @@
+change_type: bug_fix
+
+component: exporter/loadbalancing
+
+note: Prevent late forced consumes from racing exporter shutdown.
+
+issues: [7944]
+
+subtext: |
+  Removed-backend cleanup now rejects new forced consumes after shutdown starts
+  so payloads can be rerouted or requeued without reusing a waiting WaitGroup.
+
+change_logs: [user]
