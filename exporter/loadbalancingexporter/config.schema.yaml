@@ -1,4 +1,15 @@
 $defs:
+  backend_subset_config:
+    type: object
+    properties:
+      enabled:
+        type: boolean
+      max_endpoints:
+        type: integer
+        minimum: 1
+      seed:
+        x-pointer: true
+        type: string
   central_queue_config:
     type: object
     properties:
@@ -246,6 +257,8 @@ $defs:
 description: Config defines configuration for the exporter.
 type: object
 properties:
+  backend_subset:
+    $ref: backend_subset_config
   central_queue:
     $ref: central_queue_config
   endpoint_health:

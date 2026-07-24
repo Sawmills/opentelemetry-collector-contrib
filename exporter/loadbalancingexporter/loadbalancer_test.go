@@ -1565,6 +1565,15 @@ func enableEndpointHealth(cfg *Config) {
 	cfg.EndpointHealth.MaxRerouteAttempts = 1
 }
 
+func enableBackendSubset(cfg *Config, maxEndpoints int) {
+	enableEndpointHealth(cfg)
+	cfg.LogRouting.IgnoreTraceID = true
+	cfg.BackendSubset = BackendSubsetConfig{
+		Enabled:      true,
+		MaxEndpoints: maxEndpoints,
+	}
+}
+
 func listenTCPForProbe(t *testing.T, address string) net.Listener {
 	t.Helper()
 

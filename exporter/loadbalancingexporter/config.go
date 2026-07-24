@@ -51,6 +51,7 @@ type Config struct {
 	MetricBatcher             MetricBatcherConfig  `mapstructure:"metric_batcher"`
 	PayloadCodec              PayloadCodecConfig   `mapstructure:"payload_codec"`
 	EndpointHealth            EndpointHealthConfig `mapstructure:"endpoint_health"`
+	BackendSubset             BackendSubsetConfig  `mapstructure:"backend_subset"`
 
 	Protocol Protocol         `mapstructure:"protocol"`
 	Resolver ResolverSettings `mapstructure:"resolver"`
@@ -121,6 +122,12 @@ type LogRoutingConfig struct {
 	IgnoreTraceID bool `mapstructure:"ignore_trace_id"`
 	// prevent unkeyed literal initialization
 	_ struct{}
+}
+
+type BackendSubsetConfig struct {
+	Enabled      bool    `mapstructure:"enabled"`
+	MaxEndpoints int     `mapstructure:"max_endpoints"`
+	Seed         *string `mapstructure:"seed"`
 }
 
 type MetricBatcherConfig struct {
@@ -365,6 +372,9 @@ func (cfg *Config) Validate() error {
 	if err := cfg.MetricBatcher.Validate(); err != nil {
 		return err
 	}
+	if err := cfg.BackendSubset.Validate(cfg.EndpointHealth, cfg.LogRouting); err != nil {
+		return err
+	}
 	return cfg.EndpointHealth.Validate()
 }
 
@@ -494,6 +504,28 @@ func (c MetricBatcherConfig) Validate() error {
 		// Valid payload compression value.
 	default:
 		return fmt.Errorf("metric_batcher.payload_compression must be one of [none, snappy, zstd], found %q", c.PayloadCompression)
+	}
+	return nil
+}
+
+func (c BackendSubsetConfig) Validate(endpointHealth EndpointHealthConfig, logRouting LogRoutingConfig) error {
+	if !c.Enabled {
+		return nil
+	}
+	if c.MaxEndpoints <= 0 {
+		return errors.New("backend_subset.max_endpoints must be greater than 0 when backend_subset.enabled=true")
+	}
+	if c.Seed != nil && strings.TrimSpace(*c.Seed) == "" {
+		return errors.New("backend_subset.seed must be non-empty when set")
+	}
+	if !endpointHealth.Enabled {
+		return errors.New("backend_subset requires endpoint_health.enabled=true")
+	}
+	if endpointHealth.ActiveProbe.Enabled {
+		return errors.New("backend_subset is incompatible with endpoint_health.active_probe.enabled=true")
+	}
+	if !logRouting.IgnoreTraceID {
+		return errors.New("backend_subset requires log_routing.ignore_trace_id=true")
 	}
 	return nil
 }

@@ -55,6 +55,9 @@ type metricExporterImp struct {
 }
 
 func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metricExporterImp, error) {
+	if cfg.(*Config).BackendSubset.Enabled {
+		return nil, errors.New("backend_subset is only supported for logs")
+	}
 	telemetry, err := metadata.NewTelemetryBuilder(params.TelemetrySettings)
 	if err != nil {
 		return nil, err

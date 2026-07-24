@@ -53,6 +53,9 @@ type logExporterImp struct {
 
 // Create new logs exporter
 func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExporterImp, error) {
+	if c := cfg.(*Config); c.BackendSubset.Enabled && !c.LogRouting.IgnoreTraceID {
+		return nil, errors.New("backend_subset requires log_routing.ignore_trace_id=true")
+	}
 	telemetry, err := metadata.NewTelemetryBuilder(params.TelemetrySettings)
 	if err != nil {
 		return nil, err

@@ -71,6 +71,15 @@ func TestNewLogsExporter(t *testing.T) {
 	}
 }
 
+func TestNewLogsExporterRejectsBackendSubsetWithTraceAffinity(t *testing.T) {
+	cfg := simpleConfig()
+	enableBackendSubset(cfg, 32)
+	cfg.LogRouting.IgnoreTraceID = false
+
+	_, err := newLogsExporter(exportertest.NewNopSettings(metadata.Type), cfg)
+	require.ErrorContains(t, err, "backend_subset requires log_routing.ignore_trace_id=true")
+}
+
 func TestLogExporterStart(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	for _, tt := range []struct {

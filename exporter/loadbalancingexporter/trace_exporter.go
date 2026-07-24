@@ -46,6 +46,9 @@ type traceExporterImp struct {
 
 // Create new traces exporter
 func newTracesExporter(params exporter.Settings, cfg component.Config) (*traceExporterImp, error) {
+	if cfg.(*Config).BackendSubset.Enabled {
+		return nil, errors.New("backend_subset is only supported for logs")
+	}
 	telemetry, err := metadata.NewTelemetryBuilder(params.TelemetrySettings)
 	if err != nil {
 		return nil, err
