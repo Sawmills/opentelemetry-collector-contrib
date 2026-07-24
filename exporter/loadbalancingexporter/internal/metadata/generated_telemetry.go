@@ -22,23 +22,25 @@ func Tracer(settings component.TelemetrySettings) trace.Tracer {
 // TelemetryBuilder provides an interface for components to report telemetry
 // as defined in metadata and user config.
 type TelemetryBuilder struct {
-	meter                                metric.Meter
-	mu                                   sync.Mutex
-	registrations                        []metric.Registration
-	LoadbalancerBackendFailOpenTotal     metric.Int64Counter
-	LoadbalancerBackendLatency           metric.Int64Histogram
-	LoadbalancerBackendOutcome           metric.Int64Counter
-	LoadbalancerBackendQuarantineTotal   metric.Int64Counter
-	LoadbalancerBackendRequestBytes      metric.Int64Histogram
-	LoadbalancerBackendRequestItems      metric.Int64Histogram
-	LoadbalancerBackendRequestTotal      metric.Int64Counter
-	LoadbalancerBackendRerouteTotal      metric.Int64Counter
-	LoadbalancerBackendStaleTotal        metric.Int64Counter
-	LoadbalancerBackendState             metric.Int64Gauge
-	LoadbalancerBackendUnquarantineTotal metric.Int64Counter
-	LoadbalancerNumBackendUpdates        metric.Int64Counter
-	LoadbalancerNumBackends              metric.Int64Gauge
-	LoadbalancerNumResolutions           metric.Int64Counter
+	meter                                      metric.Meter
+	mu                                         sync.Mutex
+	registrations                              []metric.Registration
+	LoadbalancerBackendFailOpenTotal           metric.Int64Counter
+	LoadbalancerBackendLatency                 metric.Int64Histogram
+	LoadbalancerBackendOutcome                 metric.Int64Counter
+	LoadbalancerBackendQuarantineTotal         metric.Int64Counter
+	LoadbalancerBackendRequestBytes            metric.Int64Histogram
+	LoadbalancerBackendRequestItems            metric.Int64Histogram
+	LoadbalancerBackendRequestTotal            metric.Int64Counter
+	LoadbalancerBackendRerouteTotal            metric.Int64Counter
+	LoadbalancerBackendStaleTotal              metric.Int64Counter
+	LoadbalancerBackendState                   metric.Int64Gauge
+	LoadbalancerBackendSubsetDisplacementTotal metric.Int64Counter
+	LoadbalancerBackendUnquarantineTotal       metric.Int64Counter
+	LoadbalancerNumBackendUpdates              metric.Int64Counter
+	LoadbalancerNumBackends                    metric.Int64Gauge
+	LoadbalancerNumResolutions                 metric.Int64Counter
+	LoadbalancerNumSelectedBackends            metric.Int64Gauge
 }
 
 // TelemetryBuilderOption applies changes to default builder.
@@ -133,6 +135,12 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 		metric.WithUnit("{backends}"),
 	)
 	errs = errors.Join(errs, err)
+	builder.LoadbalancerBackendSubsetDisplacementTotal, err = builder.meter.Int64Counter(
+		"otelcol_loadbalancer_backend_subset_displacement_total",
+		metric.WithDescription("Number of backends admitted by bounded subset replacement. [Development]"),
+		metric.WithUnit("{displacements}"),
+	)
+	errs = errors.Join(errs, err)
 	builder.LoadbalancerBackendUnquarantineTotal, err = builder.meter.Int64Counter(
 		"otelcol_loadbalancer_backend_unquarantine_total",
 		metric.WithDescription("Number of times a backend endpoint was admitted after quarantine. [Development]"),
@@ -155,6 +163,12 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 		"otelcol_loadbalancer_num_resolutions",
 		metric.WithDescription("Number of times the resolver has triggered new resolutions. [Development]"),
 		metric.WithUnit("{resolutions}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerNumSelectedBackends, err = builder.meter.Int64Gauge(
+		"otelcol_loadbalancer_num_selected_backends",
+		metric.WithDescription("Current number of backends selected for routing. [Development]"),
+		metric.WithUnit("{backends}"),
 	)
 	errs = errors.Join(errs, err)
 	return &builder, errs

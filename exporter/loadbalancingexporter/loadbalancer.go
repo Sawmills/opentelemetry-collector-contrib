@@ -209,7 +209,7 @@ func (lb *loadBalancer) onBackendChanges(resolved []string) {
 	ctx := context.Background()
 
 	lb.updateLock.Lock()
-	lb.ring = newRing
+	lb.installRingLocked(newRing)
 
 	// add the missing exporters first
 	lb.addMissingExporters(ctx, resolved)
@@ -247,7 +247,7 @@ func (lb *loadBalancer) onBackendChangesWithEndpointHealth(resolved []string) {
 
 func (lb *loadBalancer) commitEndpointHealthResolverUpdateLocked(resolved []string, created []createdExporter) ([]createdExporter, []removedExporter) {
 	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
-	lb.ring = newHashRing(eligible)
+	lb.installRingLocked(newHashRing(eligible))
 
 	retained := resolved
 	if lb.endpointHealth.backendSubsetEnabled() {
@@ -264,6 +264,34 @@ func (lb *loadBalancer) removeBackendSubsetExtraExportersLocked(eligible []strin
 		return nil
 	}
 	return lb.removeExtraExportersLocked(eligible)
+}
+
+func (lb *loadBalancer) installRingLocked(ring *hashRing) {
+	previous := lb.ring
+	lb.ring = ring
+	if lb.telemetry == nil {
+		return
+	}
+
+	selected := 0
+	if ring != nil {
+		selected = len(ring.endpoints)
+	}
+	ctx := context.Background()
+	lb.telemetry.LoadbalancerNumSelectedBackends.Record(ctx, int64(selected))
+
+	if !lb.endpointHealth.backendSubsetEnabled() || previous == nil || len(previous.endpoints) == 0 || ring == nil {
+		return
+	}
+	admitted := 0
+	for _, endpoint := range ring.endpoints {
+		if !slices.Contains(previous.endpoints, endpoint) {
+			admitted++
+		}
+	}
+	if admitted > 0 {
+		lb.telemetry.LoadbalancerBackendSubsetDisplacementTotal.Add(ctx, int64(admitted))
+	}
 }
 
 type removedExporter struct {
@@ -553,7 +581,7 @@ func (lb *loadBalancer) handleBackendFailureHealthOnly(ctx context.Context, endp
 
 	lb.updateLock.Lock()
 	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
-	lb.ring = newHashRing(eligible)
+	lb.installRingLocked(newHashRing(eligible))
 	var removed []removedExporter
 	if createdExporterExists(created, endpoint) {
 		if exp, ok := lb.exporters[endpoint]; ok {
@@ -592,7 +620,7 @@ func (lb *loadBalancer) handleBackendProbeFailure(ctx context.Context, endpoint 
 
 	lb.updateLock.Lock()
 	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
-	lb.ring = newHashRing(eligible)
+	lb.installRingLocked(newHashRing(eligible))
 	var removed []removedExporter
 	endpointEligible := endpointListContains(eligible, endpoint)
 	if exp, ok := lb.exporters[endpoint]; ok && (!endpointEligible || createdExporterExists(created, endpoint)) {
@@ -629,7 +657,7 @@ func (lb *loadBalancer) handleBackendProbeSuccess(ctx context.Context, endpoint 
 
 	lb.updateLock.Lock()
 	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
-	lb.ring = newHashRing(eligible)
+	lb.installRingLocked(newHashRing(eligible))
 	duplicates := lb.installCreatedExportersLocked(created, eligible)
 	removed := lb.removeBackendSubsetExtraExportersLocked(eligible)
 	lb.refreshRoutableBackendCountLocked()
@@ -678,7 +706,7 @@ func (lb *loadBalancer) handleBackendFailureWithDrain(ctx context.Context, endpo
 
 	lb.updateLock.Lock()
 	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
-	lb.ring = newHashRing(eligible)
+	lb.installRingLocked(newHashRing(eligible))
 	var removed []removedExporter
 	endpointEligible := endpointListContains(eligible, endpoint)
 	if exp, ok := lb.exporters[endpoint]; ok && (!endpointEligible || createdExporterExists(created, endpoint)) {
@@ -736,7 +764,7 @@ func (lb *loadBalancer) handleBackendSuccess(endpoint string) {
 
 	lb.updateLock.Lock()
 	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
-	lb.ring = newHashRing(eligible)
+	lb.installRingLocked(newHashRing(eligible))
 	duplicates := lb.installCreatedExportersLocked(created, eligible)
 	removed := lb.removeBackendSubsetExtraExportersLocked(eligible)
 	lb.refreshRoutableBackendCountLocked()
@@ -769,7 +797,7 @@ func (lb *loadBalancer) refreshExpiredEndpointHealth(ctx context.Context) {
 	created := lb.createMissingExporters(ctx, refresh.eligible, nil)
 	lb.updateLock.Lock()
 	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
-	lb.ring = newHashRing(eligible)
+	lb.installRingLocked(newHashRing(eligible))
 	duplicates := lb.installCreatedExportersLocked(created, eligible)
 	removed := lb.removeBackendSubsetExtraExportersLocked(eligible)
 	lb.refreshRoutableBackendCountLocked()

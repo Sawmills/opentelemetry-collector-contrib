@@ -143,6 +143,15 @@ Refer to [config.yaml](./testdata/config.yaml) for detailed examples on using th
     * `max_concurrency` limits concurrent local probes per exporter pod. Default: `4`.
     * `fall` is the number of consecutive failed probes required before a backend is excluded. Default: `2`.
     * `rise` is the number of consecutive successful probes required before a backend is readmitted. Default: `2`.
+* The `backend_subset` property bounds the child exporters maintained by each load-balancing exporter instance. It is disabled by default.
+  * `enabled` turns bounded selection on or off.
+  * `max_endpoints` sets the maximum selected backends and must be greater than zero when enabled.
+  * `seed` optionally sets the rendezvous-selection seed. When omitted, the local hostname is used so replicas select different stable subsets.
+  * Selection scores backend hosts rather than host-port pairs. Separate exporter configurations that resolve the same hosts on different ports therefore choose the same host order. `max_endpoints` still counts endpoint entries when one resolver returns multiple ports per host.
+  * Bounded subsets support only logs with `log_routing.ignore_trace_id=true`. Traces, metrics, and trace-affine logs are rejected because limiting their backend view would break routing affinity.
+  * `endpoint_health.enabled=true` is required and `endpoint_health.active_probe.enabled=true` is incompatible. Resolver membership and health state remain complete while only the eligible selected set owns child exporters.
+  * Endpoint replacement, recovery, and fail-open remain capped at `max_endpoints`. Displaced child exporters are drained before shutdown.
+  * When used with `central_queue`, keep `central_queue.num_consumers` less than or equal to `max_endpoints` during rollout so configured drain parallelism cannot exceed the selected backend set.
 * The `log_routing` property controls log-specific routing behavior.
   * `ignore_trace_id` routes logs using an auto-generated `traceID` even when each log record has a `traceID`. Default: `false`.
 * The `log_batcher` property enables post-routing log batching per backend. It is `disabled` by default for backward compatibility.
@@ -538,6 +547,8 @@ The following metrics are recorded by this exporter:
 * `otelcol_loadbalancer_num_resolutions` represents the total number of resolutions performed by the resolver specified in the tag `resolver`, split by their outcome (`success=true|false`). For the static resolver, this should always be `1` with the tag `success=true`.
 * `otelcol_loadbalancer_num_backends` informs how many backends are currently in use. It should always match the number of items specified in the configuration file in case the `static` resolver is used, and should eventually (seconds) catch up with the DNS changes. Note that DNS caches that might exist between the load balancer and the record authority will influence how long it takes for the load balancer to see the change.
 * `otelcol_loadbalancer_num_backend_updates` records how many of the resolutions resulted in a new list of backends. Use this information to understand how frequent your backend updates are and how often the ring is rebalanced. If the DNS hostname is always returning the same list of IP addresses but this metric keeps increasing, it might indicate a bug in the load balancer.
+* `otelcol_loadbalancer_num_selected_backends` reports the number of backends currently selected for routing.
+* `otelcol_loadbalancer_backend_subset_displacement_total` counts backends admitted after the initial bounded-subset selection changes.
 * `otelcol_loadbalancer_backend_latency` measures the latency for each backend.
 * `otelcol_loadbalancer_backend_outcome` counts what the outcomes were for each endpoint, `success=true|false`.
 * When the internal LB batchers are active, age metrics are also emitted for post-routing backlog:

@@ -382,6 +382,38 @@ func TestLoadBalancerBackendSubsetFailOpenRemainsBounded(t *testing.T) {
 	require.Equal(t, 2, p.routableBackendCount())
 }
 
+func TestLoadBalancerBackendSubsetRecordsSelectionTelemetry(t *testing.T) {
+	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
+	cfg := simpleConfig()
+	enableBackendSubset(cfg, 2)
+	seed := "gateway-1"
+	cfg.BackendSubset.Seed = &seed
+	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		return mockComponent{}, nil
+	}
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+
+	resolved := backendSubsetTestEndpoints(10, 10417)
+	p.onBackendChanges(resolved)
+	metadatatest.AssertEqualLoadbalancerNumSelectedBackends(t, telemetry, []metricdata.DataPoint[int64]{
+		{Value: 2},
+	}, metricdatatest.IgnoreTimestamp())
+
+	removedSelected := p.ring.endpoints[0]
+	resolved = slices.DeleteFunc(resolved, func(endpoint string) bool {
+		return endpoint == removedSelected
+	})
+	p.onBackendChanges(resolved)
+
+	metadatatest.AssertEqualLoadbalancerNumSelectedBackends(t, telemetry, []metricdata.DataPoint[int64]{
+		{Value: 2},
+	}, metricdatatest.IgnoreTimestamp())
+	metadatatest.AssertEqualLoadbalancerBackendSubsetDisplacementTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{Value: 1},
+	}, metricdatatest.IgnoreTimestamp())
+}
+
 func TestRemoveExtraExporters(t *testing.T) {
 	// prepare
 	ts, tb := getTelemetryAssets(t)

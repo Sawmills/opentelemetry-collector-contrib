@@ -176,6 +176,22 @@ func AssertEqualLoadbalancerBackendState(t *testing.T, tt *componenttest.Telemet
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }
 
+func AssertEqualLoadbalancerBackendSubsetDisplacementTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_backend_subset_displacement_total",
+		Description: "Number of backends admitted by bounded subset replacement. [Development]",
+		Unit:        "{displacements}",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_backend_subset_displacement_total")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
 func AssertEqualLoadbalancerBackendUnquarantineTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_loadbalancer_backend_unquarantine_total",
@@ -234,6 +250,20 @@ func AssertEqualLoadbalancerNumResolutions(t *testing.T, tt *componenttest.Telem
 		},
 	}
 	got, err := tt.GetMetric("otelcol_loadbalancer_num_resolutions")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerNumSelectedBackends(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_num_selected_backends",
+		Description: "Current number of backends selected for routing. [Development]",
+		Unit:        "{backends}",
+		Data: metricdata.Gauge[int64]{
+			DataPoints: dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_num_selected_backends")
 	require.NoError(t, err)
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }
