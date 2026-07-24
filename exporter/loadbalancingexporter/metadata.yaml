@@ -149,6 +149,14 @@ telemetry:
       unit: "{backends}"
       gauge:
         value_type: int
+    loadbalancer_backend_subset_displacement_total:
+      enabled: true
+      stability: development
+      description: Number of backends admitted by bounded subset replacement.
+      unit: "{displacements}"
+      sum:
+        value_type: int
+        monotonic: true
     loadbalancer_backend_unquarantine_total:
       attributes: [endpoint, reason]
       enabled: true
@@ -185,6 +193,13 @@ telemetry:
       sum:
         value_type: int
         monotonic: true
+    loadbalancer_num_selected_backends:
+      enabled: true
+      stability: development
+      description: Current number of backends selected for routing.
+      unit: "{backends}"
+      gauge:
+        value_type: int
 
 tests:
   config:

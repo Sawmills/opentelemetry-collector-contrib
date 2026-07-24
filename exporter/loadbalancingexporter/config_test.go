@@ -553,6 +553,99 @@ func TestConfigValidateEndpointHealth(t *testing.T) {
 	cfg.EndpointHealth.MaxQuarantinedPercent = defaultEndpointHealthMaxQuarantinedPercent
 }
 
+func TestConfigValidateBackendSubset(t *testing.T) {
+	validConfig := func() *Config {
+		cfg := createDefaultConfig().(*Config)
+		cfg.BackendSubset = BackendSubsetConfig{
+			Enabled:      true,
+			MaxEndpoints: 32,
+		}
+		cfg.EndpointHealth.Enabled = true
+		cfg.LogRouting.IgnoreTraceID = true
+		return cfg
+	}
+
+	tests := []struct {
+		name        string
+		mutate      func(*Config)
+		expectedErr string
+	}{
+		{
+			name:        "valid hostname seed",
+			mutate:      func(*Config) {},
+			expectedErr: "",
+		},
+		{
+			name: "valid explicit seed",
+			mutate: func(cfg *Config) {
+				seed := "gateway-1"
+				cfg.BackendSubset.Seed = &seed
+			},
+			expectedErr: "",
+		},
+		{
+			name: "zero max endpoints",
+			mutate: func(cfg *Config) {
+				cfg.BackendSubset.MaxEndpoints = 0
+			},
+			expectedErr: "backend_subset.max_endpoints",
+		},
+		{
+			name: "endpoint health disabled",
+			mutate: func(cfg *Config) {
+				cfg.EndpointHealth.Enabled = false
+			},
+			expectedErr: "backend_subset requires endpoint_health.enabled=true",
+		},
+		{
+			name: "active probe enabled",
+			mutate: func(cfg *Config) {
+				cfg.EndpointHealth.ActiveProbe.Enabled = true
+			},
+			expectedErr: "backend_subset is incompatible with endpoint_health.active_probe.enabled=true",
+		},
+		{
+			name: "trace affinity enabled",
+			mutate: func(cfg *Config) {
+				cfg.LogRouting.IgnoreTraceID = false
+			},
+			expectedErr: "backend_subset requires log_routing.ignore_trace_id=true",
+		},
+		{
+			name: "blank explicit seed",
+			mutate: func(cfg *Config) {
+				seed := "  "
+				cfg.BackendSubset.Seed = &seed
+			},
+			expectedErr: "backend_subset.seed",
+		},
+		{
+			name: "disabled ignores nested values",
+			mutate: func(cfg *Config) {
+				cfg.BackendSubset.Enabled = false
+				cfg.BackendSubset.MaxEndpoints = -1
+				cfg.EndpointHealth.Enabled = false
+				cfg.LogRouting.IgnoreTraceID = false
+			},
+			expectedErr: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			tt.mutate(cfg)
+
+			err := cfg.Validate()
+			if tt.expectedErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.expectedErr)
+		})
+	}
+}
+
 func TestConfigValidateEndpointHealthActiveProbe(t *testing.T) {
 	validProbe := EndpointHealthActiveProbeConfig{
 		Enabled:        true,

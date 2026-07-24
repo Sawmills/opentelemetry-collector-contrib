@@ -145,6 +145,14 @@ Current endpoint health state by backend.
 | endpoint | The endpoint of the backend | Any Str | - |
 | state | Endpoint health state | Str: ``eligible``, ``quarantined``, ``stale`` | - |
 
+### otelcol_loadbalancer_backend_subset_displacement_total
+
+Number of backends admitted by bounded subset replacement.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| {displacements} | Sum | Int | true | Development |
+
 ### otelcol_loadbalancer_backend_unquarantine_total
 
 Number of times a backend endpoint was admitted after quarantine.
@@ -202,3 +210,11 @@ Number of times the resolver has triggered new resolutions.
 | ---- | ----------- | ------ | ------------------- |
 | success | Whether an outcome was successful | Any Bool | - |
 | resolver | Resolver used | Str: ``aws``, ``dns``, ``k8s``, ``static`` | - |
+
+### otelcol_loadbalancer_num_selected_backends
+
+Current number of backends selected for routing.
+
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| {backends} | Gauge | Int | Development |

@@ -1,0 +1,8 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Add opt-in bounded backend subsets for affinity-free logs.
+issues: [7944]
+subtext: |
+  Host-keyed rendezvous selection caps child OTLP transports while preserving
+  endpoint-health replacement, fail-open bounds, and exporter draining.
+change_logs: [user]

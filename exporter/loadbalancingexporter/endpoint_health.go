@@ -42,6 +42,7 @@ type endpointHealthSettings struct {
 	minEligibleBackends   int
 	maxQuarantinedPercent int
 	activeProbe           endpointHealthActiveProbeSettings
+	backendSubset         *backendSubsetSelector
 	now                   func() time.Time
 }
 
@@ -160,6 +161,10 @@ func (m *endpointHealthManager) enabled() bool {
 
 func (m *endpointHealthManager) rerouteOnFailure() bool {
 	return m != nil && m.settings.enabled && m.settings.rerouteOnFailure
+}
+
+func (m *endpointHealthManager) backendSubsetEnabled() bool {
+	return m != nil && m.settings.backendSubset != nil
 }
 
 func (m *endpointHealthManager) reconcile(resolved []string) endpointHealthReconcileResult {
@@ -548,9 +553,16 @@ func (m *endpointHealthManager) eligibleEndpointsLockedWithRefresh(now time.Time
 	failOpenStarted := failOpen && !m.failOpenActive
 	m.failOpenActive = failOpen
 	if failOpen {
-		return present, true, failOpenStarted
+		return m.selectEndpoints(present), true, failOpenStarted
 	}
-	return eligible, false, false
+	return m.selectEndpoints(eligible), false, false
+}
+
+func (m *endpointHealthManager) selectEndpoints(endpoints []string) []string {
+	if m.settings.backendSubset == nil {
+		return endpoints
+	}
+	return m.settings.backendSubset.selectEndpoints(endpoints)
 }
 
 func (m *endpointHealthManager) shouldFailOpenLocked(present, eligible, quarantined int) bool {

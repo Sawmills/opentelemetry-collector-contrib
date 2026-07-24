@@ -66,6 +66,14 @@ func TestNewTracesExporter(t *testing.T) {
 	}
 }
 
+func TestNewTracesExporterRejectsBackendSubset(t *testing.T) {
+	cfg := simpleConfig()
+	enableBackendSubset(cfg, 32)
+
+	_, err := newTracesExporter(exportertest.NewNopSettings(metadata.Type), cfg)
+	require.ErrorContains(t, err, "backend_subset is only supported for logs")
+}
+
 func TestTracesExporterStart(t *testing.T) {
 	for _, tt := range []struct {
 		desc string

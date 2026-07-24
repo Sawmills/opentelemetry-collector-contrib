@@ -102,6 +102,9 @@ func createDefaultConfig() component.Config {
 				Rise:           defaultEndpointHealthActiveProbeRise,
 			},
 		},
+		BackendSubset: BackendSubsetConfig{
+			Enabled: false,
+		},
 	}
 }
 

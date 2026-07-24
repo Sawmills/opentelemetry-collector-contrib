@@ -110,6 +110,15 @@ func TestNewMetricsExporter(t *testing.T) {
 	}
 }
 
+func TestNewMetricsExporterRejectsBackendSubset(t *testing.T) {
+	cfg := serviceBasedRoutingConfig()
+	enableBackendSubset(cfg, 32)
+	ts, _ := getTelemetryAssets(t)
+
+	_, err := newMetricsExporter(ts, cfg)
+	require.ErrorContains(t, err, "backend_subset is only supported for logs")
+}
+
 func TestMetricsExporterStart(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	for _, tt := range []struct {
