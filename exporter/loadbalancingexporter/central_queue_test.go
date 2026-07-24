@@ -249,6 +249,62 @@ func TestCentralQueueTryLeaseWithAcquirePreparesOnlyOneReadyWindow(t *testing.T)
 	lease.done()
 }
 
+func TestCentralQueuePrepareSingleReadyWindowMatchesGenericScheduler(t *testing.T) {
+	now := time.Unix(100, 0)
+	for scenario := range 200 {
+		settings := centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 500,
+			maxUncompressedBatchBytes:    300,
+			targetCompressedBytes:        100,
+			maxBatchDelay:                2 * time.Second,
+			maxReadyWindows:              8,
+		}
+		fastQueue := newCentralQueue(settings)
+		genericQueue := newCentralQueue(settings)
+
+		for lane := range 12 {
+			routingKey := fmt.Appendf(nil, "lane-%02d", lane)
+			itemCount := 1 + (scenario+lane)%5
+			for itemIndex := range itemCount {
+				item := centralQueueItem{
+					signal:             signalKindLogs,
+					routingKey:         routingKey,
+					compressedBytes:    10 + (scenario+lane+itemIndex)%5*10,
+					uncompressedBytes:  20 + (scenario+lane*2+itemIndex)%4*20,
+					count:              1,
+					enqueuedAtUnixNano: now.Add(-time.Duration((scenario+lane*3+itemIndex)%20) * time.Second).UnixNano(),
+				}
+				if (scenario+lane+itemIndex)%13 == 0 {
+					item.nextAttemptUnixNano = now.Add(time.Second).UnixNano()
+				}
+				require.NoError(t, fastQueue.enqueueAt(item, now))
+				require.NoError(t, genericQueue.enqueueAt(item, now))
+			}
+		}
+
+		inflightBytes := int64((scenario % 4) * 100)
+		fastQueue.currentInflightBytes = inflightBytes
+		genericQueue.currentInflightBytes = inflightBytes
+
+		fastQueue.mu.Lock()
+		fastState := fastQueue.prepareSingleReadyWindowLocked(now)
+		fastQueue.mu.Unlock()
+
+		genericQueue.mu.Lock()
+		genericState := genericQueue.prepareReadyWindowsLocked(now, 1)
+		genericQueue.mu.Unlock()
+
+		require.Equalf(t, genericState, fastState, "scenario %d scheduler state", scenario)
+		require.Equalf(t, genericQueue.ready, fastQueue.ready, "scenario %d ready windows", scenario)
+		require.Equalf(t, genericQueue.itemCount, fastQueue.itemCount, "scenario %d item count", scenario)
+		require.Equalf(t, genericQueue.currentInflightBytes, fastQueue.currentInflightBytes, "scenario %d inflight bytes", scenario)
+		for routingKey, genericBucket := range genericQueue.bucketsByKey {
+			require.Equalf(t, genericBucket.items, fastQueue.bucketsByKey[routingKey].items, "scenario %d bucket %s", scenario, routingKey)
+		}
+	}
+}
+
 func TestCentralQueueLeaseWithAcquireRetriesWhenConsumersBecomeAvailable(t *testing.T) {
 	q := newCentralQueue(centralQueueSettings{
 		maxCompressedBytes:           100,
@@ -1520,6 +1576,59 @@ func BenchmarkCentralQueueDrainInterleavedBacklog(b *testing.B) {
 
 		for q.len() > 0 {
 			lease, err := q.tryLease(now.Add(time.Second))
+			require.NoError(b, err)
+			if lease == nil {
+				b.Fatalf("queue stalled with %d items remaining", q.len())
+			}
+			lease.done()
+		}
+	}
+}
+
+func BenchmarkCentralQueueDrainInterleavedBacklogWithAcquire(b *testing.B) {
+	const (
+		laneCount             = 64
+		itemsPerLane          = 512
+		itemCompressedBytes   = 4 * 1024
+		itemUncompressedBytes = 16 * 1024
+		targetCompressedBytes = 256 * 1024
+	)
+
+	laneKeys := make([][]byte, laneCount)
+	for lane := range laneCount {
+		laneKeys[lane] = fmt.Appendf(nil, "lane-%02d", lane)
+	}
+	now := time.Unix(1000, 0)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		q := newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           int64(laneCount * itemsPerLane * itemCompressedBytes),
+			maxInflightUncompressedBytes: int64(laneCount * targetCompressedBytes * 16),
+			maxUncompressedBatchBytes:    laneCount * targetCompressedBytes,
+			targetCompressedBytes:        targetCompressedBytes,
+			maxBatchDelay:                time.Second,
+			maxReadyWindows:              laneCount,
+		})
+
+		b.StopTimer()
+		for itemIndex := range itemsPerLane {
+			for lane := range laneCount {
+				require.NoError(b, q.enqueueAt(centralQueueItem{
+					signal:            signalKindLogs,
+					routingKey:        laneKeys[lane],
+					compressedBytes:   itemCompressedBytes,
+					uncompressedBytes: itemUncompressedBytes,
+					count:             1,
+				}, now.Add(time.Duration(itemIndex)*time.Nanosecond)))
+			}
+		}
+		b.StartTimer()
+
+		for q.len() > 0 {
+			lease, err := q.tryLeaseWithAcquire(now.Add(time.Second), func(int64, centralQueueWindow) (func(), bool) {
+				return func() {}, true
+			})
 			require.NoError(b, err)
 			if lease == nil {
 				b.Fatalf("queue stalled with %d items remaining", q.len())

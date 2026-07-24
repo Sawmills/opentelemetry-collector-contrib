@@ -395,7 +395,15 @@ func (e *metricExporterImp) consumeCentralQueueMetricWindowAttempt(ctx context.C
 		return nil
 	}
 
-	exp.forceStartConsume()
+	if !exp.forceStartConsume() {
+		backendLease.release()
+		if directRerouteAttemptAllowed(e.loadBalancer, rerouteAttempt) {
+			rerouteErr := e.consumeCentralQueueMetricWindowAttempt(ctx, window, rerouteAttempt+1, nil)
+			e.loadBalancer.recordBackendReroute(ctx, "metrics", endpointFailureExporterStopping, rerouteErr)
+			return rerouteErr
+		}
+		return errExporterIsStopping
+	}
 	defer exp.doneConsume()
 
 	recordMetricBackendRequest(ctx, e.telemetry, exp.metricSignalAttr, exp.metricRequestAttr, md)
@@ -695,9 +703,13 @@ func (e *metricExporterImp) consumeBatch(ctx context.Context, we *wrappedExporte
 		retryMetrics = pmetric.NewMetrics()
 		md.CopyTo(retryMetrics)
 	}
+	var started bool
 	if reason == metricFlushReasonResolverChange || reason == metricFlushReasonShutdown {
-		we.forceStartConsume()
-	} else if !we.tryStartConsume() {
+		started = we.forceStartConsume()
+	} else {
+		started = we.tryStartConsume()
+	}
+	if !started {
 		if retryAllowed {
 			return metricBatcherRerouteableError{
 				err:  errMetricBatcherExporterStopping,

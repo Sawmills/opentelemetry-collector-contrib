@@ -2107,6 +2107,44 @@ func TestConsumeLogLegacyPathIgnoresStoppingGate(t *testing.T) {
 	assert.Equal(t, int64(1), logsConsumed.Load())
 }
 
+func TestConsumeLogDirectReroutesExporterAfterShutdownStarts(t *testing.T) {
+	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+
+	lb, err := newLoadBalancer(ts.Logger, cfg, nil, tb)
+	require.NoError(t, err)
+
+	stoppedExp := newWrappedExporter(newNopMockLogsExporter(), "endpoint-1:4317")
+	require.NoError(t, stoppedExp.Shutdown(t.Context()))
+
+	logsConsumed := atomic.Int64{}
+	liveExp := newWrappedExporter(newMockLogsExporter(func(_ context.Context, ld plog.Logs) error {
+		logsConsumed.Add(int64(ld.LogRecordCount()))
+		return nil
+	}), "endpoint-2:4317")
+	lb.ring = newHashRing([]string{"endpoint-2"})
+	lb.exporters = map[string]*wrappedExporter{
+		"endpoint-2:4317": liveExp,
+	}
+
+	p, err := newLogsExporter(ts, cfg)
+	require.NoError(t, err)
+	p.loadBalancer = lb
+
+	logs := simpleLogs()
+	retryLogs := plog.NewLogs()
+	logs.CopyTo(retryLogs)
+	require.NoError(t, p.consumeLogDirectAttempt(t.Context(), stoppedExp, logs, retryLogs, 0))
+	assert.Equal(t, int64(1), logsConsumed.Load())
+	metadatatest.AssertEqualLoadbalancerBackendRerouteTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("signal", "logs"), attribute.String("result", "success"), attribute.String("reason", "exporter_stopping")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+}
+
 func TestEnqueueEndpointBatchesReroutesStoppingExporterOnce(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	logsConsumed := atomic.Int64{}

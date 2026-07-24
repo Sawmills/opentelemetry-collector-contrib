@@ -371,6 +371,11 @@ func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context
 	}
 	decision, err := e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect, true, false, false)
 	backendLease.release()
+	if errors.Is(err, errLogBatcherExporterStopping) && directRerouteAttemptAllowed(e.loadBalancer, rerouteAttempt) {
+		rerouteErr := e.consumeCentralQueueLogWindowAttempt(ctx, window, rerouteAttempt+1, nil)
+		e.loadBalancer.recordBackendReroute(ctx, "logs", endpointFailureExporterStopping, rerouteErr)
+		return rerouteErr
+	}
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, le.endpoint, decision, rerouteAttempt) {
 		rerouteErr := e.consumeCentralQueueLogWindowAttempt(ctx, window, rerouteAttempt+1, nil)
 		e.loadBalancer.recordBackendReroute(ctx, "logs", decision.reason, rerouteErr)
@@ -465,7 +470,16 @@ func (e *logExporterImp) consumeLogDirect(ctx context.Context, ld plog.Logs, rer
 		retryLogs = plog.NewLogs()
 		ld.CopyTo(retryLogs)
 	}
+	return e.consumeLogDirectAttempt(ctx, le, ld, retryLogs, rerouteAttempt)
+}
+
+func (e *logExporterImp) consumeLogDirectAttempt(ctx context.Context, le *wrappedExporter, ld, retryLogs plog.Logs, rerouteAttempt int) error {
 	decision, err := e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect, true, true, false)
+	if errors.Is(err, errLogBatcherExporterStopping) && directRerouteAttemptAllowed(e.loadBalancer, rerouteAttempt) {
+		rerouteErr := e.consumeLogDirect(ctx, retryLogs, rerouteAttempt+1)
+		e.loadBalancer.recordBackendReroute(ctx, "logs", endpointFailureExporterStopping, rerouteErr)
+		return rerouteErr
+	}
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, le.endpoint, decision, rerouteAttempt) {
 		rerouteErr := e.consumeLogDirect(ctx, retryLogs, rerouteAttempt+1)
 		e.loadBalancer.recordBackendReroute(ctx, "logs", decision.reason, rerouteErr)
@@ -536,9 +550,13 @@ func (e *logExporterImp) rerouteDrainBatch(ctx context.Context, ld plog.Logs, re
 }
 
 func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrappedExporter, ld plog.Logs, reason string, updateEndpointHealth, drainRemoved, healthOnly bool) (endpointHealthFailureDecision, error) {
+	var started bool
 	if reason == logFlushReasonDirect || reason == logFlushReasonResolverChange || reason == logFlushReasonShutdown {
-		le.forceStartConsume()
-	} else if !le.tryStartConsume() {
+		started = le.forceStartConsume()
+	} else {
+		started = le.tryStartConsume()
+	}
+	if !started {
 		return endpointHealthFailureDecision{}, errLogBatcherExporterStopping
 	}
 	defer le.doneConsume()

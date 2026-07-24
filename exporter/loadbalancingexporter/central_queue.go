@@ -230,11 +230,11 @@ func (q *centralQueue) tryLeaseWithAcquire(now time.Time, acquire centralQueueLe
 
 		state := centralQueueSchedulerStateReady
 		if len(q.ready) == 0 {
-			readyWindowLimit := q.settings.maxReadyWindows
 			if acquire != nil {
-				readyWindowLimit = 1
+				state = q.prepareSingleReadyWindowLocked(now)
+			} else {
+				state = q.prepareReadyWindowsLocked(now, q.settings.maxReadyWindows)
 			}
-			state = q.prepareReadyWindowsLocked(now, readyWindowLimit)
 		}
 		if len(q.ready) == 0 {
 			q.mu.Unlock()
@@ -277,6 +277,94 @@ func (q *centralQueue) tryLeaseWithAcquire(now time.Time, acquire centralQueueLe
 		lease.consumerRelease = release
 		return lease, nil
 	}
+}
+
+// prepareSingleReadyWindowLocked avoids collecting and sorting every candidate
+// when the adaptive consumer path can lease only one window. It preserves the
+// generic scheduler's stale-fallback, target, and fresh-fallback priority.
+func (q *centralQueue) prepareSingleReadyWindowLocked(now time.Time) centralQueueSchedulerState {
+	var staleFallback centralQueueWindowCandidate
+	var target centralQueueWindowCandidate
+	var freshFallback centralQueueWindowCandidate
+	var hasStaleFallback bool
+	var hasTarget bool
+	var hasFreshFallback bool
+	var targetBlocked bool
+	var freshFallbackBlocked bool
+
+	nowUnixNano := now.UnixNano()
+	staleCutoffUnixNano := int64(0)
+	if q.settings.forceScheduleAge > 0 {
+		staleCutoffUnixNano = now.Add(-q.settings.forceScheduleAge).UnixNano()
+	}
+
+	for _, bucket := range q.readyBuckets {
+		if bucket.readyAtUnixNano > nowUnixNano {
+			continue
+		}
+		candidate, _ := q.buildWindowCandidateFromBucketLocked(bucket, now)
+		if len(candidate.indexes) == 0 {
+			continue
+		}
+
+		blocked := q.windowInflightBlockedWithBase(candidate.window, q.currentInflightBytes)
+		switch {
+		case candidate.window.flushReason == centralQueueFlushReasonTargetReached:
+			if blocked {
+				targetBlocked = true
+				continue
+			}
+			if !hasTarget || centralQueueWindowCandidateLess(candidate, target) {
+				target = candidate
+				hasTarget = true
+			}
+		case staleCutoffUnixNano > 0 &&
+			candidate.window.oldestEnqueuedAt > 0 &&
+			candidate.window.oldestEnqueuedAt <= staleCutoffUnixNano:
+			if blocked {
+				continue
+			}
+			if !hasStaleFallback || centralQueueWindowCandidateLess(candidate, staleFallback) {
+				staleFallback = candidate
+				hasStaleFallback = true
+			}
+		default:
+			if blocked {
+				freshFallbackBlocked = true
+				continue
+			}
+			if !hasFreshFallback || centralQueueWindowCandidateLess(candidate, freshFallback) {
+				freshFallback = candidate
+				hasFreshFallback = true
+			}
+		}
+	}
+
+	switch {
+	case hasStaleFallback:
+		return q.scheduleSingleReadyWindowCandidateLocked(staleFallback, now)
+	case hasTarget:
+		return q.scheduleSingleReadyWindowCandidateLocked(target, now)
+	case targetBlocked:
+		return centralQueueSchedulerStateInflightBytes
+	case hasFreshFallback:
+		return q.scheduleSingleReadyWindowCandidateLocked(freshFallback, now)
+	case freshFallbackBlocked:
+		return centralQueueSchedulerStateInflightBytes
+	default:
+		return centralQueueSchedulerStateWaiting
+	}
+}
+
+func (q *centralQueue) scheduleSingleReadyWindowCandidateLocked(candidate centralQueueWindowCandidate, now time.Time) centralQueueSchedulerState {
+	scheduled, blocked := q.scheduleReadyWindowCandidatesLocked([]centralQueueWindowCandidate{candidate}, now, 1)
+	if scheduled {
+		return centralQueueSchedulerStateReadyWindowLimit
+	}
+	if blocked {
+		return centralQueueSchedulerStateInflightBytes
+	}
+	return centralQueueSchedulerStateWaiting
 }
 
 func (q *centralQueue) prepareReadyWindowsLocked(now time.Time, readyWindowLimit int) centralQueueSchedulerState {
@@ -548,16 +636,20 @@ func (q *centralQueue) buildWindowCandidateFromBucketLocked(bucket *centralQueue
 
 func sortCentralQueueWindowCandidates(candidates []centralQueueWindowCandidate) {
 	sort.Slice(candidates, func(i, j int) bool {
-		left := candidates[i].bucket
-		right := candidates[j].bucket
-		if left == nil || right == nil {
-			return right != nil
-		}
-		if left.readyAtUnixNano != right.readyAtUnixNano {
-			return left.readyAtUnixNano < right.readyAtUnixNano
-		}
-		return left.readySequence < right.readySequence
+		return centralQueueWindowCandidateLess(candidates[i], candidates[j])
 	})
+}
+
+func centralQueueWindowCandidateLess(leftCandidate, rightCandidate centralQueueWindowCandidate) bool {
+	left := leftCandidate.bucket
+	right := rightCandidate.bucket
+	if left == nil || right == nil {
+		return right != nil
+	}
+	if left.readyAtUnixNano != right.readyAtUnixNano {
+		return left.readyAtUnixNano < right.readyAtUnixNano
+	}
+	return left.readySequence < right.readySequence
 }
 
 func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQueueWindowCandidate, now time.Time, readyWindowLimit int) (bool, bool) {
