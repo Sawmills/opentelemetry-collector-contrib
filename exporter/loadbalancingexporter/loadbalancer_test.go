@@ -1711,7 +1711,7 @@ func newBackendSubsetTestLoadBalancer(t *testing.T, maxEndpoints int) (*loadBala
 	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, telemetry)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, p.Shutdown(context.Background()))
+		require.NoError(t, p.Shutdown(context.WithoutCancel(t.Context())))
 	})
 	return p, creates, shutdowns
 }
