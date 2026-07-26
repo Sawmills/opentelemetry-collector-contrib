@@ -474,7 +474,7 @@ func TestBulkIndexerSamplesFailedDocsInputByIndex(t *testing.T) {
 
 	ctx := t.Context()
 	session := bi.StartSession(ctx)
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		require.NoError(t, session.Add(ctx, "logs-a", "", "", strings.NewReader(`{"status":"bad"}`), nil, docappender.ActionCreate))
 	}
 	require.NoError(t, session.Flush(ctx))
