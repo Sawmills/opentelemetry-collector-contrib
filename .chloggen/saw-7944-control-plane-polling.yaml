@@ -1,0 +1,14 @@
+change_type: enhancement
+
+component: exporter/loadbalancing
+
+note: Reduce load-balancing control-plane CPU and allocations for large backend sets.
+
+issues: [7944]
+
+subtext: |
+  Endpoint eligibility now uses an immutable constant-time snapshot, unchanged
+  endpoint sets skip ring rebuilds, consistent hashing avoids per-position
+  allocations, and central queue wakeups use notifications with bounded fallback.
+
+change_logs: [user]
