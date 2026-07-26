@@ -168,6 +168,9 @@ jobs:
         if: needs.changedfiles.outputs.go_sources
         env:
           CHANGED_GOLANG_SOURCES: ${{ needs.changedfiles.outputs.go_sources }}
+          # Bound analysis/compiler memory on the 8 GiB scoped-test runner.
+          GOMAXPROCS: "2"
+          GOMEMLIMIT: 6GiB
         run: |
           make run-changed-source-package-tests
           make run-changed-dependent-module-tests CMD="make lint test-twice"
