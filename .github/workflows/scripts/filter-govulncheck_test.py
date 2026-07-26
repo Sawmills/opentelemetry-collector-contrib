@@ -161,6 +161,31 @@ class FilterGovulncheckTest(unittest.TestCase):
         text_result = subprocess.CompletedProcess([], 3, "vulnerable", "")
         self.assertEqual((3, 2), self.run_filter([json_result, text_result]))
 
+    def test_ebpf_profiler_library_finding_passes(self) -> None:
+        result = subprocess.CompletedProcess(
+            [],
+            FILTER.GOVULNCHECK_VULNERABILITIES_FOUND,
+            finding(
+                "GO-2026-5343",
+                "go.opentelemetry.io/ebpf-profiler/libpf/basehash",
+            ),
+            "",
+        )
+        self.assertEqual((0, 1), self.run_filter([result]))
+
+    def test_ebpf_profiler_process_finding_fails(self) -> None:
+        json_result = subprocess.CompletedProcess(
+            [],
+            FILTER.GOVULNCHECK_VULNERABILITIES_FOUND,
+            finding(
+                "GO-2026-5343",
+                "go.opentelemetry.io/ebpf-profiler/process",
+            ),
+            "",
+        )
+        text_result = subprocess.CompletedProcess([], 3, "vulnerable", "")
+        self.assertEqual((3, 2), self.run_filter([json_result, text_result]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -23,6 +23,11 @@ PROMETHEUS_WEB_PACKAGES = {
     "github.com/prometheus/prometheus/web",
 }
 
+EBPF_PROFILER_AGENT_PACKAGES = {
+    "go.opentelemetry.io/ebpf-profiler/process",
+    "go.opentelemetry.io/ebpf-profiler/tracer",
+}
+
 PACKAGE_SCOPED_OSVS = {
     # The Go vulnerability database currently maps these Docker Engine
     # daemon-only advisories to the legacy monolithic module.
@@ -38,6 +43,10 @@ PACKAGE_SCOPED_OSVS = {
     "GO-2026-5381": PROMETHEUS_WEB_PACKAGES,
     "GO-2026-5662": PROMETHEUS_WEB_PACKAGES,
     "GO-2026-5710": PROMETHEUS_WEB_PACKAGES,
+    # The affected process traversal is used by the profiling agent. The
+    # Elasticsearch exporter imports only libpf hash and synchronization
+    # helpers, not the agent or process inspection paths.
+    "GO-2026-5343": EBPF_PROFILER_AGENT_PACKAGES,
 }
 
 GOVULNCHECK_VULNERABILITIES_FOUND = 3
@@ -170,7 +179,7 @@ def main() -> int:
     if findings:
         ignored = ", ".join(sorted(set(findings)))
         print(
-            f"govulncheck findings limited to ignored no-fix advisories: {ignored}",
+            f"govulncheck findings limited to scoped non-exploitable advisories: {ignored}",
             file=sys.stderr,
         )
         return 0

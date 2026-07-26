@@ -31,6 +31,7 @@ import (
 	toolkit_web "github.com/prometheus/exporter-toolkit/web"
 	promconfig "github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/discovery"
+	"github.com/prometheus/prometheus/promql/parser"
 	"github.com/prometheus/prometheus/scrape"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/util/httputil"
@@ -189,7 +190,7 @@ func (r *pReceiver) initPrometheusComponents(
 	// for testing only
 	if r.cfg.skipOffsetting {
 		optsValue := reflect.ValueOf(scrapeOpts).Elem()
-		field := optsValue.FieldByName("skipOffsetting")
+		field := optsValue.FieldByName("skipJitterOffsetting")
 		reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).
 			Elem().
 			Set(reflect.ValueOf(true))
@@ -354,6 +355,7 @@ func (r *pReceiver) initAPIServer(ctx context.Context, host component.Host) erro
 		nil,   // OverrideErrorCode
 		nil,   // FeatureRegistry
 		api_v1.OpenAPIOptions{},
+		parser.NewParser(parser.Options{}),
 	)
 
 	// Create listener and monitor with conntrack in the same way as the Prometheus web package: https://github.com/prometheus/prometheus/blob/6150e1ca0ede508e56414363cc9062ef522db518/web/web.go#L564-L579
