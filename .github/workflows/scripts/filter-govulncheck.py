@@ -148,6 +148,9 @@ def main() -> int:
         sys.stderr.write(text_result.stderr)
         return text_result.returncode
 
+    # govulncheck reports module and package findings as informational context;
+    # only reachable symbol findings produce its vulnerability exit status.
+    # Preserve that contract after removing known false-positive symbols.
     if symbol_findings:
         ignored = ", ".join(sorted(set(symbol_findings)))
         print(

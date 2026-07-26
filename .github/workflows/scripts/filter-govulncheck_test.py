@@ -7,7 +7,7 @@ import pathlib
 import subprocess
 import sys
 import unittest
-from unittest import mock
+import unittest.mock
 
 
 SCRIPT_PATH = pathlib.Path(__file__).with_name("filter-govulncheck.py")
@@ -30,10 +30,14 @@ class FilterGovulncheckTest(unittest.TestCase):
         results: list[subprocess.CompletedProcess[str]],
     ) -> tuple[int, int]:
         with (
-            mock.patch.object(FILTER, "run", side_effect=results) as run,
-            mock.patch.object(sys, "argv", [str(SCRIPT_PATH), "govulncheck", "./..."]),
-            mock.patch.object(sys, "stdout", io.StringIO()),
-            mock.patch.object(sys, "stderr", io.StringIO()),
+            unittest.mock.patch.object(FILTER, "run", side_effect=results) as run,
+            unittest.mock.patch.object(
+                sys,
+                "argv",
+                [str(SCRIPT_PATH), "govulncheck", "./..."],
+            ),
+            unittest.mock.patch.object(sys, "stdout", io.StringIO()),
+            unittest.mock.patch.object(sys, "stderr", io.StringIO()),
         ):
             return FILTER.main(), run.call_count
 
@@ -93,6 +97,16 @@ class FilterGovulncheckTest(unittest.TestCase):
             [],
             0,
             finding("GO-2099-0002", "example.com/module", symbol=False),
+            "",
+        )
+        self.assertEqual((0, 1), self.run_filter([result]))
+
+    def test_informational_module_finding_does_not_revive_ignored_symbol(self) -> None:
+        result = subprocess.CompletedProcess(
+            [],
+            FILTER.GOVULNCHECK_VULNERABILITIES_FOUND,
+            finding("GO-2026-5617", "github.com/docker/docker/client")
+            + finding("GO-2099-0002", "example.com/module", symbol=False),
             "",
         )
         self.assertEqual((0, 1), self.run_filter([result]))
