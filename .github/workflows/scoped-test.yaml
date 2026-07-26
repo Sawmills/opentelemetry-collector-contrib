@@ -17,6 +17,7 @@ jobs:
       go_sources: ${{ steps.changes.outputs.go_sources }}
       go_tests: ${{ steps.changes.outputs.go_tests }}
       go_modules: ${{ steps.changes.outputs.go_modules }}
+      govuln_filter: ${{ steps.changes.outputs.govuln_filter }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -63,10 +64,15 @@ jobs:
             exit 0
           fi
 
-          non_go_changes=$(printf '%s\n' "$changed_files" | grep -vE '.*\.go$|(^|/)go\.(mod|sum)$|(^|/)metadata\.yaml$|(^|/)config\.schema\.yaml$|(^|/)README\.md$|(^|/)documentation\.md$|^\.chloggen/.+\.yaml$|^\.github/workflows/scoped-test\.yaml$' || true)
+          non_go_changes=$(printf '%s\n' "$changed_files" | grep -vE '.*\.go$|(^|/)go\.(mod|sum)$|(^|/)metadata\.yaml$|(^|/)config\.schema\.yaml$|(^|/)README\.md$|(^|/)documentation\.md$|^\.chloggen/.+\.yaml$|^\.github/workflows/(build-and-test-arm\.yml|scoped-test\.yaml)$|^\.github/workflows/scripts/filter-govulncheck(_test)?\.py$|^internal/buildscripts/ocb-add-replaces\.sh$' || true)
           if [[ -n "$non_go_changes" ]]; then
             echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+
+          govuln_filter_changes=$(printf '%s\n' "$changed_files" | grep -E '^\.github/workflows/scripts/filter-govulncheck(_test)?\.py$' || true)
+          if [[ -n "$govuln_filter_changes" ]]; then
+            echo "govuln_filter=true" >> "$GITHUB_OUTPUT"
           fi
 
           go_sources=$(printf '%s\n' "$changed_files" | grep -E '\.go$' | grep -vE '.*_test\.go$' || true)
@@ -76,7 +82,11 @@ jobs:
           go_count=$(printf '%s\n%s\n' "$go_sources" "$go_tests" | awk 'NF { count++ } END { print count + 0 }')
           go_module_count=$(printf '%s\n' "$go_modules" | awk 'NF { count++ } END { print count + 0 }')
           if (( go_count == 0 && go_module_count == 0 )); then
-            echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
+            if [[ -n "$govuln_filter_changes" ]]; then
+              echo "mode=govuln_filter" >> "$GITHUB_OUTPUT"
+            else
+              echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
+            fi
             exit 0
           fi
 
@@ -113,7 +123,7 @@ jobs:
 
   scoped-tests-ubuntu:
     needs: changedfiles
-    if: needs.changedfiles.outputs.mode == 'scoped'
+    if: needs.changedfiles.outputs.mode == 'scoped' || needs.changedfiles.outputs.mode == 'govuln_filter'
     runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository && 'namespace-profile-sawmills-runner' || 'ubuntu-latest' }}
     steps:
       - name: Echo changed files
@@ -128,6 +138,10 @@ jobs:
         with:
           go-version: oldstable
           use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository && 'true' || 'false' }}
+
+      - name: Test govulncheck filter
+        if: needs.changedfiles.outputs.govuln_filter == 'true'
+        run: python3 .github/workflows/scripts/filter-govulncheck_test.py
 
       - name: Run changed tests
         if: needs.changedfiles.outputs.go_tests
@@ -154,6 +168,9 @@ jobs:
         if: needs.changedfiles.outputs.go_sources
         env:
           CHANGED_GOLANG_SOURCES: ${{ needs.changedfiles.outputs.go_sources }}
+          # Bound analysis/compiler memory on the 8 GiB scoped-test runner.
+          GOMAXPROCS: "2"
+          GOMEMLIMIT: 6GiB
         run: |
           make run-changed-source-package-tests
           make run-changed-dependent-module-tests CMD="make lint test-twice"
@@ -240,7 +257,7 @@ jobs:
                 exit 1
               fi
               ;;
-            scoped)
+            scoped|govuln_filter)
               if [[ success == "${{ needs.scoped-tests-ubuntu.result }}" ]]; then
                 echo "Scoped Ubuntu gate passed."
               else

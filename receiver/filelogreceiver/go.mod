@@ -27,7 +27,7 @@ require (
 	go.opentelemetry.io/collector/receiver/receivertest v0.149.1-0.20260402195938-76ede073ee8e
 	go.opentelemetry.io/collector/receiver/xreceiver v0.149.1-0.20260402195938-76ede073ee8e
 	go.uber.org/zap v1.27.1
-	golang.org/x/text v0.37.0
+	golang.org/x/text v0.39.0
 )
 
 require (

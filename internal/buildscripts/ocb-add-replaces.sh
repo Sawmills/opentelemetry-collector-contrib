@@ -57,6 +57,7 @@ dir_name = sys.argv[1]
 repo = Path(".").resolve()
 builder_dir = (repo / "cmd" / dir_name).resolve()
 replaces: Set[str] = set()
+version_replaces = {}
 
 for go_mod in sorted(repo.rglob("go.mod")):
     mod_path = go_mod.parent.resolve()
@@ -83,6 +84,15 @@ for go_mod in sorted(repo.rglob("go.mod")):
 
         if rhs.startswith("github.com/Sawmills/"):
             replaces.add(f"{lhs_module} => {rhs}")
+            continue
+
+        rhs_parts = rhs.split()
+        if len(rhs_parts) == 2 and rhs_parts[0] == lhs_module:
+            version_replaces.setdefault(lhs_module, set()).add(rhs)
+
+for lhs_module, replacements in version_replaces.items():
+    if len(replacements) == 1:
+        replaces.add(f"{lhs_module} => {next(iter(replacements))}")
 
 for replace in sorted(replaces):
     print(f"  - {replace}")

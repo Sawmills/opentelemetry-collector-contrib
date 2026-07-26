@@ -13,6 +13,44 @@ IGNORED_OSVS = {
     "GO-2026-4923",
 }
 
+DOCKER_DAEMON_PACKAGES = {
+    "github.com/docker/docker/daemon",
+    "github.com/moby/moby/daemon",
+    "github.com/moby/moby/v2/daemon",
+}
+
+PROMETHEUS_WEB_PACKAGES = {
+    "github.com/prometheus/prometheus/web",
+}
+
+EBPF_PROFILER_AGENT_PACKAGES = {
+    "go.opentelemetry.io/ebpf-profiler/process",
+    "go.opentelemetry.io/ebpf-profiler/tracer",
+}
+
+PACKAGE_SCOPED_OSVS = {
+    # The Go vulnerability database currently maps these Docker Engine
+    # daemon-only advisories to the legacy monolithic module.
+    "GO-2026-5617": DOCKER_DAEMON_PACKAGES,
+    "GO-2026-5668": DOCKER_DAEMON_PACKAGES,
+    "GO-2026-5746": DOCKER_DAEMON_PACKAGES,
+    # openpgp is unmaintained with no fixed x/crypto release.
+    "GO-2026-5932": {"golang.org/x/crypto/openpgp"},
+    # These advisories affect Prometheus server config, UI, and remote-read
+    # endpoints. Collector components import Prometheus libraries but do not
+    # run the Prometheus web server.
+    "GO-2026-5264": PROMETHEUS_WEB_PACKAGES,
+    "GO-2026-5381": PROMETHEUS_WEB_PACKAGES,
+    "GO-2026-5662": PROMETHEUS_WEB_PACKAGES,
+    "GO-2026-5710": PROMETHEUS_WEB_PACKAGES,
+    # The affected process traversal is used by the profiling agent. The
+    # Elasticsearch exporter imports only libpf hash and synchronization
+    # helpers, not the agent or process inspection paths.
+    "GO-2026-5343": EBPF_PROFILER_AGENT_PACKAGES,
+}
+
+GOVULNCHECK_VULNERABILITIES_FOUND = 3
+
 
 def finding_osv_id(entry: dict[str, Any]) -> Optional[str]:
     finding = entry.get("finding")
@@ -28,6 +66,50 @@ def finding_osv_id(entry: dict[str, Any]) -> Optional[str]:
             return osv_id
 
     return None
+
+
+def finding_has_symbol(entry: dict[str, Any]) -> bool:
+    finding = entry.get("finding")
+    if not isinstance(finding, dict):
+        return False
+
+    trace = finding.get("trace")
+    if not isinstance(trace, list):
+        return False
+
+    return any(isinstance(frame, dict) and "function" in frame for frame in trace)
+
+
+def ignored_osv_ids(entries: list[dict[str, Any]]) -> set[str]:
+    ignored = set(IGNORED_OSVS)
+    for osv_id, affected_packages in PACKAGE_SCOPED_OSVS.items():
+        reported_packages = set()
+        for entry in entries:
+            if finding_osv_id(entry) != osv_id:
+                continue
+            finding = entry.get("finding")
+            if not isinstance(finding, dict):
+                continue
+            trace = finding.get("trace")
+            if not isinstance(trace, list) or not trace:
+                continue
+            vulnerable_frame = trace[0]
+            if not isinstance(vulnerable_frame, dict):
+                continue
+            vulnerable_package = vulnerable_frame.get("package")
+            if isinstance(vulnerable_package, str):
+                reported_packages.add(vulnerable_package)
+
+        affected_package_reported = any(
+            reported_package == affected_package
+            or reported_package.startswith(f"{affected_package}/")
+            for reported_package in reported_packages
+            for affected_package in affected_packages
+        )
+        if not affected_package_reported:
+            ignored.add(osv_id)
+
+    return ignored
 
 
 def parse_json_stream(payload: str) -> list[dict[str, Any]]:
@@ -64,24 +146,40 @@ def main() -> int:
         sys.stderr.write(json_result.stderr)
         return json_result.returncode
 
+    ignored_osvs = ignored_osv_ids(entries)
     findings = [osv_id for entry in entries if (osv_id := finding_osv_id(entry)) is not None]
-    remaining_findings = [finding for finding in findings if finding not in IGNORED_OSVS]
+    remaining_findings = [finding for finding in findings if finding not in ignored_osvs]
+    remaining_symbol_findings = [
+        osv_id
+        for entry in entries
+        if finding_has_symbol(entry)
+        and finding_osv_id(entry) not in ignored_osvs
+        and (osv_id := finding_osv_id(entry)) is not None
+    ]
+
+    if json_result.returncode not in (0, GOVULNCHECK_VULNERABILITIES_FOUND):
+        sys.stdout.write(json_result.stdout)
+        sys.stderr.write(json_result.stderr)
+        return json_result.returncode
 
     if json_result.returncode != 0 and not findings:
         sys.stdout.write(json_result.stdout)
         sys.stderr.write(json_result.stderr)
         return json_result.returncode
 
-    if remaining_findings:
+    if remaining_symbol_findings:
         text_result = run(govulncheck_cmd)
         sys.stdout.write(text_result.stdout)
         sys.stderr.write(text_result.stderr)
         return text_result.returncode
 
+    if remaining_findings:
+        return json_result.returncode
+
     if findings:
         ignored = ", ".join(sorted(set(findings)))
         print(
-            f"govulncheck findings limited to ignored no-fix advisories: {ignored}",
+            f"govulncheck findings limited to scoped non-exploitable advisories: {ignored}",
             file=sys.stderr,
         )
         return 0

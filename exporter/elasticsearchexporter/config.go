@@ -131,7 +131,9 @@ type TelemetrySettings struct {
 	// for sampled failed documents in the exporter's own logs.
 	// WARNING: enabling this may expose sensitive data and should only be used
 	// temporarily for debugging.
-	LogFailedDocsInput          bool          `mapstructure:"log_failed_docs_input"`
+	LogFailedDocsInput bool `mapstructure:"log_failed_docs_input"`
+	// LogFailedDocsInputRateLimit configures per-error-key rate limiting for
+	// failed document input logs. A zero or negative value disables rate limiting.
 	LogFailedDocsInputRateLimit time.Duration `mapstructure:"log_failed_docs_input_rate_limit"`
 	PreserveErrorReason         bool          `mapstructure:"preserve_error_reason"`
 
