@@ -431,6 +431,51 @@ func TestCentralQueueLeaseFallbackBacksOffWhenConsumersRemainFull(t *testing.T) 
 	require.LessOrEqual(t, attempts.Load(), int64(4))
 }
 
+func TestCentralQueueLeaseFallbackPrecedesUnrelatedBatchDeadline(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           100,
+		maxInflightUncompressedBytes: 100,
+		maxUncompressedBatchBytes:    100,
+		targetCompressedBytes:        10,
+		maxBatchDelay:                time.Hour,
+		maxReadyWindows:              1,
+	})
+	require.NoError(t, q.enqueue(centralQueueItem{
+		signal:            signalKindLogs,
+		routingKey:        []byte("ready-lane"),
+		compressedBytes:   10,
+		uncompressedBytes: 10,
+		count:             1,
+	}))
+	require.NoError(t, q.enqueue(centralQueueItem{
+		signal:            signalKindLogs,
+		routingKey:        []byte("future-lane"),
+		compressedBytes:   1,
+		uncompressedBytes: 1,
+		count:             1,
+	}))
+	select {
+	case <-q.notify:
+	default:
+	}
+
+	var attempts atomic.Int64
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	start := time.Now()
+	lease, err := q.leaseWithPollIntervalAndAcquire(ctx, 20*time.Millisecond, func(int64, centralQueueWindow) (func(), bool) {
+		if attempts.Add(1) == 1 {
+			return nil, false
+		}
+		return func() {}, true
+	})
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.Less(t, time.Since(start), 500*time.Millisecond)
+	require.Equal(t, int64(2), attempts.Load())
+	lease.done()
+}
+
 func TestCentralQueuePrunesEmptyBucketsAfterScheduling(t *testing.T) {
 	q := newCentralQueue(centralQueueSettings{
 		maxCompressedBytes:        100,

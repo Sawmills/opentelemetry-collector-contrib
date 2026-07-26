@@ -245,12 +245,17 @@ func (q *centralQueue) nextLeaseWakeDelay(now time.Time, fallbackDelay time.Dura
 	}
 	q.mu.Unlock()
 
-	if readyAtUnixNano > now.UnixNano() {
-		return time.Duration(readyAtUnixNano - now.UnixNano())
-	}
-	if fallbackDelay > 0 && (hasPrepared || readyAtUnixNano > 0 ||
+	fallbackNeeded := hasPrepared ||
 		errors.Is(leaseErr, errCentralQueueInflightFull) ||
-		errors.Is(leaseErr, errCentralQueueConsumersFull)) {
+		errors.Is(leaseErr, errCentralQueueConsumersFull)
+	if readyAtUnixNano > now.UnixNano() {
+		readyDelay := time.Duration(readyAtUnixNano - now.UnixNano())
+		if fallbackDelay > 0 && fallbackNeeded {
+			return min(readyDelay, fallbackDelay)
+		}
+		return readyDelay
+	}
+	if fallbackDelay > 0 && (fallbackNeeded || readyAtUnixNano > 0) {
 		return fallbackDelay
 	}
 	return 0
