@@ -296,6 +296,32 @@ func TestOnBackendChanges(t *testing.T) {
 	assert.Len(t, p.ring.items, 2*defaultWeight)
 }
 
+func TestOnBackendChangesReconcilesConfiguredEndpointsWhenRingImageMatches(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		return newNopMockExporter(), nil
+	}
+
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	p.onBackendChanges([]string{"endpoint-1"})
+
+	// Simulate a saturated ring where the new endpoint receives no position:
+	// the visible ring image matches the candidate while configured membership
+	// still differs.
+	candidate := newHashRing([]string{"endpoint-1", "endpoint-2"})
+	p.ring.items = candidate.items
+	p.ring.endpoints = candidate.endpoints
+	require.True(t, candidate.equal(p.ring))
+	require.False(t, p.ring.hasNormalizedEndpoints([]string{"endpoint-1", "endpoint-2"}))
+
+	p.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+
+	require.Equal(t, candidate.configuredEndpoints, p.ring.configuredEndpoints)
+	require.Contains(t, p.exporters, "endpoint-2:4317")
+}
+
 func TestInstallRingForEndpointsLockedSkipsUnchangedSet(t *testing.T) {
 	lb := &loadBalancer{ring: newHashRing([]string{"endpoint-1", "endpoint-2"})}
 	original := lb.ring

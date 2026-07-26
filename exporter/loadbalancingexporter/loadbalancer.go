@@ -199,9 +199,10 @@ func (lb *loadBalancer) onBackendChanges(resolved []string) {
 		return
 	}
 
-	newRing := newHashRing(resolved)
-
-	if newRing.equal(lb.ring) {
+	lb.updateLock.RLock()
+	unchanged := lb.ring.hasNormalizedEndpoints(resolved)
+	lb.updateLock.RUnlock()
+	if unchanged {
 		return
 	}
 
@@ -209,7 +210,10 @@ func (lb *loadBalancer) onBackendChanges(resolved []string) {
 	ctx := context.Background()
 
 	lb.updateLock.Lock()
-	lb.installRingLocked(newRing)
+	if !lb.installRingForEndpointsLocked(resolved) {
+		lb.updateLock.Unlock()
+		return
+	}
 
 	// add the missing exporters first
 	lb.addMissingExporters(ctx, resolved)
