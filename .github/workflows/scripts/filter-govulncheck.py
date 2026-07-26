@@ -19,6 +19,10 @@ DOCKER_DAEMON_PACKAGES = {
     "github.com/moby/moby/v2/daemon",
 }
 
+PROMETHEUS_WEB_PACKAGES = {
+    "github.com/prometheus/prometheus/web",
+}
+
 PACKAGE_SCOPED_OSVS = {
     # The Go vulnerability database currently maps these Docker Engine
     # daemon-only advisories to the legacy monolithic module.
@@ -27,6 +31,13 @@ PACKAGE_SCOPED_OSVS = {
     "GO-2026-5746": DOCKER_DAEMON_PACKAGES,
     # openpgp is unmaintained with no fixed x/crypto release.
     "GO-2026-5932": {"golang.org/x/crypto/openpgp"},
+    # These advisories affect Prometheus server config, UI, and remote-read
+    # endpoints. Collector components import Prometheus libraries but do not
+    # run the Prometheus web server.
+    "GO-2026-5264": PROMETHEUS_WEB_PACKAGES,
+    "GO-2026-5381": PROMETHEUS_WEB_PACKAGES,
+    "GO-2026-5662": PROMETHEUS_WEB_PACKAGES,
+    "GO-2026-5710": PROMETHEUS_WEB_PACKAGES,
 }
 
 GOVULNCHECK_VULNERABILITIES_FOUND = 3

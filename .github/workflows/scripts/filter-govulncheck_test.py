@@ -136,6 +136,31 @@ class FilterGovulncheckTest(unittest.TestCase):
         text_result = subprocess.CompletedProcess([], 3, "vulnerable", "")
         self.assertEqual((3, 2), self.run_filter([json_result, text_result]))
 
+    def test_prometheus_library_false_positive_passes(self) -> None:
+        result = subprocess.CompletedProcess(
+            [],
+            FILTER.GOVULNCHECK_VULNERABILITIES_FOUND,
+            finding(
+                "GO-2026-5710",
+                "github.com/prometheus/prometheus/storage/remote/azuread",
+            ),
+            "",
+        )
+        self.assertEqual((0, 1), self.run_filter([result]))
+
+    def test_prometheus_web_server_finding_fails(self) -> None:
+        json_result = subprocess.CompletedProcess(
+            [],
+            FILTER.GOVULNCHECK_VULNERABILITIES_FOUND,
+            finding(
+                "GO-2026-5662",
+                "github.com/prometheus/prometheus/web/api/v1",
+            ),
+            "",
+        )
+        text_result = subprocess.CompletedProcess([], 3, "vulnerable", "")
+        self.assertEqual((3, 2), self.run_filter([json_result, text_result]))
+
 
 if __name__ == "__main__":
     unittest.main()
