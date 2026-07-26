@@ -303,6 +303,9 @@ func TestInstallRingForEndpointsLockedSkipsUnchangedSet(t *testing.T) {
 	require.False(t, lb.installRingForEndpointsLocked([]string{"endpoint-1:4317", "endpoint-2:4317"}))
 	require.Same(t, original, lb.ring)
 
+	require.False(t, lb.installRingForEndpointsLocked([]string{"endpoint-2", "endpoint-1", "endpoint-2:4317"}))
+	require.Same(t, original, lb.ring)
+
 	require.True(t, lb.installRingForEndpointsLocked([]string{"endpoint-1:4317", "endpoint-3:4317"}))
 	require.NotSame(t, original, lb.ring)
 	require.Equal(t, []string{"endpoint-1:4317", "endpoint-3:4317"}, lb.ring.endpoints)

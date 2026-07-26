@@ -292,4 +292,9 @@ func TestHashRingConfiguredEndpointsDoNotChangeRoutableEndpoints(t *testing.T) {
 
 	assert.Equal(t, []string{"endpoint-1:4317"}, ring.endpoints)
 	assert.True(t, ring.hasNormalizedEndpoints([]string{"endpoint-1:4317", "endpoint-without-position:4317"}))
+	assert.True(t, ring.hasNormalizedEndpoints([]string{
+		"endpoint-without-position",
+		"endpoint-1:4317",
+		"endpoint-1",
+	}))
 }

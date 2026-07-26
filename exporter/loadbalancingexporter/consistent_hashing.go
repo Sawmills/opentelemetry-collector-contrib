@@ -166,11 +166,32 @@ func positionsForEndpoints(endpoints []string, weight int) []ringItem {
 }
 
 func (h *hashRing) hasNormalizedEndpoints(endpoints []string) bool {
-	if h == nil || len(h.configuredEndpoints) != len(endpoints) {
+	if h == nil {
 		return false
 	}
-	for i, endpoint := range endpoints {
-		if h.configuredEndpoints[i] != endpointWithPort(endpoint) {
+
+	// Keep the already-normalized common path allocation-free.
+	if len(h.configuredEndpoints) == len(endpoints) {
+		matches := true
+		for i, endpoint := range endpoints {
+			if h.configuredEndpoints[i] != endpointWithPort(endpoint) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return true
+		}
+	}
+
+	// Resolver inputs are normally normalized already, but canonicalize a
+	// reordered or duplicate-equivalent candidate before rebuilding the ring.
+	normalized := normalizeEndpoints(endpoints)
+	if len(h.configuredEndpoints) != len(normalized) {
+		return false
+	}
+	for i, endpoint := range normalized {
+		if h.configuredEndpoints[i] != endpoint {
 			return false
 		}
 	}
