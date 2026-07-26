@@ -10,9 +10,11 @@ import (
 )
 
 type centralQueueBackendLimiter struct {
-	mu     sync.Mutex
-	active map[string]int
-	limit  int
+	mu                   sync.Mutex
+	active               map[string]int
+	limit                int
+	waiters              map[string]chan struct{}
+	fallbackInitialDelay time.Duration
 }
 
 type centralQueueBackendLease struct {
@@ -57,8 +59,10 @@ func tryAcquireCentralQueueBackendForWindow(lb *loadBalancer, limiter *centralQu
 
 func newCentralQueueBackendLimiter() *centralQueueBackendLimiter {
 	return &centralQueueBackendLimiter{
-		active: make(map[string]int),
-		limit:  defaultCentralQueueMaxInflightSendsPerBackend,
+		active:               make(map[string]int),
+		limit:                defaultCentralQueueMaxInflightSendsPerBackend,
+		waiters:              make(map[string]chan struct{}),
+		fallbackInitialDelay: centralQueueLeaseFallbackInitialDelay,
 	}
 }
 
@@ -66,21 +70,53 @@ func (l *centralQueueBackendLimiter) acquire(ctx context.Context, endpoint strin
 	if l == nil || endpoint == "" {
 		return &centralQueueBackendLease{}, nil
 	}
-	if l.tryAcquire(endpoint) {
+	acquired, notify := l.tryAcquireOrWait(endpoint)
+	if acquired {
 		return &centralQueueBackendLease{limiter: l, endpoint: endpoint}, nil
 	}
-	ticker := time.NewTicker(centralQueueLeasePollInterval)
-	defer ticker.Stop()
+	delay := l.fallbackInitialDelay
+	if delay <= 0 {
+		delay = centralQueueLeaseFallbackInitialDelay
+	}
+	maxDelay := max(delay, centralQueueLeaseFallbackMaxDelay)
+	timer := time.NewTimer(delay)
+	defer stopCentralQueueTimer(timer)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-ticker.C:
-			if l.tryAcquire(endpoint) {
-				return &centralQueueBackendLease{limiter: l, endpoint: endpoint}, nil
+		case <-notify:
+			delay = l.fallbackInitialDelay
+			if delay <= 0 {
+				delay = centralQueueLeaseFallbackInitialDelay
 			}
+		case <-timer.C:
+			delay = min(delay*2, maxDelay)
 		}
+		acquired, notify = l.tryAcquireOrWait(endpoint)
+		if acquired {
+			return &centralQueueBackendLease{limiter: l, endpoint: endpoint}, nil
+		}
+		resetCentralQueueTimer(timer, delay)
 	}
+}
+
+func (l *centralQueueBackendLimiter) tryAcquireOrWait(endpoint string) (bool, <-chan struct{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.active[endpoint] < l.limit {
+		l.active[endpoint]++
+		return true, nil
+	}
+	if l.waiters == nil {
+		l.waiters = make(map[string]chan struct{})
+	}
+	notify := l.waiters[endpoint]
+	if notify == nil {
+		notify = make(chan struct{})
+		l.waiters[endpoint] = notify
+	}
+	return false, notify
 }
 
 func (l *centralQueueBackendLimiter) tryAcquire(endpoint string) bool {
@@ -95,13 +131,18 @@ func (l *centralQueueBackendLimiter) tryAcquire(endpoint string) bool {
 
 func (l *centralQueueBackendLimiter) release(endpoint string) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	active := l.active[endpoint]
 	if active <= 1 {
 		delete(l.active, endpoint)
-		return
+	} else {
+		l.active[endpoint] = active - 1
 	}
-	l.active[endpoint] = active - 1
+	notify := l.waiters[endpoint]
+	delete(l.waiters, endpoint)
+	l.mu.Unlock()
+	if notify != nil {
+		close(notify)
+	}
 }
 
 func (l *centralQueueBackendLease) release() {

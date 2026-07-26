@@ -32,6 +32,9 @@ type hashRing struct {
 	items []ringItem
 	// endpoints holds the normalized unique endpoints represented by items.
 	endpoints []string
+	// configuredEndpoints holds the normalized input set, including an endpoint
+	// that received no position because the finite ring was saturated.
+	configuredEndpoints []string
 	// balancedLaneRoutingKeys caches central queue routing keys for this immutable ring.
 	balancedLaneRoutingKeys sync.Map
 }
@@ -40,8 +43,9 @@ type hashRing struct {
 func newHashRing(endpoints []string) *hashRing {
 	items := positionsForEndpoints(endpoints, defaultWeight)
 	return &hashRing{
-		items:     items,
-		endpoints: hashRingEndpoints(items),
+		items:               items,
+		endpoints:           hashRingEndpoints(items),
+		configuredEndpoints: normalizeEndpoints(endpoints),
 	}
 }
 
@@ -51,9 +55,7 @@ func (h *hashRing) endpointFor(identifier []byte) string {
 		// perhaps the ring itself couldn't get initialized yet?
 		return ""
 	}
-	hasher := crc32.NewIEEE()
-	hasher.Write(identifier)
-	hash := hasher.Sum32()
+	hash := crc32.ChecksumIEEE(identifier)
 	pos := hash % maxPositions
 
 	return h.findEndpoint(position(pos))
@@ -111,15 +113,11 @@ func bsearch(pos position, left, right []ringItem) ringItem {
 // The slice length of the result matches the numPoints.
 func positionsFor(endpoint string, numPoints int) []position {
 	res := make([]position, 0, numPoints)
-	buf := make([]byte, 4)
+	var buf [4]byte
+	endpointHash := crc32.Update(0, crc32.IEEETable, []byte(endpoint))
 	for i := range numPoints {
-		h := crc32.NewIEEE()
-		binary.LittleEndian.PutUint32(buf, uint32(i))
-		h.Write([]byte(endpoint))
-		h.Write(buf)
-		hash := h.Sum32()
-		pos := hash % maxPositions
-		res = append(res, position(pos))
+		binary.LittleEndian.PutUint32(buf[:], uint32(i))
+		res = append(res, position(crc32.Update(endpointHash, crc32.IEEETable, buf[:])%maxPositions))
 	}
 
 	return res
@@ -127,23 +125,30 @@ func positionsFor(endpoint string, numPoints int) []position {
 
 // positionsForEndpoints calculates all the positions for all the given endpoints
 func positionsForEndpoints(endpoints []string, weight int) []ringItem {
-	var items []ringItem
-	positions := map[position]bool{} // tracking the used positions
+	capacity := min(len(endpoints)*weight, int(maxPositions))
+	items := make([]ringItem, 0, capacity)
+	positions := make(map[position]struct{}, capacity)
+	var buf [4]byte
 	for _, endpoint := range endpoints {
+		endpointHash := crc32.Update(0, crc32.IEEETable, []byte(endpoint))
 		// for this initial implementation, we don't allow endpoints to have custom weights
-		for _, pos := range positionsFor(endpoint, weight) {
+		for i := range weight {
+			binary.LittleEndian.PutUint32(buf[:], uint32(i))
+			pos := position(crc32.Update(endpointHash, crc32.IEEETable, buf[:]) % maxPositions)
 			// if this position is occupied already, look ahead in the array for a free position
 			actualPos := pos
 			positionsProbed := 0
-			for positions[actualPos] && positionsProbed < linearProbeLimit {
+			_, occupied := positions[actualPos]
+			for occupied && positionsProbed < linearProbeLimit {
 				actualPos = (actualPos + 1) % position(maxPositions)
 				positionsProbed++
+				_, occupied = positions[actualPos]
 			}
 			if positionsProbed >= linearProbeLimit {
 				continue // Not able to find a free spot; skip this item
 			}
 
-			positions[actualPos] = true
+			positions[actualPos] = struct{}{}
 
 			item := ringItem{
 				pos:      actualPos,
@@ -160,14 +165,46 @@ func positionsForEndpoints(endpoints []string, weight int) []ringItem {
 	return items
 }
 
+func (h *hashRing) hasNormalizedEndpoints(endpoints []string) bool {
+	if h == nil {
+		return false
+	}
+
+	// Keep the already-normalized common path allocation-free.
+	if len(h.configuredEndpoints) == len(endpoints) {
+		matches := true
+		for i, endpoint := range endpoints {
+			if h.configuredEndpoints[i] != endpointWithPort(endpoint) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return true
+		}
+	}
+
+	// Resolver inputs are normally normalized already, but canonicalize a
+	// reordered or duplicate-equivalent candidate before rebuilding the ring.
+	normalized := normalizeEndpoints(endpoints)
+	if len(h.configuredEndpoints) != len(normalized) {
+		return false
+	}
+	for i, endpoint := range normalized {
+		if h.configuredEndpoints[i] != endpoint {
+			return false
+		}
+	}
+	return true
+}
+
 func hashRingEndpoints(items []ringItem) []string {
 	if len(items) == 0 {
 		return nil
 	}
 	seen := make(map[string]struct{})
 	for _, item := range items {
-		endpoint := endpointWithPort(item.endpoint)
-		seen[endpoint] = struct{}{}
+		seen[endpointWithPort(item.endpoint)] = struct{}{}
 	}
 	endpoints := make([]string, 0, len(seen))
 	for endpoint := range seen {

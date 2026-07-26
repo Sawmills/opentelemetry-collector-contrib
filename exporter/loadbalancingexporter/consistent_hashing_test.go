@@ -4,7 +4,9 @@
 package loadbalancingexporter
 
 import (
+	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -19,6 +21,7 @@ func TestNewHashRing(t *testing.T) {
 
 	// verify
 	assert.Len(t, ring.items, 2*defaultWeight)
+	assert.Equal(t, []string{"endpoint-1:4317", "endpoint-2:4317"}, ring.configuredEndpoints)
 }
 
 func TestEndpointFor(t *testing.T) {
@@ -56,6 +59,54 @@ func TestPositionsFor(t *testing.T) {
 	// verify
 	assert.Len(t, positions, 10)
 }
+
+func TestPositionsForMatchesLegacyCRCConstruction(t *testing.T) {
+	for _, endpoint := range []string{"endpoint-1", "10.141.1.2:10417", "[::1]:4317"} {
+		expected := make([]position, 0, defaultWeight)
+		buf := make([]byte, 4)
+		for i := range defaultWeight {
+			hasher := crc32.NewIEEE()
+			binary.LittleEndian.PutUint32(buf, uint32(i))
+			_, _ = hasher.Write([]byte(endpoint))
+			_, _ = hasher.Write(buf)
+			expected = append(expected, position(hasher.Sum32()%maxPositions))
+		}
+		assert.Equal(t, expected, positionsFor(endpoint, defaultWeight))
+	}
+}
+
+func BenchmarkNewHashRing(b *testing.B) {
+	for _, endpointCount := range []int{86, 365, 720} {
+		b.Run(fmt.Sprintf("endpoints_%d", endpointCount), func(b *testing.B) {
+			endpoints := make([]string, endpointCount)
+			for i := range endpointCount {
+				endpoints[i] = fmt.Sprintf("10.141.%d.%d:10417", i/256, i%256)
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				consistentHashBenchmarkRing = newHashRing(endpoints)
+			}
+		})
+	}
+}
+
+func BenchmarkHashRingEndpointFor(b *testing.B) {
+	ring := newHashRing([]string{"endpoint-1", "endpoint-2"})
+	identifier := []byte("bigid-routing-key")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		consistentHashBenchmarkEndpoint = ring.endpointFor(identifier)
+	}
+}
+
+var (
+	consistentHashBenchmarkRing     *hashRing
+	consistentHashBenchmarkEndpoint string
+)
 
 func TestBinarySearch(t *testing.T) {
 	// prepare
@@ -229,4 +280,21 @@ func TestEqual(t *testing.T) {
 			assert.Equal(t, tt.outcome, original.equal(tt.candidate))
 		})
 	}
+}
+
+func TestHashRingConfiguredEndpointsDoNotChangeRoutableEndpoints(t *testing.T) {
+	items := []ringItem{{pos: 1, endpoint: "endpoint-1"}}
+	ring := &hashRing{
+		items:               items,
+		endpoints:           hashRingEndpoints(items),
+		configuredEndpoints: normalizeEndpoints([]string{"endpoint-1", "endpoint-without-position"}),
+	}
+
+	assert.Equal(t, []string{"endpoint-1:4317"}, ring.endpoints)
+	assert.True(t, ring.hasNormalizedEndpoints([]string{"endpoint-1:4317", "endpoint-without-position:4317"}))
+	assert.True(t, ring.hasNormalizedEndpoints([]string{
+		"endpoint-without-position",
+		"endpoint-1:4317",
+		"endpoint-1",
+	}))
 }

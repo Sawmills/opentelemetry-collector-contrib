@@ -43,6 +43,47 @@ func TestEndpointHealthBackendSubsetBoundsEligibleEndpoints(t *testing.T) {
 	}, pressure)
 }
 
+func TestEndpointHealthCurrentlyEligibleTracksTransitions(t *testing.T) {
+	manager := newEndpointHealthManager(endpointHealthSettings{
+		enabled:               true,
+		quarantineDuration:    time.Minute,
+		minEligibleBackends:   1,
+		maxQuarantinedPercent: 100,
+	})
+	manager.reconcile([]string{"endpoint-1:4317", "endpoint-2:4317"})
+
+	require.True(t, manager.currentlyEligible("endpoint-1:4317"))
+	require.True(t, manager.currentlyEligible("endpoint-2"))
+	require.False(t, manager.currentlyEligible("endpoint-3"))
+
+	decision := manager.markFailure("endpoint-1:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, decision.quarantined)
+	require.False(t, manager.currentlyEligible("endpoint-1"))
+	require.True(t, manager.currentlyEligible("endpoint-2:4317"))
+}
+
+func BenchmarkEndpointHealthCurrentlyEligible(b *testing.B) {
+	for _, endpointCount := range []int{86, 365, 720} {
+		b.Run(fmt.Sprintf("endpoints_%d", endpointCount), func(b *testing.B) {
+			manager := newEndpointHealthManager(endpointHealthSettings{
+				enabled:               true,
+				minEligibleBackends:   1,
+				maxQuarantinedPercent: 100,
+			})
+			endpoints := backendSubsetTestEndpoints(endpointCount, 10417)
+			manager.reconcile(endpoints)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := range b.N {
+				if !manager.currentlyEligible(endpoints[i%len(endpoints)]) {
+					b.Fatal("expected endpoint to remain eligible")
+				}
+			}
+		})
+	}
+}
+
 func TestEndpointHealthBackendSubsetBoundsFailOpen(t *testing.T) {
 	selector := &backendSubsetSelector{seed: "gateway-1", maxEndpoints: 3}
 	manager := newEndpointHealthManager(endpointHealthSettings{
