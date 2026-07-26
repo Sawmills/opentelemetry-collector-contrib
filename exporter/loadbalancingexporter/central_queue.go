@@ -17,6 +17,11 @@ import (
 
 const centralQueueLeasePollInterval = 10 * time.Millisecond
 const (
+	centralQueueLeaseFallbackInitialDelay = 50 * time.Millisecond
+	centralQueueLeaseFallbackMaxDelay     = time.Second
+)
+
+const (
 	centralQueueInitialRetryDelay = 100 * time.Millisecond
 	centralQueueMaxRetryDelay     = 5 * time.Second
 	centralQueueMaxRetryJitter    = 100 * time.Millisecond
@@ -173,7 +178,7 @@ func (q *centralQueue) enqueueAt(item centralQueueItem, now time.Time) error {
 }
 
 func (q *centralQueue) lease(ctx context.Context) (*centralQueueLease, error) {
-	return q.leaseWithPollInterval(ctx, centralQueueLeasePollInterval)
+	return q.leaseWithPollInterval(ctx, centralQueueLeaseFallbackInitialDelay)
 }
 
 func (q *centralQueue) leaseWithPollInterval(ctx context.Context, pollInterval time.Duration) (*centralQueueLease, error) {
@@ -183,32 +188,86 @@ func (q *centralQueue) leaseWithPollInterval(ctx context.Context, pollInterval t
 type centralQueueLeaseAcquireFunc func(queueCompressedBytes int64, window centralQueueWindow) (func(), bool)
 
 func (q *centralQueue) leaseWithAcquire(ctx context.Context, acquire centralQueueLeaseAcquireFunc) (*centralQueueLease, error) {
-	return q.leaseWithPollIntervalAndAcquire(ctx, centralQueueLeasePollInterval, acquire)
+	return q.leaseWithPollIntervalAndAcquire(ctx, centralQueueLeaseFallbackInitialDelay, acquire)
 }
 
-func (q *centralQueue) leaseWithPollIntervalAndAcquire(ctx context.Context, pollInterval time.Duration, acquire centralQueueLeaseAcquireFunc) (*centralQueueLease, error) {
-	var ticker *time.Ticker
-	var poll <-chan time.Time
-	if pollInterval > 0 {
-		ticker = time.NewTicker(pollInterval)
-		poll = ticker.C
-		defer ticker.Stop()
-	}
+func (q *centralQueue) leaseWithPollIntervalAndAcquire(ctx context.Context, fallbackInitialDelay time.Duration, acquire centralQueueLeaseAcquireFunc) (*centralQueueLease, error) {
+	var timer *time.Timer
+	defer func() {
+		stopCentralQueueTimer(timer)
+	}()
+
+	fallbackDelay := fallbackInitialDelay
+	fallbackMaxDelay := max(fallbackInitialDelay, centralQueueLeaseFallbackMaxDelay)
 	for {
-		lease, err := q.tryLeaseWithAcquire(time.Now(), acquire)
+		now := time.Now()
+		lease, err := q.tryLeaseWithAcquire(now, acquire)
 		if lease != nil {
+			// Pass the wakeup to another waiter when this queue has more work.
+			// The buffered notification coalesces the otherwise redundant wakeups.
+			q.notifyLeaseWaiters()
 			return lease, nil
 		}
 		if err != nil && !errors.Is(err, errCentralQueueInflightFull) && !errors.Is(err, errCentralQueueConsumersFull) {
 			return nil, err
 		}
 
+		waitDelay := q.nextLeaseWakeDelay(now, fallbackDelay, err)
+		var timerC <-chan time.Time
+		if waitDelay > 0 {
+			if timer == nil {
+				timer = time.NewTimer(waitDelay)
+			} else {
+				resetCentralQueueTimer(timer, waitDelay)
+			}
+			timerC = timer.C
+		} else {
+			stopCentralQueueTimer(timer)
+		}
+
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-q.notify:
-		case <-poll:
+			fallbackDelay = fallbackInitialDelay
+		case <-timerC:
+			fallbackDelay = min(fallbackDelay*2, fallbackMaxDelay)
 		}
+	}
+}
+
+func (q *centralQueue) nextLeaseWakeDelay(now time.Time, fallbackDelay time.Duration, leaseErr error) time.Duration {
+	q.mu.Lock()
+	hasPrepared := len(q.ready) > 0
+	var readyAtUnixNano int64
+	if len(q.readyBuckets) > 0 {
+		readyAtUnixNano = q.readyBuckets[0].readyAtUnixNano
+	}
+	q.mu.Unlock()
+
+	if readyAtUnixNano > now.UnixNano() {
+		return time.Duration(readyAtUnixNano - now.UnixNano())
+	}
+	if fallbackDelay > 0 && (hasPrepared || readyAtUnixNano > 0 ||
+		errors.Is(leaseErr, errCentralQueueInflightFull) ||
+		errors.Is(leaseErr, errCentralQueueConsumersFull)) {
+		return fallbackDelay
+	}
+	return 0
+}
+
+func resetCentralQueueTimer(timer *time.Timer, delay time.Duration) {
+	stopCentralQueueTimer(timer)
+	timer.Reset(delay)
+}
+
+func stopCentralQueueTimer(timer *time.Timer) {
+	if timer == nil || timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C:
+	default:
 	}
 }
 

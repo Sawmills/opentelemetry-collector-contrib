@@ -61,7 +61,10 @@ type endpointHealthManager struct {
 	pressureSnapshot   endpointHealthPressureSnapshot
 	failOpenActive     bool
 	nextExpiryUnixNano atomic.Int64
+	eligibleSnapshot   atomic.Pointer[endpointHealthEligibleSet]
 }
+
+type endpointHealthEligibleSet map[string]struct{}
 
 type endpointHealthPressureSnapshot struct {
 	present   int
@@ -427,6 +430,18 @@ func (m *endpointHealthManager) eligibleEndpointsNoRefresh() []string {
 	return eligible
 }
 
+func (m *endpointHealthManager) currentlyEligible(endpoint string) bool {
+	if !m.enabled() {
+		return false
+	}
+	snapshot := m.eligibleSnapshot.Load()
+	if snapshot == nil {
+		return false
+	}
+	_, ok := (*snapshot)[endpointWithPort(endpoint)]
+	return ok
+}
+
 func (m *endpointHealthManager) presentEndpoints() []string {
 	if !m.enabled() {
 		return nil
@@ -552,10 +567,20 @@ func (m *endpointHealthManager) eligibleEndpointsLockedWithRefresh(now time.Time
 	failOpen := m.shouldFailOpenLocked(len(present), len(eligible), quarantined)
 	failOpenStarted := failOpen && !m.failOpenActive
 	m.failOpenActive = failOpen
+	selected := m.selectEndpoints(eligible)
 	if failOpen {
-		return m.selectEndpoints(present), true, failOpenStarted
+		selected = m.selectEndpoints(present)
 	}
-	return m.selectEndpoints(eligible), false, false
+	m.storeEligibleSnapshot(selected)
+	return selected, failOpen, failOpenStarted
+}
+
+func (m *endpointHealthManager) storeEligibleSnapshot(endpoints []string) {
+	snapshot := make(endpointHealthEligibleSet, len(endpoints))
+	for _, endpoint := range endpoints {
+		snapshot[endpointWithPort(endpoint)] = struct{}{}
+	}
+	m.eligibleSnapshot.Store(&snapshot)
 }
 
 func (m *endpointHealthManager) selectEndpoints(endpoints []string) []string {

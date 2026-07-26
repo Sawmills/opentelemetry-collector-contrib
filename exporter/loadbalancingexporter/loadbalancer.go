@@ -247,7 +247,7 @@ func (lb *loadBalancer) onBackendChangesWithEndpointHealth(resolved []string) {
 
 func (lb *loadBalancer) commitEndpointHealthResolverUpdateLocked(resolved []string, created []createdExporter) ([]createdExporter, []removedExporter) {
 	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
-	lb.installRingLocked(newHashRing(eligible))
+	lb.installRingForEndpointsLocked(eligible)
 
 	retained := resolved
 	if lb.endpointHealth.backendSubsetEnabled() {
@@ -292,6 +292,14 @@ func (lb *loadBalancer) installRingLocked(ring *hashRing) {
 	if admitted > 0 {
 		lb.telemetry.LoadbalancerBackendSubsetDisplacementTotal.Add(ctx, int64(admitted))
 	}
+}
+
+func (lb *loadBalancer) installRingForEndpointsLocked(endpoints []string) bool {
+	if lb.ring.hasNormalizedEndpoints(endpoints) {
+		return false
+	}
+	lb.installRingLocked(newHashRing(endpoints))
+	return true
 }
 
 type removedExporter struct {
@@ -419,7 +427,7 @@ func (lb *loadBalancer) createMissingExportersWithGuard(ctx context.Context, end
 }
 
 func (lb *loadBalancer) endpointHealthCurrentlyEligible(endpoint string) bool {
-	return slices.Contains(lb.endpointHealth.eligibleEndpoints(), endpointWithPort(endpoint))
+	return lb.endpointHealth.currentlyEligible(endpoint)
 }
 
 func (lb *loadBalancer) routableBackendCount() int {
@@ -581,7 +589,7 @@ func (lb *loadBalancer) handleBackendFailureHealthOnly(ctx context.Context, endp
 
 	lb.updateLock.Lock()
 	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
-	lb.installRingLocked(newHashRing(eligible))
+	lb.installRingForEndpointsLocked(eligible)
 	var removed []removedExporter
 	if createdExporterExists(created, endpoint) {
 		if exp, ok := lb.exporters[endpoint]; ok {
@@ -620,7 +628,7 @@ func (lb *loadBalancer) handleBackendProbeFailure(ctx context.Context, endpoint 
 
 	lb.updateLock.Lock()
 	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
-	lb.installRingLocked(newHashRing(eligible))
+	lb.installRingForEndpointsLocked(eligible)
 	var removed []removedExporter
 	endpointEligible := endpointListContains(eligible, endpoint)
 	if exp, ok := lb.exporters[endpoint]; ok && (!endpointEligible || createdExporterExists(created, endpoint)) {
@@ -657,7 +665,7 @@ func (lb *loadBalancer) handleBackendProbeSuccess(ctx context.Context, endpoint 
 
 	lb.updateLock.Lock()
 	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
-	lb.installRingLocked(newHashRing(eligible))
+	lb.installRingForEndpointsLocked(eligible)
 	duplicates := lb.installCreatedExportersLocked(created, eligible)
 	removed := lb.removeBackendSubsetExtraExportersLocked(eligible)
 	lb.refreshRoutableBackendCountLocked()
@@ -706,7 +714,7 @@ func (lb *loadBalancer) handleBackendFailureWithDrain(ctx context.Context, endpo
 
 	lb.updateLock.Lock()
 	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
-	lb.installRingLocked(newHashRing(eligible))
+	lb.installRingForEndpointsLocked(eligible)
 	var removed []removedExporter
 	endpointEligible := endpointListContains(eligible, endpoint)
 	if exp, ok := lb.exporters[endpoint]; ok && (!endpointEligible || createdExporterExists(created, endpoint)) {
@@ -764,7 +772,7 @@ func (lb *loadBalancer) handleBackendSuccess(endpoint string) {
 
 	lb.updateLock.Lock()
 	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
-	lb.installRingLocked(newHashRing(eligible))
+	lb.installRingForEndpointsLocked(eligible)
 	duplicates := lb.installCreatedExportersLocked(created, eligible)
 	removed := lb.removeBackendSubsetExtraExportersLocked(eligible)
 	lb.refreshRoutableBackendCountLocked()
@@ -797,7 +805,7 @@ func (lb *loadBalancer) refreshExpiredEndpointHealth(ctx context.Context) {
 	created := lb.createMissingExporters(ctx, refresh.eligible, nil)
 	lb.updateLock.Lock()
 	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
-	lb.installRingLocked(newHashRing(eligible))
+	lb.installRingForEndpointsLocked(eligible)
 	duplicates := lb.installCreatedExportersLocked(created, eligible)
 	removed := lb.removeBackendSubsetExtraExportersLocked(eligible)
 	lb.refreshRoutableBackendCountLocked()
