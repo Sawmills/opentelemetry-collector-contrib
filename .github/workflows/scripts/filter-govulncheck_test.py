@@ -8,6 +8,7 @@ import subprocess
 import sys
 import unittest
 import unittest.mock
+from typing import Optional
 
 
 SCRIPT_PATH = pathlib.Path(__file__).with_name("filter-govulncheck.py")
@@ -17,8 +18,10 @@ FILTER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(FILTER)
 
 
-def finding(osv_id: str, package: str, *, symbol: bool = True) -> str:
-    frame = {"module": "example.com/module", "package": package}
+def finding(osv_id: str, package: Optional[str], *, symbol: bool = True) -> str:
+    frame = {"module": "example.com/module"}
+    if package is not None:
+        frame["package"] = package
     if symbol:
         frame["function"] = "Vulnerable"
     return json.dumps({"finding": {"osv": osv_id, "trace": [frame]}})
@@ -109,7 +112,29 @@ class FilterGovulncheckTest(unittest.TestCase):
             + finding("GO-2099-0002", "example.com/module", symbol=False),
             "",
         )
+        self.assertEqual((3, 1), self.run_filter([result]))
+
+    def test_ignored_module_only_advisory_passes(self) -> None:
+        result = subprocess.CompletedProcess(
+            [],
+            FILTER.GOVULNCHECK_VULNERABILITIES_FOUND,
+            finding("GO-2026-5746", None, symbol=False),
+            "",
+        )
         self.assertEqual((0, 1), self.run_filter([result]))
+
+    def test_actual_openpgp_package_is_not_ignored(self) -> None:
+        json_result = subprocess.CompletedProcess(
+            [],
+            FILTER.GOVULNCHECK_VULNERABILITIES_FOUND,
+            finding(
+                "GO-2026-5932",
+                "golang.org/x/crypto/openpgp/packet",
+            ),
+            "",
+        )
+        text_result = subprocess.CompletedProcess([], 3, "vulnerable", "")
+        self.assertEqual((3, 2), self.run_filter([json_result, text_result]))
 
 
 if __name__ == "__main__":

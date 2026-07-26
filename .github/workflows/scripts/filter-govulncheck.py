@@ -13,17 +13,20 @@ IGNORED_OSVS = {
     "GO-2026-4923",
 }
 
-# The Go vulnerability database currently maps these Docker Engine daemon-only
-# advisories to every package and symbol in the legacy monolithic module.
-DOCKER_DAEMON_ONLY_OSVS = {
-    "GO-2026-5617",
-    "GO-2026-5668",
-}
-
 DOCKER_DAEMON_PACKAGES = {
     "github.com/docker/docker/daemon",
     "github.com/moby/moby/daemon",
     "github.com/moby/moby/v2/daemon",
+}
+
+PACKAGE_SCOPED_OSVS = {
+    # The Go vulnerability database currently maps these Docker Engine
+    # daemon-only advisories to the legacy monolithic module.
+    "GO-2026-5617": DOCKER_DAEMON_PACKAGES,
+    "GO-2026-5668": DOCKER_DAEMON_PACKAGES,
+    "GO-2026-5746": DOCKER_DAEMON_PACKAGES,
+    # openpgp is unmaintained with no fixed x/crypto release.
+    "GO-2026-5932": {"golang.org/x/crypto/openpgp"},
 }
 
 GOVULNCHECK_VULNERABILITIES_FOUND = 3
@@ -57,31 +60,36 @@ def finding_has_symbol(entry: dict[str, Any]) -> bool:
     return any(isinstance(frame, dict) and "function" in frame for frame in trace)
 
 
-def finding_is_ignored(entry: dict[str, Any]) -> bool:
-    osv_id = finding_osv_id(entry)
-    if osv_id in IGNORED_OSVS:
-        return True
-    if osv_id not in DOCKER_DAEMON_ONLY_OSVS:
-        return False
+def ignored_osv_ids(entries: list[dict[str, Any]]) -> set[str]:
+    ignored = set(IGNORED_OSVS)
+    for osv_id, affected_packages in PACKAGE_SCOPED_OSVS.items():
+        reported_packages = set()
+        for entry in entries:
+            if finding_osv_id(entry) != osv_id:
+                continue
+            finding = entry.get("finding")
+            if not isinstance(finding, dict):
+                continue
+            trace = finding.get("trace")
+            if not isinstance(trace, list) or not trace:
+                continue
+            vulnerable_frame = trace[0]
+            if not isinstance(vulnerable_frame, dict):
+                continue
+            vulnerable_package = vulnerable_frame.get("package")
+            if isinstance(vulnerable_package, str):
+                reported_packages.add(vulnerable_package)
 
-    finding = entry.get("finding")
-    if not isinstance(finding, dict):
-        return False
-    trace = finding.get("trace")
-    if not isinstance(trace, list) or not trace:
-        return False
-    vulnerable_frame = trace[0]
-    if not isinstance(vulnerable_frame, dict):
-        return False
-    vulnerable_package = vulnerable_frame.get("package")
-    if not isinstance(vulnerable_package, str):
-        return False
+        affected_package_reported = any(
+            reported_package == affected_package
+            or reported_package.startswith(f"{affected_package}/")
+            for reported_package in reported_packages
+            for affected_package in affected_packages
+        )
+        if not affected_package_reported:
+            ignored.add(osv_id)
 
-    return not any(
-        vulnerable_package == daemon_package
-        or vulnerable_package.startswith(f"{daemon_package}/")
-        for daemon_package in DOCKER_DAEMON_PACKAGES
-    )
+    return ignored
 
 
 def parse_json_stream(payload: str) -> list[dict[str, Any]]:
@@ -118,17 +126,14 @@ def main() -> int:
         sys.stderr.write(json_result.stderr)
         return json_result.returncode
 
+    ignored_osvs = ignored_osv_ids(entries)
     findings = [osv_id for entry in entries if (osv_id := finding_osv_id(entry)) is not None]
-    symbol_findings = [
-        osv_id
-        for entry in entries
-        if finding_has_symbol(entry) and (osv_id := finding_osv_id(entry)) is not None
-    ]
+    remaining_findings = [finding for finding in findings if finding not in ignored_osvs]
     remaining_symbol_findings = [
         osv_id
         for entry in entries
         if finding_has_symbol(entry)
-        and not finding_is_ignored(entry)
+        and finding_osv_id(entry) not in ignored_osvs
         and (osv_id := finding_osv_id(entry)) is not None
     ]
 
@@ -148,11 +153,11 @@ def main() -> int:
         sys.stderr.write(text_result.stderr)
         return text_result.returncode
 
-    # govulncheck reports module and package findings as informational context;
-    # only reachable symbol findings produce its vulnerability exit status.
-    # Preserve that contract after removing known false-positive symbols.
-    if symbol_findings:
-        ignored = ", ".join(sorted(set(symbol_findings)))
+    if remaining_findings:
+        return json_result.returncode
+
+    if findings:
+        ignored = ", ".join(sorted(set(findings)))
         print(
             f"govulncheck findings limited to ignored no-fix advisories: {ignored}",
             file=sys.stderr,
