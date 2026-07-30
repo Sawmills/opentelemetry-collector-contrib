@@ -77,10 +77,12 @@ type centralQueueConsumerResult struct {
 }
 
 func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) centralQueueConsumerResult {
+	pressureState, pressureReductionLimit := p.preservedPressureEpisode(inputs.backendPressure)
 	if inputs.queueCompressedBytes <= 0 {
 		return centralQueueConsumerResult{
-			limitReason:   centralQueueConsumerLimitReasonQueueEmpty,
-			pressureState: centralQueueConsumerPressureStable,
+			limitReason:            centralQueueConsumerLimitReasonQueueEmpty,
+			pressureState:          pressureState,
+			pressureReductionLimit: pressureReductionLimit,
 		}
 	}
 
@@ -111,7 +113,8 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 			queueDemandConsumers:      queueDemand,
 			backendSafeConsumersPerLB: backendSafe,
 			limitReason:               centralQueueConsumerLimitReasonBackendCapacity,
-			pressureState:             centralQueueConsumerPressureStable,
+			pressureState:             pressureState,
+			pressureReductionLimit:    pressureReductionLimit,
 		}
 	}
 
@@ -126,8 +129,6 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 		reason = centralQueueConsumerLimitReasonQueueDemand
 	}
 	effective = clampInt(effective, min(minConsumers, backendSafe), maxConsumers)
-	pressureState := centralQueueConsumerPressureStable
-	pressureReductionLimit := 0
 
 	if inputs.backendPressure {
 		pressureBase := effective
@@ -175,6 +176,13 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 		pressureState:             pressureState,
 		pressureReductionLimit:    pressureReductionLimit,
 	}
+}
+
+func (p centralQueueConsumerPolicy) preservedPressureEpisode(backendPressure bool) (centralQueueConsumerPressureState, int) {
+	if backendPressure && p.pressureReductionActive && p.pressureReductionLimit > 0 {
+		return centralQueueConsumerPressureReducing, p.pressureReductionLimit
+	}
+	return centralQueueConsumerPressureStable, 0
 }
 
 func (p centralQueueConsumerPolicy) backendSafeConsumersPerLB(readyBackends int) int {
