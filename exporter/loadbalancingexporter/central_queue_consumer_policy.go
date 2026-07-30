@@ -56,6 +56,8 @@ type centralQueueConsumerPolicy struct {
 	pressureRecoveryStep         int
 	previousEffectiveConsumers   int
 	previousEffectiveConsumersOK bool
+	pressureReductionActive      bool
+	pressureReductionLimit       int
 	pressureRecoveryActive       bool
 }
 
@@ -71,13 +73,16 @@ type centralQueueConsumerResult struct {
 	backendSafeConsumersPerLB int
 	limitReason               centralQueueConsumerLimitReason
 	pressureState             centralQueueConsumerPressureState
+	pressureReductionLimit    int
 }
 
 func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) centralQueueConsumerResult {
+	pressureState, pressureReductionLimit := p.preservedPressureEpisode(inputs.backendPressure)
 	if inputs.queueCompressedBytes <= 0 {
 		return centralQueueConsumerResult{
-			limitReason:   centralQueueConsumerLimitReasonQueueEmpty,
-			pressureState: centralQueueConsumerPressureStable,
+			limitReason:            centralQueueConsumerLimitReasonQueueEmpty,
+			pressureState:          pressureState,
+			pressureReductionLimit: pressureReductionLimit,
 		}
 	}
 
@@ -108,7 +113,8 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 			queueDemandConsumers:      queueDemand,
 			backendSafeConsumersPerLB: backendSafe,
 			limitReason:               centralQueueConsumerLimitReasonBackendCapacity,
-			pressureState:             centralQueueConsumerPressureStable,
+			pressureState:             pressureState,
+			pressureReductionLimit:    pressureReductionLimit,
 		}
 	}
 
@@ -123,15 +129,17 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 		reason = centralQueueConsumerLimitReasonQueueDemand
 	}
 	effective = clampInt(effective, min(minConsumers, backendSafe), maxConsumers)
-	pressureState := centralQueueConsumerPressureStable
 
 	if inputs.backendPressure {
 		pressureBase := effective
 		if p.previousEffectiveConsumersOK && p.previousEffectiveConsumers > 0 {
 			pressureBase = p.previousEffectiveConsumers
 		}
-		pressureLimit := max(minConsumers, pressureBase/2)
-		effective = clampInt(min(target, pressureLimit), minConsumers, maxConsumers)
+		pressureReductionLimit = p.pressureReductionLimit
+		if !p.pressureReductionActive || pressureReductionLimit <= 0 {
+			pressureReductionLimit = max(minConsumers, pressureBase/2)
+		}
+		effective = clampInt(min(target, pressureReductionLimit), minConsumers, maxConsumers)
 		reason = centralQueueConsumerLimitReasonBackendPressure
 		pressureState = centralQueueConsumerPressureReducing
 	}
@@ -166,7 +174,15 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 		backendSafeConsumersPerLB: backendSafe,
 		limitReason:               reason,
 		pressureState:             pressureState,
+		pressureReductionLimit:    pressureReductionLimit,
 	}
+}
+
+func (p centralQueueConsumerPolicy) preservedPressureEpisode(backendPressure bool) (centralQueueConsumerPressureState, int) {
+	if backendPressure && p.pressureReductionActive && p.pressureReductionLimit > 0 {
+		return centralQueueConsumerPressureReducing, p.pressureReductionLimit
+	}
+	return centralQueueConsumerPressureStable, 0
 }
 
 func (p centralQueueConsumerPolicy) backendSafeConsumersPerLB(readyBackends int) int {
@@ -270,7 +286,13 @@ func (c *centralQueueConsumerController) computeLocked(inputs centralQueueConsum
 	if c.last.effectiveConsumers > 0 {
 		policy.previousEffectiveConsumers = c.last.effectiveConsumers
 		policy.previousEffectiveConsumersOK = true
+	} else if c.last.pressureState == centralQueueConsumerPressureReducing &&
+		c.last.pressureReductionLimit > 0 {
+		policy.previousEffectiveConsumers = c.last.pressureReductionLimit
+		policy.previousEffectiveConsumersOK = true
 	}
+	policy.pressureReductionActive = c.last.pressureState == centralQueueConsumerPressureReducing
+	policy.pressureReductionLimit = c.last.pressureReductionLimit
 	policy.pressureRecoveryActive = c.last.pressureState == centralQueueConsumerPressureReducing ||
 		c.last.pressureState == centralQueueConsumerPressureRecovering
 	return policy.compute(inputs)

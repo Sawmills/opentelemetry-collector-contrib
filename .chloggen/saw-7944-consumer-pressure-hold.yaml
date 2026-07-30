@@ -1,0 +1,14 @@
+change_type: bug_fix
+
+component: exporter/loadbalancing
+
+note: Prevent sustained backend pressure from collapsing central queue drain concurrency to one consumer.
+
+issues: [7944]
+
+subtext: |
+  A continuous pressure episode now applies one bounded concurrency reduction
+  and holds it until pressure clears. Recovery remains gradual, and a later
+  pressure episode can reduce the recovered limit again.
+
+change_logs: [user]

@@ -218,6 +218,130 @@ func TestCentralQueueConsumerPolicyBackendPressureReducesQuickly(t *testing.T) {
 	require.Equal(t, 8, decision.effectiveConsumers)
 }
 
+func TestCentralQueueConsumerControllerHoldsReductionDuringSustainedBackendPressure(t *testing.T) {
+	controller := newCentralQueueConsumerController(30, 256<<10, 1)
+	controller.last = centralQueueConsumerResult{
+		effectiveConsumers: 30,
+		limitReason:        centralQueueConsumerLimitReasonConfiguredMax,
+		pressureState:      centralQueueConsumerPressureStable,
+	}
+	var active atomic.Int64
+
+	first, acquired, changed := controller.tryAcquire(&active, 64<<20, 80, true)
+	require.True(t, acquired)
+	require.True(t, changed)
+	require.Equal(t, 15, first.effectiveConsumers)
+	active.Store(0)
+
+	second, acquired, changed := controller.tryAcquire(&active, 64<<20, 80, true)
+	require.True(t, acquired)
+	require.False(t, changed)
+	require.Equal(t, 15, second.effectiveConsumers)
+}
+
+func TestCentralQueueConsumerControllerSustainedPressureDoesNotRatchetOnLowDemand(t *testing.T) {
+	controller := newCentralQueueConsumerController(30, 256<<10, 1)
+	controller.last = centralQueueConsumerResult{
+		effectiveConsumers: 30,
+		limitReason:        centralQueueConsumerLimitReasonConfiguredMax,
+		pressureState:      centralQueueConsumerPressureStable,
+	}
+	var active atomic.Int64
+
+	first, acquired, _ := controller.tryAcquire(&active, 64<<20, 80, true)
+	require.True(t, acquired)
+	require.Equal(t, 15, first.effectiveConsumers)
+	require.Equal(t, 15, first.pressureReductionLimit)
+	active.Store(0)
+
+	lowDemand, acquired, _ := controller.tryAcquire(&active, 256<<10, 80, true)
+	require.True(t, acquired)
+	require.Equal(t, 1, lowDemand.effectiveConsumers)
+	require.Equal(t, 15, lowDemand.pressureReductionLimit)
+	active.Store(0)
+
+	backlogged, acquired, _ := controller.tryAcquire(&active, 64<<20, 80, true)
+	require.True(t, acquired)
+	require.Equal(t, 15, backlogged.effectiveConsumers)
+	require.Equal(t, 15, backlogged.pressureReductionLimit)
+}
+
+func TestCentralQueueConsumerControllerSustainedPressureSurvivesEmptyQueue(t *testing.T) {
+	controller := newCentralQueueConsumerController(30, 256<<10, 1)
+	controller.last = centralQueueConsumerResult{
+		effectiveConsumers: 30,
+		limitReason:        centralQueueConsumerLimitReasonConfiguredMax,
+		pressureState:      centralQueueConsumerPressureStable,
+	}
+	var active atomic.Int64
+
+	first, acquired, _ := controller.tryAcquire(&active, 64<<20, 80, true)
+	require.True(t, acquired)
+	require.Equal(t, 15, first.effectiveConsumers)
+	active.Store(0)
+
+	empty, acquired, _ := controller.tryAcquire(&active, 0, 80, true)
+	require.False(t, acquired)
+	require.Equal(t, centralQueueConsumerPressureReducing, empty.pressureState)
+	require.Equal(t, 15, empty.pressureReductionLimit)
+
+	recovering, acquired, _ := controller.tryAcquire(&active, 64<<20, 80, false)
+	require.True(t, acquired)
+	require.Equal(t, 18, recovering.effectiveConsumers)
+	require.Equal(t, centralQueueConsumerPressureRecovering, recovering.pressureState)
+}
+
+func TestCentralQueueConsumerControllerSustainedPressureSurvivesNoReadyBackends(t *testing.T) {
+	controller := newCentralQueueConsumerController(30, 256<<10, 1)
+	controller.last = centralQueueConsumerResult{
+		effectiveConsumers: 30,
+		limitReason:        centralQueueConsumerLimitReasonConfiguredMax,
+		pressureState:      centralQueueConsumerPressureStable,
+	}
+	var active atomic.Int64
+
+	first, acquired, _ := controller.tryAcquire(&active, 64<<20, 80, true)
+	require.True(t, acquired)
+	require.Equal(t, 15, first.effectiveConsumers)
+	active.Store(0)
+
+	noBackends, acquired, _ := controller.tryAcquire(&active, 64<<20, 0, true)
+	require.False(t, acquired)
+	require.Equal(t, centralQueueConsumerPressureReducing, noBackends.pressureState)
+	require.Equal(t, 15, noBackends.pressureReductionLimit)
+
+	recoveredBackends, acquired, _ := controller.tryAcquire(&active, 64<<20, 80, true)
+	require.True(t, acquired)
+	require.Equal(t, 15, recoveredBackends.effectiveConsumers)
+	require.Equal(t, 15, recoveredBackends.pressureReductionLimit)
+}
+
+func TestCentralQueueConsumerControllerRecurrentPressureReducesRecoveredLimit(t *testing.T) {
+	controller := newCentralQueueConsumerController(30, 256<<10, 1)
+	controller.last = centralQueueConsumerResult{
+		effectiveConsumers: 30,
+		limitReason:        centralQueueConsumerLimitReasonConfiguredMax,
+		pressureState:      centralQueueConsumerPressureStable,
+	}
+	var active atomic.Int64
+
+	first, acquired, _ := controller.tryAcquire(&active, 64<<20, 80, true)
+	require.True(t, acquired)
+	require.Equal(t, 15, first.effectiveConsumers)
+	active.Store(0)
+
+	recovering, acquired, _ := controller.tryAcquire(&active, 64<<20, 80, false)
+	require.True(t, acquired)
+	require.Equal(t, 18, recovering.effectiveConsumers)
+	require.Equal(t, centralQueueConsumerPressureRecovering, recovering.pressureState)
+	active.Store(0)
+
+	recurrent, acquired, _ := controller.tryAcquire(&active, 64<<20, 80, true)
+	require.True(t, acquired)
+	require.Equal(t, 9, recurrent.effectiveConsumers)
+	require.Equal(t, centralQueueConsumerPressureReducing, recurrent.pressureState)
+}
+
 func TestCentralQueueConsumerPolicyBackendPressureReducesFirstSample(t *testing.T) {
 	policy := centralQueueConsumerPolicy{
 		maxConsumers:               120,
