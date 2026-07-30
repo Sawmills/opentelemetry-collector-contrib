@@ -218,6 +218,70 @@ func TestCentralQueueConsumerPolicyBackendPressureReducesQuickly(t *testing.T) {
 	require.Equal(t, 8, decision.effectiveConsumers)
 }
 
+func TestCentralQueueConsumerControllerHoldsReductionDuringSustainedBackendPressure(t *testing.T) {
+	controller := newCentralQueueConsumerController(30, 256<<10, 1)
+	controller.last = centralQueueConsumerResult{
+		effectiveConsumers: 30,
+		limitReason:        centralQueueConsumerLimitReasonConfiguredMax,
+		pressureState:      centralQueueConsumerPressureStable,
+	}
+	var active atomic.Int64
+
+	first, acquired, changed := controller.tryAcquire(&active, 64<<20, 80, true)
+	require.True(t, acquired)
+	require.True(t, changed)
+	require.Equal(t, 15, first.effectiveConsumers)
+	active.Store(0)
+
+	second, acquired, changed := controller.tryAcquire(&active, 64<<20, 80, true)
+	require.True(t, acquired)
+	require.False(t, changed)
+	require.Equal(t, 15, second.effectiveConsumers)
+}
+
+func TestCentralQueueConsumerPolicySustainedPressureStillFollowsLowerTarget(t *testing.T) {
+	policy := centralQueueConsumerPolicy{
+		maxConsumers:                 30,
+		minConsumers:                 1,
+		targetCompressedBytes:        256 << 10,
+		maxInflightSendsPerBackend:   1,
+		previousEffectiveConsumers:   15,
+		previousEffectiveConsumersOK: true,
+		pressureReductionActive:      true,
+	}
+
+	decision := policy.compute(centralQueueConsumerInputs{
+		queueCompressedBytes: 2 << 20,
+		readyBackends:        80,
+		backendPressure:      true,
+	})
+
+	require.Equal(t, 8, decision.queueDemandConsumers)
+	require.Equal(t, 8, decision.effectiveConsumers)
+	require.Equal(t, centralQueueConsumerPressureReducing, decision.pressureState)
+}
+
+func TestCentralQueueConsumerPolicyRecurrentPressureReducesRecoveredLimit(t *testing.T) {
+	policy := centralQueueConsumerPolicy{
+		maxConsumers:                 30,
+		minConsumers:                 1,
+		targetCompressedBytes:        256 << 10,
+		maxInflightSendsPerBackend:   1,
+		previousEffectiveConsumers:   18,
+		previousEffectiveConsumersOK: true,
+		pressureRecoveryActive:       true,
+	}
+
+	decision := policy.compute(centralQueueConsumerInputs{
+		queueCompressedBytes: 64 << 20,
+		readyBackends:        80,
+		backendPressure:      true,
+	})
+
+	require.Equal(t, 9, decision.effectiveConsumers)
+	require.Equal(t, centralQueueConsumerPressureReducing, decision.pressureState)
+}
+
 func TestCentralQueueConsumerPolicyBackendPressureReducesFirstSample(t *testing.T) {
 	policy := centralQueueConsumerPolicy{
 		maxConsumers:               120,

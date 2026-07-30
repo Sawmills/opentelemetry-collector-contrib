@@ -56,6 +56,7 @@ type centralQueueConsumerPolicy struct {
 	pressureRecoveryStep         int
 	previousEffectiveConsumers   int
 	previousEffectiveConsumersOK bool
+	pressureReductionActive      bool
 	pressureRecoveryActive       bool
 }
 
@@ -130,7 +131,10 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 		if p.previousEffectiveConsumersOK && p.previousEffectiveConsumers > 0 {
 			pressureBase = p.previousEffectiveConsumers
 		}
-		pressureLimit := max(minConsumers, pressureBase/2)
+		pressureLimit := pressureBase
+		if !p.pressureReductionActive {
+			pressureLimit = max(minConsumers, pressureBase/2)
+		}
 		effective = clampInt(min(target, pressureLimit), minConsumers, maxConsumers)
 		reason = centralQueueConsumerLimitReasonBackendPressure
 		pressureState = centralQueueConsumerPressureReducing
@@ -271,6 +275,7 @@ func (c *centralQueueConsumerController) computeLocked(inputs centralQueueConsum
 		policy.previousEffectiveConsumers = c.last.effectiveConsumers
 		policy.previousEffectiveConsumersOK = true
 	}
+	policy.pressureReductionActive = c.last.pressureState == centralQueueConsumerPressureReducing
 	policy.pressureRecoveryActive = c.last.pressureState == centralQueueConsumerPressureReducing ||
 		c.last.pressureState == centralQueueConsumerPressureRecovering
 	return policy.compute(inputs)
