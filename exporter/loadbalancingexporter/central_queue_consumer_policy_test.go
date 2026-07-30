@@ -285,10 +285,10 @@ func TestCentralQueueConsumerControllerSustainedPressureSurvivesEmptyQueue(t *te
 	require.Equal(t, centralQueueConsumerPressureReducing, empty.pressureState)
 	require.Equal(t, 15, empty.pressureReductionLimit)
 
-	backlogged, acquired, _ := controller.tryAcquire(&active, 64<<20, 80, true)
+	recovering, acquired, _ := controller.tryAcquire(&active, 64<<20, 80, false)
 	require.True(t, acquired)
-	require.Equal(t, 15, backlogged.effectiveConsumers)
-	require.Equal(t, 15, backlogged.pressureReductionLimit)
+	require.Equal(t, 18, recovering.effectiveConsumers)
+	require.Equal(t, centralQueueConsumerPressureRecovering, recovering.pressureState)
 }
 
 func TestCentralQueueConsumerControllerSustainedPressureSurvivesNoReadyBackends(t *testing.T) {

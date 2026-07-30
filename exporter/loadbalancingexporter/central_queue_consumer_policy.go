@@ -286,6 +286,10 @@ func (c *centralQueueConsumerController) computeLocked(inputs centralQueueConsum
 	if c.last.effectiveConsumers > 0 {
 		policy.previousEffectiveConsumers = c.last.effectiveConsumers
 		policy.previousEffectiveConsumersOK = true
+	} else if c.last.pressureState == centralQueueConsumerPressureReducing &&
+		c.last.pressureReductionLimit > 0 {
+		policy.previousEffectiveConsumers = c.last.pressureReductionLimit
+		policy.previousEffectiveConsumersOK = true
 	}
 	policy.pressureReductionActive = c.last.pressureState == centralQueueConsumerPressureReducing
 	policy.pressureReductionLimit = c.last.pressureReductionLimit
