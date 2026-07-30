@@ -239,26 +239,31 @@ func TestCentralQueueConsumerControllerHoldsReductionDuringSustainedBackendPress
 	require.Equal(t, 15, second.effectiveConsumers)
 }
 
-func TestCentralQueueConsumerPolicySustainedPressureStillFollowsLowerTarget(t *testing.T) {
-	policy := centralQueueConsumerPolicy{
-		maxConsumers:                 30,
-		minConsumers:                 1,
-		targetCompressedBytes:        256 << 10,
-		maxInflightSendsPerBackend:   1,
-		previousEffectiveConsumers:   15,
-		previousEffectiveConsumersOK: true,
-		pressureReductionActive:      true,
+func TestCentralQueueConsumerControllerSustainedPressureDoesNotRatchetOnLowDemand(t *testing.T) {
+	controller := newCentralQueueConsumerController(30, 256<<10, 1)
+	controller.last = centralQueueConsumerResult{
+		effectiveConsumers: 30,
+		limitReason:        centralQueueConsumerLimitReasonConfiguredMax,
+		pressureState:      centralQueueConsumerPressureStable,
 	}
+	var active atomic.Int64
 
-	decision := policy.compute(centralQueueConsumerInputs{
-		queueCompressedBytes: 2 << 20,
-		readyBackends:        80,
-		backendPressure:      true,
-	})
+	first, acquired, _ := controller.tryAcquire(&active, 64<<20, 80, true)
+	require.True(t, acquired)
+	require.Equal(t, 15, first.effectiveConsumers)
+	require.Equal(t, 15, first.pressureReductionLimit)
+	active.Store(0)
 
-	require.Equal(t, 8, decision.queueDemandConsumers)
-	require.Equal(t, 8, decision.effectiveConsumers)
-	require.Equal(t, centralQueueConsumerPressureReducing, decision.pressureState)
+	lowDemand, acquired, _ := controller.tryAcquire(&active, 256<<10, 80, true)
+	require.True(t, acquired)
+	require.Equal(t, 1, lowDemand.effectiveConsumers)
+	require.Equal(t, 15, lowDemand.pressureReductionLimit)
+	active.Store(0)
+
+	backlogged, acquired, _ := controller.tryAcquire(&active, 64<<20, 80, true)
+	require.True(t, acquired)
+	require.Equal(t, 15, backlogged.effectiveConsumers)
+	require.Equal(t, 15, backlogged.pressureReductionLimit)
 }
 
 func TestCentralQueueConsumerPolicyRecurrentPressureReducesRecoveredLimit(t *testing.T) {

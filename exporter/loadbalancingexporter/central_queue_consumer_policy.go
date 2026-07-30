@@ -57,6 +57,7 @@ type centralQueueConsumerPolicy struct {
 	previousEffectiveConsumers   int
 	previousEffectiveConsumersOK bool
 	pressureReductionActive      bool
+	pressureReductionLimit       int
 	pressureRecoveryActive       bool
 }
 
@@ -72,6 +73,7 @@ type centralQueueConsumerResult struct {
 	backendSafeConsumersPerLB int
 	limitReason               centralQueueConsumerLimitReason
 	pressureState             centralQueueConsumerPressureState
+	pressureReductionLimit    int
 }
 
 func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) centralQueueConsumerResult {
@@ -125,17 +127,18 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 	}
 	effective = clampInt(effective, min(minConsumers, backendSafe), maxConsumers)
 	pressureState := centralQueueConsumerPressureStable
+	pressureReductionLimit := 0
 
 	if inputs.backendPressure {
 		pressureBase := effective
 		if p.previousEffectiveConsumersOK && p.previousEffectiveConsumers > 0 {
 			pressureBase = p.previousEffectiveConsumers
 		}
-		pressureLimit := pressureBase
-		if !p.pressureReductionActive {
-			pressureLimit = max(minConsumers, pressureBase/2)
+		pressureReductionLimit = p.pressureReductionLimit
+		if !p.pressureReductionActive || pressureReductionLimit <= 0 {
+			pressureReductionLimit = max(minConsumers, pressureBase/2)
 		}
-		effective = clampInt(min(target, pressureLimit), minConsumers, maxConsumers)
+		effective = clampInt(min(target, pressureReductionLimit), minConsumers, maxConsumers)
 		reason = centralQueueConsumerLimitReasonBackendPressure
 		pressureState = centralQueueConsumerPressureReducing
 	}
@@ -170,6 +173,7 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 		backendSafeConsumersPerLB: backendSafe,
 		limitReason:               reason,
 		pressureState:             pressureState,
+		pressureReductionLimit:    pressureReductionLimit,
 	}
 }
 
@@ -276,6 +280,7 @@ func (c *centralQueueConsumerController) computeLocked(inputs centralQueueConsum
 		policy.previousEffectiveConsumersOK = true
 	}
 	policy.pressureReductionActive = c.last.pressureState == centralQueueConsumerPressureReducing
+	policy.pressureReductionLimit = c.last.pressureReductionLimit
 	policy.pressureRecoveryActive = c.last.pressureState == centralQueueConsumerPressureReducing ||
 		c.last.pressureState == centralQueueConsumerPressureRecovering
 	return policy.compute(inputs)
