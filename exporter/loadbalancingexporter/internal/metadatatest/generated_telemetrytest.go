@@ -21,6 +21,20 @@ func NewSettings(tt *componenttest.Telemetry) exporter.Settings {
 	return set
 }
 
+func AssertEqualLoadbalancerBackendCount(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_backend_count",
+		Description: "Current number of resolved backends for a telemetry signal. [Development]",
+		Unit:        "{backends}",
+		Data: metricdata.Gauge[int64]{
+			DataPoints: dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_backend_count")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
 func AssertEqualLoadbalancerBackendFailOpenTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_loadbalancer_backend_fail_open_total",
@@ -99,6 +113,22 @@ func AssertEqualLoadbalancerBackendRequestBytes(t *testing.T, tt *componenttest.
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }
 
+func AssertEqualLoadbalancerBackendRequestBytesTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_backend_request_bytes_total",
+		Description: "Serialized OTLP bytes sent to each backend before transport compression. [Development]",
+		Unit:        "By",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_backend_request_bytes_total")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
 func AssertEqualLoadbalancerBackendRequestItems(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.HistogramDataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_loadbalancer_backend_request_items",
@@ -110,6 +140,22 @@ func AssertEqualLoadbalancerBackendRequestItems(t *testing.T, tt *componenttest.
 		},
 	}
 	got, err := tt.GetMetric("otelcol_loadbalancer_backend_request_items")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerBackendRequestItemsTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_backend_request_items_total",
+		Description: "Log records or metric datapoints sent to each backend. [Development]",
+		Unit:        "{items}",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_backend_request_items_total")
 	require.NoError(t, err)
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }
@@ -188,6 +234,22 @@ func AssertEqualLoadbalancerBackendSubsetDisplacementTotal(t *testing.T, tt *com
 		},
 	}
 	got, err := tt.GetMetric("otelcol_loadbalancer_backend_subset_displacement_total")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerBackendTimeoutTotal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_backend_timeout_total",
+		Description: "Number of backend requests that failed because of a timeout. [Development]",
+		Unit:        "{timeouts}",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_backend_timeout_total")
 	require.NoError(t, err)
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }

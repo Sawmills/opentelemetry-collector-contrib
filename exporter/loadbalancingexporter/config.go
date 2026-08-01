@@ -119,7 +119,8 @@ type LogBatcherConfig struct {
 }
 
 type LogRoutingConfig struct {
-	IgnoreTraceID bool `mapstructure:"ignore_trace_id"`
+	IgnoreTraceID         bool `mapstructure:"ignore_trace_id"`
+	RecordStripingEnabled bool `mapstructure:"record_striping_enabled"`
 	// prevent unkeyed literal initialization
 	_ struct{}
 }
@@ -353,6 +354,12 @@ func (cfg *Config) Validate() error {
 	}
 	if err := cfg.CentralQueue.Validate(); err != nil {
 		return err
+	}
+	if cfg.LogRouting.RecordStripingEnabled && !cfg.LogRouting.IgnoreTraceID {
+		return errors.New("log_routing.record_striping_enabled=true requires log_routing.ignore_trace_id=true")
+	}
+	if cfg.LogRouting.RecordStripingEnabled && !cfg.CentralQueue.Enabled {
+		return errors.New("log_routing.record_striping_enabled=true requires central_queue.enabled=true")
 	}
 	if cfg.CentralQueue.Enabled && cfg.QueueSettings.QueueConfig.HasValue() {
 		return errors.New("central_queue.enabled=true is incompatible with sending_queue.enabled=true")

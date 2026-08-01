@@ -951,6 +951,7 @@ func (q *centralQueue) stop() {
 	q.mu.Unlock()
 	q.notifyLeaseWaiters()
 	q.settings.telemetry.stopObservingOldestItemAge()
+	q.settings.telemetry.stopObservingBackendInflightAge()
 	q.settings.telemetry.stopObservingSchedulerState()
 	q.settings.telemetry.stopObservingConsumerDecision()
 }

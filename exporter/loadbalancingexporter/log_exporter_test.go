@@ -874,6 +874,12 @@ func TestLogsCentralQueueReroutesDeadlineExceededEndpoint(t *testing.T) {
 			Value:      1,
 		},
 	}, metricdatatest.IgnoreTimestamp())
+	metadatatest.AssertEqualLoadbalancerBackendTimeoutTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("signal", "logs")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
 }
 
 func TestLogsCentralQueueReroutesFailedEndpointItem(t *testing.T) {
@@ -1179,7 +1185,7 @@ func TestLogsCentralQueueBackendWaitDoesNotHoldConsumerSlot(t *testing.T) {
 		centralQueueNumConsumers:   3,
 		centralQueueBackendLimiter: newCentralQueueBackendLimiter(),
 	}
-	blockedBackendLease, err := p.centralQueueBackendLimiter.acquire(t.Context(), "endpoint-1:4317")
+	blockedBackendLease, err := p.centralQueueBackendLimiter.acquire(t.Context(), "endpoint-1:4317", 0)
 	require.NoError(t, err)
 	t.Cleanup(blockedBackendLease.release)
 
@@ -1832,6 +1838,96 @@ func TestConsumeLogsIgnoreTraceIDCentralByteBatchDoesNotSplitByTraceID(t *testin
 
 	assert.Equal(t, int64(1), calls.Load())
 	assert.Equal(t, int64(3), records.Load())
+}
+
+func TestConsumeLogsCentralQueueLowCardinalityThreeWorkerReplayRebalancesBeforeDeadline(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := createDefaultConfig().(*Config)
+	cfg.Resolver = ResolverSettings{
+		Static: configoptional.Some(StaticResolver{Hostnames: []string{
+			"endpoint-1:4317",
+			"endpoint-2:4317",
+			"endpoint-3:4317",
+		}}),
+	}
+	cfg.LogRouting.IgnoreTraceID = true
+	cfg.LogRouting.RecordStripingEnabled = true
+	cfg.CentralQueue.Enabled = true
+	cfg.CentralQueue.MaxCompressedBytes = 1 << 20
+	cfg.CentralQueue.MaxUncompressedBatchBytes = 1 << 20
+	cfg.CentralQueue.MaxInflightUncompressedBytes = 3 << 20
+	cfg.CentralQueue.TargetCompressedBytes = 1
+	cfg.CentralQueue.MaxBatchDelay = time.Second
+	cfg.CentralQueue.LaneCount = 3
+	cfg.CentralQueue.NumConsumers = 3
+
+	hotEndpoint := "endpoint-1:4317"
+	hotRelease := make(chan struct{})
+	type backendDelivery struct {
+		endpoint string
+		records  int
+	}
+	received := make(chan backendDelivery, 16)
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockLogsExporter(func(ctx context.Context, logs plog.Logs) error {
+			received <- backendDelivery{endpoint: endpoint, records: logs.LogRecordCount()}
+			if endpoint != hotEndpoint {
+				return nil
+			}
+			select {
+			case <-hotRelease:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}), nil
+	}
+
+	p, lb := newTestLogsExporter(t, ts, tb, cfg, componentFactory)
+	p.randomTraceID = func() pcommon.TraceID {
+		for i := 1; i < 10_000; i++ {
+			var candidate pcommon.TraceID
+			copy(candidate[:], strconv.Itoa(i))
+			lane := centralQueueLaneIndex(signalKindLogs, candidate[:], cfg.CentralQueue.LaneCount)
+			laneKey := centralQueueBalancedLaneRoutingKeyForLoadBalancerLane(lb, signalKindLogs, lane)
+			if lb.ring.endpointFor(laneKey) == hotEndpoint {
+				return candidate
+			}
+		}
+		require.FailNow(t, "no record-striping lane routes to the saturated endpoint")
+		return pcommon.NewTraceIDEmpty()
+	}
+	require.NoError(t, p.Start(t.Context(), componenttest.NewNopHost()))
+	defer func() {
+		close(hotRelease)
+		require.NoError(t, p.Shutdown(context.WithoutCancel(t.Context())))
+	}()
+
+	traceIDs := make([]pcommon.TraceID, 90)
+	for i := range traceIDs {
+		traceIDs[i] = pcommon.TraceID([16]byte{1})
+	}
+	require.NoError(t, p.ConsumeLogs(t.Context(), sharedScopeLogsWithTraceIDs(traceIDs...)))
+	require.Less(t, p.centralQueue.compressedBytes(), int64(10<<20))
+
+	deliveredRecords := map[string]int{}
+	deliveredTotal := 0
+	deadline := time.NewTimer(500 * time.Millisecond)
+	defer deadline.Stop()
+	for deliveredTotal < len(traceIDs) {
+		select {
+		case delivery := <-received:
+			deliveredRecords[delivery.endpoint] += delivery.records
+			deliveredTotal += delivery.records
+		case <-deadline.C:
+			require.FailNow(t, "low-cardinality replay did not rebalance before the backend deadline", "delivered records=%v, total=%d", deliveredRecords, deliveredTotal)
+		}
+	}
+	assert.Equal(t, map[string]int{
+		"endpoint-1:4317": 30,
+		"endpoint-2:4317": 30,
+		"endpoint-3:4317": 30,
+	}, deliveredRecords)
 }
 
 func TestConsumeLogsIgnoreTraceIDWithoutCentralByteBatchingKeepsTraceSplit(t *testing.T) {

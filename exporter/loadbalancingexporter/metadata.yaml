@@ -61,6 +61,14 @@ attributes:
 
 telemetry:
   metrics:
+    loadbalancer_backend_count:
+      attributes: [backend_request_signal]
+      enabled: true
+      stability: development
+      description: Current number of resolved backends for a telemetry signal.
+      unit: "{backends}"
+      gauge:
+        value_type: int
     loadbalancer_backend_fail_open_total:
       enabled: true
       stability: development
@@ -105,6 +113,15 @@ telemetry:
       histogram:
         value_type: int
         bucket_boundaries: [1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216]
+    loadbalancer_backend_request_bytes_total:
+      attributes: [backend_request_signal, endpoint]
+      enabled: true
+      stability: development
+      description: Serialized OTLP bytes sent to each backend before transport compression.
+      unit: By
+      sum:
+        value_type: int
+        monotonic: true
     loadbalancer_backend_request_items:
       attributes: [backend_request_signal]
       enabled: true
@@ -114,6 +131,15 @@ telemetry:
       histogram:
         value_type: int
         bucket_boundaries: [1, 10, 50, 100, 500, 1000, 5000, 10000, 50000]
+    loadbalancer_backend_request_items_total:
+      attributes: [backend_request_signal, endpoint]
+      enabled: true
+      stability: development
+      description: Log records or metric datapoints sent to each backend.
+      unit: "{items}"
+      sum:
+        value_type: int
+        monotonic: true
     loadbalancer_backend_request_total:
       attributes: [backend_request_signal, endpoint]
       enabled: true
@@ -154,6 +180,15 @@ telemetry:
       stability: development
       description: Number of backends admitted by bounded subset replacement.
       unit: "{displacements}"
+      sum:
+        value_type: int
+        monotonic: true
+    loadbalancer_backend_timeout_total:
+      attributes: [backend_request_signal, endpoint]
+      enabled: true
+      stability: development
+      description: Number of backend requests that failed because of a timeout.
+      unit: "{timeouts}"
       sum:
         value_type: int
         monotonic: true

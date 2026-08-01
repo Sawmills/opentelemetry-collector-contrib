@@ -38,6 +38,7 @@ type logExporterImp struct {
 	started                      atomic.Bool
 	telemetry                    *metadata.TelemetryBuilder
 	ignoreTraceID                bool
+	recordStripingEnabled        bool
 	randomTraceID                func() pcommon.TraceID
 	centralQueueByteBatching     bool
 	centralQueueLaneCount        int
@@ -68,7 +69,7 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 		return exporterFactory.CreateLogs(ctx, oParams, &oCfg)
 	}
 
-	lb, err := newLoadBalancer(params.Logger, cfg, cfFunc, telemetry)
+	lb, err := newLoadBalancerForSignal(params.Logger, cfg, cfFunc, telemetry, backendRequestSignalLogs)
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +79,7 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 		telemetry:                    telemetry,
 		logger:                       params.Logger,
 		ignoreTraceID:                cfg.(*Config).LogRouting.IgnoreTraceID,
+		recordStripingEnabled:        cfg.(*Config).LogRouting.RecordStripingEnabled,
 		randomTraceID:                random,
 		centralQueueByteBatching:     cfg.(*Config).centralQueueByteBatchingEnabled(),
 		centralQueueLaneCount:        cfg.(*Config).CentralQueue.LaneCount,
@@ -159,6 +161,7 @@ func (e *logExporterImp) startCentralQueueConsumers(ctx context.Context) {
 	if e.centralQueueBackendLimiter == nil {
 		e.centralQueueBackendLimiter = newCentralQueueBackendLimiter()
 	}
+	e.centralQueue.settings.telemetry.observeBackendInflightAge(e.centralQueueBackendLimiter.oldestInflightAges)
 	e.centralQueue.settings.telemetry.recordConfiguredConsumers(ctx, int64(consumers))
 	e.centralQueue.settings.telemetry.recordActiveLoadBalancerReplicas(ctx, int64(configuredCentralQueueActiveLBReplicas(e.centralQueueActiveLBReplicas)))
 	e.centralQueue.settings.telemetry.recordActiveConsumers(ctx, e.centralActiveConsumers.Load())
@@ -330,7 +333,7 @@ func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context
 		if err != nil {
 			return err
 		}
-		backendLease, err = e.centralQueueBackendLimiter.acquire(ctx, endpoint)
+		backendLease, err = e.centralQueueBackendLimiter.acquire(ctx, endpoint, window.oldestEnqueuedAt)
 		if err != nil {
 			return err
 		}
@@ -568,6 +571,7 @@ func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrapp
 	start := time.Now()
 	err := le.ConsumeLogs(ctx, ld)
 	duration := time.Since(start)
+	recordBackendTimeout(ctx, e.telemetry, le.logRequestAttr, err)
 	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(le.endpointAttr))
 	if err == nil {
 		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.successAttr))

@@ -19,22 +19,29 @@ func TestSetupTelemetry(t *testing.T) {
 	tb, err := metadata.NewTelemetryBuilder(testTel.NewTelemetrySettings())
 	require.NoError(t, err)
 	defer tb.Shutdown()
+	tb.LoadbalancerBackendCount.Record(context.Background(), 1)
 	tb.LoadbalancerBackendFailOpenTotal.Add(context.Background(), 1)
 	tb.LoadbalancerBackendLatency.Record(context.Background(), 1)
 	tb.LoadbalancerBackendOutcome.Add(context.Background(), 1)
 	tb.LoadbalancerBackendQuarantineTotal.Add(context.Background(), 1)
 	tb.LoadbalancerBackendRequestBytes.Record(context.Background(), 1)
+	tb.LoadbalancerBackendRequestBytesTotal.Add(context.Background(), 1)
 	tb.LoadbalancerBackendRequestItems.Record(context.Background(), 1)
+	tb.LoadbalancerBackendRequestItemsTotal.Add(context.Background(), 1)
 	tb.LoadbalancerBackendRequestTotal.Add(context.Background(), 1)
 	tb.LoadbalancerBackendRerouteTotal.Add(context.Background(), 1)
 	tb.LoadbalancerBackendStaleTotal.Add(context.Background(), 1)
 	tb.LoadbalancerBackendState.Record(context.Background(), 1)
 	tb.LoadbalancerBackendSubsetDisplacementTotal.Add(context.Background(), 1)
+	tb.LoadbalancerBackendTimeoutTotal.Add(context.Background(), 1)
 	tb.LoadbalancerBackendUnquarantineTotal.Add(context.Background(), 1)
 	tb.LoadbalancerNumBackendUpdates.Add(context.Background(), 1)
 	tb.LoadbalancerNumBackends.Record(context.Background(), 1)
 	tb.LoadbalancerNumResolutions.Add(context.Background(), 1)
 	tb.LoadbalancerNumSelectedBackends.Record(context.Background(), 1)
+	AssertEqualLoadbalancerBackendCount(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
 	AssertEqualLoadbalancerBackendFailOpenTotal(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
@@ -50,8 +57,14 @@ func TestSetupTelemetry(t *testing.T) {
 	AssertEqualLoadbalancerBackendRequestBytes(t, testTel,
 		[]metricdata.HistogramDataPoint[int64]{{}}, metricdatatest.IgnoreValue(),
 		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerBackendRequestBytesTotal(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
 	AssertEqualLoadbalancerBackendRequestItems(t, testTel,
 		[]metricdata.HistogramDataPoint[int64]{{}}, metricdatatest.IgnoreValue(),
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerBackendRequestItemsTotal(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
 	AssertEqualLoadbalancerBackendRequestTotal(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
@@ -66,6 +79,9 @@ func TestSetupTelemetry(t *testing.T) {
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
 	AssertEqualLoadbalancerBackendSubsetDisplacementTotal(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerBackendTimeoutTotal(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
 	AssertEqualLoadbalancerBackendUnquarantineTotal(t, testTel,

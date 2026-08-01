@@ -726,6 +726,12 @@ func TestEndpointFailureClassification(t *testing.T) {
 			ok:     true,
 		},
 		{
+			name:   "dns timeout",
+			err:    &net.DNSError{Err: "i/o timeout", Name: "backend.default.svc", IsTimeout: true},
+			reason: endpointFailureDNS,
+			ok:     true,
+		},
+		{
 			name:   "connection refused",
 			err:    &net.OpError{Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)},
 			reason: endpointFailureConnectionRefused,

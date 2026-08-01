@@ -25,17 +25,21 @@ type TelemetryBuilder struct {
 	meter                                      metric.Meter
 	mu                                         sync.Mutex
 	registrations                              []metric.Registration
+	LoadbalancerBackendCount                   metric.Int64Gauge
 	LoadbalancerBackendFailOpenTotal           metric.Int64Counter
 	LoadbalancerBackendLatency                 metric.Int64Histogram
 	LoadbalancerBackendOutcome                 metric.Int64Counter
 	LoadbalancerBackendQuarantineTotal         metric.Int64Counter
 	LoadbalancerBackendRequestBytes            metric.Int64Histogram
+	LoadbalancerBackendRequestBytesTotal       metric.Int64Counter
 	LoadbalancerBackendRequestItems            metric.Int64Histogram
+	LoadbalancerBackendRequestItemsTotal       metric.Int64Counter
 	LoadbalancerBackendRequestTotal            metric.Int64Counter
 	LoadbalancerBackendRerouteTotal            metric.Int64Counter
 	LoadbalancerBackendStaleTotal              metric.Int64Counter
 	LoadbalancerBackendState                   metric.Int64Gauge
 	LoadbalancerBackendSubsetDisplacementTotal metric.Int64Counter
+	LoadbalancerBackendTimeoutTotal            metric.Int64Counter
 	LoadbalancerBackendUnquarantineTotal       metric.Int64Counter
 	LoadbalancerNumBackendUpdates              metric.Int64Counter
 	LoadbalancerNumBackends                    metric.Int64Gauge
@@ -72,6 +76,12 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 	}
 	builder.meter = Meter(settings)
 	var err, errs error
+	builder.LoadbalancerBackendCount, err = builder.meter.Int64Gauge(
+		"otelcol_loadbalancer_backend_count",
+		metric.WithDescription("Current number of resolved backends for a telemetry signal. [Development]"),
+		metric.WithUnit("{backends}"),
+	)
+	errs = errors.Join(errs, err)
 	builder.LoadbalancerBackendFailOpenTotal, err = builder.meter.Int64Counter(
 		"otelcol_loadbalancer_backend_fail_open_total",
 		metric.WithDescription("Number of times endpoint health failed open because quarantine would leave too few eligible resolver-present backends. [Development]"),
@@ -104,11 +114,23 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 		metric.WithExplicitBucketBoundaries([]float64{1024, 4096, 16384, 65536, 262144, 1.048576e+06, 4.194304e+06, 1.6777216e+07}...),
 	)
 	errs = errors.Join(errs, err)
+	builder.LoadbalancerBackendRequestBytesTotal, err = builder.meter.Int64Counter(
+		"otelcol_loadbalancer_backend_request_bytes_total",
+		metric.WithDescription("Serialized OTLP bytes sent to each backend before transport compression. [Development]"),
+		metric.WithUnit("By"),
+	)
+	errs = errors.Join(errs, err)
 	builder.LoadbalancerBackendRequestItems, err = builder.meter.Int64Histogram(
 		"otelcol_loadbalancer_backend_request_items",
 		metric.WithDescription("Log records or metric datapoints per backend request. [Development]"),
 		metric.WithUnit("{items}"),
 		metric.WithExplicitBucketBoundaries([]float64{1, 10, 50, 100, 500, 1000, 5000, 10000, 50000}...),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerBackendRequestItemsTotal, err = builder.meter.Int64Counter(
+		"otelcol_loadbalancer_backend_request_items_total",
+		metric.WithDescription("Log records or metric datapoints sent to each backend. [Development]"),
+		metric.WithUnit("{items}"),
 	)
 	errs = errors.Join(errs, err)
 	builder.LoadbalancerBackendRequestTotal, err = builder.meter.Int64Counter(
@@ -139,6 +161,12 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 		"otelcol_loadbalancer_backend_subset_displacement_total",
 		metric.WithDescription("Number of backends admitted by bounded subset replacement. [Development]"),
 		metric.WithUnit("{displacements}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerBackendTimeoutTotal, err = builder.meter.Int64Counter(
+		"otelcol_loadbalancer_backend_timeout_total",
+		metric.WithDescription("Number of backend requests that failed because of a timeout. [Development]"),
+		metric.WithUnit("{timeouts}"),
 	)
 	errs = errors.Join(errs, err)
 	builder.LoadbalancerBackendUnquarantineTotal, err = builder.meter.Int64Counter(

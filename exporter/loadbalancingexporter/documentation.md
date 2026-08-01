@@ -6,6 +6,20 @@
 
 The following telemetry is emitted by this component.
 
+### otelcol_loadbalancer_backend_count
+
+Current number of resolved backends for a telemetry signal.
+
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| {backends} | Gauge | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics`` | - |
+
 ### otelcol_loadbalancer_backend_fail_open_total
 
 Number of times endpoint health failed open because quarantine would leave too few eligible resolver-present backends.
@@ -71,6 +85,21 @@ Serialized OTLP bytes per backend request before transport compression.
 | ---- | ----------- | ------ | ------------------- |
 | signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics`` | - |
 
+### otelcol_loadbalancer_backend_request_bytes_total
+
+Serialized OTLP bytes sent to each backend before transport compression.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| By | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics`` | - |
+| endpoint | The endpoint of the backend | Any Str | - |
+
 ### otelcol_loadbalancer_backend_request_items
 
 Log records or metric datapoints per backend request.
@@ -84,6 +113,21 @@ Log records or metric datapoints per backend request.
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
 | signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics`` | - |
+
+### otelcol_loadbalancer_backend_request_items_total
+
+Log records or metric datapoints sent to each backend.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| {items} | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics`` | - |
+| endpoint | The endpoint of the backend | Any Str | - |
 
 ### otelcol_loadbalancer_backend_request_total
 
@@ -152,6 +196,21 @@ Number of backends admitted by bounded subset replacement.
 | Unit | Metric Type | Value Type | Monotonic | Stability |
 | ---- | ----------- | ---------- | --------- | --------- |
 | {displacements} | Sum | Int | true | Development |
+
+### otelcol_loadbalancer_backend_timeout_total
+
+Number of backend requests that failed because of a timeout.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| {timeouts} | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics`` | - |
+| endpoint | The endpoint of the backend | Any Str | - |
 
 ### otelcol_loadbalancer_backend_unquarantine_total
 

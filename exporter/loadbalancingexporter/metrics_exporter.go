@@ -70,7 +70,7 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 		return exporterFactory.CreateMetrics(ctx, oParams, &oCfg)
 	}
 
-	lb, err := newLoadBalancer(params.Logger, cfg, cfFunc, telemetry)
+	lb, err := newLoadBalancerForSignal(params.Logger, cfg, cfFunc, telemetry, backendRequestSignalMetrics)
 	if err != nil {
 		return nil, err
 	}
@@ -174,6 +174,7 @@ func (e *metricExporterImp) startCentralQueueConsumers(ctx context.Context) {
 	if e.centralQueueBackendLimiter == nil {
 		e.centralQueueBackendLimiter = newCentralQueueBackendLimiter()
 	}
+	e.centralQueue.settings.telemetry.observeBackendInflightAge(e.centralQueueBackendLimiter.oldestInflightAges)
 	e.centralQueue.settings.telemetry.recordConfiguredConsumers(ctx, int64(consumers))
 	e.centralQueue.settings.telemetry.recordActiveLoadBalancerReplicas(ctx, int64(configuredCentralQueueActiveLBReplicas(e.centralQueueActiveLBReplicas)))
 	e.centralQueue.settings.telemetry.recordActiveConsumers(ctx, e.centralActiveConsumers.Load())
@@ -355,7 +356,7 @@ func (e *metricExporterImp) consumeCentralQueueMetricWindowAttempt(ctx context.C
 		if err != nil {
 			return err
 		}
-		backendLease, err = e.centralQueueBackendLimiter.acquire(ctx, endpoint)
+		backendLease, err = e.centralQueueBackendLimiter.acquire(ctx, endpoint, window.oldestEnqueuedAt)
 		if err != nil {
 			return err
 		}
@@ -849,6 +850,7 @@ func (e *metricExporterImp) recordBackendResultWithoutDrain(ctx context.Context,
 }
 
 func (e *metricExporterImp) recordBackendResultWithDrain(ctx context.Context, we *wrappedExporter, duration time.Duration, err error, updateEndpointHealth, drainRemoved bool) endpointHealthFailureDecision {
+	recordBackendTimeout(ctx, e.telemetry, we.metricRequestAttr, err)
 	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(we.endpointAttr))
 	if err == nil {
 		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(we.successAttr))
@@ -870,6 +872,7 @@ func (e *metricExporterImp) recordBackendResultWithDrain(ctx context.Context, we
 }
 
 func (e *metricExporterImp) recordBackendResultHealthOnly(ctx context.Context, we *wrappedExporter, duration time.Duration, err error, updateEndpointHealth bool) endpointHealthFailureDecision {
+	recordBackendTimeout(ctx, e.telemetry, we.metricRequestAttr, err)
 	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(we.endpointAttr))
 	if err == nil {
 		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(we.successAttr))

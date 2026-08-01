@@ -1,0 +1,15 @@
+change_type: bug_fix
+
+component: exporter/loadbalancing
+
+note: Rebalance low-cardinality log records and expose backend pressure signals.
+
+issues: [9892]
+
+subtext: |
+  An opt-in log routing mode stripes records across central queue lanes so one
+  low-cardinality stream cannot saturate one backend while peers stay idle.
+  Backend request bytes, timeouts, and oldest in-flight age are now available
+  for pressure-aware scaling.
+
+change_logs: [user]

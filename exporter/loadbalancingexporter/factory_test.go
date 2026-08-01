@@ -116,6 +116,7 @@ func TestDefaultLogRoutingConfig(t *testing.T) {
 	cfg := createDefaultConfig().(*Config)
 
 	assert.False(t, cfg.LogRouting.IgnoreTraceID)
+	assert.False(t, cfg.LogRouting.RecordStripingEnabled)
 }
 
 func TestDefaultMetricBatcherConfig(t *testing.T) {

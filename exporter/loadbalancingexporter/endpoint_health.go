@@ -614,11 +614,14 @@ func classifyEndpointFailure(err error) (endpointFailureReason, bool) {
 	if err == nil || consumererror.IsPermanent(err) || errors.Is(err, context.Canceled) {
 		return "", false
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
 		return endpointFailureTimeout, true
 	}
 	if isEndpointDNSFailure(err) {
 		return endpointFailureDNS, true
+	}
+	if isBackendTimeout(err) {
+		return endpointFailureTimeout, true
 	}
 	switch status.Code(err) {
 	case codes.DeadlineExceeded:
@@ -664,6 +667,20 @@ func classifyEndpointFailure(err error) (endpointFailureReason, bool) {
 	default:
 		return "", false
 	}
+}
+
+func isBackendTimeout(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "i/o timeout")
 }
 
 func isEndpointDNSFailure(err error) bool {

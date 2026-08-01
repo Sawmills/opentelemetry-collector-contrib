@@ -45,6 +45,20 @@ func TestNewLoadBalancerNoResolver(t *testing.T) {
 	require.Equal(t, errNoResolver, err)
 }
 
+func TestLoadBalancerRecordsBackendCountBySignal(t *testing.T) {
+	_, tb, telemetry := getTelemetryAssetsWithReader(t)
+	lb := &loadBalancer{telemetry: tb, backendSignal: backendRequestSignalLogs}
+
+	lb.recordBackendCount([]string{"worker-1:4317", "worker-2:4317", "worker-3:4317"})
+
+	metadatatest.AssertEqualLoadbalancerBackendCount(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: backendRequestSignalAttributeSet(backendRequestSignalLogs),
+			Value:      3,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+}
+
 func TestNewLoadBalancerInvalidStaticResolver(t *testing.T) {
 	// prepare
 	ts, tb := getTelemetryAssets(t)

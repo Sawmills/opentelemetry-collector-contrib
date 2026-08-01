@@ -16,12 +16,12 @@ func TestCentralQueueBackendLimiterReleaseWakesWaiter(t *testing.T) {
 	limiter.limit = 1
 	limiter.fallbackInitialDelay = time.Hour
 
-	first, err := limiter.acquire(t.Context(), "endpoint-1:4317")
+	first, err := limiter.acquire(t.Context(), "endpoint-1:4317", 0)
 	require.NoError(t, err)
 
 	acquired := make(chan *centralQueueBackendLease, 1)
 	go func() {
-		lease, acquireErr := limiter.acquire(t.Context(), "endpoint-1:4317")
+		lease, acquireErr := limiter.acquire(t.Context(), "endpoint-1:4317", 0)
 		if acquireErr == nil {
 			acquired <- lease
 		}
@@ -49,9 +49,9 @@ func TestCentralQueueBackendLimiterReleaseWakesOnlyMatchingEndpoint(t *testing.T
 	limiter.limit = 1
 	limiter.fallbackInitialDelay = time.Hour
 
-	firstA, err := limiter.acquire(t.Context(), "endpoint-a:4317")
+	firstA, err := limiter.acquire(t.Context(), "endpoint-a:4317", 0)
 	require.NoError(t, err)
-	firstB, err := limiter.acquire(t.Context(), "endpoint-b:4317")
+	firstB, err := limiter.acquire(t.Context(), "endpoint-b:4317", 0)
 	require.NoError(t, err)
 
 	acquiredA := make(chan *centralQueueBackendLease, 1)
@@ -86,13 +86,28 @@ func TestCentralQueueBackendLimiterReleaseWakesOnlyMatchingEndpoint(t *testing.T
 	}
 }
 
+func TestCentralQueueBackendLimiterTracksOldestInflightAgeAndEmitsZeroAfterRelease(t *testing.T) {
+	limiter := newCentralQueueBackendLimiter()
+	base := time.Date(2026, time.July, 31, 21, 5, 0, 0, time.UTC)
+	endpoint := "endpoint-1:4317"
+
+	lease, err := limiter.acquire(t.Context(), endpoint, base.UnixNano())
+	require.NoError(t, err)
+	require.Equal(t, map[string]int64{endpoint: 2_000}, limiter.oldestInflightAges(base.Add(2*time.Second)))
+
+	lease.release()
+	require.Equal(t, map[string]int64{endpoint: 0}, limiter.oldestInflightAges(base.Add(3*time.Second)))
+	require.Equal(t, map[string]int64{endpoint: 0}, limiter.oldestInflightAges(base.Add(4*time.Second)))
+	require.Empty(t, limiter.oldestInflightAges(base.Add(5*time.Second)))
+}
+
 func acquireCentralQueueBackendForTest(
 	ctx context.Context,
 	limiter *centralQueueBackendLimiter,
 	endpoint string,
 	acquired chan<- *centralQueueBackendLease,
 ) {
-	lease, err := limiter.acquire(ctx, endpoint)
+	lease, err := limiter.acquire(ctx, endpoint, 0)
 	if err == nil {
 		acquired <- lease
 	}
