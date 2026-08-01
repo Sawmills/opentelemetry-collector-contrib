@@ -614,11 +614,14 @@ func classifyEndpointFailure(err error) (endpointFailureReason, bool) {
 	if err == nil || consumererror.IsPermanent(err) || errors.Is(err, context.Canceled) {
 		return "", false
 	}
-	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return endpointFailureTimeout, true
 	}
 	if isEndpointDNSFailure(err) {
 		return endpointFailureDNS, true
+	}
+	if status.Code(err) == codes.DeadlineExceeded {
+		return endpointFailureTimeout, true
 	}
 	if isBackendTimeout(err) {
 		return endpointFailureTimeout, true

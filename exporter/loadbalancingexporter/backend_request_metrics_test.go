@@ -26,6 +26,7 @@ func TestIsBackendTimeout(t *testing.T) {
 	require.True(t, isBackendTimeout(consumererror.NewPermanent(context.DeadlineExceeded)))
 	require.False(t, isBackendTimeout(&net.DNSError{Err: "i/o timeout", Name: "backend.default.svc", IsTimeout: true}))
 	require.False(t, isBackendTimeout(status.Error(codes.Unavailable, "transport: error while dialing: dial tcp: lookup backend.default.svc: i/o timeout")))
+	require.False(t, isBackendTimeout(status.Error(codes.DeadlineExceeded, "transport: error while dialing: dial tcp: lookup backend.default.svc: i/o timeout")))
 	require.False(t, isBackendTimeout(consumererror.NewPermanent(errors.New("bad payload"))))
 	require.False(t, isBackendTimeout(context.Canceled))
 }

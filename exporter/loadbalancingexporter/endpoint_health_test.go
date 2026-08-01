@@ -738,6 +738,12 @@ func TestEndpointFailureClassification(t *testing.T) {
 			ok:     true,
 		},
 		{
+			name:   "grpc deadline exceeded dns lookup timeout",
+			err:    status.Error(codes.DeadlineExceeded, "transport: error while dialing: dial tcp: lookup backend.default.svc: i/o timeout"),
+			reason: endpointFailureDNS,
+			ok:     true,
+		},
+		{
 			name:   "connection refused",
 			err:    &net.OpError{Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)},
 			reason: endpointFailureConnectionRefused,
