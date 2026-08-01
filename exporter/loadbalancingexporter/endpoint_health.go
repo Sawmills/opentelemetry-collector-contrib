@@ -673,6 +673,9 @@ func isBackendTimeout(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return false
 	}
+	if isEndpointDNSFailure(err) {
+		return false
+	}
 	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
 		return true
 	}
@@ -689,5 +692,7 @@ func isEndpointDNSFailure(err error) bool {
 		return true
 	}
 	errText := strings.ToLower(err.Error())
-	return strings.HasPrefix(errText, "lookup ") || strings.Contains(errText, "no such host")
+	return strings.HasPrefix(errText, "lookup ") ||
+		strings.Contains(errText, ": lookup ") ||
+		strings.Contains(errText, "no such host")
 }
