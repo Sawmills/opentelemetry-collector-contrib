@@ -4,16 +4,32 @@
 package loadbalancingexporter
 
 import (
+	"context"
+	"errors"
+	"net"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata/metricdatatest"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadatatest"
 )
+
+func TestIsBackendTimeout(t *testing.T) {
+	require.True(t, isBackendTimeout(context.DeadlineExceeded))
+	require.True(t, isBackendTimeout(consumererror.NewPermanent(context.DeadlineExceeded)))
+	require.False(t, isBackendTimeout(&net.DNSError{Err: "i/o timeout", Name: "backend.default.svc", IsTimeout: true}))
+	require.False(t, isBackendTimeout(status.Error(codes.Unavailable, "transport: error while dialing: dial tcp: lookup backend.default.svc: i/o timeout")))
+	require.False(t, isBackendTimeout(status.Error(codes.DeadlineExceeded, "transport: error while dialing: dial tcp: lookup backend.default.svc: i/o timeout")))
+	require.False(t, isBackendTimeout(consumererror.NewPermanent(errors.New("bad payload"))))
+	require.False(t, isBackendTimeout(context.Canceled))
+}
 
 var (
 	backendRequestBytesBounds = []float64{1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216}
@@ -32,6 +48,18 @@ func assertBackendRequestMetrics(t *testing.T, telemetry *componenttest.Telemetr
 		{
 			Attributes: endpointAttrs,
 			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+	metadatatest.AssertEqualLoadbalancerBackendRequestBytesTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: endpointAttrs,
+			Value:      bytes,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+	metadatatest.AssertEqualLoadbalancerBackendRequestItemsTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: endpointAttrs,
+			Value:      items,
 		},
 	}, metricdatatest.IgnoreTimestamp())
 	metadatatest.AssertEqualLoadbalancerBackendRequestBytes(t, telemetry, []metricdata.HistogramDataPoint[int64]{

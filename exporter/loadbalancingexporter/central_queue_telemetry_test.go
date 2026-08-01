@@ -122,6 +122,26 @@ func TestCentralQueueTelemetryOldestItemAgeReportsMultipleSignals(t *testing.T) 
 	requireCentralQueueIntGaugeDatapoint(t, gauge.DataPoints, attribute.NewSet(attribute.String("signal", string(signalKindMetrics))), 250)
 }
 
+func TestCentralQueueTelemetryBackendInflightAgeReportsExplicitZeroAfterCompletion(t *testing.T) {
+	reader := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, reader.Shutdown(context.WithoutCancel(t.Context())))
+	})
+	telemetry, err := newCentralQueueTelemetry(reader.NewTelemetrySettings(), signalKindLogs)
+	require.NoError(t, err)
+	endpoint := "endpoint-1:4317"
+	ageMillis := int64(2_000)
+	telemetry.observeBackendInflightAge(func(time.Time) map[string]int64 {
+		return map[string]int64{endpoint: ageMillis}
+	})
+
+	attrs := attribute.NewSet(attribute.String("endpoint", endpoint), attribute.String("signal", string(signalKindLogs)))
+	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_backend_inflight_oldest_age", "ms", attrs, 2_000)
+
+	ageMillis = 0
+	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_backend_inflight_oldest_age", "ms", attrs, 0)
+}
+
 func requireCentralQueueSchedulerState(t *testing.T, reader *componenttest.Telemetry, activeState centralQueueSchedulerState) {
 	t.Helper()
 	metric, err := reader.GetMetric("otelcol_loadbalancer_central_queue_scheduler_state")

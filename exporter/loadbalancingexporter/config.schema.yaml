@@ -181,6 +181,8 @@ $defs:
     properties:
       ignore_trace_id:
         type: boolean
+      record_striping_enabled:
+        type: boolean
   metric_batcher_config:
     type: object
     properties:

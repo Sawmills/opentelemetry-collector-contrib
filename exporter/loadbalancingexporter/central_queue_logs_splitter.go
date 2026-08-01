@@ -26,6 +26,7 @@ type centralQueueLogSplitter struct {
 	emptyTraceFallbackKeys map[[2]int]pcommon.TraceID
 	laneRoutingKeys        map[uint32][]byte
 	lanes                  map[string]*centralQueueLogLaneBuilder
+	nextStripingLane       uint32
 }
 
 type centralQueueLogLaneBuilder struct {
@@ -56,7 +57,7 @@ func newCentralQueueLogSplitter(exporter *logExporterImp, limit int, now time.Ti
 	if effectiveLimit > centralQueueLogSplitHeadroom {
 		effectiveLimit -= centralQueueLogSplitHeadroom
 	}
-	return &centralQueueLogSplitter{
+	splitter := &centralQueueLogSplitter{
 		exporter:               exporter,
 		codec:                  exporter.centralCodec,
 		hardLimit:              limit,
@@ -68,6 +69,11 @@ func newCentralQueueLogSplitter(exporter *logExporterImp, limit int, now time.Ti
 		laneRoutingKeys:        make(map[uint32][]byte),
 		lanes:                  make(map[string]*centralQueueLogLaneBuilder),
 	}
+	if exporter.recordStripingEnabled && splitter.laneCount > 0 {
+		startKey := exporter.nextRandomTraceID()
+		splitter.nextStripingLane = centralQueueLaneIndex(signalKindLogs, startKey[:], splitter.laneCount)
+	}
+	return splitter
 }
 
 func centralQueueEffectiveUncompressedItemLimit(settings centralQueueSettings) int {
@@ -90,8 +96,14 @@ func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) err
 			sl := rl.ScopeLogs().At(j)
 			for k := 0; k < sl.LogRecords().Len(); k++ {
 				rec := sl.LogRecords().At(k)
-				balancingKey := s.exporter.routingKeyForLogRecord(rec, [2]int{i, j}, s.emptyTraceFallbackKeys)
-				queueRoutingKey := s.balancedLaneRoutingKey(balancingKey)
+				var queueRoutingKey []byte
+				if s.exporter.recordStripingEnabled && s.laneCount > 0 {
+					queueRoutingKey = s.balancedLaneRoutingKeyForLane(s.nextStripingLane)
+					s.nextStripingLane = (s.nextStripingLane + 1) % uint32(s.laneCount)
+				} else {
+					balancingKey := s.exporter.routingKeyForLogRecord(rec, [2]int{i, j}, s.emptyTraceFallbackKeys)
+					queueRoutingKey = s.balancedLaneRoutingKey(balancingKey)
+				}
 				lane := s.lane(queueRoutingKey)
 				if !lane.empty() && !lane.canFit(rl, sl, rec, s.marshaler, s.limit) {
 					if err := s.flushLane(lane); err != nil {
@@ -114,6 +126,10 @@ func (s *centralQueueLogSplitter) balancedLaneRoutingKey(balancingKey pcommon.Tr
 		return balancingKey[:]
 	}
 	lane := centralQueueLaneIndex(signalKindLogs, balancingKey[:], s.laneCount)
+	return s.balancedLaneRoutingKeyForLane(lane)
+}
+
+func (s *centralQueueLogSplitter) balancedLaneRoutingKeyForLane(lane uint32) []byte {
 	if key, ok := s.laneRoutingKeys[lane]; ok {
 		return key
 	}

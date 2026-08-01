@@ -46,6 +46,7 @@ type loadBalancer struct {
 	exporters         map[string]*wrappedExporter
 	onExporterRemove  func(context.Context, string, *wrappedExporter) error
 	telemetry         *metadata.TelemetryBuilder
+	backendSignal     string
 	endpointHealth    *endpointHealthManager
 	activeProbe       EndpointHealthActiveProbeConfig
 	activeProbeJitter float64
@@ -64,6 +65,10 @@ type loadBalancer struct {
 
 // Create new load balancer
 func newLoadBalancer(logger *zap.Logger, cfg component.Config, factory componentFactory, telemetry *metadata.TelemetryBuilder) (*loadBalancer, error) {
+	return newLoadBalancerForSignal(logger, cfg, factory, telemetry, "")
+}
+
+func newLoadBalancerForSignal(logger *zap.Logger, cfg component.Config, factory componentFactory, telemetry *metadata.TelemetryBuilder, backendSignal string) (*loadBalancer, error) {
 	oCfg := cfg.(*Config)
 
 	count := 0
@@ -171,7 +176,7 @@ func newLoadBalancer(logger *zap.Logger, cfg component.Config, factory component
 		}
 	}
 
-	return &loadBalancer{
+	lb := &loadBalancer{
 		logger:            logger,
 		res:               res,
 		componentFactory:  factory,
@@ -180,7 +185,9 @@ func newLoadBalancer(logger *zap.Logger, cfg component.Config, factory component
 		endpointHealth:    newEndpointHealthManager(healthSettings),
 		activeProbe:       oCfg.EndpointHealth.ActiveProbe,
 		activeProbeJitter: activeProbeJitter,
-	}, nil
+	}
+	lb.backendSignal = backendSignal
+	return lb, nil
 }
 
 func (lb *loadBalancer) Start(ctx context.Context, host component.Host) error {
@@ -194,6 +201,7 @@ func (lb *loadBalancer) Start(ctx context.Context, host component.Host) error {
 }
 
 func (lb *loadBalancer) onBackendChanges(resolved []string) {
+	lb.recordBackendCount(resolved)
 	if lb.endpointHealth.enabled() {
 		lb.onBackendChangesWithEndpointHealth(resolved)
 		return
@@ -226,6 +234,17 @@ func (lb *loadBalancer) onBackendChanges(resolved []string) {
 			lb.drainRemovedExporters(ctx, removed)
 		})
 	}
+}
+
+func (lb *loadBalancer) recordBackendCount(resolved []string) {
+	if lb.telemetry == nil || lb.backendSignal == "" {
+		return
+	}
+	lb.telemetry.LoadbalancerBackendCount.Record(
+		context.Background(),
+		int64(len(resolved)),
+		backendRequestMetricOptions(backendRequestSignalAttributeSet(lb.backendSignal)),
+	)
 }
 
 func (lb *loadBalancer) onBackendChangesWithEndpointHealth(resolved []string) {

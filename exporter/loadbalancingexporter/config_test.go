@@ -646,6 +646,35 @@ func TestConfigValidateBackendSubset(t *testing.T) {
 	}
 }
 
+func TestConfigValidateLogRoutingRecordStriping(t *testing.T) {
+	validConfig := func() *Config {
+		cfg := createDefaultConfig().(*Config)
+		cfg.CentralQueue.Enabled = true
+		cfg.CentralQueue.MaxCompressedBytes = 1 << 20
+		cfg.LogRouting.IgnoreTraceID = true
+		cfg.LogRouting.RecordStripingEnabled = true
+		return cfg
+	}
+
+	t.Run("valid", func(t *testing.T) {
+		require.NoError(t, validConfig().Validate())
+	})
+
+	t.Run("requires ignored trace ID", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.LogRouting.IgnoreTraceID = false
+
+		require.ErrorContains(t, cfg.Validate(), "log_routing.record_striping_enabled=true requires log_routing.ignore_trace_id=true")
+	})
+
+	t.Run("requires central queue", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.CentralQueue.Enabled = false
+
+		require.ErrorContains(t, cfg.Validate(), "log_routing.record_striping_enabled=true requires central_queue.enabled=true")
+	})
+}
+
 func TestConfigValidateEndpointHealthActiveProbe(t *testing.T) {
 	validProbe := EndpointHealthActiveProbeConfig{
 		Enabled:        true,

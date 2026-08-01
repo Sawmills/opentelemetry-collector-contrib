@@ -53,6 +53,10 @@ type centralQueueTelemetry struct {
 	oldestItemAgeReg      metric.Registration
 	oldestItemAgeMu       sync.RWMutex
 	oldestItemAgeMillis   func() int64
+	backendInflightAge    metric.Int64ObservableGauge
+	backendInflightAgeReg metric.Registration
+	backendInflightAgeMu  sync.RWMutex
+	backendInflightAges   func(time.Time) map[string]int64
 	readyWindows          metric.Int64ObservableGauge
 	readyWindowLimit      metric.Int64ObservableGauge
 	readyLanes            metric.Int64ObservableGauge
@@ -338,6 +342,31 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 		}, t.oldestItemAge)
 		errs = errors.Join(errs, err)
 	}
+	t.backendInflightAge, err = meter.Int64ObservableGauge(
+		"otelcol_loadbalancer_backend_inflight_oldest_age",
+		metric.WithDescription("Age in ms of the oldest central queue window in flight to each backend. Completed endpoints report zero."),
+		metric.WithUnit("ms"),
+	)
+	errs = errors.Join(errs, err)
+	if err == nil {
+		t.backendInflightAgeReg, err = meter.RegisterCallback(func(_ context.Context, observer metric.Observer) error {
+			t.backendInflightAgeMu.RLock()
+			backendInflightAges := t.backendInflightAges
+			t.backendInflightAgeMu.RUnlock()
+			if backendInflightAges == nil {
+				return nil
+			}
+			for endpoint, ageMillis := range backendInflightAges(time.Now()) {
+				attrs := metric.WithAttributeSet(attribute.NewSet(
+					attribute.String("endpoint", endpoint),
+					attribute.String("signal", string(t.signal)),
+				))
+				observer.ObserveInt64(t.backendInflightAge, ageMillis, attrs)
+			}
+			return nil
+		}, t.backendInflightAge)
+		errs = errors.Join(errs, err)
+	}
 	t.readyWindows, err = meter.Int64ObservableGauge(
 		"otelcol_loadbalancer_central_queue_ready_windows",
 		metric.WithDescription("Central load-balancing request windows ready to be leased by drain workers."),
@@ -544,6 +573,29 @@ func (t *centralQueueTelemetry) stopObservingOldestItemAge() {
 	t.oldestItemAgeReg = nil
 	t.oldestItemAgeMillis = nil
 	t.oldestItemAgeMu.Unlock()
+	if registration != nil {
+		_ = registration.Unregister()
+	}
+}
+
+func (t *centralQueueTelemetry) observeBackendInflightAge(backendInflightAges func(time.Time) map[string]int64) {
+	if t == nil {
+		return
+	}
+	t.backendInflightAgeMu.Lock()
+	defer t.backendInflightAgeMu.Unlock()
+	t.backendInflightAges = backendInflightAges
+}
+
+func (t *centralQueueTelemetry) stopObservingBackendInflightAge() {
+	if t == nil {
+		return
+	}
+	t.backendInflightAgeMu.Lock()
+	registration := t.backendInflightAgeReg
+	t.backendInflightAgeReg = nil
+	t.backendInflightAges = nil
+	t.backendInflightAgeMu.Unlock()
 	if registration != nil {
 		_ = registration.Unregister()
 	}

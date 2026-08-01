@@ -575,6 +575,12 @@ func TestMetricsCentralQueueReroutesDeadlineExceededEndpoint(t *testing.T) {
 			Value:      1,
 		},
 	}, metricdatatest.IgnoreTimestamp())
+	metadatatest.AssertEqualLoadbalancerBackendTimeoutTotal(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("signal", "metrics")),
+			Value:      1,
+		},
+	}, metricdatatest.IgnoreTimestamp())
 }
 
 func TestConsumeMetricsByExporterAggregatesFailedEndpointSubsets(t *testing.T) {
@@ -848,7 +854,7 @@ func TestMetricsCentralQueueBackendWaitDoesNotHoldConsumerSlot(t *testing.T) {
 		centralQueueNumConsumers:   3,
 		centralQueueBackendLimiter: newCentralQueueBackendLimiter(),
 	}
-	blockedBackendLease, err := p.centralQueueBackendLimiter.acquire(t.Context(), "endpoint-1:4317")
+	blockedBackendLease, err := p.centralQueueBackendLimiter.acquire(t.Context(), "endpoint-1:4317", 0)
 	require.NoError(t, err)
 	t.Cleanup(blockedBackendLease.release)
 

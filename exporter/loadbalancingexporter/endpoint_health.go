@@ -620,6 +620,12 @@ func classifyEndpointFailure(err error) (endpointFailureReason, bool) {
 	if isEndpointDNSFailure(err) {
 		return endpointFailureDNS, true
 	}
+	if status.Code(err) == codes.DeadlineExceeded {
+		return endpointFailureTimeout, true
+	}
+	if isBackendTimeout(err) {
+		return endpointFailureTimeout, true
+	}
 	switch status.Code(err) {
 	case codes.DeadlineExceeded:
 		return endpointFailureTimeout, true
@@ -666,11 +672,30 @@ func classifyEndpointFailure(err error) (endpointFailureReason, bool) {
 	}
 }
 
+func isBackendTimeout(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	if isEndpointDNSFailure(err) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "i/o timeout")
+}
+
 func isEndpointDNSFailure(err error) bool {
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
 		return true
 	}
 	errText := strings.ToLower(err.Error())
-	return strings.HasPrefix(errText, "lookup ") || strings.Contains(errText, "no such host")
+	return strings.HasPrefix(errText, "lookup ") ||
+		strings.Contains(errText, ": lookup ") ||
+		strings.Contains(errText, "no such host")
 }
