@@ -9,13 +9,13 @@ import (
 	"time"
 )
 
-const centralQueueBackendCompletionZeroObservations = 2
+const centralQueueBackendCompletionZeroWindow = 30 * time.Second
 
 type centralQueueBackendLimiter struct {
 	mu                   sync.Mutex
 	active               map[string]int
 	inflightEnqueuedAt   map[string]map[int64]int
-	completionZeros      map[string]int
+	completionZeroUntil  map[string]time.Time
 	limit                int
 	waiters              map[string]chan struct{}
 	fallbackInitialDelay time.Duration
@@ -67,7 +67,7 @@ func newCentralQueueBackendLimiter() *centralQueueBackendLimiter {
 	return &centralQueueBackendLimiter{
 		active:               make(map[string]int),
 		inflightEnqueuedAt:   make(map[string]map[int64]int),
-		completionZeros:      make(map[string]int),
+		completionZeroUntil:  make(map[string]time.Time),
 		limit:                defaultCentralQueueMaxInflightSendsPerBackend,
 		waiters:              make(map[string]chan struct{}),
 		fallbackInitialDelay: centralQueueLeaseFallbackInitialDelay,
@@ -156,7 +156,7 @@ func (l *centralQueueBackendLimiter) release(endpoint string, oldestEnqueuedAt i
 
 func (l *centralQueueBackendLimiter) trackAcquireLocked(endpoint string, oldestEnqueuedAt int64) {
 	l.active[endpoint]++
-	delete(l.completionZeros, endpoint)
+	delete(l.completionZeroUntil, endpoint)
 	if oldestEnqueuedAt <= 0 {
 		return
 	}
@@ -188,10 +188,10 @@ func (l *centralQueueBackendLimiter) trackReleaseLocked(endpoint string, oldestE
 		delete(l.inflightEnqueuedAt, endpoint)
 	}
 	if l.active[endpoint] == 0 {
-		if l.completionZeros == nil {
-			l.completionZeros = make(map[string]int)
+		if l.completionZeroUntil == nil {
+			l.completionZeroUntil = make(map[string]time.Time)
 		}
-		l.completionZeros[endpoint] = centralQueueBackendCompletionZeroObservations
+		l.completionZeroUntil[endpoint] = time.Time{}
 	}
 }
 
@@ -201,7 +201,7 @@ func (l *centralQueueBackendLimiter) oldestInflightAges(now time.Time) map[strin
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	ages := make(map[string]int64, len(l.active)+len(l.completionZeros))
+	ages := make(map[string]int64, len(l.active)+len(l.completionZeroUntil))
 	for endpoint := range l.active {
 		ages[endpoint] = 0
 	}
@@ -220,13 +220,16 @@ func (l *centralQueueBackendLimiter) oldestInflightAges(now time.Time) map[strin
 			ages[endpoint] = age
 		}
 	}
-	for endpoint, remaining := range l.completionZeros {
-		ages[endpoint] = 0
-		if remaining <= 1 {
-			delete(l.completionZeros, endpoint)
-		} else {
-			l.completionZeros[endpoint] = remaining - 1
+	for endpoint, until := range l.completionZeroUntil {
+		if until.IsZero() {
+			until = now.Add(centralQueueBackendCompletionZeroWindow)
+			l.completionZeroUntil[endpoint] = until
 		}
+		if !now.Before(until) {
+			delete(l.completionZeroUntil, endpoint)
+			continue
+		}
+		ages[endpoint] = 0
 	}
 	return ages
 }

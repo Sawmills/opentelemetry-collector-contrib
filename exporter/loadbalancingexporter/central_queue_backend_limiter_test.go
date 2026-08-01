@@ -97,8 +97,11 @@ func TestCentralQueueBackendLimiterTracksOldestInflightAgeAndEmitsZeroAfterRelea
 
 	lease.release()
 	require.Equal(t, map[string]int64{endpoint: 0}, limiter.oldestInflightAges(base.Add(3*time.Second)))
-	require.Equal(t, map[string]int64{endpoint: 0}, limiter.oldestInflightAges(base.Add(4*time.Second)))
-	require.Empty(t, limiter.oldestInflightAges(base.Add(5*time.Second)))
+	for range 3 {
+		require.Equal(t, map[string]int64{endpoint: 0}, limiter.oldestInflightAges(base.Add(3*time.Second)))
+	}
+	require.Equal(t, map[string]int64{endpoint: 0}, limiter.oldestInflightAges(base.Add(32*time.Second)))
+	require.Empty(t, limiter.oldestInflightAges(base.Add(33*time.Second)))
 }
 
 func acquireCentralQueueBackendForTest(

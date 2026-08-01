@@ -564,7 +564,7 @@ The following metrics are recorded by this exporter:
   * `otelcol_loadbalancer_metric_batch_pending_oldest_datapoint_age_max` reports the maximum pending oldest-datapoint age across all backend endpoints.
   * `otelcol_loadbalancer_metric_batch_flush_oldest_datapoint_age` records the age of the oldest metric datapoint in each flushed batch.
 * When central queue mode is active, `otelcol_loadbalancer_central_queue_oldest_item_age` reports the age in milliseconds of the oldest item waiting in the central queue.
-* When central queue mode is active, `otelcol_loadbalancer_backend_inflight_oldest_age` reports the original queue age in milliseconds of the oldest active request window for each endpoint and signal. Completed endpoints report zero for two collections before their series is removed.
+* When central queue mode is active, `otelcol_loadbalancer_backend_inflight_oldest_age` reports the original queue age in milliseconds of the oldest active request window for each endpoint and signal. Completed endpoints report zero for 30 seconds after the first post-completion collection before their series is removed.
 * Central queue worker metrics show whether each LB pod is draining queue windows in parallel:
   * `otelcol_loadbalancer_central_queue_configured_consumers` reports the configured maximum drain workers per signal exporter.
   * `otelcol_loadbalancer_central_queue_active_load_balancer_replicas` reports the LB replica count used to divide backend-safe drain concurrency.
