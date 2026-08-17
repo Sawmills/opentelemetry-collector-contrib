@@ -1,0 +1,9 @@
+change_type: bug_fix
+component: exporter/loadbalancing
+note: Allow bounded backend subsets to use endpoint health active probes.
+issues: [10460]
+subtext: |
+  Backend subsets can now enable endpoint health active probes. Probes still
+  visit every resolver-present backend, while the routing ring and child
+  exporters remain bounded by `backend_subset.max_endpoints`.
+change_logs: [user]

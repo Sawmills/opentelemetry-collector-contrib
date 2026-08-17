@@ -134,7 +134,7 @@ Refer to [config.yaml](./testdata/config.yaml) for detailed examples on using th
   * `max_reroute_attempts` limits endpoint-failure reroute attempts. Default: `1`.
   * `min_eligible_backends` fails open when quarantine would leave fewer than this many resolver-present backends eligible. Default: `1`.
   * `max_quarantined_percent` fails open when more than this percentage of resolver-present backends are quarantined. Default: `100`.
-  * `active_probe` actively checks every resolver-present backend from the local exporter before routing customer telemetry to it. It is disabled by default and fails open if every backend is locally unhealthy.
+  * `active_probe` actively checks every resolver-present backend from the local exporter before routing customer telemetry to it. When `backend_subset` is enabled, probing still covers every resolver-present backend, not only the selected child-exporter set. It is disabled by default and fails open if every backend is locally unhealthy.
     * `enabled` turns active probing on or off. Default: `false`.
     * `type` is the probe type. Only `tcp_connect` is currently supported. Default: `tcp_connect`.
     * `interval` controls how often each exporter pod probes its resolved backend set. Default: `5s`.
@@ -149,7 +149,7 @@ Refer to [config.yaml](./testdata/config.yaml) for detailed examples on using th
   * `seed` optionally sets the rendezvous-selection seed. When omitted, the local hostname is used so replicas select different stable subsets.
   * Selection scores backend hosts rather than host-port pairs. Separate exporter configurations that resolve the same hosts on different ports therefore choose the same host order. `max_endpoints` still counts endpoint entries when one resolver returns multiple ports per host.
   * Bounded subsets support only logs with `log_routing.ignore_trace_id=true`. Traces, metrics, and trace-affine logs are rejected because limiting their backend view would break routing affinity.
-  * `endpoint_health.enabled=true` is required and `endpoint_health.active_probe.enabled=true` is incompatible. Resolver membership and health state remain complete while only the eligible selected set owns child exporters.
+  * `endpoint_health.enabled=true` is required. Active probes are supported and still cover every resolver-present backend. Resolver membership and health state remain complete while only the eligible selected set owns child exporters and the routing ring.
   * Endpoint replacement, recovery, and fail-open remain capped at `max_endpoints`. Displaced child exporters are drained before shutdown.
   * When used with `central_queue`, keep `central_queue.num_consumers` less than or equal to `max_endpoints` during rollout so configured drain parallelism cannot exceed the selected backend set.
 * The `log_routing` property controls log-specific routing behavior.

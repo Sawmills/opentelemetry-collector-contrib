@@ -437,6 +437,190 @@ func TestLoadBalancerBackendSubsetFailOpenRemainsBounded(t *testing.T) {
 	require.Equal(t, 2, p.routableBackendCount())
 }
 
+func TestLoadBalancerBackendSubsetActiveProbeVisitsAllResolverPresentEndpoints(t *testing.T) {
+	p, _, _ := newBackendSubsetActiveProbeTestLoadBalancer(t)
+	resolved := backendSubsetTestEndpoints(8, 10417)
+	p.onBackendChanges(resolved)
+	selected := slices.Clone(p.ring.endpoints)
+
+	probed := make(chan string, len(resolved))
+	p.activeProbeFunc = func(_ context.Context, endpoint string) error {
+		probed <- endpoint
+		return nil
+	}
+
+	p.runEndpointHealthActiveProbeCycle(t.Context())
+
+	require.Len(t, probed, len(resolved))
+	probedEndpoints := make([]string, 0, len(resolved))
+	for range len(resolved) {
+		probedEndpoints = append(probedEndpoints, <-probed)
+	}
+	require.ElementsMatch(t, normalizeEndpoints(resolved), probedEndpoints)
+	require.Equal(t, selected, p.ring.endpoints)
+	require.LessOrEqual(t, len(p.ring.endpoints), 2)
+	require.LessOrEqual(t, len(p.exporters), 2)
+}
+
+func TestLoadBalancerBackendSubsetActiveProbeFailureAndRecoveryStayBounded(t *testing.T) {
+	p, creates, shutdownEvents := newBackendSubsetActiveProbeTestLoadBalancer(t)
+	resolved := backendSubsetTestEndpoints(12, 10417)
+	p.onBackendChanges(resolved)
+	initial := slices.Clone(p.ring.endpoints)
+	require.Len(t, initial, 2)
+
+	failed := initial[0]
+	eligibleAfterFailure := slices.DeleteFunc(slices.Clone(normalizeEndpoints(resolved)), func(endpoint string) bool {
+		return endpoint == failed
+	})
+	expectedAfterFailure := p.endpointHealth.settings.backendSubset.selectEndpoints(eligibleAfterFailure)
+	var replacement string
+	for _, endpoint := range expectedAfterFailure {
+		if !slices.Contains(initial, endpoint) {
+			replacement = endpoint
+			break
+		}
+	}
+	require.NotEmpty(t, replacement)
+
+	decision := p.handleBackendProbeFailure(t.Context(), failed, errors.New("probe failed"))
+	require.True(t, decision.quarantined)
+	require.Equal(t, expectedAfterFailure, p.ring.endpoints)
+	require.NotContains(t, p.exporters, failed)
+	require.Contains(t, p.exporters, replacement)
+	require.Len(t, p.ring.endpoints, 2)
+	require.Len(t, p.exporters, 2)
+	require.LessOrEqual(t, len(p.ring.endpoints), 2)
+	require.LessOrEqual(t, len(p.exporters), 2)
+	require.Equal(t, int64(3), creates.Load())
+	requireShutdownEvent(t, shutdownEvents, failed)
+
+	recovery := p.handleBackendProbeSuccess(t.Context(), failed)
+	require.True(t, recovery.recovered)
+	require.Equal(t, initial, p.ring.endpoints)
+	require.Contains(t, p.exporters, failed)
+	require.NotContains(t, p.exporters, replacement)
+	require.Len(t, p.ring.endpoints, 2)
+	require.Len(t, p.exporters, 2)
+	require.LessOrEqual(t, len(p.ring.endpoints), 2)
+	require.LessOrEqual(t, len(p.exporters), 2)
+	require.Equal(t, int64(4), creates.Load())
+	requireShutdownEvent(t, shutdownEvents, replacement)
+}
+
+func TestLoadBalancerBackendSubsetActiveProbeFailureOutsideSelectionDoesNotCreateExporter(t *testing.T) {
+	p, creates, _ := newBackendSubsetActiveProbeTestLoadBalancer(t)
+	resolved := backendSubsetTestEndpoints(8, 10417)
+	p.onBackendChanges(resolved)
+	selected := slices.Clone(p.ring.endpoints)
+
+	var failed string
+	for _, endpoint := range normalizeEndpoints(resolved) {
+		if !slices.Contains(selected, endpoint) {
+			failed = endpoint
+			break
+		}
+	}
+	require.NotEmpty(t, failed)
+
+	probed := make(chan string, len(resolved))
+	p.activeProbeFunc = func(_ context.Context, endpoint string) error {
+		probed <- endpoint
+		if endpoint == failed {
+			return errors.New("probe failed")
+		}
+		return nil
+	}
+	p.runEndpointHealthActiveProbeCycle(t.Context())
+
+	require.Len(t, probed, len(resolved))
+	require.NotContains(t, p.exporters, failed)
+	require.Equal(t, selected, p.ring.endpoints)
+	require.Len(t, p.exporters, 2)
+	require.LessOrEqual(t, len(p.ring.endpoints), 2)
+	require.LessOrEqual(t, len(p.exporters), 2)
+	require.Equal(t, int64(2), creates.Load())
+}
+
+func TestLoadBalancerBackendSubsetActiveProbeFailOpenRemainsBounded(t *testing.T) {
+	p, _, _ := newBackendSubsetActiveProbeTestLoadBalancer(t)
+	resolved := backendSubsetTestEndpoints(10, 10417)
+	p.onBackendChanges(resolved)
+
+	probed := make(chan string, len(resolved))
+	p.activeProbeFunc = func(_ context.Context, endpoint string) error {
+		probed <- endpoint
+		return errors.New("probe failed")
+	}
+	p.runEndpointHealthActiveProbeCycle(t.Context())
+
+	require.Len(t, probed, len(resolved))
+	require.True(t, p.endpointHealth.failOpen())
+	expected := p.endpointHealth.settings.backendSubset.selectEndpoints(normalizeEndpoints(resolved))
+	require.Equal(t, expected, p.ring.endpoints)
+	require.Len(t, p.ring.endpoints, 2)
+	require.Len(t, p.exporters, 2)
+	require.Equal(t, 2, p.routableBackendCount())
+	require.LessOrEqual(t, len(p.ring.endpoints), 2)
+	require.LessOrEqual(t, len(p.exporters), 2)
+}
+
+func TestLoadBalancerBackendSubsetActiveProbeShutdownDuringInFlightProbe(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableBackendSubset(cfg, 2)
+	cfg.EndpointHealth.ActiveProbe = EndpointHealthActiveProbeConfig{
+		Enabled:        true,
+		Type:           EndpointHealthActiveProbeTypeTCPConnect,
+		Interval:       10 * time.Millisecond,
+		Timeout:        time.Second,
+		Jitter:         "0%",
+		MaxConcurrency: 1,
+		Fall:           1,
+		Rise:           1,
+	}
+	shutdowns := &sync.Map{}
+	p, err := newLoadBalancer(ts.Logger, cfg, func(_ context.Context, endpoint string) (component.Component, error) {
+		return &countingComponent{endpoint: endpoint, shutdowns: shutdowns}, nil
+	}, tb)
+	require.NoError(t, err)
+
+	probeStarted := make(chan struct{})
+	probeCanceled := make(chan struct{})
+	var startOnce sync.Once
+	var cancelOnce sync.Once
+	p.activeProbeFunc = func(ctx context.Context, _ string) error {
+		startOnce.Do(func() { close(probeStarted) })
+		<-ctx.Done()
+		cancelOnce.Do(func() { close(probeCanceled) })
+		return ctx.Err()
+	}
+
+	var shutdownOnce sync.Once
+	shutdown := func() {
+		shutdownOnce.Do(func() {
+			shutdownCtx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			require.NoError(t, p.Shutdown(shutdownCtx))
+		})
+	}
+	defer shutdown()
+
+	require.NoError(t, p.Start(t.Context(), componenttest.NewNopHost()))
+	select {
+	case <-probeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("expected active probe to be in flight")
+	}
+
+	shutdown()
+	select {
+	case <-probeCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("expected shutdown to cancel the in-flight probe")
+	}
+}
+
 func TestLoadBalancerBackendSubsetRecordsSelectionTelemetry(t *testing.T) {
 	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
 	cfg := simpleConfig()
@@ -1771,6 +1955,44 @@ func newBackendSubsetTestLoadBalancer(t *testing.T, maxEndpoints int) (*loadBala
 	return p, creates, shutdowns
 }
 
+func newBackendSubsetActiveProbeTestLoadBalancer(t *testing.T) (*loadBalancer, *atomic.Int64, <-chan string) {
+	t.Helper()
+
+	ts, telemetry := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableBackendSubset(cfg, 2)
+	seed := "gateway-1"
+	cfg.BackendSubset.Seed = &seed
+	cfg.EndpointHealth.ActiveProbe = EndpointHealthActiveProbeConfig{
+		Enabled:        true,
+		Type:           EndpointHealthActiveProbeTypeTCPConnect,
+		Interval:       time.Second,
+		Timeout:        100 * time.Millisecond,
+		Jitter:         "0%",
+		MaxConcurrency: 4,
+		Fall:           1,
+		Rise:           1,
+	}
+
+	creates := &atomic.Int64{}
+	shutdowns := &sync.Map{}
+	shutdownEvents := make(chan string, 32)
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		creates.Add(1)
+		return &countingComponent{
+			endpoint:       endpoint,
+			shutdowns:      shutdowns,
+			shutdownEvents: shutdownEvents,
+		}, nil
+	}
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, telemetry)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, p.Shutdown(context.WithoutCancel(t.Context())))
+	})
+	return p, creates, shutdownEvents
+}
+
 func countComponentEvents(events *sync.Map) int64 {
 	var total int64
 	events.Range(func(_, value any) bool {
@@ -1778,6 +2000,16 @@ func countComponentEvents(events *sync.Map) int64 {
 		return true
 	})
 	return total
+}
+
+func requireShutdownEvent(t *testing.T, events <-chan string, expected string) {
+	t.Helper()
+	select {
+	case actual := <-events:
+		require.Equal(t, expected, actual)
+	case <-time.After(time.Second):
+		t.Fatalf("expected shutdown event for %s", expected)
+	}
 }
 
 func listenTCPForProbe(t *testing.T, address string) net.Listener {
@@ -1813,9 +2045,10 @@ func requireProbeStarts(t *testing.T, started <-chan struct{}, count int) {
 }
 
 type countingComponent struct {
-	endpoint  string
-	starts    *sync.Map
-	shutdowns *sync.Map
+	endpoint       string
+	starts         *sync.Map
+	shutdowns      *sync.Map
+	shutdownEvents chan<- string
 }
 
 func (c *countingComponent) Start(context.Context, component.Host) error {
@@ -1829,6 +2062,9 @@ func (c *countingComponent) Start(context.Context, component.Host) error {
 func (c *countingComponent) Shutdown(context.Context) error {
 	count, _ := c.shutdowns.LoadOrStore(c.endpoint, &atomic.Int64{})
 	count.(*atomic.Int64).Add(1)
+	if c.shutdownEvents != nil {
+		c.shutdownEvents <- c.endpoint
+	}
 	return nil
 }
 

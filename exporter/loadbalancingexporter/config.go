@@ -528,9 +528,6 @@ func (c BackendSubsetConfig) Validate(endpointHealth EndpointHealthConfig, logRo
 	if !endpointHealth.Enabled {
 		return errors.New("backend_subset requires endpoint_health.enabled=true")
 	}
-	if endpointHealth.ActiveProbe.Enabled {
-		return errors.New("backend_subset is incompatible with endpoint_health.active_probe.enabled=true")
-	}
 	if !logRouting.IgnoreTraceID {
 		return errors.New("backend_subset requires log_routing.ignore_trace_id=true")
 	}

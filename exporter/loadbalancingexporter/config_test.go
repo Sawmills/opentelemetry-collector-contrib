@@ -598,11 +598,11 @@ func TestConfigValidateBackendSubset(t *testing.T) {
 			expectedErr: "backend_subset requires endpoint_health.enabled=true",
 		},
 		{
-			name: "active probe enabled",
+			name: "active probe enabled is accepted",
 			mutate: func(cfg *Config) {
 				cfg.EndpointHealth.ActiveProbe.Enabled = true
 			},
-			expectedErr: "backend_subset is incompatible with endpoint_health.active_probe.enabled=true",
+			expectedErr: "",
 		},
 		{
 			name: "trace affinity enabled",
