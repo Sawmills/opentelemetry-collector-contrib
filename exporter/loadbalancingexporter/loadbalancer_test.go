@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -506,6 +507,752 @@ func TestLoadBalancerBackendSubsetActiveProbeFailureAndRecoveryStayBounded(t *te
 	require.LessOrEqual(t, len(p.exporters), 2)
 	require.Equal(t, int64(4), creates.Load())
 	requireShutdownEvent(t, shutdownEvents, replacement)
+}
+
+func TestLoadBalancerBackendSubsetActiveProbeConcurrentFailuresPublishInstalledRing(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableBackendSubset(cfg, 1)
+	seed := "gateway-1"
+	cfg.BackendSubset.Seed = &seed
+	cfg.EndpointHealth.ActiveProbe = EndpointHealthActiveProbeConfig{
+		Enabled: true,
+		Fall:    1,
+		Rise:    1,
+	}
+
+	starts := &sync.Map{}
+	shutdowns := &sync.Map{}
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return &countingComponent{endpoint: endpoint, starts: starts, shutdowns: shutdowns}, nil
+	}
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, p.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	resolved := backendSubsetTestEndpoints(3, 10417)
+	p.onBackendChanges(resolved)
+	initial := slices.Clone(p.ring.endpoints)
+	require.Len(t, initial, 1)
+	firstFailure := initial[0]
+	expectedAfterFirst := p.endpointHealth.settings.backendSubset.selectEndpoints(
+		slices.DeleteFunc(slices.Clone(normalizeEndpoints(resolved)), func(endpoint string) bool {
+			return endpoint == firstFailure
+		}),
+	)
+	var secondFailure string
+	for _, endpoint := range expectedAfterFirst {
+		if !slices.Contains(initial, endpoint) {
+			secondFailure = endpoint
+			break
+		}
+	}
+	require.NotEmpty(t, secondFailure)
+	expectedAfterBoth := p.endpointHealth.settings.backendSubset.selectEndpoints(
+		slices.DeleteFunc(slices.Clone(normalizeEndpoints(resolved)), func(endpoint string) bool {
+			return endpoint == firstFailure || endpoint == secondFailure
+		}),
+	)
+	require.Len(t, expectedAfterBoth, 1)
+
+	startHandlers := make(chan struct{})
+	h1Done := make(chan endpointHealthFailureDecision, 1)
+	go func() {
+		<-startHandlers
+		h1Done <- p.handleBackendProbeFailure(t.Context(), firstFailure, errors.New("first probe failed"))
+	}()
+	h2Done := make(chan endpointHealthFailureDecision, 1)
+	go func() {
+		<-startHandlers
+		h2Done <- p.handleBackendProbeFailure(t.Context(), secondFailure, errors.New("second probe failed"))
+	}()
+	close(startHandlers)
+
+	select {
+	case <-h1Done:
+	case <-time.After(time.Second):
+		t.Fatal("expected first active-probe handler to publish its update")
+	}
+	select {
+	case <-h2Done:
+	case <-time.After(time.Second):
+		t.Fatal("expected second active-probe handler to finish")
+	}
+
+	p.updateLock.RLock()
+	publishedRing := slices.Clone(p.ring.endpoints)
+	installed := make(map[string]struct{}, len(p.exporters))
+	for endpoint := range p.exporters {
+		installed[endpoint] = struct{}{}
+	}
+	p.updateLock.RUnlock()
+	require.Equal(t, expectedAfterBoth, publishedRing)
+	for _, endpoint := range publishedRing {
+		require.Contains(t, installed, endpoint, "published ring endpoint has no installed child exporter")
+	}
+	for endpoint := range installed {
+		require.Contains(t, publishedRing, endpoint, "stale child exporter was installed")
+	}
+
+	p.updateLock.RLock()
+	finalRing := slices.Clone(p.ring.endpoints)
+	finalInstalled := make(map[string]struct{}, len(p.exporters))
+	for endpoint := range p.exporters {
+		finalInstalled[endpoint] = struct{}{}
+	}
+	p.updateLock.RUnlock()
+	require.Equal(t, expectedAfterBoth, finalRing)
+	for _, endpoint := range finalRing {
+		require.Contains(t, finalInstalled, endpoint)
+	}
+}
+
+func TestLoadBalancerBackendSubsetActiveProbeAlternateFailuresNeverPublishEmptyRing(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableBackendSubset(cfg, 1)
+	seed := "gateway-1"
+	cfg.BackendSubset.Seed = &seed
+	cfg.EndpointHealth.ActiveProbe = EndpointHealthActiveProbeConfig{
+		Enabled: true,
+		Fall:    1,
+		Rise:    1,
+	}
+
+	starts := &sync.Map{}
+	shutdowns := &sync.Map{}
+	var p *loadBalancer
+	var interleave atomic.Bool
+	var atomicGreen atomic.Bool
+	var eligibilityChanged atomic.Bool
+	var staleStarts atomic.Int64
+	var firstHandlerCandidate string
+	var secondHandlerCandidate string
+	h1StartEntered := make(chan struct{})
+	allowH1Start := make(chan struct{})
+	h2FactoryEntered := make(chan struct{})
+	releaseH2 := make(chan struct{})
+	var h1StartOnce sync.Once
+	var h2FactoryOnce sync.Once
+	var allowH1StartOnce sync.Once
+	var releaseH2Once sync.Once
+	var secondCandidateCalls atomic.Int64
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		if interleave.Load() && endpoint == secondHandlerCandidate {
+			call := secondCandidateCalls.Add(1)
+			shouldBlock := !atomicGreen.Load() && call == 1 || atomicGreen.Load() && call == 2
+			if shouldBlock {
+				h2FactoryOnce.Do(func() { close(h2FactoryEntered) })
+				<-releaseH2
+			}
+		}
+		return &countingComponent{
+			endpoint:  endpoint,
+			starts:    starts,
+			shutdowns: shutdowns,
+			onStart: func(endpoint string) {
+				if eligibilityChanged.Load() && !p.endpointHealth.currentlyEligible(endpoint) {
+					staleStarts.Add(1)
+				}
+				if interleave.Load() && endpoint == firstHandlerCandidate {
+					h1StartOnce.Do(func() { close(h1StartEntered) })
+					<-allowH1Start
+				}
+			},
+		}, nil
+	}
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+
+	h1Done := make(chan endpointHealthFailureDecision, 1)
+	h2Done := make(chan endpointHealthFailureDecision, 1)
+	releaseSecondHandler := func() {
+		releaseH2Once.Do(func() { close(releaseH2) })
+	}
+	releaseFirstStart := func() {
+		allowH1StartOnce.Do(func() { close(allowH1Start) })
+	}
+	t.Cleanup(func() {
+		releaseFirstStart()
+		releaseSecondHandler()
+		select {
+		case <-h1Done:
+		case <-time.After(time.Second):
+		}
+		select {
+		case <-h2Done:
+		case <-time.After(time.Second):
+		}
+		require.NoError(t, p.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	resolved := backendSubsetTestEndpoints(3, 10417)
+	p.onBackendChanges(resolved)
+	initial := slices.Clone(p.ring.endpoints)
+	require.Len(t, initial, 1)
+	firstFailure := initial[0]
+	expectedAfterFirst := p.endpointHealth.settings.backendSubset.selectEndpoints(
+		slices.DeleteFunc(slices.Clone(normalizeEndpoints(resolved)), func(endpoint string) bool {
+			return endpoint == firstFailure
+		}),
+	)
+	for _, endpoint := range expectedAfterFirst {
+		if !slices.Contains(initial, endpoint) {
+			firstHandlerCandidate = endpoint
+			break
+		}
+	}
+	require.NotEmpty(t, firstHandlerCandidate)
+	secondFailure := firstHandlerCandidate
+	expectedAfterBoth := p.endpointHealth.settings.backendSubset.selectEndpoints(
+		slices.DeleteFunc(slices.Clone(normalizeEndpoints(resolved)), func(endpoint string) bool {
+			return endpoint == firstFailure || endpoint == secondFailure
+		}),
+	)
+	require.Len(t, expectedAfterBoth, 1)
+	secondHandlerCandidate = expectedAfterBoth[0]
+	require.NotEqual(t, firstHandlerCandidate, secondHandlerCandidate)
+
+	interleave.Store(true)
+	go func() {
+		h1Done <- p.handleBackendProbeFailure(t.Context(), firstFailure, errors.New("first probe failed"))
+	}()
+	select {
+	case <-h1StartEntered:
+	case <-time.After(time.Second):
+		t.Fatal("expected first active-probe handler to start its candidate")
+	}
+
+	atomicGreen.Store(true)
+	go func() {
+		h2Done <- p.handleBackendProbeFailure(t.Context(), secondFailure, errors.New("second probe failed"))
+	}()
+	releaseFirstStart()
+	deadline := time.After(time.Second)
+	for p.endpointHealth.currentlyEligible(secondFailure) {
+		select {
+		case <-deadline:
+			t.Fatal("expected second handler to change eligibility")
+		default:
+			runtime.Gosched()
+		}
+	}
+	eligibilityChanged.Store(true)
+
+	select {
+	case <-h1Done:
+	case <-time.After(time.Second):
+		t.Fatal("expected first active-probe handler to finish its commit")
+	}
+
+	p.updateLock.RLock()
+	publishedRing := slices.Clone(p.ring.endpoints)
+	installed := make(map[string]struct{}, len(p.exporters))
+	for endpoint := range p.exporters {
+		installed[endpoint] = struct{}{}
+	}
+	p.updateLock.RUnlock()
+	require.NotEmpty(t, publishedRing, "ring became empty before the second child exporter was created")
+	for _, endpoint := range publishedRing {
+		require.Contains(t, installed, endpoint)
+	}
+	require.Zero(t, staleStarts.Load(), "stale unselected child exporter started after the last eligibility guard")
+
+	if !atomicGreen.Load() {
+		select {
+		case <-h2FactoryEntered:
+		case <-time.After(time.Second):
+			t.Fatal("expected second handler to block while creating its candidate")
+		}
+	}
+	releaseSecondHandler()
+	select {
+	case <-h2Done:
+	case <-time.After(time.Second):
+		t.Fatal("expected second active-probe handler to finish")
+	}
+
+	p.updateLock.RLock()
+	finalRing := slices.Clone(p.ring.endpoints)
+	finalInstalled := make(map[string]struct{}, len(p.exporters))
+	for endpoint := range p.exporters {
+		finalInstalled[endpoint] = struct{}{}
+	}
+	p.updateLock.RUnlock()
+	require.Equal(t, expectedAfterBoth, finalRing)
+	for _, endpoint := range finalRing {
+		require.Contains(t, finalInstalled, endpoint)
+	}
+}
+
+func TestLoadBalancerBackendSubsetActiveProbeThreeFailuresNeverPublishEmptyRing(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableBackendSubset(cfg, 1)
+	seed := "gateway-1"
+	cfg.BackendSubset.Seed = &seed
+	cfg.EndpointHealth.ActiveProbe = EndpointHealthActiveProbeConfig{
+		Enabled: true,
+		Fall:    1,
+		Rise:    1,
+	}
+
+	starts := &sync.Map{}
+	shutdowns := &sync.Map{}
+	var p *loadBalancer
+	var interleave atomic.Bool
+	var firstHandlerCandidate string
+	var secondHandlerCandidate string
+	var thirdHandlerCandidate string
+	h1FirstStart := make(chan struct{})
+	h1SecondStart := make(chan struct{})
+	h2ThirdFactory := make(chan struct{})
+	releaseFirstStart := make(chan struct{})
+	releaseSecondStart := make(chan struct{})
+	releaseThirdFactory := make(chan struct{})
+	var h1FirstStartOnce sync.Once
+	var h1SecondStartOnce sync.Once
+	var h2ThirdFactoryOnce sync.Once
+	var releaseFirstStartOnce sync.Once
+	var releaseSecondStartOnce sync.Once
+	var releaseThirdFactoryOnce sync.Once
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		if interleave.Load() && endpoint == thirdHandlerCandidate {
+			h2ThirdFactoryOnce.Do(func() { close(h2ThirdFactory) })
+			<-releaseThirdFactory
+		}
+		return &countingComponent{
+			endpoint:  endpoint,
+			starts:    starts,
+			shutdowns: shutdowns,
+			onStart: func(endpoint string) {
+				switch endpoint {
+				case firstHandlerCandidate:
+					if interleave.Load() {
+						h1FirstStartOnce.Do(func() { close(h1FirstStart) })
+						<-releaseFirstStart
+					}
+				case secondHandlerCandidate:
+					if interleave.Load() {
+						h1SecondStartOnce.Do(func() { close(h1SecondStart) })
+						<-releaseSecondStart
+					}
+				}
+			},
+		}, nil
+	}
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+
+	h1Done := make(chan endpointHealthFailureDecision, 1)
+	h2Done := make(chan endpointHealthFailureDecision, 1)
+	h3Done := make(chan endpointHealthFailureDecision, 1)
+	releaseAll := func() {
+		releaseFirstStartOnce.Do(func() { close(releaseFirstStart) })
+		releaseSecondStartOnce.Do(func() { close(releaseSecondStart) })
+		releaseThirdFactoryOnce.Do(func() { close(releaseThirdFactory) })
+	}
+	t.Cleanup(func() {
+		releaseAll()
+		for _, done := range []<-chan endpointHealthFailureDecision{h1Done, h2Done, h3Done} {
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+			}
+		}
+		require.NoError(t, p.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	resolved := backendSubsetTestEndpoints(4, 10417)
+	p.onBackendChanges(resolved)
+	initial := slices.Clone(p.ring.endpoints)
+	require.Len(t, initial, 1)
+	firstFailure := initial[0]
+	expectedAfterFirst := p.endpointHealth.settings.backendSubset.selectEndpoints(
+		slices.DeleteFunc(slices.Clone(normalizeEndpoints(resolved)), func(endpoint string) bool {
+			return endpoint == firstFailure
+		}),
+	)
+	for _, endpoint := range expectedAfterFirst {
+		if !slices.Contains(initial, endpoint) {
+			firstHandlerCandidate = endpoint
+			break
+		}
+	}
+	require.NotEmpty(t, firstHandlerCandidate)
+	secondFailure := firstHandlerCandidate
+	expectedAfterSecond := p.endpointHealth.settings.backendSubset.selectEndpoints(
+		slices.DeleteFunc(slices.Clone(normalizeEndpoints(resolved)), func(endpoint string) bool {
+			return endpoint == firstFailure || endpoint == secondFailure
+		}),
+	)
+	require.Len(t, expectedAfterSecond, 1)
+	secondHandlerCandidate = expectedAfterSecond[0]
+	thirdFailure := secondHandlerCandidate
+	expectedAfterThird := p.endpointHealth.settings.backendSubset.selectEndpoints(
+		slices.DeleteFunc(slices.Clone(normalizeEndpoints(resolved)), func(endpoint string) bool {
+			return endpoint == firstFailure || endpoint == secondFailure || endpoint == thirdFailure
+		}),
+	)
+	require.Len(t, expectedAfterThird, 1)
+	thirdHandlerCandidate = expectedAfterThird[0]
+
+	waitForIneligible := func(endpoint string) bool {
+		t.Helper()
+		deadline := time.After(time.Second)
+		for p.endpointHealth.currentlyEligible(endpoint) {
+			select {
+			case <-deadline:
+				return false
+			default:
+				runtime.Gosched()
+			}
+		}
+		return true
+	}
+	snapshotRouting := func() ([]string, map[string]struct{}) {
+		// The final-D factory barrier holds updateLock before map/ring mutation.
+		publishedRing := slices.Clone(p.ring.endpoints)
+		installed := make(map[string]struct{}, len(p.exporters))
+		for endpoint := range p.exporters {
+			installed[endpoint] = struct{}{}
+		}
+		return publishedRing, installed
+	}
+
+	interleave.Store(true)
+	go func() {
+		h1Done <- p.handleBackendProbeFailure(t.Context(), firstFailure, errors.New("first probe failed"))
+	}()
+	select {
+	case <-h1FirstStart:
+	case <-time.After(time.Second):
+		t.Fatal("expected H1 to start B")
+	}
+	go func() {
+		h2Done <- p.handleBackendProbeFailure(t.Context(), secondFailure, errors.New("second probe failed"))
+	}()
+	if !waitForIneligible(secondFailure) {
+		// The corrected lock scope keeps H2 from changing eligibility until H1
+		// commits B. H2 then commits C before H3 can invalidate it.
+		releaseFirstStartOnce.Do(func() { close(releaseFirstStart) })
+		select {
+		case <-h1Done:
+		case <-time.After(time.Second):
+			t.Fatal("expected H1 to finish before H2 changes eligibility")
+		}
+		select {
+		case <-h1SecondStart:
+		case <-time.After(time.Second):
+			t.Fatal("expected H2 to start C after H1 commits B")
+		}
+		go func() {
+			h3Done <- p.handleBackendProbeFailure(t.Context(), thirdFailure, errors.New("third probe failed"))
+		}()
+		releaseSecondStartOnce.Do(func() { close(releaseSecondStart) })
+		require.True(t, waitForIneligible(thirdFailure), "expected H3 to invalidate C after H2 commits")
+		select {
+		case <-h2ThirdFactory:
+		case <-time.After(time.Second):
+			t.Fatal("expected H3 to block while creating final candidate D")
+		}
+		select {
+		case <-h2Done:
+		case <-time.After(time.Second):
+			t.Fatal("expected H2 to publish C before H3 creates D")
+		}
+		publishedRing, installed := snapshotRouting()
+		require.NotEmpty(t, publishedRing, "serialized handlers must not publish an empty ring")
+		for _, endpoint := range publishedRing {
+			require.Contains(t, installed, endpoint, "published ring endpoint has no installed child exporter")
+		}
+		releaseThirdFactoryOnce.Do(func() { close(releaseThirdFactory) })
+		select {
+		case <-h3Done:
+		case <-time.After(time.Second):
+			t.Fatal("expected H3 to finish after creating D")
+		}
+		p.updateLock.RLock()
+		finalRing := slices.Clone(p.ring.endpoints)
+		finalInstalled := make(map[string]struct{}, len(p.exporters))
+		for endpoint := range p.exporters {
+			finalInstalled[endpoint] = struct{}{}
+		}
+		p.updateLock.RUnlock()
+		require.Equal(t, []string{thirdHandlerCandidate}, finalRing)
+		require.Contains(t, finalInstalled, thirdHandlerCandidate)
+		require.NotContains(t, finalInstalled, firstHandlerCandidate)
+		require.NotContains(t, finalInstalled, secondHandlerCandidate)
+		return
+	}
+	waitForIneligible(secondFailure)
+	releaseFirstStartOnce.Do(func() { close(releaseFirstStart) })
+
+	select {
+	case <-h1SecondStart:
+	case <-time.After(time.Second):
+		t.Fatal("expected H1 to select and start C")
+	}
+	go func() {
+		h3Done <- p.handleBackendProbeFailure(t.Context(), thirdFailure, errors.New("third probe failed"))
+	}()
+	require.True(t, waitForIneligible(thirdFailure), "expected H3 to invalidate C during H1 reconciliation pass 2")
+	releaseSecondStartOnce.Do(func() { close(releaseSecondStart) })
+
+	select {
+	case <-h2ThirdFactory:
+	case <-time.After(time.Second):
+		t.Fatal("expected H2 or H3 to block while creating final candidate D")
+	}
+	select {
+	case <-h1Done:
+	case <-time.After(time.Second):
+		t.Fatal("expected H1 to publish its final routing update")
+	}
+
+	publishedRing, installed := snapshotRouting()
+	require.NotEmpty(t, publishedRing, "ring must not become empty while H2/H3 create final D")
+	require.Contains(t, publishedRing, thirdHandlerCandidate, "final eligible D must be published")
+	require.NotEmpty(t, installed, "installed exporters must back the published ring")
+	require.Contains(t, installed, thirdHandlerCandidate, "final eligible D must have an installed child exporter")
+	require.NotContains(t, publishedRing, firstHandlerCandidate, "stale B must not be published")
+	require.NotContains(t, publishedRing, secondHandlerCandidate, "stale C must not be published")
+	require.NotContains(t, installed, firstHandlerCandidate, "stale B child exporter must not remain installed")
+	require.NotContains(t, installed, secondHandlerCandidate, "stale C child exporter must not remain installed")
+
+	releaseThirdFactoryOnce.Do(func() { close(releaseThirdFactory) })
+	for _, done := range []<-chan endpointHealthFailureDecision{h2Done, h3Done} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("expected remaining active-probe handler to finish")
+		}
+	}
+}
+
+func TestLoadBalancerBackendSubsetActiveProbeConcurrentRecoveriesPublishInstalledRing(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableBackendSubset(cfg, 1)
+	seed := "gateway-14"
+	cfg.BackendSubset.Seed = &seed
+	cfg.EndpointHealth.ActiveProbe = EndpointHealthActiveProbeConfig{
+		Enabled: true,
+		Fall:    1,
+		Rise:    1,
+	}
+
+	baseEndpoint := endpointWithPort("backend-a")
+	firstCandidate := endpointWithPort("A")
+	secondCandidate := endpointWithPort("C")
+	thirdCandidate := endpointWithPort("B")
+	starts := &sync.Map{}
+	shutdowns := &sync.Map{}
+	var p *loadBalancer
+	var interleave atomic.Bool
+	firstStart := make(chan struct{})
+	secondStart := make(chan struct{})
+	finalFactory := make(chan struct{})
+	releaseFirstStart := make(chan struct{})
+	releaseSecondStart := make(chan struct{})
+	releaseFinalFactory := make(chan struct{})
+	var firstStartOnce sync.Once
+	var secondStartOnce sync.Once
+	var finalFactoryOnce sync.Once
+	var releaseFirstStartOnce sync.Once
+	var releaseSecondStartOnce sync.Once
+	var releaseFinalFactoryOnce sync.Once
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		if interleave.Load() && endpoint == thirdCandidate {
+			finalFactoryOnce.Do(func() { close(finalFactory) })
+			<-releaseFinalFactory
+		}
+		return &countingComponent{
+			endpoint:  endpoint,
+			starts:    starts,
+			shutdowns: shutdowns,
+			onStart: func(endpoint string) {
+				if !interleave.Load() {
+					return
+				}
+				switch endpoint {
+				case firstCandidate:
+					firstStartOnce.Do(func() { close(firstStart) })
+					<-releaseFirstStart
+				case secondCandidate:
+					secondStartOnce.Do(func() { close(secondStart) })
+					<-releaseSecondStart
+				}
+			},
+		}, nil
+	}
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+
+	h1Done := make(chan endpointHealthSuccessDecision, 1)
+	h2Done := make(chan endpointHealthSuccessDecision, 1)
+	h3Done := make(chan endpointHealthSuccessDecision, 1)
+	releaseAll := func() {
+		releaseFirstStartOnce.Do(func() { close(releaseFirstStart) })
+		releaseSecondStartOnce.Do(func() { close(releaseSecondStart) })
+		releaseFinalFactoryOnce.Do(func() { close(releaseFinalFactory) })
+	}
+	t.Cleanup(func() {
+		releaseAll()
+		for _, done := range []<-chan endpointHealthSuccessDecision{h1Done, h2Done, h3Done} {
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+			}
+		}
+		require.NoError(t, p.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	resolved := []string{"backend-a", "A", "B", "C"}
+	p.onBackendChanges(resolved)
+	for _, endpoint := range []string{"B", "C", "A"} {
+		decision := p.handleBackendProbeFailure(t.Context(), endpoint, errors.New("probe failed"))
+		require.True(t, decision.quarantined)
+	}
+	require.Equal(t, []string{baseEndpoint}, p.ring.endpoints)
+	require.Contains(t, p.exporters, baseEndpoint)
+
+	selectEndpoints := p.endpointHealth.settings.backendSubset.selectEndpoints
+	require.Equal(t, []string{firstCandidate}, selectEndpoints([]string{baseEndpoint, firstCandidate}))
+	require.Equal(t, []string{secondCandidate}, selectEndpoints([]string{baseEndpoint, firstCandidate, secondCandidate}))
+	require.Equal(t, []string{thirdCandidate}, selectEndpoints([]string{baseEndpoint, firstCandidate, secondCandidate, thirdCandidate}))
+
+	waitForIneligible := func(endpoint string) bool {
+		t.Helper()
+		deadline := time.After(time.Second)
+		for !p.endpointHealth.currentlyEligible(endpoint) {
+			select {
+			case <-deadline:
+				return false
+			default:
+				runtime.Gosched()
+			}
+		}
+		return true
+	}
+	snapshotRouting := func() ([]string, map[string]struct{}) {
+		// The final-B factory barrier holds updateLock before map/ring mutation.
+		publishedRing := slices.Clone(p.ring.endpoints)
+		installed := make(map[string]struct{}, len(p.exporters))
+		for endpoint := range p.exporters {
+			installed[endpoint] = struct{}{}
+		}
+		return publishedRing, installed
+	}
+
+	interleave.Store(true)
+	go func() {
+		h1Done <- p.handleBackendProbeSuccess(t.Context(), firstCandidate)
+	}()
+	select {
+	case <-firstStart:
+	case <-time.After(time.Second):
+		t.Fatal("expected H1 to start A")
+	}
+	go func() {
+		h2Done <- p.handleBackendProbeSuccess(t.Context(), secondCandidate)
+	}()
+
+	if !waitForIneligible(secondCandidate) {
+		releaseFirstStartOnce.Do(func() { close(releaseFirstStart) })
+		select {
+		case <-h1Done:
+		case <-time.After(time.Second):
+			t.Fatal("expected H1 to finish before H2 changes eligibility")
+		}
+		select {
+		case <-secondStart:
+		case <-time.After(time.Second):
+			t.Fatal("expected H2 to start C after H1 commits A")
+		}
+		go func() {
+			h3Done <- p.handleBackendProbeSuccess(t.Context(), thirdCandidate)
+		}()
+		releaseSecondStartOnce.Do(func() { close(releaseSecondStart) })
+		require.True(t, waitForIneligible(thirdCandidate), "expected H3 to make B the selected endpoint")
+		select {
+		case <-finalFactory:
+		case <-time.After(time.Second):
+			t.Fatal("expected H3 to block while creating B")
+		}
+		select {
+		case <-h2Done:
+		case <-time.After(time.Second):
+			t.Fatal("expected H2 to publish C before H3 creates B")
+		}
+		publishedRing, installed := snapshotRouting()
+		require.NotEmpty(t, publishedRing, "serialized recoveries must not publish an empty ring")
+		for _, endpoint := range publishedRing {
+			require.Contains(t, installed, endpoint, "published ring endpoint has no installed child exporter")
+		}
+		require.NotContains(t, installed, firstCandidate)
+		releaseFinalFactoryOnce.Do(func() { close(releaseFinalFactory) })
+		select {
+		case <-h3Done:
+		case <-time.After(time.Second):
+			t.Fatal("expected H3 to finish after creating B")
+		}
+		p.updateLock.RLock()
+		finalRing := slices.Clone(p.ring.endpoints)
+		finalInstalled := make(map[string]struct{}, len(p.exporters))
+		for endpoint := range p.exporters {
+			finalInstalled[endpoint] = struct{}{}
+		}
+		p.updateLock.RUnlock()
+		require.Equal(t, []string{thirdCandidate}, finalRing)
+		require.Contains(t, finalInstalled, thirdCandidate)
+		require.NotContains(t, finalInstalled, firstCandidate)
+		require.NotContains(t, finalInstalled, secondCandidate)
+		return
+	}
+
+	releaseFirstStartOnce.Do(func() { close(releaseFirstStart) })
+	select {
+	case <-secondStart:
+	case <-time.After(time.Second):
+		t.Fatal("expected H1 to select and start C")
+	}
+	go func() {
+		h3Done <- p.handleBackendProbeSuccess(t.Context(), thirdCandidate)
+	}()
+	require.True(t, waitForIneligible(thirdCandidate), "expected H3 to make B the selected endpoint")
+	releaseSecondStartOnce.Do(func() { close(releaseSecondStart) })
+
+	select {
+	case <-finalFactory:
+	case <-time.After(time.Second):
+		t.Fatal("expected H2 or H3 to block while creating B")
+	}
+	select {
+	case <-h1Done:
+	case <-time.After(time.Second):
+		t.Fatal("expected H1 to publish its final routing update")
+	}
+	publishedRing, installed := snapshotRouting()
+	require.NotEmpty(t, publishedRing, "ring must not become empty while H2/H3 create B")
+	require.Contains(t, publishedRing, thirdCandidate, "final eligible B must be published")
+	require.NotEmpty(t, installed, "installed exporters must back the published ring")
+	require.Contains(t, installed, thirdCandidate, "final eligible B must have an installed child exporter")
+	require.NotContains(t, publishedRing, firstCandidate, "stale A must not be published")
+	require.NotContains(t, publishedRing, secondCandidate, "stale C must not be published")
+	require.NotContains(t, installed, firstCandidate, "stale A child exporter must not remain installed")
+	require.NotContains(t, installed, secondCandidate, "stale C child exporter must not remain installed")
+
+	releaseFinalFactoryOnce.Do(func() { close(releaseFinalFactory) })
+	for _, done := range []<-chan endpointHealthSuccessDecision{h2Done, h3Done} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("expected remaining recovery handler to finish")
+		}
+	}
 }
 
 func TestLoadBalancerBackendSubsetActiveProbeFailureOutsideSelectionDoesNotCreateExporter(t *testing.T) {
@@ -2049,12 +2796,16 @@ type countingComponent struct {
 	starts         *sync.Map
 	shutdowns      *sync.Map
 	shutdownEvents chan<- string
+	onStart        func(string)
 }
 
 func (c *countingComponent) Start(context.Context, component.Host) error {
 	if c.starts != nil {
 		count, _ := c.starts.LoadOrStore(c.endpoint, &atomic.Int64{})
 		count.(*atomic.Int64).Add(1)
+	}
+	if c.onStart != nil {
+		c.onStart(c.endpoint)
 	}
 	return nil
 }
