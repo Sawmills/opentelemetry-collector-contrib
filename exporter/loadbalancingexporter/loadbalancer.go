@@ -499,6 +499,7 @@ func (lb *loadBalancer) createMissingExportersWithGuardLocked(ctx context.Contex
 		we := newWrappedExporter(exp, endpoint)
 		if err = we.Start(ctx, lb.host); err != nil {
 			lb.logger.Error("failed to start new exporter for endpoint", zap.String("endpoint", endpoint), zap.Error(err))
+			lb.shutdownSkippedExporter(ctx, endpoint, exp)
 			continue
 		}
 		created = append(created, createdExporter{endpoint: endpoint, exporter: we})

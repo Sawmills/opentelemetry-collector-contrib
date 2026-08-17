@@ -509,6 +509,69 @@ func TestLoadBalancerBackendSubsetActiveProbeFailureAndRecoveryStayBounded(t *te
 	requireShutdownEvent(t, shutdownEvents, replacement)
 }
 
+func TestLoadBalancerBackendSubsetActiveProbeStartFailureShutsDownExporter(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableBackendSubset(cfg, 1)
+	seed := "gateway-1"
+	cfg.BackendSubset.Seed = &seed
+	cfg.EndpointHealth.ActiveProbe = EndpointHealthActiveProbeConfig{
+		Enabled: true,
+		Fall:    1,
+		Rise:    1,
+	}
+
+	startFailures := &atomic.Int64{}
+	shutdowns := &atomic.Int64{}
+	normalShutdowns := &sync.Map{}
+	shutdownEvents := make(chan struct{}, 4)
+	startFailureEndpoint := ""
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		if endpoint == startFailureEndpoint {
+			return &startFailureComponent{
+				startErr:       errors.New("start failed"),
+				startFailures:  startFailures,
+				shutdowns:      shutdowns,
+				shutdownEvents: shutdownEvents,
+			}, nil
+		}
+		return &countingComponent{endpoint: endpoint, shutdowns: normalShutdowns}, nil
+	}
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, p.Shutdown(context.WithoutCancel(t.Context())))
+	})
+
+	resolved := backendSubsetTestEndpoints(3, 10417)
+	p.onBackendChanges(resolved)
+	initial := slices.Clone(p.ring.endpoints)
+	require.Len(t, initial, 1)
+
+	failed := initial[0]
+	eligibleAfterFailure := slices.DeleteFunc(slices.Clone(normalizeEndpoints(resolved)), func(endpoint string) bool {
+		return endpoint == failed
+	})
+	expectedAfterFailure := p.endpointHealth.settings.backendSubset.selectEndpoints(eligibleAfterFailure)
+	require.Len(t, expectedAfterFailure, 1)
+	startFailureEndpoint = expectedAfterFailure[0]
+
+	decision := p.handleBackendProbeFailure(t.Context(), failed, errors.New("probe failed"))
+	require.True(t, decision.quarantined)
+	require.NotContains(t, p.exporters, startFailureEndpoint)
+	require.NotContains(t, p.ring.endpoints, startFailureEndpoint)
+
+	require.NotZero(t, startFailures.Load())
+	for range startFailures.Load() {
+		select {
+		case <-shutdownEvents:
+		case <-time.After(time.Second):
+			t.Fatal("expected every failed exporter start to be followed by shutdown")
+		}
+	}
+	require.Equal(t, startFailures.Load(), shutdowns.Load())
+}
+
 func TestLoadBalancerBackendSubsetActiveProbeConcurrentFailuresPublishInstalledRing(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	cfg := simpleConfig()
@@ -2816,6 +2879,24 @@ func (c *countingComponent) Shutdown(context.Context) error {
 	if c.shutdownEvents != nil {
 		c.shutdownEvents <- c.endpoint
 	}
+	return nil
+}
+
+type startFailureComponent struct {
+	startErr       error
+	startFailures  *atomic.Int64
+	shutdowns      *atomic.Int64
+	shutdownEvents chan<- struct{}
+}
+
+func (c *startFailureComponent) Start(context.Context, component.Host) error {
+	c.startFailures.Add(1)
+	return c.startErr
+}
+
+func (c *startFailureComponent) Shutdown(context.Context) error {
+	c.shutdowns.Add(1)
+	c.shutdownEvents <- struct{}{}
 	return nil
 }
 
