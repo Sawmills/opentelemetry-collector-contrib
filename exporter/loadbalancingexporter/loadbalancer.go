@@ -413,6 +413,30 @@ func (lb *loadBalancer) createEndpointHealthMissingExporters(ctx context.Context
 	return lb.createMissingExportersWithGuard(ctx, endpoints, nil, lb.endpointHealthCurrentlyEligible)
 }
 
+func (lb *loadBalancer) reconcileEndpointHealthExportersLocked(ctx context.Context, forceCreate map[string]struct{}) ([]createdExporter, []string) {
+	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
+	created := lb.createMissingExportersWithGuardLocked(ctx, eligible, forceCreate, lb.endpointHealthCurrentlyEligible)
+
+	eligible = lb.endpointHealth.eligibleEndpointsNoRefresh()
+	createdEndpoints := make(map[string]struct{}, len(created))
+	for _, createdExporter := range created {
+		createdEndpoints[createdExporter.endpoint] = struct{}{}
+	}
+	missing := make([]string, 0, len(eligible))
+	for _, endpoint := range eligible {
+		endpoint = endpointWithPort(endpoint)
+		if _, ok := createdEndpoints[endpoint]; ok {
+			continue
+		}
+		if _, ok := lb.exporters[endpoint]; ok {
+			continue
+		}
+		missing = append(missing, endpoint)
+	}
+	created = append(created, lb.createMissingExportersWithGuardLocked(ctx, missing, nil, lb.endpointHealthCurrentlyEligible)...)
+	return created, lb.endpointHealth.eligibleEndpointsNoRefresh()
+}
+
 func (lb *loadBalancer) createMissingExportersWithGuard(ctx context.Context, endpoints []string, forceCreate map[string]struct{}, shouldCreate func(string) bool) []createdExporter {
 	var created []createdExporter
 	for _, endpoint := range endpoints {
@@ -442,6 +466,40 @@ func (lb *loadBalancer) createMissingExportersWithGuard(ctx context.Context, end
 		we := newWrappedExporter(exp, endpoint)
 		if err = we.Start(ctx, lb.host); err != nil {
 			lb.logger.Error("failed to start new exporter for endpoint", zap.String("endpoint", endpoint), zap.Error(err))
+			continue
+		}
+		created = append(created, createdExporter{endpoint: endpoint, exporter: we})
+	}
+	return created
+}
+
+func (lb *loadBalancer) createMissingExportersWithGuardLocked(ctx context.Context, endpoints []string, forceCreate map[string]struct{}, shouldCreate func(string) bool) []createdExporter {
+	var created []createdExporter
+	for _, endpoint := range endpoints {
+		endpoint = endpointWithPort(endpoint)
+		if shouldCreate != nil && !shouldCreate(endpoint) {
+			continue
+		}
+
+		if _, force := forceCreate[endpoint]; !force {
+			if _, exists := lb.exporters[endpoint]; exists {
+				continue
+			}
+		}
+
+		exp, err := lb.componentFactory(ctx, endpoint)
+		if err != nil {
+			lb.logger.Error("failed to create new exporter for endpoint", zap.String("endpoint", endpoint), zap.Error(err))
+			continue
+		}
+		if shouldCreate != nil && !shouldCreate(endpoint) {
+			lb.shutdownSkippedExporter(ctx, endpoint, exp)
+			continue
+		}
+		we := newWrappedExporter(exp, endpoint)
+		if err = we.Start(ctx, lb.host); err != nil {
+			lb.logger.Error("failed to start new exporter for endpoint", zap.String("endpoint", endpoint), zap.Error(err))
+			lb.shutdownSkippedExporter(ctx, endpoint, exp)
 			continue
 		}
 		created = append(created, createdExporter{endpoint: endpoint, exporter: we})
@@ -530,6 +588,18 @@ func (lb *loadBalancer) installCreatedExportersLocked(created []createdExporter,
 		lb.exporters[createdExporter.endpoint] = createdExporter.exporter
 	}
 	return duplicates
+}
+
+func (lb *loadBalancer) installEndpointHealthRingLocked(eligible []string) {
+	installed := make([]string, 0, len(eligible))
+	for _, endpoint := range eligible {
+		endpoint = endpointWithPort(endpoint)
+		exp, ok := lb.exporters[endpoint]
+		if ok && exp != nil && !exp.isStopping() {
+			installed = append(installed, endpoint)
+		}
+	}
+	lb.installRingForEndpointsLocked(installed)
 }
 
 func (lb *loadBalancer) shutdownCreatedExporters(ctx context.Context, created []createdExporter) {
@@ -637,9 +707,11 @@ func (lb *loadBalancer) handleBackendFailureHealthOnly(ctx context.Context, endp
 
 func (lb *loadBalancer) handleBackendProbeFailure(ctx context.Context, endpoint string, _ error) endpointHealthFailureDecision {
 	endpoint = endpointWithPort(endpoint)
+	lb.updateLock.Lock()
 	decision := lb.endpointHealth.markProbeFailure(endpoint)
 	lb.recordEndpointFailureDecision(ctx, endpoint, decision)
 	if !shouldCommitEndpointHealthFailure(endpoint, decision) {
+		lb.updateLock.Unlock()
 		return decision
 	}
 
@@ -647,11 +719,7 @@ func (lb *loadBalancer) handleBackendProbeFailure(ctx context.Context, endpoint 
 	if endpointListContains(decision.eligible, endpoint) {
 		forceCreate[endpoint] = struct{}{}
 	}
-	created := lb.createMissingExporters(ctx, decision.eligible, forceCreate)
-
-	lb.updateLock.Lock()
-	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
-	lb.installRingForEndpointsLocked(eligible)
+	created, eligible := lb.reconcileEndpointHealthExportersLocked(ctx, forceCreate)
 	var removed []removedExporter
 	endpointEligible := endpointListContains(eligible, endpoint)
 	if exp, ok := lb.exporters[endpoint]; ok && (!endpointEligible || createdExporterExists(created, endpoint)) {
@@ -661,6 +729,7 @@ func (lb *loadBalancer) handleBackendProbeFailure(ctx context.Context, endpoint 
 	}
 	duplicates := lb.installCreatedExportersLocked(created, eligible)
 	removed = append(removed, lb.removeBackendSubsetExtraExportersLocked(eligible)...)
+	lb.installEndpointHealthRingLocked(eligible)
 	lb.refreshRoutableBackendCountLocked()
 	lb.updateLock.Unlock()
 
@@ -679,18 +748,17 @@ func (lb *loadBalancer) handleBackendProbeSuccess(ctx context.Context, endpoint 
 	}
 
 	endpoint = endpointWithPort(endpoint)
+	lb.updateLock.Lock()
 	decision := lb.endpointHealth.markProbeSuccess(endpoint)
 	if !decision.recovered {
+		lb.updateLock.Unlock()
 		return decision
 	}
 	lb.recordEndpointUnquarantine(ctx, endpoint, decision.reason)
-	created := lb.createMissingExporters(ctx, decision.eligible, nil)
-
-	lb.updateLock.Lock()
-	eligible := lb.endpointHealth.eligibleEndpointsNoRefresh()
-	lb.installRingForEndpointsLocked(eligible)
+	created, eligible := lb.reconcileEndpointHealthExportersLocked(ctx, nil)
 	duplicates := lb.installCreatedExportersLocked(created, eligible)
 	removed := lb.removeBackendSubsetExtraExportersLocked(eligible)
+	lb.installEndpointHealthRingLocked(eligible)
 	lb.refreshRoutableBackendCountLocked()
 	lb.updateLock.Unlock()
 
