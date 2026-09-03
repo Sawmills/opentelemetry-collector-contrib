@@ -166,6 +166,10 @@ func (q *centralQueue) enqueueAllAt(items []centralQueueItem, now time.Time) err
 		}
 		totalCompressed += int64(it.compressedBytes)
 	}
+	if totalCompressed > q.settings.maxCompressedBytes {
+		q.settings.telemetry.recordRejected(context.Background(), totalCompressed)
+		return errCentralQueueRequestTooLarge
+	}
 
 	q.mu.Lock()
 	if q.stopped {

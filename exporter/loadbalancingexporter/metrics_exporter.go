@@ -220,7 +220,11 @@ func (e *metricExporterImp) ConsumeMetrics(ctx context.Context, md pmetric.Metri
 	}
 
 	if e.centralQueue != nil {
-		return e.consumeMetricsCentralQueue(batches)
+		err := e.consumeMetricsCentralQueue(batches)
+		if errors.Is(err, errCentralQueueRequestTooLarge) {
+			return consumererror.NewPermanent(err)
+		}
+		return err
 	}
 
 	if e.batcher != nil {

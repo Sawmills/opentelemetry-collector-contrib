@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 )
@@ -59,6 +60,8 @@ func TestConsumeLogsCentralQueue_NoPartialCommitOnFull(t *testing.T) {
 	err := p.ConsumeLogs(t.Context(), multiLaneLogsForTest(6, 1000))
 
 	require.Error(t, err, "a request that overflows the central queue must return an error to the caller")
+	require.ErrorIs(t, err, errCentralQueueRequestTooLarge)
+	require.True(t, consumererror.IsPermanent(err), "a request larger than the queue can never succeed by retrying")
 	require.Equal(t, 0, p.centralQueue.len(),
 		"on overflow NOTHING must be committed; a partial commit + client retry causes duplicate delivery (SAW-10951)")
 	require.EqualValues(t, 0, p.centralQueue.compressedBytes(),
