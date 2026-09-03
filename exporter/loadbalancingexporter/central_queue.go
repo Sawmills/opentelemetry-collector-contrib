@@ -138,6 +138,68 @@ func (q *centralQueue) enqueue(item centralQueueItem) error {
 	return q.enqueueAt(item, time.Now())
 }
 
+// enqueueAll atomically enqueues every item or none of them. If committing the
+// whole set would exceed maxCompressedBytes it commits NOTHING and returns
+// errCentralQueueFull, so a caller that returns an error to its client has not
+// partially committed data (SAW-10951: prevents accept-then-500 duplicates — a
+// partial commit + client retry re-delivers the committed records downstream).
+func (q *centralQueue) enqueueAll(items []centralQueueItem) error {
+	return q.enqueueAllAt(items, time.Now())
+}
+
+func (q *centralQueue) enqueueAllAt(items []centralQueueItem, now time.Time) error {
+	if len(items) == 0 {
+		return nil
+	}
+	// Validate per-item hard limits (same as enqueueAt) before taking the lock;
+	// any oversized item fails the whole request without committing anything.
+	var totalCompressed int64
+	for i := range items {
+		it := items[i]
+		if q.settings.maxUncompressedBatchBytes > 0 && it.uncompressedBytes > q.settings.maxUncompressedBatchBytes {
+			q.settings.telemetry.recordRejected(context.Background(), int64(it.compressedBytes))
+			return errCentralQueueItemTooLarge
+		}
+		if q.settings.maxInflightUncompressedBytes > 0 && int64(it.uncompressedBytes) > q.settings.maxInflightUncompressedBytes {
+			q.settings.telemetry.recordRejected(context.Background(), int64(it.compressedBytes))
+			return errCentralQueueItemTooLarge
+		}
+		totalCompressed += int64(it.compressedBytes)
+	}
+
+	q.mu.Lock()
+	if q.stopped {
+		q.mu.Unlock()
+		return errCentralQueueStopped
+	}
+	// All-or-nothing capacity check: reserve room for the WHOLE request.
+	if q.currentCompressedBytes+totalCompressed > q.settings.maxCompressedBytes {
+		q.mu.Unlock()
+		q.settings.telemetry.recordRejected(context.Background(), totalCompressed)
+		return errCentralQueueFull
+	}
+	for i := range items {
+		item := items[i]
+		if item.enqueuedAtUnixNano == 0 {
+			item.enqueuedAtUnixNano = now.UnixNano()
+		}
+		if item.routingKeyID == "" && len(item.routingKey) > 0 {
+			item.routingKeyID = string(item.routingKey)
+		}
+		bucket := q.bucketForItemLocked(item)
+		bucket.append(item)
+		q.itemCount++
+		q.updateReadyBucketLocked(bucket, now.UnixNano())
+		q.currentCompressedBytes += int64(item.compressedBytes)
+		q.trackOldestEnqueuedAtLocked(item)
+	}
+	snapshot := q.snapshotLockedAt(now)
+	q.mu.Unlock()
+	q.notifyLeaseWaiters()
+	q.settings.telemetry.record(context.Background(), snapshot)
+	return nil
+}
+
 func (q *centralQueue) enqueueAt(item centralQueueItem, now time.Time) error {
 	if q.settings.maxUncompressedBatchBytes > 0 && item.uncompressedBytes > q.settings.maxUncompressedBatchBytes {
 		q.settings.telemetry.recordRejected(context.Background(), int64(item.compressedBytes))

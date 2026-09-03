@@ -235,23 +235,28 @@ func (e *metricExporterImp) ConsumeMetrics(ctx context.Context, md pmetric.Metri
 }
 
 func (e *metricExporterImp) consumeMetricsCentralQueue(batches map[string]pmetric.Metrics) error {
-	var errs error
 	now := time.Now()
 	laneCount := e.effectiveCentralQueueLaneCount(now)
+	// Build every per-routing-key item first, then commit them all-or-nothing —
+	// see consumeLogsCentralQueue / enqueueAll (SAW-10951): committing item-by-item
+	// let a full queue partially accept a request while still returning an error,
+	// which a retrying client re-delivers as duplicates.
+	items := make([]centralQueueItem, 0, len(batches))
 	for routingKey, md := range batches {
 		queueRoutingKey := centralQueueLaneRoutingKey(signalKindMetrics, []byte(routingKey), laneCount)
 		item, err := newCentralQueueMetricsItem(queueRoutingKey, md, e.centralCodec, now)
 		if err != nil {
-			errs = multierr.Append(errs, err)
-			continue
+			return err
 		}
-		err = e.centralQueue.enqueue(item)
-		if err == nil {
-			e.observeCentralQueueLaneBytes(item.compressedBytes, now)
-		}
-		errs = multierr.Append(errs, err)
+		items = append(items, item)
 	}
-	return errs
+	if err := e.centralQueue.enqueueAll(items); err != nil {
+		return err
+	}
+	for _, item := range items {
+		e.observeCentralQueueLaneBytes(item.compressedBytes, now)
+	}
+	return nil
 }
 
 func (e *metricExporterImp) effectiveCentralQueueLaneCount(now time.Time) int {
