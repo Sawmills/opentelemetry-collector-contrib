@@ -241,14 +241,14 @@ func (s *centralQueueLogSplitter) flushLane(lane *centralQueueLogLaneBuilder) er
 	if lane.records == 1 {
 		return errCentralQueueItemTooLarge
 	}
-	return s.exactSplitAndEnqueue(lane.routingKey, lane.logs)
+	return s.exactSplitAndBuffer(lane.routingKey, lane.logs)
 }
 
 func (s *centralQueueLogSplitter) itemExceedsLimit(item centralQueueItem) bool {
 	return s.hardLimit > 0 && item.uncompressedBytes > s.hardLimit
 }
 
-func (s *centralQueueLogSplitter) exactSplitAndEnqueue(routingKey []byte, logs plog.Logs) error {
+func (s *centralQueueLogSplitter) exactSplitAndBuffer(routingKey []byte, logs plog.Logs) error {
 	current := plog.NewLogs()
 	currentRecords := 0
 

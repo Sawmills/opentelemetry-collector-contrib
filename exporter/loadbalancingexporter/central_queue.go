@@ -151,20 +151,24 @@ func (q *centralQueue) enqueueAllAt(items []centralQueueItem, now time.Time) err
 	if len(items) == 0 {
 		return nil
 	}
-	// Validate per-item hard limits (same as enqueueAt) before taking the lock;
-	// any oversized item fails the whole request without committing anything.
+	// This admission is all-or-nothing, so any rejection drops the whole request.
+	// Sum the request first, then validate, so rejected-byte telemetry always
+	// reflects the complete rejected request, not just the offending item.
 	var totalCompressed int64
+	for i := range items {
+		totalCompressed += int64(items[i].compressedBytes)
+	}
+	// Validate per-item hard limits (same as enqueueAt) before taking the lock.
 	for i := range items {
 		it := items[i]
 		if q.settings.maxUncompressedBatchBytes > 0 && it.uncompressedBytes > q.settings.maxUncompressedBatchBytes {
-			q.settings.telemetry.recordRejected(context.Background(), int64(it.compressedBytes))
+			q.settings.telemetry.recordRejected(context.Background(), totalCompressed)
 			return errCentralQueueItemTooLarge
 		}
 		if q.settings.maxInflightUncompressedBytes > 0 && int64(it.uncompressedBytes) > q.settings.maxInflightUncompressedBytes {
-			q.settings.telemetry.recordRejected(context.Background(), int64(it.compressedBytes))
+			q.settings.telemetry.recordRejected(context.Background(), totalCompressed)
 			return errCentralQueueItemTooLarge
 		}
-		totalCompressed += int64(it.compressedBytes)
 	}
 	if totalCompressed > q.settings.maxCompressedBytes {
 		q.settings.telemetry.recordRejected(context.Background(), totalCompressed)
