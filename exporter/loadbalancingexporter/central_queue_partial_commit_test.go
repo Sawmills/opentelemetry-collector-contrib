@@ -17,7 +17,7 @@ import (
 func multiLaneLogsForTest(n, bodyLen int) plog.Logs {
 	ld := plog.NewLogs()
 	sl := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		lr := sl.LogRecords().AppendEmpty()
 		b := make([]byte, bodyLen)
 		for k := range b {

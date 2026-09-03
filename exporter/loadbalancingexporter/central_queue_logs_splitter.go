@@ -128,8 +128,8 @@ func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) err
 	if err := s.exporter.centralQueue.enqueueAll(s.pending); err != nil {
 		return err
 	}
-	for _, item := range s.pending {
-		s.exporter.observeCentralQueueLaneBytes(item.compressedBytes, s.now)
+	for i := range s.pending {
+		s.exporter.observeCentralQueueLaneBytes(s.pending[i].compressedBytes, s.now)
 	}
 	return nil
 }

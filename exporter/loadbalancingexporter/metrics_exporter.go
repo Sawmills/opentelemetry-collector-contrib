@@ -253,8 +253,8 @@ func (e *metricExporterImp) consumeMetricsCentralQueue(batches map[string]pmetri
 	if err := e.centralQueue.enqueueAll(items); err != nil {
 		return err
 	}
-	for _, item := range items {
-		e.observeCentralQueueLaneBytes(item.compressedBytes, now)
+	for i := range items {
+		e.observeCentralQueueLaneBytes(items[i].compressedBytes, now)
 	}
 	return nil
 }
