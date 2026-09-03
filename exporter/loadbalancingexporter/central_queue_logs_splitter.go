@@ -27,6 +27,7 @@ type centralQueueLogSplitter struct {
 	laneRoutingKeys        map[uint32][]byte
 	lanes                  map[string]*centralQueueLogLaneBuilder
 	nextStripingLane       uint32
+	pending                []centralQueueItem // buffered items, committed all-or-nothing in consume()
 }
 
 type centralQueueLogLaneBuilder struct {
@@ -118,7 +119,19 @@ func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) err
 	for _, lane := range s.lanes {
 		errs = multierr.Append(errs, s.flushLane(lane))
 	}
-	return errs
+	if errs != nil {
+		return errs // a lane failed to build/split — commit nothing
+	}
+	// All-or-nothing: commit every buffered item or none, so an error returned
+	// to the caller never leaves a partial commit that a client retry would
+	// re-deliver as duplicates (SAW-10951).
+	if err := s.exporter.centralQueue.enqueueAll(s.pending); err != nil {
+		return err
+	}
+	for i := range s.pending {
+		s.exporter.observeCentralQueueLaneBytes(s.pending[i].compressedBytes, s.now)
+	}
+	return nil
 }
 
 func (s *centralQueueLogSplitter) balancedLaneRoutingKey(balancingKey pcommon.TraceID) []byte {
@@ -222,23 +235,20 @@ func (s *centralQueueLogSplitter) flushLane(lane *centralQueueLogLaneBuilder) er
 		return err
 	}
 	if !s.itemExceedsLimit(item) {
-		err := s.exporter.centralQueue.enqueue(item)
-		if err == nil {
-			s.exporter.observeCentralQueueLaneBytes(item.compressedBytes, s.now)
-		}
-		return err
+		s.pending = append(s.pending, item) // buffer; committed atomically in consume()
+		return nil
 	}
 	if lane.records == 1 {
 		return errCentralQueueItemTooLarge
 	}
-	return s.exactSplitAndEnqueue(lane.routingKey, lane.logs)
+	return s.exactSplitAndBuffer(lane.routingKey, lane.logs)
 }
 
 func (s *centralQueueLogSplitter) itemExceedsLimit(item centralQueueItem) bool {
 	return s.hardLimit > 0 && item.uncompressedBytes > s.hardLimit
 }
 
-func (s *centralQueueLogSplitter) exactSplitAndEnqueue(routingKey []byte, logs plog.Logs) error {
+func (s *centralQueueLogSplitter) exactSplitAndBuffer(routingKey []byte, logs plog.Logs) error {
 	current := plog.NewLogs()
 	currentRecords := 0
 
@@ -250,15 +260,10 @@ func (s *centralQueueLogSplitter) exactSplitAndEnqueue(routingKey []byte, logs p
 		if err == nil && s.itemExceedsLimit(item) {
 			err = errCentralQueueItemTooLarge
 		}
-		if err == nil {
-			err = s.exporter.centralQueue.enqueue(item)
-			if err == nil {
-				s.exporter.observeCentralQueueLaneBytes(item.compressedBytes, s.now)
-			}
-		}
 		if err != nil {
 			return err
 		}
+		s.pending = append(s.pending, item) // buffer; committed atomically in consume()
 		current = plog.NewLogs()
 		currentRecords = 0
 		return nil

@@ -221,7 +221,11 @@ func (e *logExporterImp) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
 
 func (e *logExporterImp) consumeLogsCentralQueue(ctx context.Context, ld plog.Logs) error {
 	splitter := newCentralQueueLogSplitter(e, centralQueueEffectiveUncompressedItemLimit(e.centralQueue.settings), time.Now())
-	return splitter.consume(ctx, ld)
+	err := splitter.consume(ctx, ld)
+	if errors.Is(err, errCentralQueueRequestTooLarge) {
+		return consumererror.NewPermanent(err)
+	}
+	return err
 }
 
 func (e *logExporterImp) effectiveCentralQueueLaneCount(now time.Time) int {

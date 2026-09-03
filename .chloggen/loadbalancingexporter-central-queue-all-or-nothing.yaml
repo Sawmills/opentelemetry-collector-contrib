@@ -1,0 +1,12 @@
+change_type: bug_fix
+
+component: exporter/loadbalancing
+
+note: Commit central-queue requests all-or-nothing so a full queue never partially accepts a request while returning an error.
+
+issues: [111]
+
+subtext: |-
+  When the central queue was near capacity, a request's per-routing-key items were enqueued one-by-one, so some could commit while a later one hit "queue full" and the caller still returned an error. A retry-on-error client then re-sent the whole request and the already-committed items were delivered again, duplicating records downstream. Requests are now committed atomically (all items or none), so an error means nothing was committed and the retry is safe.
+
+change_logs: [user]
