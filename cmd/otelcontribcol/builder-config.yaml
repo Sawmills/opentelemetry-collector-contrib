@@ -286,3 +286,5 @@ providers:
 # file before passing it to OCB, to ensure that local versions are used for all
 # Contrib modules.
 replaces:
+  # The original Avro module has no fix for GO-2026-5046, GO-2026-5047, or GO-2026-5048.
+  - github.com/hamba/avro/v2 => github.com/iskorotkov/avro/v2 v2.33.0
