@@ -101,9 +101,7 @@ func TestInitializeReaders(t *testing.T) {
 
 func TestDatabaseReader_Name(t *testing.T) {
 	databaseID := datasource.NewDatabaseID(projectID, instanceID, databaseName)
-	ctx := t.Context()
-	client, _ := spanner.NewClient(ctx, databaseName)
-	database := datasource.NewDatabaseFromClient(client, databaseID)
+	database := datasource.NewDatabaseFromClient(nil, databaseID)
 	logger := zaptest.NewLogger(t)
 
 	reader := &DatabaseReader{
@@ -117,9 +115,7 @@ func TestDatabaseReader_Name(t *testing.T) {
 
 func TestDatabaseReader_Shutdown(t *testing.T) {
 	databaseID := datasource.NewDatabaseID(projectID, instanceID, databaseName)
-	ctx := t.Context()
-	client, _ := spanner.NewClient(ctx, databaseName)
-	database := datasource.NewDatabaseFromClient(client, databaseID)
+	database := datasource.NewDatabaseFromClient(nil, databaseID)
 	logger := zaptest.NewLogger(t)
 
 	reader := &DatabaseReader{
@@ -133,8 +129,7 @@ func TestDatabaseReader_Shutdown(t *testing.T) {
 func TestDatabaseReader_Read(t *testing.T) {
 	databaseID := datasource.NewDatabaseID(projectID, instanceID, databaseName)
 	ctx := t.Context()
-	client, _ := spanner.NewClient(ctx, databaseName)
-	database := datasource.NewDatabaseFromClient(client, databaseID)
+	database := datasource.NewDatabaseFromClient(nil, databaseID)
 	logger := zaptest.NewLogger(t)
 	testCases := map[string]struct {
 		expectedError error

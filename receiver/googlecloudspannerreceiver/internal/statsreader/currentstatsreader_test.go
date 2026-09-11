@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"cloud.google.com/go/spanner"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap/zaptest"
 
@@ -25,9 +24,7 @@ const (
 
 func TestCurrentStatsReader_Name(t *testing.T) {
 	databaseID := datasource.NewDatabaseID(projectID, instanceID, databaseName)
-	ctx := t.Context()
-	client, _ := spanner.NewClient(ctx, "")
-	database := datasource.NewDatabaseFromClient(client, databaseID)
+	database := datasource.NewDatabaseFromClient(nil, databaseID)
 	metricsMetadata := &metadata.MetricsMetadata{
 		Name: name,
 	}
@@ -43,9 +40,7 @@ func TestCurrentStatsReader_Name(t *testing.T) {
 
 func TestNewCurrentStatsReader(t *testing.T) {
 	databaseID := datasource.NewDatabaseID(projectID, instanceID, databaseName)
-	ctx := t.Context()
-	client, _ := spanner.NewClient(ctx, "")
-	database := datasource.NewDatabaseFromClient(client, databaseID)
+	database := datasource.NewDatabaseFromClient(nil, databaseID)
 	metricsMetadata := &metadata.MetricsMetadata{
 		Name: name,
 	}

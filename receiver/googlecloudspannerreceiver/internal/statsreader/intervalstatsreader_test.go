@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"cloud.google.com/go/spanner"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap/zaptest"
 
@@ -17,9 +16,7 @@ import (
 
 func TestIntervalStatsReader_Name(t *testing.T) {
 	databaseID := datasource.NewDatabaseID(projectID, instanceID, databaseName)
-	ctx := t.Context()
-	client, _ := spanner.NewClient(ctx, "")
-	database := datasource.NewDatabaseFromClient(client, databaseID)
+	database := datasource.NewDatabaseFromClient(nil, databaseID)
 	metricsMetadata := &metadata.MetricsMetadata{
 		Name: name,
 	}
@@ -37,9 +34,7 @@ func TestIntervalStatsReader_Name(t *testing.T) {
 
 func TestNewIntervalStatsReader(t *testing.T) {
 	databaseID := datasource.NewDatabaseID(projectID, instanceID, databaseName)
-	ctx := t.Context()
-	client, _ := spanner.NewClient(ctx, "")
-	database := datasource.NewDatabaseFromClient(client, databaseID)
+	database := datasource.NewDatabaseFromClient(nil, databaseID)
 	metricsMetadata := &metadata.MetricsMetadata{
 		Name: name,
 	}
@@ -73,9 +68,7 @@ func TestIntervalStatsReader_NewPullStatement(t *testing.T) {
 		HideTopnLockstatsRowrangestartkey: true,
 		TruncateText:                      true,
 	}
-	ctx := t.Context()
-	client, _ := spanner.NewClient(ctx, "")
-	database := datasource.NewDatabaseFromClient(client, databaseID)
+	database := datasource.NewDatabaseFromClient(nil, databaseID)
 	metricsMetadata := &metadata.MetricsMetadata{
 		Query: query,
 	}
