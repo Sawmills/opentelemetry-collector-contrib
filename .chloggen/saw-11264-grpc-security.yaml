@@ -1,0 +1,7 @@
+change_type: bug_fix
+component: all
+note: Upgrade gRPC to v1.82.1 to fix GO-2026-6061.
+issues: [11264]
+subtext: |
+  Update component and collector distribution dependencies to the patched gRPC release.
+change_logs: [user]
