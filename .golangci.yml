@@ -68,6 +68,12 @@ linters:
 
     # Excluding configuration per-path, per-linter, per-text and per-source
     rules:
+      # Porto requires import comments; Go 1.26 syntax migrations are separate
+      # from the dependency security update.
+      - linters:
+          - modernize
+        text: "^(importcomment|newexpr|errorsastype):"
+
       - path: processor/hotreloadprocessor/
         linters:
           - errcheck

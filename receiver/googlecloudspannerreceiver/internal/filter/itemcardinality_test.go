@@ -33,7 +33,7 @@ func TestNewItemCardinalityFilter(t *testing.T) {
 
 			if testCase.expectError {
 				require.Nil(t, filter)
-				require.Error(t, err)
+				require.EqualError(t, err, "total limit 1 is lower than limit by timestamp 2")
 			} else {
 				require.NoError(t, err)
 				filterCasted := filter.(*itemCardinalityFilter)

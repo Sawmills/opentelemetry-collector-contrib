@@ -258,3 +258,6 @@ tests:
         - internal/poll.runtime_pollWait
         - syscall.Syscall6
         - syscall.SyscallN
+      any:
+        # Go 1.26 changed the syscall wrapper; match the Windows DNS lookup itself.
+        - net.(*Resolver).lookupIP.func1
