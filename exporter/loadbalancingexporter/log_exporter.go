@@ -189,9 +189,9 @@ func (e *logExporterImp) Shutdown(ctx context.Context) error {
 		if e.centralCancel != nil {
 			e.centralCancel()
 		}
-		// Consumers need a short cleanup window even when the drain deadline
-		// expired. Never close the codec while a consumer can still use it.
-		waitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+		// Bound cleanup by the caller deadline. Never close the codec while
+		// a consumer can still use it.
+		waitCtx, cancel := context.WithTimeout(ctx, time.Second)
 		waitErr := waitForInflight(waitCtx, &e.centralWG)
 		cancel()
 		err = errors.Join(err, waitErr)

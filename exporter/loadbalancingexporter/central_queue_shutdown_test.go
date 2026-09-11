@@ -139,3 +139,28 @@ func TestLogsShutdownWaitsForInflightDeliveryAndRejectsNewIntake(t *testing.T) {
 	require.NoError(t, <-shutdown)
 	require.Equal(t, int64(simpleLogs().LogRecordCount()), records.Load())
 }
+
+// Complete delivery when drain starts waiting, before it observes cancellation.
+type drainCompletionContext struct {
+	context.Context
+	complete func()
+}
+
+func (c drainCompletionContext) Done() <-chan struct{} {
+	c.complete()
+	return c.Context.Done()
+}
+
+func TestCentralQueueDrainRechecksCompletionAtDeadline(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{})
+	q.currentInflightBytes = 1
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	complete := sync.OnceFunc(func() {
+		q.mu.Lock()
+		q.currentInflightBytes = 0
+		q.mu.Unlock()
+		cancel()
+	})
+	require.NoError(t, q.drain(drainCompletionContext{Context: ctx, complete: complete}))
+}

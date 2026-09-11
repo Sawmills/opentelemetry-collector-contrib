@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package loadbalancingexporter
+package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter"
 
 import (
 	"context"
@@ -30,9 +30,12 @@ func (q *centralQueue) drain(ctx context.Context) error {
 		if empty {
 			return nil
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			// Recheck completion under the queue lock before reporting a timeout.
 		case <-ticker.C:
 		}
 	}

@@ -639,7 +639,9 @@ func TestLogsCentralQueueShutdownTimeoutStillRunsTeardown(t *testing.T) {
 
 	shutdownCtx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
+	started := time.Now()
 	require.Error(t, p.Shutdown(shutdownCtx))
+	require.Less(t, time.Since(started), 250*time.Millisecond, "shutdown must respect the caller deadline")
 	require.True(t, resolverShutdown.Load())
 }
 
