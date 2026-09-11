@@ -182,6 +182,7 @@ Refer to [config.yaml](./testdata/config.yaml) for detailed examples on using th
   * `min_lanes`, `max_lanes`, `backend_lane_multiplier`, `target_lane_fill_duration`, and `lane_hysteresis_factor` tune dynamic lane selection. Defaults are `1`, `256`, `2`, derived from `max_batch_delay`, and `2`.
   * Queued payloads stay compressed until dispatch. Central queue capacity is enforced on compressed bytes; request windows are decoded only after a ready lane window is leased.
   * The scheduler keeps a bounded set of ready request windows, limited by `num_consumers`. Ready windows reserve uncompressed in-flight budget before a worker leases them, so parallel consumers do not shrink request windows beyond `target_compressed_bytes` unless a bounded flush reason applies.
+  * On graceful log-exporter shutdown, the central queue rejects new intake and flushes partial batches. It retries accepted work for up to 30 seconds or the caller's earlier deadline. Shutdown returns an error if the drain deadline expires. This queue resides in memory; abrupt process or node loss still requires upstream replay or durable storage to preserve acknowledged records.
   * Central queue mode is incompatible with `sending_queue.enabled=true`, `protocol.otlp.sending_queue`, `log_batcher.enabled=true`, and `metric_batcher.enabled=true`. Child OTLP exporter queues are disabled while central queue mode is active.
 
 Simple example

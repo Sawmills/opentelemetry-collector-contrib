@@ -569,7 +569,7 @@ func TestLogsCentralQueueWindowUsesRoutingKeyWhenIgnoringTraceIDs(t *testing.T) 
 	assert.Equal(t, int64(1), endpoint2Calls.Load())
 }
 
-func TestLogsCentralQueueShutdownCancelsBeforeWaiting(t *testing.T) {
+func TestLogsCentralQueueShutdownCancelsAfterDrainDeadline(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
 
@@ -612,7 +612,7 @@ func TestLogsCentralQueueShutdownCancelsBeforeWaiting(t *testing.T) {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer shutdownCancel()
-	require.NoError(t, p.Shutdown(shutdownCtx))
+	require.ErrorIs(t, p.Shutdown(shutdownCtx), context.DeadlineExceeded)
 }
 
 func TestLogsCentralQueueShutdownTimeoutStillRunsTeardown(t *testing.T) {

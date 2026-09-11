@@ -1,0 +1,8 @@
+change_type: bug_fix
+component: exporter/loadbalancing
+note: Drain accepted central log queue records before canceling consumers on graceful shutdown.
+issues: [11264]
+subtext: |
+  Flush partial batches and retry transient backend failures within a bounded shutdown deadline.
+  Return an error when the deadline expires. Abrupt process loss still requires replay or durable storage.
+change_logs: [user]

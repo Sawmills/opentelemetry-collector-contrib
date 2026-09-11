@@ -69,6 +69,7 @@ type centralQueue struct {
 	readySequence int64
 	itemCount     int
 	stopped       bool
+	draining      bool
 	ready         []centralQueueWindow
 	notify        chan struct{}
 
@@ -176,7 +177,7 @@ func (q *centralQueue) enqueueAllAt(items []centralQueueItem, now time.Time) err
 	}
 
 	q.mu.Lock()
-	if q.stopped {
+	if q.stopped || q.draining {
 		q.mu.Unlock()
 		return errCentralQueueStopped
 	}
@@ -219,7 +220,7 @@ func (q *centralQueue) enqueueAt(item centralQueueItem, now time.Time) error {
 	}
 
 	q.mu.Lock()
-	if q.stopped {
+	if q.stopped || q.draining {
 		q.mu.Unlock()
 		return errCentralQueueStopped
 	}
@@ -657,7 +658,7 @@ func (q *centralQueue) bucketReadyAtUnixNanoLocked(bucket *centralQueueBucket, n
 		return futureReadyAt
 	}
 	var readyAt int64
-	if q.settings.maxBatchDelay <= 0 {
+	if q.settings.maxBatchDelay <= 0 || q.draining {
 		readyAt = candidateReadyAt
 	} else {
 		readyAt = max(candidateReadyAt, candidate.oldestEnqueuedAt+q.settings.maxBatchDelay.Nanoseconds())
@@ -744,7 +745,7 @@ func (q *centralQueue) buildWindowCandidateFromBucketLocked(bucket *centralQueue
 		bucket.candidateIndexes = candidate.indexes
 		return centralQueueWindowCandidate{}, hasReady
 	}
-	if q.stopped {
+	if q.stopped || q.draining {
 		candidate.window.flushReason = centralQueueFlushReasonShutdown
 		bucket.candidateIndexes = candidate.indexes
 		return candidate, hasReady
