@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package buildscripts
+package buildscripts // import "github.com/open-telemetry/opentelemetry-collector-contrib/internal/buildscripts"
 
 import (
 	"context"
