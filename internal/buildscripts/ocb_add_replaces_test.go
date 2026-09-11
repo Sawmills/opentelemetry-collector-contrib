@@ -34,6 +34,7 @@ func TestOCBAddReplacesPreservesRelativePaths(t *testing.T) {
 		"go 1.24.0",
 		"",
 		"replace github.com/example/conflicting => github.com/example/conflicting v1.2.3",
+		"replace github.com/example/conflicting-fork => github.com/example/fork-one v1.2.3",
 		"",
 	}, "\n"))
 	mustWriteFile(t, filepath.Join(tempRepo, "cmd", "telemetrygen", "go.mod"), strings.Join([]string{
@@ -42,6 +43,7 @@ func TestOCBAddReplacesPreservesRelativePaths(t *testing.T) {
 		"go 1.24.0",
 		"",
 		"replace github.com/example/conflicting => github.com/example/conflicting v1.2.4",
+		"replace github.com/example/conflicting-fork => github.com/example/fork-two v1.2.3",
 		"",
 	}, "\n"))
 	mustWriteFile(t, filepath.Join(tempRepo, "receiver", "simpleprometheusreceiver", "examples", "federation", "prom-counter", "go.mod"), "module github.com/open-telemetry/opentelemetry-collector-contrib/receiver/simpleprometheusreceiver/examples/federation/prom-counter\n\ngo 1.24.0\n")
@@ -57,6 +59,7 @@ func TestOCBAddReplacesPreservesRelativePaths(t *testing.T) {
 		"\tgithub.com/example/thirdparty => ../../sawmills-helper",
 		"\tgithub.com/example/remote => github.com/Sawmills/remote",
 		"\tgithub.com/example/versioned => github.com/example/versioned v1.2.3",
+		"\tgithub.com/hamba/avro/v2 => github.com/iskorotkov/avro/v2 v2.33.0",
 		"\tgithub.com/Sawmills/helper => ../../sawmills-helper",
 		")",
 		"",
@@ -87,8 +90,10 @@ func TestOCBAddReplacesPreservesRelativePaths(t *testing.T) {
 	assertContains(t, content, "github.com/Sawmills/versioned-helper => ../../sawmills-helper")
 	assertContains(t, content, "github.com/example/remote => github.com/Sawmills/remote")
 	assertContains(t, content, "github.com/example/versioned => github.com/example/versioned v1.2.3")
+	assertContains(t, content, "github.com/hamba/avro/v2 => github.com/iskorotkov/avro/v2 v2.33.0")
 	assertNotContains(t, content, "github.com/example/thirdparty => ../../sawmills-helper")
 	assertNotContains(t, content, "github.com/example/conflicting =>")
+	assertNotContains(t, content, "github.com/example/conflicting-fork =>")
 	assertNotContains(t, content, "github.com/Sawmills/versioned-helper v1.2.3 => ../../sawmills-helper")
 	assertNotContains(t, content, "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/simpleprometheusreceiver/examples/federation/prom-counter => ../../receiver/simpleprometheusreceiver/examples/federation/prom-counter")
 	assertNotContains(t, content, "github.com/open-telemetry/opentelemetry-collector-contrib/internal/aws/xray/testdata/sampleapp => ../../internal/aws/xray/testdata/sampleapp")
