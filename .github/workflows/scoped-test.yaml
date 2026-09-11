@@ -182,7 +182,12 @@ jobs:
           GOMEMLIMIT: 6GiB
         run: |
           make run-changed-source-package-tests
-          make run-changed-dependent-module-tests CMD="make lint test-twice"
+          dependent_modules=$(go run ./internal/buildscripts/cmd/dependent-modules)
+          while IFS= read -r dir; do
+            [[ -z "$dir" ]] && continue
+            echo "running dependent module tests in $dir"
+            (cd "$dir" && make lint test-twice)
+          done <<< "$dependent_modules"
 
       - run: ./.github/workflows/scripts/check-disk-space.sh
 
@@ -236,7 +241,12 @@ jobs:
         shell: bash
         run: |
           make run-changed-source-package-tests
-          make run-changed-dependent-module-tests CMD="make test-twice"
+          dependent_modules=$(go run ./internal/buildscripts/cmd/dependent-modules)
+          while IFS= read -r dir; do
+            [[ -z "$dir" ]] && continue
+            echo "running dependent module tests in $dir"
+            (cd "$dir" && make test-twice)
+          done <<< "$dependent_modules"
 
       - run: ./.github/workflows/scripts/check-disk-space.sh
 

@@ -98,6 +98,9 @@ func TestScopedLintConfigClassification(t *testing.T) {
 		{"config_and_metadata", ".golangci.yml\nexporter/example/metadata.yaml", "full_fallback"},
 		{"config_and_schema", ".golangci.yml\nexporter/example/config.schema.yaml", "full_fallback"},
 		{"config_and_workflow", ".golangci.yml\n.github/workflows/scoped-test.yaml", "full_fallback"},
+		{"makefile_only", "Makefile.Common", "full_fallback"},
+		{"makefile_and_go", "Makefile.Common\ninternal/buildscripts/dependent_modules_test.go", "full_fallback"},
+		{"config_and_makefile", ".golangci.yml\nMakefile.Common", "full_fallback"},
 		{"config_and_unknown", ".golangci.yml\nDockerfile", "full_fallback"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
