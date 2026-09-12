@@ -182,15 +182,29 @@ func (e *logExporterImp) Shutdown(ctx context.Context) error {
 		err = e.batcher.Shutdown(ctx)
 	}
 	if e.centralQueue != nil {
+		drainCtx, drainCancel := context.WithTimeout(ctx, 30*time.Second)
+		err = errors.Join(err, e.centralQueue.drain(drainCtx))
+		drainCancel()
 		e.centralQueue.stop()
 		if e.centralCancel != nil {
 			e.centralCancel()
 		}
+		// Bound cleanup by the caller deadline. Never close the codec while
+		// a consumer can still use it.
 		waitCtx, cancel := context.WithTimeout(ctx, time.Second)
 		waitErr := waitForInflight(waitCtx, &e.centralWG)
 		cancel()
 		err = errors.Join(err, waitErr)
-		err = errors.Join(err, e.centralCodec.Close())
+		if waitErr == nil {
+			err = errors.Join(err, e.centralCodec.Close())
+		} else {
+			go func() {
+				e.centralWG.Wait()
+				if closeErr := e.centralCodec.Close(); closeErr != nil {
+					e.logger.Warn("failed to close central queue codec", zap.Error(closeErr))
+				}
+			}()
+		}
 	}
 	err = errors.Join(err, e.loadBalancer.Shutdown(ctx))
 	return err

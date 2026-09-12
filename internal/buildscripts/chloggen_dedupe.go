@@ -2,7 +2,7 @@ package buildscripts // import "github.com/open-telemetry/opentelemetry-collecto
 
 import (
 	"bytes"
-	"fmt"
+	"errors"
 )
 
 // DedupeChloggenComponentsConfig removes duplicate component entries inside the
@@ -40,7 +40,7 @@ func DedupeChloggenComponentsConfig(input []byte) ([]byte, error) {
 	}
 
 	if output.Len() == 0 {
-		return nil, fmt.Errorf("deduped config is empty")
+		return nil, errors.New("deduped config is empty")
 	}
 
 	return output.Bytes(), nil

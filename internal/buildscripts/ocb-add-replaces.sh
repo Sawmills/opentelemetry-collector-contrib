@@ -87,7 +87,7 @@ for go_mod in sorted(repo.rglob("go.mod")):
             continue
 
         rhs_parts = rhs.split()
-        if len(rhs_parts) == 2 and rhs_parts[0] == lhs_module:
+        if len(rhs_parts) == 2:
             version_replaces.setdefault(lhs_module, set()).add(rhs)
 
 for lhs_module, replacements in version_replaces.items():

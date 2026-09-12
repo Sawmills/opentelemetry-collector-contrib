@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"cloud.google.com/go/spanner"
+	"cloud.google.com/go/spanner/spannertest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -32,6 +33,11 @@ func (r *mockReader) Read(ctx context.Context) ([]*metadata.MetricsDataPoint, er
 }
 
 func TestNewDatabaseReader(t *testing.T) {
+	server, err := spannertest.NewServer("localhost:0")
+	require.NoError(t, err)
+	t.Cleanup(server.Close)
+	// Keep client setup and location detection on the local emulator.
+	t.Setenv("SPANNER_EMULATOR_HOST", server.Addr)
 	ctx := t.Context()
 	databaseID := datasource.NewDatabaseID(projectID, instanceID, databaseName)
 	serviceAccountPath := "../../testdata/serviceAccount.json"
@@ -44,9 +50,8 @@ func TestNewDatabaseReader(t *testing.T) {
 
 	reader, err := NewDatabaseReader(ctx, parsedMetadata, databaseID, serviceAccountPath, readerConfig, logger)
 
-	assert.NoError(t, err)
-
-	defer executeShutdown(reader)
+	require.NoError(t, err)
+	t.Cleanup(reader.Shutdown)
 
 	assert.Equal(t, databaseID, reader.database.DatabaseID())
 	assert.Equal(t, logger, reader.logger)
@@ -101,9 +106,7 @@ func TestInitializeReaders(t *testing.T) {
 
 func TestDatabaseReader_Name(t *testing.T) {
 	databaseID := datasource.NewDatabaseID(projectID, instanceID, databaseName)
-	ctx := t.Context()
-	client, _ := spanner.NewClient(ctx, databaseName)
-	database := datasource.NewDatabaseFromClient(client, databaseID)
+	database := datasource.NewDatabaseFromClient(nil, databaseID)
 	logger := zaptest.NewLogger(t)
 
 	reader := &DatabaseReader{
@@ -117,9 +120,7 @@ func TestDatabaseReader_Name(t *testing.T) {
 
 func TestDatabaseReader_Shutdown(t *testing.T) {
 	databaseID := datasource.NewDatabaseID(projectID, instanceID, databaseName)
-	ctx := t.Context()
-	client, _ := spanner.NewClient(ctx, databaseName)
-	database := datasource.NewDatabaseFromClient(client, databaseID)
+	database := datasource.NewDatabaseFromClient(nil, databaseID)
 	logger := zaptest.NewLogger(t)
 
 	reader := &DatabaseReader{
@@ -133,8 +134,7 @@ func TestDatabaseReader_Shutdown(t *testing.T) {
 func TestDatabaseReader_Read(t *testing.T) {
 	databaseID := datasource.NewDatabaseID(projectID, instanceID, databaseName)
 	ctx := t.Context()
-	client, _ := spanner.NewClient(ctx, databaseName)
-	database := datasource.NewDatabaseFromClient(client, databaseID)
+	database := datasource.NewDatabaseFromClient(nil, databaseID)
 	logger := zaptest.NewLogger(t)
 	testCases := map[string]struct {
 		expectedError error

@@ -18,6 +18,7 @@ jobs:
       go_tests: ${{ steps.changes.outputs.go_tests }}
       go_modules: ${{ steps.changes.outputs.go_modules }}
       govuln_filter: ${{ steps.changes.outputs.govuln_filter }}
+      lint_config: ${{ steps.changes.outputs.lint_config }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -64,10 +65,15 @@ jobs:
             exit 0
           fi
 
-          non_go_changes=$(printf '%s\n' "$changed_files" | grep -vE '.*\.go$|(^|/)go\.(mod|sum)$|(^|/)metadata\.yaml$|(^|/)config\.schema\.yaml$|(^|/)README\.md$|(^|/)documentation\.md$|^\.chloggen/.+\.yaml$|^\.github/workflows/(build-and-test-arm\.yml|scoped-test\.yaml)$|^\.github/workflows/scripts/filter-govulncheck(_test)?\.py$|^internal/buildscripts/ocb-add-replaces\.sh$' || true)
+          non_go_changes=$(printf '%s\n' "$changed_files" | grep -vE '.*\.go$|(^|/)go\.(mod|sum)$|(^|/)metadata\.yaml$|(^|/)config\.schema\.yaml$|(^|/)README\.md$|(^|/)documentation\.md$|^\.chloggen/.+\.yaml$|^\.github/workflows/(build-and-test-arm\.yml|scoped-test\.yaml)$|^\.github/workflows/scripts/filter-govulncheck(_test)?\.py$|^internal/buildscripts/ocb-add-replaces\.sh$|^\.golangci\.yml$' || true)
           if [[ -n "$non_go_changes" ]]; then
             echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+
+          lint_config_changes=$(printf '%s\n' "$changed_files" | grep -E '^\.golangci\.yml$' || true)
+          if [[ -n "$lint_config_changes" ]]; then
+            echo "lint_config=true" >> "$GITHUB_OUTPUT"
           fi
 
           govuln_filter_changes=$(printf '%s\n' "$changed_files" | grep -E '^\.github/workflows/scripts/filter-govulncheck(_test)?\.py$' || true)
@@ -82,7 +88,10 @@ jobs:
           go_count=$(printf '%s\n%s\n' "$go_sources" "$go_tests" | awk 'NF { count++ } END { print count + 0 }')
           go_module_count=$(printf '%s\n' "$go_modules" | awk 'NF { count++ } END { print count + 0 }')
           if (( go_count == 0 && go_module_count == 0 )); then
-            if [[ -n "$govuln_filter_changes" ]]; then
+            non_lint_config_changes=$(printf '%s\n' "$non_docs_changes" | grep -vE '^\.golangci\.yml$' || true)
+            if [[ -n "$lint_config_changes" && -z "$non_lint_config_changes" ]]; then
+              echo "mode=scoped" >> "$GITHUB_OUTPUT"
+            elif [[ -n "$govuln_filter_changes" ]]; then
               echo "mode=govuln_filter" >> "$GITHUB_OUTPUT"
             else
               echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
@@ -173,7 +182,12 @@ jobs:
           GOMEMLIMIT: 6GiB
         run: |
           make run-changed-source-package-tests
-          make run-changed-dependent-module-tests CMD="make lint test-twice"
+          dependent_modules=$(go run ./internal/buildscripts/cmd/dependent-modules)
+          while IFS= read -r dir; do
+            [[ -z "$dir" ]] && continue
+            echo "running dependent module tests in $dir"
+            (cd "$dir" && make lint test-twice)
+          done <<< "$dependent_modules"
 
       - run: ./.github/workflows/scripts/check-disk-space.sh
 
@@ -227,7 +241,12 @@ jobs:
         shell: bash
         run: |
           make run-changed-source-package-tests
-          make run-changed-dependent-module-tests CMD="make test-twice"
+          dependent_modules=$(go run ./internal/buildscripts/cmd/dependent-modules)
+          while IFS= read -r dir; do
+            [[ -z "$dir" ]] && continue
+            echo "running dependent module tests in $dir"
+            (cd "$dir" && make test-twice)
+          done <<< "$dependent_modules"
 
       - run: ./.github/workflows/scripts/check-disk-space.sh
 
@@ -274,3 +293,33 @@ jobs:
               exit 1
               ;;
           esac
+      - name: Wait for full lint
+        if: needs.changedfiles.outputs.lint_config == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          suite=""
+          for attempt in $(seq 1 120); do
+            echo "Waiting for full lint ($attempt/120)."
+            if [[ -z "$suite" ]]; then
+              suite=$(gh api "repos/${GH_REPO}/actions/workflows/build-and-test.yml/runs?head_sha=${PR_HEAD}&event=pull_request" \
+                --jq '.workflow_runs | max_by(.id) | .check_suite_id // empty')
+            fi
+            if [[ -z "$suite" ]]; then
+              sleep 15
+              continue
+            fi
+            state=$(gh api "repos/${GH_REPO}/check-suites/${suite}/check-runs?check_name=lint&filter=latest&per_page=100" \
+              --jq '[.check_runs[] | select(.name == "lint" and .app.slug == "github-actions")] | max_by(.id) | .conclusion // .status // "pending"')
+            case "$state" in
+              success) exit 0 ;;
+              pending|queued|in_progress) sleep 15 ;;
+              *) echo "Full lint did not pass: $state"; exit 1 ;;
+            esac
+          done
+          echo "Timed out waiting for full lint."
+          exit 1

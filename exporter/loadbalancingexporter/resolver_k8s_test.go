@@ -96,13 +96,14 @@ func TestK8sResolve(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, expectInit, res.Endpoints())
 
+		cleanup := func(*testing.T) {
+			require.NoError(t, res.shutdown(t.Context()))
+		}
 		return &suiteContext{
-				endpoint:  endpoint,
-				clientset: cl,
-				resolver:  res,
-			}, func(*testing.T) {
-				require.NoError(t, res.shutdown(t.Context()))
-			}
+			endpoint:  endpoint,
+			clientset: cl,
+			resolver:  res,
+		}, cleanup
 	}
 	tests := []struct {
 		name              string

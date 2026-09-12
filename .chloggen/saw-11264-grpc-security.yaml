@@ -1,0 +1,12 @@
+change_type: bug_fix
+component: all
+note: Update dependencies to fix gRPC, crypto, archive, OpenTelemetry, and Avro vulnerabilities.
+issues: [11264]
+subtext: |
+  Upgrade gRPC to v1.82.1, golang.org/x/crypto to v0.56.0,
+  github.com/moby/go-archive to v0.3.0, and OpenTelemetry Go to v1.44.0.
+  Replace the archived github.com/hamba/avro/v2 dependency with
+  github.com/iskorotkov/avro/v2 v2.33.0 in the Pulsar components and contrib distribution.
+  Custom distributions that include Pulsar must add the same replacement to their main module.
+  The crypto update requires Go 1.26 or later to build affected components.
+change_logs: [user, api]
