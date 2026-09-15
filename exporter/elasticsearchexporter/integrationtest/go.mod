@@ -373,3 +373,6 @@ replace github.com/open-telemetry/opentelemetry-collector-contrib/receiver/otela
 replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/splunk => ../../../pkg/translator/splunk
 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/pkg/sampling => ../../../pkg/sampling
+
+// Keep the profile API compatible with the local Elasticsearch serializer.
+replace go.opentelemetry.io/collector/pdata/pprofile => go.opentelemetry.io/collector/pdata/pprofile v0.149.1-0.20260402195938-76ede073ee8e
