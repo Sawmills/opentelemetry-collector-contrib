@@ -85,6 +85,7 @@ func TestPrometheusAPIServer(t *testing.T) {
 		testRuntimeInfo(t, endpoint)
 		testBuildInfo(t, endpoint)
 		testFlags(t, endpoint)
+		testSearchDisabled(t, endpoint)
 	}
 }
 
@@ -218,4 +219,17 @@ func testMetricsEndpoint(t *testing.T, endpoint string) {
 	content, err := io.ReadAll(resp.Body)
 	assert.NoError(t, err)
 	assert.Contains(t, string(content), "prometheus_target_scrape_pools_total")
+}
+
+func testSearchDisabled(t *testing.T, endpoint string) {
+	for _, path := range []string{"/search/metric_names", "/search/label_names", "/search/label_values"} {
+		resp, err := http.Get(fmt.Sprintf("http://%s/api/v1%s", endpoint, path))
+		require.NoError(t, err)
+		var response apiResponse
+		err = json.NewDecoder(resp.Body).Decode(&response)
+		require.NoError(t, resp.Body.Close())
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+		assert.Equal(t, "search API disabled", response.Error)
+	}
 }

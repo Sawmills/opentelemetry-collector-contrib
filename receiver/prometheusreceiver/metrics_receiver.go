@@ -146,11 +146,8 @@ func (r *pReceiver) initPrometheusComponents(
 	ctx context.Context, logger *slog.Logger, host component.Host,
 	opts prometheusComponentTestOptions,
 ) error {
-	// Some SD mechanisms use the "refresh" package, which has its own metrics.
-	refreshSdMetrics := discovery.NewRefreshMetrics(r.registerer)
-
-	// Register the metrics specific for each SD mechanism, and the ones for the refresh package.
-	sdMetrics, err := discovery.RegisterSDMetrics(r.registerer, refreshSdMetrics)
+	// Register the metrics needed by service discovery mechanisms.
+	sdMetrics, err := discovery.CreateAndRegisterSDMetrics(r.registerer)
 	if err != nil {
 		return fmt.Errorf("failed to register service discovery metrics: %w", err)
 	}
@@ -203,8 +200,8 @@ func (r *pReceiver) initPrometheusComponents(
 	r.scrapeManager = scrapeManager
 
 	r.unregisterMetrics = func() {
-		refreshSdMetrics.Unregister()
-		for _, sdMetric := range sdMetrics {
+		sdMetrics.RefreshManager.Unregister()
+		for _, sdMetric := range sdMetrics.MechanismMetrics {
 			sdMetric.Unregister()
 		}
 		r.discoveryManager.UnregisterMetrics()
@@ -312,6 +309,8 @@ func (r *pReceiver) initAPIServer(ctx context.Context, host component.Host) erro
 		o.LocalStorage,   // nil
 		o.TSDBDir,        // nil
 		o.EnableAdminAPI, // nil
+		false,            // enableSearch: the receiver does not expose Prometheus search
+		0,                // maxSearchLimit: search is disabled
 		logger,
 		factoryRr,
 		o.RemoteReadSampleLimit,      // nil
