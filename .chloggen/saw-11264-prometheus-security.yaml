@@ -5,4 +5,5 @@ issues: [11264]
 subtext: |
   Adapt service discovery metrics and API construction to the updated dependency.
   Keep the Prometheus search API disabled.
+  Scrape clients no longer send credentials after a redirect to a different host.
 change_logs: [user, api]
