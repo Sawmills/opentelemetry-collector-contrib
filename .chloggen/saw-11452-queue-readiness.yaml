@@ -1,0 +1,5 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Reduce repeated central queue readiness scans when a leased batch is deferred or retried.
+issues: [114]
+change_logs: [user]
