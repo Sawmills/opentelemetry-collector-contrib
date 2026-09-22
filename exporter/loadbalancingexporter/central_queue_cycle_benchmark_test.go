@@ -6,6 +6,7 @@ package loadbalancingexporter
 import (
 	"bytes"
 	"fmt"
+	"runtime"
 	"slices"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ func BenchmarkCentralQueueFullCycle(b *testing.B) {
 		deferredWindows   int
 		requeuedWindows   int
 		shutdownBeforeRun bool
+		reuseQueue        bool
 	}{
 		{name: "healthy_balanced_batch_8", lanes: 64, batchItems: 8},
 		{name: "healthy_hot_batch_64", lanes: 64, hotPercent: 80, batchItems: 64},
@@ -34,6 +36,8 @@ func BenchmarkCentralQueueFullCycle(b *testing.B) {
 		{name: "unavailable_hot_batch_64", lanes: 64, hotPercent: 80, batchItems: 64, deferredWindows: 4, requeuedWindows: 4},
 		{name: "unavailable_hot_batch_256", lanes: 64, hotPercent: 80, batchItems: 256, deferredWindows: 2, requeuedWindows: 2},
 		{name: "shutdown_hot_batch_64", lanes: 64, hotPercent: 80, batchItems: 64, shutdownBeforeRun: true},
+		{name: "steady_healthy_hot_batch_256", lanes: 64, hotPercent: 80, batchItems: 256, reuseQueue: true},
+		{name: "steady_unavailable_hot_batch_256", lanes: 64, hotPercent: 80, batchItems: 256, deferredWindows: 2, requeuedWindows: 2, reuseQueue: true},
 	} {
 		b.Run(scenario.name, func(b *testing.B) {
 			laneKeys := make([][]byte, scenario.lanes)
@@ -45,10 +49,8 @@ func BenchmarkCentralQueueFullCycle(b *testing.B) {
 				laneKeys[lane] = fmt.Appendf(nil, "lane-%02d", lane)
 			}
 			b.ReportAllocs()
-			b.ResetTimer()
-			for b.Loop() {
-				now := time.Unix(1_700_000_000, 0)
-				q := newCentralQueue(centralQueueSettings{
+			newQueue := func() *centralQueue {
+				return newCentralQueue(centralQueueSettings{
 					maxCompressedBytes:           records * compressedBytes,
 					maxInflightUncompressedBytes: records * uncompressedBytes,
 					maxUncompressedBatchBytes:    scenario.batchItems * uncompressedBytes,
@@ -56,6 +58,17 @@ func BenchmarkCentralQueueFullCycle(b *testing.B) {
 					maxBatchDelay:                time.Millisecond,
 					maxReadyWindows:              scenario.lanes,
 				})
+			}
+			var q *centralQueue
+			if scenario.reuseQueue {
+				q = newQueue()
+			}
+			b.ResetTimer()
+			for b.Loop() {
+				now := time.Unix(1_700_000_000, 0)
+				if !scenario.reuseQueue {
+					q = newQueue()
+				}
 				for record := range records {
 					lane := record % scenario.lanes
 					if scenario.hotPercent > 0 {
@@ -130,4 +143,64 @@ func BenchmarkCentralQueueFullCycle(b *testing.B) {
 			b.ReportMetric(float64(b.N*records)/b.Elapsed().Seconds(), "records/s")
 		})
 	}
+}
+
+// BenchmarkCentralQueueRetainedHeap measures one full batch of concurrently
+// leased windows. The queue remains live during the final GC so the reported
+// delta includes any reusable item buffers held after all leases complete.
+func BenchmarkCentralQueueRetainedHeap(b *testing.B) {
+	const lanes = 16
+	const itemsPerLane = 256
+	const records = lanes * itemsPerLane
+	laneKeys := make([][]byte, lanes)
+	for lane := range laneKeys {
+		laneKeys[lane] = fmt.Appendf(nil, "lane-%02d", lane)
+	}
+	leases := make([]*centralQueueLease, lanes)
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           records,
+		maxInflightUncompressedBytes: records,
+		maxUncompressedBatchBytes:    itemsPerLane,
+		targetCompressedBytes:        itemsPerLane,
+		maxReadyWindows:              lanes,
+	})
+	now := time.Unix(1_700_000_000, 0)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		for range itemsPerLane {
+			for lane := range lanes {
+				if err := q.enqueueAt(centralQueueItem{
+					signal: signalKindLogs, routingKey: laneKeys[lane],
+					payload: make([]byte, 1024), compressedBytes: 1,
+					uncompressedBytes: 1, count: 1,
+				}, now); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+		for lane := range lanes {
+			lease, err := q.tryLease(now)
+			if err != nil || lease == nil {
+				b.Fatalf("lease %d: %v", lane, err)
+			}
+			leases[lane] = lease
+		}
+		for lane, lease := range leases {
+			lease.done()
+			leases[lane] = nil
+		}
+		if q.len() != 0 || q.compressedBytes() != 0 {
+			b.Fatal("queue was not empty after completion")
+		}
+	}
+	b.StopTimer()
+	runtime.GC()
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	b.ReportMetric(float64(int64(after.HeapAlloc)-int64(before.HeapAlloc)), "retained-B")
+	runtime.KeepAlive(q)
 }

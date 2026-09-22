@@ -1,0 +1,5 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Reuse bounded central queue window item buffers after completion or retry to reduce allocations.
+issues: [11452]
+change_logs: [user]
