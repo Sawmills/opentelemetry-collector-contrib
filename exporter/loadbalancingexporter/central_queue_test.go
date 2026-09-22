@@ -1023,6 +1023,163 @@ func TestCentralQueueRequeuesWholeCoalescedWindow(t *testing.T) {
 	require.Equal(t, 1, lease.window.maxAttempt)
 }
 
+func TestCentralQueueReturnedWindowRefreshesBucketOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		returnWindow func(*centralQueueLease, time.Time) error
+		deriveKey    bool
+	}{
+		{name: "defer ready", returnWindow: (*centralQueueLease).deferReady},
+		{name: "defer ready with derived key", returnWindow: (*centralQueueLease).deferReady, deriveKey: true},
+		{name: "requeue", returnWindow: (*centralQueueLease).requeue},
+		{name: "requeue with derived key", returnWindow: (*centralQueueLease).requeue, deriveKey: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const items = 64
+			q := newCentralQueue(centralQueueSettings{
+				maxCompressedBytes:           items,
+				maxInflightUncompressedBytes: items,
+				maxUncompressedBatchBytes:    items,
+				targetCompressedBytes:        items,
+			})
+			now := time.Unix(10, 0)
+			for range items {
+				require.NoError(t, q.enqueueAt(centralQueueItem{
+					signal:            signalKindLogs,
+					routingKey:        []byte("hot-lane"),
+					compressedBytes:   1,
+					uncompressedBytes: 1,
+					count:             1,
+				}, now))
+			}
+
+			lease, err := q.tryLease(now)
+			require.NoError(t, err)
+			require.NotNil(t, lease)
+			require.Len(t, lease.window.items, items)
+			if tc.deriveKey {
+				for i := range lease.window.items {
+					lease.window.items[i].routingKeyID = ""
+				}
+			}
+			readySequence := q.readySequence
+			require.NoError(t, tc.returnWindow(lease, now))
+			require.EqualValues(t, 1, q.readySequence-readySequence)
+			require.Equal(t, items, q.len())
+			require.EqualValues(t, items, q.compressedBytes())
+			require.Zero(t, q.inflightUncompressedBytes())
+		})
+	}
+}
+
+func TestCentralQueueDeferReadyKeepsWindowAndDeadline(t *testing.T) {
+	const items = 8
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           items,
+		maxInflightUncompressedBytes: items,
+		maxUncompressedBatchBytes:    items,
+		targetCompressedBytes:        items,
+	})
+	now := time.Unix(10, 0)
+	for range items {
+		require.NoError(t, q.enqueueAt(centralQueueItem{
+			signal:            signalKindLogs,
+			routingKey:        []byte("hot-lane"),
+			compressedBytes:   1,
+			uncompressedBytes: 1,
+			count:             1,
+		}, now))
+	}
+
+	lease, err := q.tryLease(now)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.NoError(t, lease.deferReady(now))
+
+	lease, err = q.tryLease(now.Add(centralQueueLeasePollInterval - time.Nanosecond))
+	require.NoError(t, err)
+	require.Nil(t, lease)
+
+	lease, err = q.tryLease(now.Add(centralQueueLeasePollInterval))
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.Len(t, lease.window.items, items)
+	lease.done()
+	require.Zero(t, q.len())
+	require.Zero(t, q.compressedBytes())
+}
+
+func TestCentralQueueReturnedMixedWindowKeepsRoutingBuckets(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		returnWindow func(*centralQueueLease, time.Time) error
+	}{
+		{name: "defer ready", returnWindow: (*centralQueueLease).deferReady},
+		{name: "requeue", returnWindow: (*centralQueueLease).requeue},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := newCentralQueue(centralQueueSettings{
+				maxCompressedBytes:           3,
+				maxInflightUncompressedBytes: 3,
+				maxUncompressedBatchBytes:    3,
+				targetCompressedBytes:        3,
+			})
+			now := time.Unix(10, 0)
+			q.currentCompressedBytes = 3
+			q.currentInflightBytes = 3
+			item := func(key string) centralQueueItem {
+				return centralQueueItem{
+					signal:             signalKindLogs,
+					routingKey:         []byte(key),
+					routingKeyID:       key,
+					compressedBytes:    1,
+					uncompressedBytes:  1,
+					count:              1,
+					enqueuedAtUnixNano: now.UnixNano(),
+				}
+			}
+			lease := &centralQueueLease{
+				queue: q,
+				window: centralQueueWindow{
+					items:             []centralQueueItem{item("lane-a"), item("lane-b"), item("lane-a")},
+					compressedBytes:   3,
+					uncompressedBytes: 3,
+				},
+			}
+
+			require.NoError(t, tc.returnWindow(lease, now))
+			aBucket := q.bucketsByKey["lane-a"]
+			bBucket := q.bucketsByKey["lane-b"]
+			require.Len(t, aBucket.items, 2)
+			require.Len(t, bBucket.items, 1)
+			require.Greater(t, aBucket.readySequence, bBucket.readySequence)
+			for _, bucket := range []*centralQueueBucket{aBucket, bBucket} {
+				require.GreaterOrEqual(t, bucket.readyHeapIndex, 0)
+				require.Greater(t, bucket.readyAtUnixNano, now.UnixNano())
+			}
+			require.Equal(t, 3, q.len())
+			require.EqualValues(t, 3, q.compressedBytes())
+			require.Zero(t, q.inflightUncompressedBytes())
+
+			readyAt := now.Add(centralQueueRetryDelayUpperBound(0))
+			first, err := q.tryLease(readyAt)
+			require.NoError(t, err)
+			require.NotNil(t, first)
+			second, err := q.tryLease(readyAt)
+			require.NoError(t, err)
+			require.NotNil(t, second)
+			require.ElementsMatch(t, []string{"lane-a", "lane-b"}, []string{
+				string(first.window.routingKey), string(second.window.routingKey),
+			})
+			require.Equal(t, 3, len(first.window.items)+len(second.window.items))
+			first.done()
+			second.done()
+			require.Zero(t, q.len())
+			require.Zero(t, q.compressedBytes())
+		})
+	}
+}
+
 func TestCentralQueueRequeueUsesPerItemRetryDelay(t *testing.T) {
 	q := newCentralQueue(centralQueueSettings{
 		maxCompressedBytes:           100,

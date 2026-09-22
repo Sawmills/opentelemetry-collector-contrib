@@ -584,11 +584,16 @@ func (q *centralQueue) splitFallbackByStaleness(candidates []centralQueueWindowC
 	return stale, fresh
 }
 
-func (q *centralQueue) bucketForItemLocked(item centralQueueItem) *centralQueueBucket {
+func centralQueueBucketKey(item centralQueueItem) string {
 	key := item.routingKeyID
 	if key == "" && len(item.routingKey) > 0 {
 		key = string(item.routingKey)
 	}
+	return key
+}
+
+func (q *centralQueue) bucketForItemLocked(item centralQueueItem) *centralQueueBucket {
+	key := centralQueueBucketKey(item)
 	bucket := q.bucketsByKey[key]
 	if bucket != nil {
 		return bucket
@@ -964,16 +969,26 @@ func (l *centralQueueLease) requeue(now time.Time) error {
 			l.queue.currentCompressedBytes -= int64(l.window.compressedBytes)
 			err = errCentralQueueStopped
 		} else {
+			// Leased windows currently come from one bucket. Refresh a prior
+			// bucket if a future window contains more than one routing key.
+			var bucket *centralQueueBucket
 			for i := range l.window.items {
 				item := l.window.items[i]
 				nextAttempt := now.Add(centralQueueRetryDelayWithJitter(item))
 				item.attempt++
 				item.nextAttemptUnixNano = nextAttempt.UnixNano()
-				bucket := l.queue.bucketForItemLocked(item)
+				if bucket == nil {
+					bucket = l.queue.bucketForItemLocked(item)
+				} else if centralQueueBucketKey(item) != bucket.routingKeyID {
+					l.queue.updateReadyBucketLocked(bucket, now.UnixNano())
+					bucket = l.queue.bucketForItemLocked(item)
+				}
 				bucket.append(item)
 				l.queue.itemCount++
-				l.queue.updateReadyBucketLocked(bucket, now.UnixNano())
 				l.queue.trackOldestEnqueuedAtLocked(item)
+			}
+			if bucket != nil {
+				l.queue.updateReadyBucketLocked(bucket, now.UnixNano())
 			}
 		}
 		snapshot := l.queue.snapshotLocked()
@@ -993,15 +1008,25 @@ func (l *centralQueueLease) deferReady(now time.Time) error {
 			l.queue.currentCompressedBytes -= int64(l.window.compressedBytes)
 			err = errCentralQueueStopped
 		} else {
+			// Leased windows currently come from one bucket. Refresh a prior
+			// bucket if a future window contains more than one routing key.
+			var bucket *centralQueueBucket
 			nextAttemptUnixNano := now.Add(centralQueueLeasePollInterval).UnixNano()
 			for i := range l.window.items {
 				item := l.window.items[i]
 				item.nextAttemptUnixNano = nextAttemptUnixNano
-				bucket := l.queue.bucketForItemLocked(item)
+				if bucket == nil {
+					bucket = l.queue.bucketForItemLocked(item)
+				} else if centralQueueBucketKey(item) != bucket.routingKeyID {
+					l.queue.updateReadyBucketLocked(bucket, now.UnixNano())
+					bucket = l.queue.bucketForItemLocked(item)
+				}
 				bucket.append(item)
 				l.queue.itemCount++
-				l.queue.updateReadyBucketLocked(bucket, now.UnixNano())
 				l.queue.trackOldestEnqueuedAtLocked(item)
+			}
+			if bucket != nil {
+				l.queue.updateReadyBucketLocked(bucket, now.UnixNano())
 			}
 		}
 		snapshot := l.queue.snapshotLocked()
