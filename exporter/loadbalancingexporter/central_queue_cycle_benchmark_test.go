@@ -193,7 +193,7 @@ func BenchmarkCentralQueueRetainedHeap(b *testing.B) {
 			lease.done()
 			leases[lane] = nil
 		}
-		if q.len() != 0 || q.compressedBytes() != 0 {
+		if q.len() != 0 || q.compressedBytes() != 0 || q.inflightUncompressedBytes() != 0 {
 			b.Fatal("queue was not empty after completion")
 		}
 	}
