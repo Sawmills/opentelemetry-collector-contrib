@@ -15,7 +15,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awss3receiver/internal/metadata"
 )
 
 // S3 event notification structure from AWS
@@ -67,9 +72,10 @@ type s3SQSNotificationReader struct {
 	maxNumberOfMessages     int32
 	waitTimeSeconds         int32
 	tagObjectAfterIngestion bool
+	telemetry               *metadata.TelemetryBuilder
 }
 
-func newS3SQSReader(ctx context.Context, logger *zap.Logger, cfg *Config) (*s3SQSNotificationReader, error) {
+func newS3SQSReader(ctx context.Context, logger *zap.Logger, cfg *Config, telemetry *metadata.TelemetryBuilder) (*s3SQSNotificationReader, error) {
 	if cfg.SQS == nil {
 		return nil, errors.New("SQS configuration is required")
 	}
@@ -105,6 +111,7 @@ func newS3SQSReader(ctx context.Context, logger *zap.Logger, cfg *Config) (*s3SQ
 		maxNumberOfMessages:     maxMessages,
 		waitTimeSeconds:         waitTime,
 		tagObjectAfterIngestion: cfg.S3Downloader.TagObjectAfterIngestion,
+		telemetry:               telemetry,
 	}, nil
 }
 
@@ -152,17 +159,22 @@ func (r *s3SQSNotificationReader) readAll(ctx context.Context, _ string, callbac
 					var snsMsg snsMessage
 
 					if err = json.Unmarshal([]byte(messageBody), &snsMsg); err != nil {
-						r.logger.Warn("Failed to parse message as SNS notification", zap.Error(err))
+						r.dropMessage(ctx, message, "invalid_json", zap.Error(err))
 						continue
 					}
 
 					if snsMsg.Type != "Notification" {
-						r.logger.Warn("Message is not a valid S3 notification", zap.String("type", snsMsg.Type))
+						r.dropMessage(ctx, message, "not_s3_notification", zap.String("type", snsMsg.Type))
 						continue
 					}
 
 					if err = json.Unmarshal([]byte(snsMsg.Message), &s3Event); err != nil {
-						r.logger.Warn("Failed to parse S3 event from SNS message", zap.Error(err))
+						r.dropMessage(ctx, message, "invalid_sns_message", zap.Error(err))
+						continue
+					}
+
+					if len(s3Event.Records) == 0 && s3Event.Event != "s3:TestEvent" {
+						r.dropMessage(ctx, message, "invalid_sns_message", zap.String("detail", "SNS message holds no S3 event records"))
 						continue
 					}
 				}
@@ -170,6 +182,8 @@ func (r *s3SQSNotificationReader) readAll(ctx context.Context, _ string, callbac
 				// Track whether all records were successfully processed.
 				// Only delete the message if all records succeed to prevent data loss.
 				allRecordsSucceeded := true
+				// Count dropped objects only once the message leaves the queue, so a retried message is not counted twice.
+				var droppedObjectReasons []string
 
 				// Process each S3 object notification
 				for _, record := range s3Event.Records {
@@ -221,6 +235,16 @@ func (r *s3SQSNotificationReader) readAll(ctx context.Context, _ string, callbac
 					}
 
 					err = callback(ctx, decodedKey, content)
+					var undecodable *undecodableObjectError
+					if errors.As(err, &undecodable) {
+						r.logger.Warn("Dropping S3 object that cannot be decoded",
+							zap.String("bucket", bucket),
+							zap.String("key", decodedKey),
+							zap.String("reason", undecodable.reason),
+							zap.Error(err))
+						droppedObjectReasons = append(droppedObjectReasons, undecodable.reason)
+						continue
+					}
 					if err != nil {
 						r.logger.Error("Failed to process S3 object content",
 							zap.String("key", decodedKey),
@@ -248,12 +272,11 @@ func (r *s3SQSNotificationReader) readAll(ctx context.Context, _ string, callbac
 				// Only delete the message if all records were successfully processed.
 				// If any record failed, leave the message in the queue for retry.
 				if allRecordsSucceeded {
-					_, err = r.sqsClient.DeleteMessage(ctx, &sqs.DeleteMessageInput{
-						QueueUrl:      aws.String(r.queueURL),
-						ReceiptHandle: message.ReceiptHandle,
-					})
-					if err != nil {
-						r.logger.Warn("Failed to delete message from SQS queue", zap.Error(err))
+					if r.deleteMessage(ctx, message) {
+						for _, reason := range droppedObjectReasons {
+							r.telemetry.ReceiverAwss3ObjectsDropped.Add(ctx, 1,
+								metric.WithAttributes(attribute.String("reason", reason)))
+						}
 					}
 				} else {
 					r.logger.Warn("Message not deleted due to processing failures, will be retried after visibility timeout",
@@ -261,5 +284,31 @@ func (r *s3SQSNotificationReader) readAll(ctx context.Context, _ string, callbac
 				}
 			}
 		}
+	}
+}
+
+// deleteMessage removes a message from the queue and reports whether it succeeded.
+func (r *s3SQSNotificationReader) deleteMessage(ctx context.Context, message sqstypes.Message) bool {
+	_, err := r.sqsClient.DeleteMessage(ctx, &sqs.DeleteMessageInput{
+		QueueUrl:      aws.String(r.queueURL),
+		ReceiptHandle: message.ReceiptHandle,
+	})
+	if err != nil {
+		r.logger.Warn("Failed to delete message from SQS queue", zap.Error(err))
+		return false
+	}
+	return true
+}
+
+// dropMessage deletes a message that is not a readable S3 event notification.
+// A retry cannot make such a message readable, so keeping it would only loop it through the queue.
+func (r *s3SQSNotificationReader) dropMessage(ctx context.Context, message sqstypes.Message, reason string, detail zap.Field) {
+	r.logger.Warn("Deleting SQS message that is not a readable S3 event notification",
+		zap.String("reason", reason),
+		zap.Stringp("messageID", message.MessageId),
+		detail)
+	if r.deleteMessage(ctx, message) {
+		r.telemetry.ReceiverAwss3SqsMessagesDropped.Add(ctx, 1,
+			metric.WithAttributes(attribute.String("reason", reason)))
 	}
 }

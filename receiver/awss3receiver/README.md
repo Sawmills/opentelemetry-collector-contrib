@@ -71,6 +71,13 @@ sqs:
 ```
 
 **Note:** You must configure your S3 bucket to send event notifications to the SQS queue.
+
+The receiver deletes an SQS message when it cannot succeed on a retry:
+
+- The message is not valid JSON, is not an S3 event notification or an SNS notification, or holds an SNS payload that is not an S3 event. The `otelcol_receiver_awss3_sqs_messages_dropped` counter records these with the `reason` label `invalid_json`, `not_s3_notification`, or `invalid_sns_message`.
+- The S3 object content cannot be decompressed or decoded. The receiver drops that object and still deletes the message. The `otelcol_receiver_awss3_objects_dropped` counter records these with the `reason` label `decompress_failed` or `decode_failed`.
+
+The receiver keeps the message for a retry when it cannot download the object or when the next consumer returns an error. The receiver never deletes S3 objects.
 Time-based configuration (`starttime`/`endtime`) and SQS configuration cannot be used together.
 
 ### Time format for `starttime` and `endtime`

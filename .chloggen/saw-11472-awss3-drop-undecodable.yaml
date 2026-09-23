@@ -1,0 +1,5 @@
+change_type: enhancement
+component: receiver/awss3
+note: Delete SQS messages that are not readable S3 event notifications or whose S3 object cannot be decoded, and count them with `otelcol_receiver_awss3_sqs_messages_dropped` and `otelcol_receiver_awss3_objects_dropped`.
+issues: [11472]
+change_logs: [user]
