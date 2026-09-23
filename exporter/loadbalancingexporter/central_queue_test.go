@@ -211,6 +211,7 @@ func TestCentralQueueTryLeaseWithAcquireSucceedsWhenConsumersAvailable(t *testin
 	lease, err := q.tryLeaseWithAcquire(now, func(queueCompressedBytes int64, window centralQueueWindow) (func(), bool) {
 		require.EqualValues(t, 10, queueCompressedBytes)
 		require.Equal(t, []byte("lane-a"), window.routingKey)
+		require.Empty(t, window.items)
 		return func() {}, true
 	})
 
@@ -747,7 +748,7 @@ func TestCentralQueueMaterializeAndRemoveWindowKeepsSparseIndexSurvivors(t *test
 		bucket:  q.buckets[0],
 		indexes: []int{1, 3},
 	}
-	materializeWindowCandidateItemsLocked(&candidate)
+	materializeWindowCandidateItemsLocked(&candidate, nil)
 	q.removeWindowFromBucketLocked(candidate.bucket, candidate.indexes, false)
 	remainingItems := q.queuedItemsLocked()
 	q.mu.Unlock()
@@ -2001,7 +2002,7 @@ func centralQueuePayloadStrings(items []centralQueueItem) []string {
 
 func materializeCentralQueueCandidatesLocked(candidates []centralQueueWindowCandidate) {
 	for i := range candidates {
-		materializeWindowCandidateItemsLocked(&candidates[i])
+		materializeWindowCandidateItemsLocked(&candidates[i], nil)
 	}
 }
 
@@ -2069,4 +2070,153 @@ func requireCentralQueueReadyWindows(t *testing.T, q *centralQueue, expected int
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	require.Len(t, q.ready, expected)
+}
+
+func TestCentralQueueWindowItemsReleasedAfterTerminalLease(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		terminal func(*centralQueueLease, time.Time) error
+		stop     bool
+	}{
+		{name: "done", terminal: func(l *centralQueueLease, _ time.Time) error { l.done(); return nil }},
+		{name: "defer", terminal: (*centralQueueLease).deferReady},
+		{name: "requeue", terminal: (*centralQueueLease).requeue},
+		{name: "stopped requeue", terminal: (*centralQueueLease).requeue, stop: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := newCentralQueue(centralQueueSettings{
+				maxCompressedBytes: 1, maxInflightUncompressedBytes: 1,
+				maxUncompressedBatchBytes: 1, targetCompressedBytes: 1,
+			})
+			now := time.Unix(10, 0)
+			require.NoError(t, q.enqueueAt(centralQueueItem{
+				signal: signalKindLogs, routingKey: []byte("lane"), payload: []byte("payload"),
+				compressedBytes: 1, uncompressedBytes: 1, count: 1,
+			}, now))
+			lease, err := q.tryLease(now)
+			require.NoError(t, err)
+			require.NotNil(t, lease)
+			items := lease.window.items
+			if tc.stop {
+				q.stop()
+			}
+			err = tc.terminal(lease, now)
+			if tc.stop {
+				require.ErrorIs(t, err, errCentralQueueStopped)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Empty(t, lease.window.items)
+			require.Empty(t, lease.item.payload)
+			for _, item := range items[:cap(items)] {
+				require.Equal(t, centralQueueItem{}, item)
+			}
+			if tc.name == "defer" || tc.name == "requeue" {
+				require.Equal(t, "payload", string(q.bucketsByKey["lane"].items[0].payload))
+			}
+		})
+	}
+}
+
+func TestCentralQueueWindowItemsReuseOnlyAfterLeaseCompletion(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes: 3, maxInflightUncompressedBytes: 3,
+		maxUncompressedBatchBytes: 1, targetCompressedBytes: 1, maxReadyWindows: 2,
+	})
+	now := time.Unix(10, 0)
+	enqueue := func(key string) {
+		t.Helper()
+		require.NoError(t, q.enqueueAt(centralQueueItem{
+			signal: signalKindLogs, routingKey: []byte(key), payload: []byte(key),
+			compressedBytes: 1, uncompressedBytes: 1, count: 1,
+		}, now))
+	}
+	enqueue("first")
+	enqueue("second")
+	first, err := q.tryLease(now)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	second, err := q.tryLease(now)
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	firstItems := first.window.items
+	secondItems := second.window.items
+	require.NotSame(t, &firstItems[0], &secondItems[0])
+	second.done()
+	enqueue("third")
+	third, err := q.tryLease(now)
+	require.NoError(t, err)
+	require.NotNil(t, third)
+	require.Same(t, &secondItems[0], &third.window.items[0])
+	require.Equal(t, "first", string(firstItems[0].payload))
+	require.Equal(t, "third", string(third.window.items[0].payload))
+	third.done()
+	first.done()
+}
+
+func TestCentralQueueWindowItemsCacheBounds(t *testing.T) {
+	const windows = centralQueueMaxCachedWindowBuffers + 4
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes: windows, maxInflightUncompressedBytes: windows,
+		maxUncompressedBatchBytes: 1, targetCompressedBytes: 1, maxReadyWindows: windows,
+	})
+	now := time.Unix(10, 0)
+	for i := range windows {
+		key := fmt.Sprintf("lane-%d", i)
+		require.NoError(t, q.enqueueAt(centralQueueItem{
+			signal: signalKindLogs, routingKey: []byte(key), payload: []byte(key),
+			compressedBytes: 1, uncompressedBytes: 1, count: 1,
+		}, now))
+	}
+	leases := make([]*centralQueueLease, 0, windows)
+	for range windows {
+		lease, err := q.tryLease(now)
+		require.NoError(t, err)
+		require.NotNil(t, lease)
+		leases = append(leases, lease)
+	}
+	for _, lease := range leases {
+		lease.done()
+	}
+	require.Len(t, q.cachedWindowItems, centralQueueMaxCachedWindowBuffers)
+	for _, items := range q.cachedWindowItems {
+		require.LessOrEqual(t, cap(items), centralQueueMaxCachedWindowItems)
+	}
+	largeLease := &centralQueueLease{
+		queue: q, itemsReusable: true,
+		window: centralQueueWindow{items: make([]centralQueueItem, centralQueueMaxCachedWindowItems)},
+	}
+	q.mu.Lock()
+	q.releaseWindowItemsLocked(largeLease)
+	q.mu.Unlock()
+	require.Len(t, q.cachedWindowItems, centralQueueMaxCachedWindowBuffers)
+	largeBuffers := 0
+	for _, items := range q.cachedWindowItems {
+		if cap(items) == centralQueueMaxCachedWindowItems {
+			largeBuffers++
+		}
+	}
+	require.Equal(t, 1, largeBuffers)
+
+	const oversized = centralQueueMaxCachedWindowItems + 1
+	large := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes: oversized, maxInflightUncompressedBytes: oversized,
+		maxUncompressedBatchBytes: oversized, targetCompressedBytes: oversized,
+	})
+	for range oversized {
+		require.NoError(t, large.enqueueAt(centralQueueItem{
+			signal: signalKindLogs, routingKey: []byte("large"), payload: []byte("payload"),
+			compressedBytes: 1, uncompressedBytes: 1, count: 1,
+		}, now))
+	}
+	lease, err := large.tryLease(now)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	items := lease.window.items
+	require.Len(t, items, oversized)
+	lease.done()
+	require.Empty(t, large.cachedWindowItems)
+	for _, item := range items[:cap(items)] {
+		require.Equal(t, centralQueueItem{}, item)
+	}
 }

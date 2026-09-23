@@ -17,6 +17,11 @@ import (
 
 const centralQueueLeasePollInterval = 10 * time.Millisecond
 const (
+	centralQueueMaxCachedWindowItems   = 256
+	centralQueueMaxCachedWindowBuffers = 8
+)
+
+const (
 	centralQueueLeaseFallbackInitialDelay = 50 * time.Millisecond
 	centralQueueLeaseFallbackMaxDelay     = time.Second
 )
@@ -62,16 +67,17 @@ type centralQueueSettings struct {
 type centralQueue struct {
 	settings centralQueueSettings
 
-	mu            sync.Mutex
-	buckets       []*centralQueueBucket
-	bucketsByKey  map[string]*centralQueueBucket
-	readyBuckets  centralQueueReadyHeap
-	readySequence int64
-	itemCount     int
-	stopped       bool
-	draining      bool
-	ready         []centralQueueWindow
-	notify        chan struct{}
+	mu                sync.Mutex
+	buckets           []*centralQueueBucket
+	bucketsByKey      map[string]*centralQueueBucket
+	readyBuckets      centralQueueReadyHeap
+	readySequence     int64
+	itemCount         int
+	stopped           bool
+	draining          bool
+	ready             []centralQueueWindow
+	cachedWindowItems [][]centralQueueItem
+	notify            chan struct{}
 
 	currentCompressedBytes int64
 	currentInflightBytes   int64
@@ -84,6 +90,7 @@ type centralQueueLease struct {
 	queue               *centralQueue
 	window              centralQueueWindow
 	item                centralQueueItem
+	itemsReusable       bool
 	once                sync.Once
 	consumerRelease     func()
 	consumerReleaseOnce sync.Once
@@ -386,6 +393,9 @@ func (q *centralQueue) tryLeaseWithAcquire(now time.Time, acquire centralQueueLe
 		queueCompressedBytes := q.currentCompressedBytes
 		selectedWindow := q.ready[0]
 		selectedWindow.routingKey = append([]byte(nil), selectedWindow.routingKey...)
+		// The callback only needs window metadata. Do not expose the item
+		// buffer while another consumer may lease and release this window.
+		selectedWindow.items = nil
 		q.mu.Unlock()
 
 		release, acquired := acquire(queueCompressedBytes, selectedWindow)
@@ -825,7 +835,7 @@ func (q *centralQueue) scheduleReadyWindowCandidatesLocked(candidates []centralQ
 
 	for i := range selected {
 		candidate := &selected[i]
-		materializeWindowCandidateItemsLocked(candidate)
+		materializeWindowCandidateItemsLocked(candidate, q.takeWindowItemsLocked(len(candidate.indexes)))
 		q.ready = append(q.ready, candidate.window)
 		q.currentInflightBytes += int64(candidate.window.uncompressedBytes)
 	}
@@ -859,10 +869,66 @@ func appendCentralQueueWindowItemStats(window *centralQueueWindow, item *central
 	}
 }
 
-func materializeWindowCandidateItemsLocked(candidate *centralQueueWindowCandidate) {
-	candidate.window.items = make([]centralQueueItem, 0, len(candidate.indexes))
+func materializeWindowCandidateItemsLocked(candidate *centralQueueWindowCandidate, items []centralQueueItem) {
+	if cap(items) < len(candidate.indexes) {
+		items = make([]centralQueueItem, 0, len(candidate.indexes))
+	} else {
+		items = items[:0]
+	}
+	candidate.window.items = items
 	for _, index := range candidate.indexes {
 		candidate.window.items = append(candidate.window.items, candidate.bucket.items[index])
+	}
+}
+
+// The queue lock protects the cache. A ready window and a live lease retain
+// exclusive ownership of their item buffers until a terminal lease call.
+func (q *centralQueue) takeWindowItemsLocked(minCapacity int) []centralQueueItem {
+	best := -1
+	for i, items := range q.cachedWindowItems {
+		if cap(items) >= minCapacity && (best == -1 || cap(items) < cap(q.cachedWindowItems[best])) {
+			best = i
+		}
+	}
+	if best == -1 {
+		return nil
+	}
+	items := q.cachedWindowItems[best]
+	last := len(q.cachedWindowItems) - 1
+	q.cachedWindowItems[best] = q.cachedWindowItems[last]
+	q.cachedWindowItems[last] = nil
+	q.cachedWindowItems = q.cachedWindowItems[:last]
+	return items
+}
+
+func (q *centralQueue) releaseWindowItemsLocked(lease *centralQueueLease) {
+	if !lease.itemsReusable {
+		return
+	}
+	items := lease.window.items
+	clear(items[:cap(items)])
+	lease.window.items = nil
+	lease.window.routingKey = nil
+	lease.itemsReusable = false
+	lease.item = centralQueueItem{}
+	if q.stopped || cap(items) > centralQueueMaxCachedWindowItems {
+		return
+	}
+	items = items[:0]
+	if len(q.cachedWindowItems) < min(q.settings.maxReadyWindows, centralQueueMaxCachedWindowBuffers) {
+		q.cachedWindowItems = append(q.cachedWindowItems, items)
+		return
+	}
+	// Keep larger buffers when the cache is full. They avoid the most bytes
+	// per future materialization, while small windows remain cheap to allocate.
+	smallest := 0
+	for i := 1; i < len(q.cachedWindowItems); i++ {
+		if cap(q.cachedWindowItems[i]) < cap(q.cachedWindowItems[smallest]) {
+			smallest = i
+		}
+	}
+	if cap(items) > cap(q.cachedWindowItems[smallest]) {
+		q.cachedWindowItems[smallest] = items
 	}
 }
 
@@ -896,8 +962,9 @@ func (q *centralQueue) leaseReadyWindowLocked() *centralQueueLease {
 	q.settings.telemetry.record(context.Background(), snapshot)
 	q.settings.telemetry.recordWindow(context.Background(), window, q.settings.targetCompressedBytes)
 	lease := &centralQueueLease{
-		queue:  q,
-		window: window,
+		queue:         q,
+		window:        window,
+		itemsReusable: true,
 	}
 	if len(window.items) > 0 {
 		lease.item = window.items[0]
@@ -944,6 +1011,7 @@ func (l *centralQueueLease) done() {
 		l.queue.mu.Lock()
 		l.queue.currentInflightBytes -= int64(l.window.uncompressedBytes)
 		l.queue.currentCompressedBytes -= int64(l.window.compressedBytes)
+		l.queue.releaseWindowItemsLocked(l)
 		snapshot := l.queue.snapshotLocked()
 		l.queue.mu.Unlock()
 		l.queue.notifyLeaseWaiters()
@@ -991,6 +1059,7 @@ func (l *centralQueueLease) requeue(now time.Time) error {
 				l.queue.updateReadyBucketLocked(bucket, now.UnixNano())
 			}
 		}
+		l.queue.releaseWindowItemsLocked(l)
 		snapshot := l.queue.snapshotLocked()
 		l.queue.mu.Unlock()
 		l.queue.notifyLeaseWaiters()
@@ -1029,6 +1098,7 @@ func (l *centralQueueLease) deferReady(now time.Time) error {
 				l.queue.updateReadyBucketLocked(bucket, now.UnixNano())
 			}
 		}
+		l.queue.releaseWindowItemsLocked(l)
 		snapshot := l.queue.snapshotLocked()
 		l.queue.mu.Unlock()
 		l.queue.notifyLeaseWaiters()
@@ -1040,6 +1110,7 @@ func (l *centralQueueLease) deferReady(now time.Time) error {
 func (q *centralQueue) stop() {
 	q.mu.Lock()
 	q.stopped = true
+	q.cachedWindowItems = nil
 	nowUnixNano := time.Now().UnixNano()
 	for _, bucket := range q.buckets {
 		q.updateReadyBucketLocked(bucket, nowUnixNano)
