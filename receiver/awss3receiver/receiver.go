@@ -213,8 +213,7 @@ func (r *traceReceiver) processReceivedData(ctx context.Context, rcvr *awss3Rece
 		}
 	}
 	if unmarshaler == nil {
-		rcvr.logger.Warn("Unsupported file format", zap.String("key", key))
-		return nil
+		return &undecodableObjectError{reason: "unsupported_format", err: fmt.Errorf("no decoder matches key %q", key)}
 	}
 	rcvr.logger.Debug("Processing trace file", zap.String("key", key), zap.String("format", format))
 	traces, err := unmarshaler.UnmarshalTraces(data)
@@ -255,8 +254,7 @@ func (r *metricsReceiver) processReceivedData(ctx context.Context, rcvr *awss3Re
 		}
 	}
 	if unmarshaler == nil {
-		rcvr.logger.Warn("Unsupported file format", zap.String("key", key))
-		return nil
+		return &undecodableObjectError{reason: "unsupported_format", err: fmt.Errorf("no decoder matches key %q", key)}
 	}
 	rcvr.logger.Debug("Processing metric file", zap.String("key", key), zap.String("format", format))
 	metrics, err := unmarshaler.UnmarshalMetrics(data)
@@ -297,8 +295,7 @@ func (r *logsReceiver) processReceivedData(ctx context.Context, rcvr *awss3Recei
 		}
 	}
 	if unmarshaler == nil {
-		rcvr.logger.Warn("Unsupported file format", zap.String("key", key))
-		return nil
+		return &undecodableObjectError{reason: "unsupported_format", err: fmt.Errorf("no decoder matches key %q", key)}
 	}
 	rcvr.logger.Debug("Processing log file", zap.String("key", key), zap.String("format", format))
 	logs, err := unmarshaler.UnmarshalLogs(data)

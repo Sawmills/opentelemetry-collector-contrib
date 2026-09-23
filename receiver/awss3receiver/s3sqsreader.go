@@ -159,7 +159,11 @@ func (r *s3SQSNotificationReader) readAll(ctx context.Context, _ string, callbac
 					var snsMsg snsMessage
 
 					if err = json.Unmarshal([]byte(messageBody), &snsMsg); err != nil {
-						r.dropMessage(ctx, message, "invalid_json", zap.Error(err))
+						reason := "invalid_json"
+						if json.Valid([]byte(messageBody)) {
+							reason = "not_s3_notification"
+						}
+						r.dropMessage(ctx, message, reason, zap.Error(err))
 						continue
 					}
 

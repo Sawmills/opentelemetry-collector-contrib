@@ -62,9 +62,10 @@ func receiveOnce(mockSQS *mockSQSClient, messages ...types.Message) {
 	mockSQS.On("ReceiveMessage", mock.Anything, mock.Anything).Return(
 		&sqs.ReceiveMessageOutput{Messages: messages}, nil,
 	).Once()
-	mockSQS.On("ReceiveMessage", mock.Anything, mock.Anything).Return(
-		&sqs.ReceiveMessageOutput{Messages: []types.Message{}}, nil,
-	)
+	// Later polls block until the test context ends, as SQS long polling would, instead of spinning.
+	mockSQS.On("ReceiveMessage", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		<-args.Get(0).(context.Context).Done()
+	}).Return(&sqs.ReceiveMessageOutput{Messages: []types.Message{}}, nil)
 }
 
 func expectDelete(mockSQS *mockSQSClient, receiptHandle string) {
@@ -100,6 +101,7 @@ func TestS3SQSReader_DeletesUnreadableMessages(t *testing.T) {
 		reason string
 	}{
 		{name: "not json", body: "plain text", reason: "invalid_json"},
+		{name: "json array", body: "[]", reason: "not_s3_notification"},
 		{name: "eventbridge event", body: `{"version":"0","detail-type":"Object Created","source":"aws.s3"}`, reason: "not_s3_notification"},
 		{name: "sns with bad payload", body: string(snsWithBadPayload), reason: "invalid_sns_message"},
 		{name: "sns without s3 records", body: `{"Type":"Notification","Message":"{}"}`, reason: "invalid_sns_message"},
@@ -263,4 +265,22 @@ func TestS3SQSReader_CountsDroppedObjectsOnlyAfterDelete(t *testing.T) {
 		_, err := tt.GetMetric("otelcol_receiver_awss3_objects_dropped")
 		assert.Error(t, err, "an object whose message is retried must not count as dropped")
 	})
+}
+
+func TestS3SQSReader_DropsUnsupportedFormatObject(t *testing.T) {
+	tt := componenttest.NewTelemetry()
+	t.Cleanup(func() { require.NoError(t, tt.Shutdown(context.Background())) }) //nolint:usetesting
+	mockS3 := new(mockS3ClientSQS)
+	mockSQS := new(mockSQSClient)
+	receiveOnce(mockSQS, objectCreatedMessage(t, "unsupported", "logs/app.unknown"))
+	mockS3.On("GetObject", mock.Anything, mock.Anything).Return([]byte("anything"), nil)
+	expectDelete(mockSQS, "unsupported")
+
+	rcvr := newTestMetricsReceiver(t, consumertest.NewNop())
+	runReader(t, newDropTestReader(t, tt, mockS3, mockSQS), rcvr.receiveBytes)
+
+	mockSQS.AssertExpectations(t)
+	metadatatest.AssertEqualReceiverAwss3ObjectsDropped(t, tt,
+		[]metricdata.DataPoint[int64]{{Value: 1, Attributes: attribute.NewSet(attribute.String("reason", "unsupported_format"))}},
+		metricdatatest.IgnoreTimestamp())
 }

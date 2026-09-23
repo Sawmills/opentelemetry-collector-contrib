@@ -60,7 +60,7 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 	var err, errs error
 	builder.ReceiverAwss3ObjectsDropped, err = builder.meter.Int64Counter(
 		"otelcol_receiver_awss3_objects_dropped",
-		metric.WithDescription("Number of S3 objects dropped because their content cannot be decompressed or decoded. [Development]"),
+		metric.WithDescription("Number of S3 objects dropped because no decoder matches them or their content cannot be decompressed or decoded. [Development]"),
 		metric.WithUnit("{objects}"),
 	)
 	errs = errors.Join(errs, err)

@@ -168,7 +168,7 @@ func Test_receiveBytes_traces(t *testing.T) {
 				key:  "test.unknown",
 				data: []byte("unknown"),
 			},
-			wantErr:   false,
+			wantErr:   true,
 			wantTrace: false,
 		},
 		{
@@ -347,7 +347,7 @@ func Test_receiveBytes_metrics(t *testing.T) {
 				key:  "test.unknown",
 				data: []byte("unknown"),
 			},
-			wantErr:    false,
+			wantErr:    true,
 			wantMetric: false,
 		},
 		{
@@ -526,7 +526,7 @@ func Test_receiveBytes_logs(t *testing.T) {
 				key:  "test.unknown",
 				data: []byte("unknown"),
 			},
-			wantErr:    false,
+			wantErr:    true,
 			wantMetric: false,
 		},
 		{

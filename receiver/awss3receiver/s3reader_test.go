@@ -294,6 +294,54 @@ func Test_readTelemetryForTime(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func Test_readTelemetryForTime_SkipsUnsupportedFormat(t *testing.T) {
+	testKey1 := "year=2021/month=02/day=01/hour=17/minute=32/traces_1"
+	testKey2 := "year=2021/month=02/day=01/hour=17/minute=32/traces_2"
+	newReader := func() s3TimeBasedReader {
+		return s3TimeBasedReader{
+			listObjectsClient: mockListObjectsAPI(func(*s3.ListObjectsV2Input) ListObjectsV2Pager {
+				return &mockListObjectsV2Pager{
+					Pages: []*s3.ListObjectsV2Output{{Contents: []types.Object{{Key: &testKey1}, {Key: &testKey2}}}},
+				}
+			}),
+			singleObjectClient: &mockSingleObjectAPI{
+				getObjectFunc: func(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+					return &s3.GetObjectOutput{Body: io.NopCloser(bytes.NewReader([]byte("body")))}, nil
+				},
+			},
+			logger:                         zap.NewNop(),
+			s3Bucket:                       "bucket",
+			s3PartitionFormat:              s3PartitionFormatDefault,
+			S3PartitionTimeLocation:        time.UTC,
+			filePrefixIncludeTelemetryType: true,
+			startTime:                      testTime,
+			endTime:                        testTime.Add(time.Minute),
+		}
+	}
+
+	t.Run("unsupported format is skipped", func(t *testing.T) {
+		reader := newReader()
+		var keys []string
+		err := reader.readTelemetryForTime(t.Context(), testTime, "traces", func(_ context.Context, key string, _ []byte) error {
+			keys = append(keys, key)
+			if key == testKey1 {
+				return &undecodableObjectError{reason: "unsupported_format", err: errors.New("no decoder")}
+			}
+			return nil
+		})
+		require.NoError(t, err)
+		require.Equal(t, []string{testKey1, testKey2}, keys)
+	})
+
+	t.Run("decode failure stops the read", func(t *testing.T) {
+		reader := newReader()
+		err := reader.readTelemetryForTime(t.Context(), testTime, "traces", func(context.Context, string, []byte) error {
+			return &undecodableObjectError{reason: "decode_failed", err: errors.New("invalid character")}
+		})
+		require.ErrorContains(t, err, "invalid character")
+	})
+}
+
 func Test_readTelemetryForTime_GetObjectError(t *testing.T) {
 	testKey := "year=2021/month=02/day=01/hour=17/minute=32/traces_1"
 	testError := errors.New("test error")

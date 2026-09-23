@@ -20,7 +20,7 @@ attributes:
     name_override: reason
     description: Why the S3 object content was dropped.
     type: string
-    enum: [decompress_failed, decode_failed]
+    enum: [decompress_failed, decode_failed, unsupported_format]
   sqs_message_drop_reason:
     name_override: reason
     description: Why the SQS message was deleted without reading an S3 object.
@@ -30,7 +30,7 @@ attributes:
 telemetry:
   metrics:
     receiver_awss3_objects_dropped:
-      description: Number of S3 objects dropped because their content cannot be decompressed or decoded.
+      description: Number of S3 objects dropped because no decoder matches them or their content cannot be decompressed or decoded.
       stability: development
       unit: "{objects}"
       enabled: true

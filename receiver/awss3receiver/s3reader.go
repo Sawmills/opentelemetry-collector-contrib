@@ -5,6 +5,7 @@ package awss3receiver // import "github.com/open-telemetry/opentelemetry-collect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -153,7 +154,12 @@ func (s3Reader *s3TimeBasedReader) readTelemetryForTime(ctx context.Context, t t
 
 				s3Reader.logger.Debug("Retrieved telemetry", zap.String("key", *obj.Key))
 				if callbackErr := dataCallback(ctx, *obj.Key, data); callbackErr != nil {
-					return callbackErr
+					// An object with no matching decoder is skipped here, as before; any other failure stops the read.
+					var undecodable *undecodableObjectError
+					if !errors.As(callbackErr, &undecodable) || undecodable.reason != "unsupported_format" {
+						return callbackErr
+					}
+					s3Reader.logger.Warn("Unsupported file format", zap.String("key", *obj.Key))
 				}
 
 				if s3Reader.tagObjectAfterIngestion {

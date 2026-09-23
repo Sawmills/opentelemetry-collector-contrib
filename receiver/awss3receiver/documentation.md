@@ -8,7 +8,7 @@ The following telemetry is emitted by this component.
 
 ### otelcol_receiver_awss3_objects_dropped
 
-Number of S3 objects dropped because their content cannot be decompressed or decoded.
+Number of S3 objects dropped because no decoder matches them or their content cannot be decompressed or decoded.
 
 | Unit | Metric Type | Value Type | Monotonic | Stability |
 | ---- | ----------- | ---------- | --------- | --------- |
@@ -18,7 +18,7 @@ Number of S3 objects dropped because their content cannot be decompressed or dec
 
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
-| reason | Why the S3 object content was dropped. | Str: ``decompress_failed``, ``decode_failed`` | - |
+| reason | Why the S3 object content was dropped. | Str: ``decompress_failed``, ``decode_failed``, ``unsupported_format`` | - |
 
 ### otelcol_receiver_awss3_sqs_messages_dropped
 

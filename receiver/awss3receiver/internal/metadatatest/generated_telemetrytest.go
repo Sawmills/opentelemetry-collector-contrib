@@ -24,7 +24,7 @@ func NewSettings(tt *componenttest.Telemetry) receiver.Settings {
 func AssertEqualReceiverAwss3ObjectsDropped(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_receiver_awss3_objects_dropped",
-		Description: "Number of S3 objects dropped because their content cannot be decompressed or decoded. [Development]",
+		Description: "Number of S3 objects dropped because no decoder matches them or their content cannot be decompressed or decoded. [Development]",
 		Unit:        "{objects}",
 		Data: metricdata.Sum[int64]{
 			Temporality: metricdata.CumulativeTemporality,

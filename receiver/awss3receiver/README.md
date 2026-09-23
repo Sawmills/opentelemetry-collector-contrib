@@ -72,12 +72,17 @@ sqs:
 
 **Note:** You must configure your S3 bucket to send event notifications to the SQS queue.
 
-The receiver deletes an SQS message when it cannot succeed on a retry:
+The receiver handles each SQS message as follows:
 
-- The message is not valid JSON, is not an S3 event notification or an SNS notification, or holds an SNS payload that is not an S3 event. The `otelcol_receiver_awss3_sqs_messages_dropped` counter records these with the `reason` label `invalid_json`, `not_s3_notification`, or `invalid_sns_message`.
-- The S3 object content cannot be decompressed or decoded. The receiver drops that object and still deletes the message. The `otelcol_receiver_awss3_objects_dropped` counter records these with the `reason` label `decompress_failed` or `decode_failed`.
+- If the message is not valid JSON, it deletes the message. The `otelcol_receiver_awss3_sqs_messages_dropped` counter records it with `reason` `invalid_json`.
+- If the message is valid JSON but not an S3 event notification or an SNS notification, it deletes the message with `reason` `not_s3_notification`.
+- If an SNS notification does not hold an S3 event, it deletes the message with `reason` `invalid_sns_message`.
+- If no decoder matches an object, or its content cannot be decompressed or decoded, the receiver skips that object. The `otelcol_receiver_awss3_objects_dropped` counter records it with `reason` `unsupported_format`, `decompress_failed`, or `decode_failed`.
+- If an object download fails for a reason other than a missing object, or the next consumer returns an error, the receiver keeps the message for a retry. It keeps the whole message, including any object in it that it skipped.
+- If an object no longer exists (`NoSuchKey`), the receiver treats that record as done.
+- The receiver deletes a message when every record in it is done or skipped.
 
-The receiver keeps the message for a retry when it cannot download the object or when the next consumer returns an error. The receiver never deletes S3 objects.
+Both counters increase only after the SQS delete succeeds, so a message that stays in the queue is not counted. The receiver never deletes S3 objects.
 Time-based configuration (`starttime`/`endtime`) and SQS configuration cannot be used together.
 
 ### Time format for `starttime` and `endtime`
