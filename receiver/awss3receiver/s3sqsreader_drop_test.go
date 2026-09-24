@@ -105,6 +105,12 @@ func TestS3SQSReader_DeletesUnreadableMessages(t *testing.T) {
 		{name: "eventbridge event", body: `{"version":"0","detail-type":"Object Created","source":"aws.s3"}`, reason: "not_s3_notification"},
 		{name: "sns with bad payload", body: string(snsWithBadPayload), reason: "invalid_sns_message"},
 		{name: "sns without s3 records", body: `{"Type":"Notification","Message":"{}"}`, reason: "invalid_sns_message"},
+		{
+			// The direct parse fills Records before it fails on Event; the SNS payload must not reuse them.
+			name:   "sns without s3 records after partial direct parse",
+			body:   `{"Records":[{"eventSource":"aws:s3","eventName":"ObjectCreated:Put","s3":{"bucket":{"name":"test-bucket"},"object":{"key":"stale"}}}],"Event":5,"Type":"Notification","Message":"{}"}`,
+			reason: "invalid_sns_message",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

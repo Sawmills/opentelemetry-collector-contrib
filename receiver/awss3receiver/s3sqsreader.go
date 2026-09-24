@@ -172,15 +172,18 @@ func (r *s3SQSNotificationReader) readAll(ctx context.Context, _ string, callbac
 						continue
 					}
 
-					if err = json.Unmarshal([]byte(snsMsg.Message), &s3Event); err != nil {
+					// Decode into a new value: a failed direct parse can leave fields set on s3Event.
+					var snsEvent s3EventNotification
+					if err = json.Unmarshal([]byte(snsMsg.Message), &snsEvent); err != nil {
 						r.dropMessage(ctx, message, "invalid_sns_message", zap.Error(err))
 						continue
 					}
 
-					if len(s3Event.Records) == 0 && s3Event.Event != "s3:TestEvent" {
+					if len(snsEvent.Records) == 0 && snsEvent.Event != "s3:TestEvent" {
 						r.dropMessage(ctx, message, "invalid_sns_message", zap.String("detail", "SNS message holds no S3 event records"))
 						continue
 					}
+					s3Event = snsEvent
 				}
 
 				// Track whether all records were successfully processed.
