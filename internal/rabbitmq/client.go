@@ -131,7 +131,7 @@ func (c *connectionHolder) ReconnectIfUnhealthy() error {
 func (c *connectionHolder) connect() error {
 	c.logger.Debug("Connecting to rabbitmq")
 
-	connection, err := amqp.DialConfig(c.url, c.config)
+	connection, err := amqp.DialConfig(c.url, c.dialConfig())
 	if connection != nil {
 		c.connection = connection
 	}
@@ -144,6 +144,27 @@ func (c *connectionHolder) connect() error {
 	c.connectionErrors = make(chan *amqp.Error, 1)
 	c.connection.NotifyClose(c.connectionErrors)
 	return nil
+}
+
+// dialConfig returns the connection config with fresh copies of the SASL mechanisms.
+// amqp091-go clears the password of the mechanism it used after a successful
+// handshake, so reusing c.config.SASL would send an empty password on reconnect.
+func (c *connectionHolder) dialConfig() amqp.Config {
+	config := c.config
+	config.SASL = make([]amqp.Authentication, len(c.config.SASL))
+	for i, auth := range c.config.SASL {
+		switch a := auth.(type) {
+		case *amqp.PlainAuth:
+			authCopy := *a
+			config.SASL[i] = &authCopy
+		case *amqp.AMQPlainAuth:
+			authCopy := *a
+			config.SASL[i] = &authCopy
+		default:
+			config.SASL[i] = auth
+		}
+	}
+	return config
 }
 
 func (c *connectionHolder) Close() error {

@@ -188,3 +188,22 @@ func TestPublishWithDeferredConfirmWithContext(t *testing.T) {
 	mockChan.AssertExpectations(t)
 	mockDefConf.AssertExpectations(t)
 }
+
+func TestDialConfigKeepsCredentialsAcrossDials(t *testing.T) {
+	holder := &connectionHolder{
+		config: amqp.Config{SASL: []amqp.Authentication{
+			&amqp.PlainAuth{Username: "user", Password: "secret"},
+			&amqp.AMQPlainAuth{Username: "user", Password: "secret"},
+		}},
+	}
+
+	first := holder.dialConfig()
+	// amqp091-go clears the password of the used mechanism after a successful handshake.
+	first.SASL[0].(*amqp.PlainAuth).Password = ""
+	first.SASL[1].(*amqp.AMQPlainAuth).Password = ""
+
+	second := holder.dialConfig()
+	assert.Equal(t, "secret", second.SASL[0].(*amqp.PlainAuth).Password)
+	assert.Equal(t, "secret", second.SASL[1].(*amqp.AMQPlainAuth).Password)
+	assert.Equal(t, "secret", holder.config.SASL[0].(*amqp.PlainAuth).Password)
+}
