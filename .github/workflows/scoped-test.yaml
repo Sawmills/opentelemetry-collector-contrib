@@ -67,7 +67,7 @@ jobs:
             exit 0
           fi
 
-          non_go_changes=$(printf '%s\n' "$changed_files" | grep -vE '.*\.go$|(^|/)go\.(mod|sum)$|(^|/)metadata\.yaml$|(^|/)config\.schema\.yaml$|(^|/)README\.md$|(^|/)documentation\.md$|^\.chloggen/.+\.yaml$|^\.github/workflows/(build-and-test-arm\.yml|scoped-test\.yaml)$|^\.github/workflows/scripts/filter-govulncheck(_test)?\.py$|^internal/buildscripts/ocb-add-replaces\.sh$|^\.golangci\.yml$' || true)
+          non_go_changes=$(printf '%s\n' "$changed_files" | grep -vE '.*\.go$|(^|/)go\.(mod|sum)$|(^|/)metadata\.yaml$|(^|/)config\.schema\.yaml$|(^|/)README\.md$|(^|/)documentation\.md$|^\.chloggen/.+\.yaml$|^\.github/workflows/(build-and-test-arm\.yml|scoped-test\.yaml)$|^\.github/workflows/scripts/filter-govulncheck(_test)?\.py$|^internal/buildscripts/ocb-add-replaces\.sh$|^\.github/workflows/scripts/check-collector-module-version\.sh$|^\.github/workflows/scripts/collector-module-version-exceptions\.txt$|^\.golangci\.yml$' || true)
           if [[ -n "$non_go_changes" ]]; then
             echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
             exit 0

@@ -1,0 +1,10 @@
+change_type: bug_fix
+component: all
+note: Update dependencies to fix gRPC and RabbitMQ client vulnerabilities.
+issues: [11556]
+subtext: |
+  Upgrade google.golang.org/grpc to v1.83.2 (GO-2026-6348, GO-2026-6443) and
+  github.com/rabbitmq/amqp091-go to v1.13.0 (GO-2026-6372). amqp091-go v1.13.0 clears the
+  password after a successful handshake, so the RabbitMQ client now passes a fresh copy of
+  the credentials on every dial to keep reconnects authenticated.
+change_logs: [user]
