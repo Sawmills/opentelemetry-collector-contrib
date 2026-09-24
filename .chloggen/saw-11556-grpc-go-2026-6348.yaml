@@ -1,0 +1,5 @@
+change_type: bug_fix
+component: all
+note: Update google.golang.org/grpc to v1.83.1 to fix GO-2026-6348 (heap memory exhaustion via HTTP/2 DATA frame fragmentation).
+issues: [11556]
+change_logs: [user]
