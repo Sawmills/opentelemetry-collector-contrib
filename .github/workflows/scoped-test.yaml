@@ -41,7 +41,9 @@ jobs:
             exit 0
           fi
 
-          renamed_or_copied_paths="$(git diff -M -C -C --name-only --diff-filter=RC "$(git merge-base "origin/${PR_BASE}" "$PR_HEAD")" "$PR_HEAD")"
+          # New mdatagen output looks like a copy of other components' generated files. Exempt only those copies;
+          # a copy leaves its source in place, while every rename still forces the full fallback.
+          renamed_or_copied_paths="$(git diff -M -C -C --name-status --diff-filter=RC "$(git merge-base "origin/${PR_BASE}" "$PR_HEAD")" "$PR_HEAD" | awk -F'\t' '!($1 ~ /^C/ && $3 ~ /(^|\/)internal\/metadata(test)?\/generated_[^\/]+\.go$/)')"
           if [[ -n "$renamed_or_copied_paths" ]]; then
             echo "mode=full_fallback" >> "$GITHUB_OUTPUT"
             exit 0

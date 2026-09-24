@@ -21,6 +21,8 @@ import (
 	"go.opentelemetry.io/collector/receiver"
 	"go.opentelemetry.io/collector/receiver/receiverhelper"
 	"go.uber.org/zap"
+
+	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/awss3receiver/internal/metadata"
 )
 
 type encodingExtension struct {
@@ -29,6 +31,21 @@ type encodingExtension struct {
 }
 
 type encodingExtensions []encodingExtension
+
+// undecodableObjectError marks S3 object content that no retry can decode.
+// The SQS reader drops such objects instead of leaving their message in the queue.
+type undecodableObjectError struct {
+	reason string
+	err    error
+}
+
+func (e *undecodableObjectError) Error() string {
+	return e.err.Error()
+}
+
+func (e *undecodableObjectError) Unwrap() error {
+	return e.err
+}
 
 type receiverProcessor interface {
 	processReceivedData(ctx context.Context, receiver *awss3Receiver, key string, data []byte) error
@@ -44,12 +61,16 @@ type awss3Receiver struct {
 	dataProcessor   receiverProcessor
 	extensions      encodingExtensions
 	notifier        statusNotifier
+	telemetry       *metadata.TelemetryBuilder
 }
 
 func newAWSS3Receiver(ctx context.Context, cfg *Config, telemetryType string, settings receiver.Settings, processor receiverProcessor) (*awss3Receiver, error) {
 	notifier := newNotifier(cfg, settings.Logger)
+	telemetry, err := metadata.NewTelemetryBuilder(settings.TelemetrySettings)
+	if err != nil {
+		return nil, err
+	}
 	var reader s3Reader
-	var err error
 
 	// Create the appropriate reader based on configuration
 	switch {
@@ -59,7 +80,7 @@ func newAWSS3Receiver(ctx context.Context, cfg *Config, telemetryType string, se
 			return nil, err
 		}
 	case cfg.SQS != nil:
-		reader, err = newS3SQSReader(ctx, settings.Logger, cfg)
+		reader, err = newS3SQSReader(ctx, settings.Logger, cfg, telemetry)
 		if err != nil {
 			return nil, err
 		}
@@ -85,6 +106,7 @@ func newAWSS3Receiver(ctx context.Context, cfg *Config, telemetryType string, se
 		dataProcessor:   processor,
 		encodingsConfig: cfg.Encodings,
 		notifier:        notifier,
+		telemetry:       telemetry,
 	}, nil
 }
 
@@ -118,6 +140,7 @@ func (r *awss3Receiver) Shutdown(ctx context.Context) error {
 	if r.cancel != nil {
 		r.cancel()
 	}
+	r.telemetry.Shutdown()
 	return nil
 }
 
@@ -129,7 +152,7 @@ func (r *awss3Receiver) receiveBytes(ctx context.Context, key string, data []byt
 		var reader *gzip.Reader
 		reader, err = gzip.NewReader(bytes.NewReader(data))
 		if err != nil {
-			return err
+			return &undecodableObjectError{reason: "decompress_failed", err: err}
 		}
 		defer func() {
 			if closeErr := reader.Close(); closeErr != nil && err == nil {
@@ -139,13 +162,13 @@ func (r *awss3Receiver) receiveBytes(ctx context.Context, key string, data []byt
 		key = strings.TrimSuffix(key, ".gz")
 		data, err = io.ReadAll(reader)
 		if err != nil {
-			return err
+			return &undecodableObjectError{reason: "decompress_failed", err: err}
 		}
 	} else if strings.HasSuffix(key, ".zst") {
 		var reader *zstd.Decoder
 		reader, err = zstd.NewReader(bytes.NewReader(data))
 		if err != nil {
-			return err
+			return &undecodableObjectError{reason: "decompress_failed", err: err}
 		}
 		decompressedReader := reader.IOReadCloser()
 		defer func() {
@@ -156,7 +179,7 @@ func (r *awss3Receiver) receiveBytes(ctx context.Context, key string, data []byt
 		key = strings.TrimSuffix(key, ".zst")
 		data, err = io.ReadAll(decompressedReader)
 		if err != nil {
-			return err
+			return &undecodableObjectError{reason: "decompress_failed", err: err}
 		}
 	}
 	return r.dataProcessor.processReceivedData(ctx, r, key, data)
@@ -190,13 +213,12 @@ func (r *traceReceiver) processReceivedData(ctx context.Context, rcvr *awss3Rece
 		}
 	}
 	if unmarshaler == nil {
-		rcvr.logger.Warn("Unsupported file format", zap.String("key", key))
-		return nil
+		return &undecodableObjectError{reason: "unsupported_format", err: fmt.Errorf("no decoder matches key %q", key)}
 	}
 	rcvr.logger.Debug("Processing trace file", zap.String("key", key), zap.String("format", format))
 	traces, err := unmarshaler.UnmarshalTraces(data)
 	if err != nil {
-		return err
+		return &undecodableObjectError{reason: "decode_failed", err: err}
 	}
 	obsCtx := rcvr.obsrecv.StartTracesOp(ctx)
 	err = r.consumer.ConsumeTraces(ctx, traces)
@@ -232,13 +254,12 @@ func (r *metricsReceiver) processReceivedData(ctx context.Context, rcvr *awss3Re
 		}
 	}
 	if unmarshaler == nil {
-		rcvr.logger.Warn("Unsupported file format", zap.String("key", key))
-		return nil
+		return &undecodableObjectError{reason: "unsupported_format", err: fmt.Errorf("no decoder matches key %q", key)}
 	}
 	rcvr.logger.Debug("Processing metric file", zap.String("key", key), zap.String("format", format))
 	metrics, err := unmarshaler.UnmarshalMetrics(data)
 	if err != nil {
-		return err
+		return &undecodableObjectError{reason: "decode_failed", err: err}
 	}
 	obsCtx := rcvr.obsrecv.StartMetricsOp(ctx)
 	err = r.consumer.ConsumeMetrics(ctx, metrics)
@@ -274,13 +295,12 @@ func (r *logsReceiver) processReceivedData(ctx context.Context, rcvr *awss3Recei
 		}
 	}
 	if unmarshaler == nil {
-		rcvr.logger.Warn("Unsupported file format", zap.String("key", key))
-		return nil
+		return &undecodableObjectError{reason: "unsupported_format", err: fmt.Errorf("no decoder matches key %q", key)}
 	}
 	rcvr.logger.Debug("Processing log file", zap.String("key", key), zap.String("format", format))
 	logs, err := unmarshaler.UnmarshalLogs(data)
 	if err != nil {
-		return err
+		return &undecodableObjectError{reason: "decode_failed", err: err}
 	}
 	obsCtx := rcvr.obsrecv.StartLogsOp(ctx)
 	err = r.consumer.ConsumeLogs(ctx, logs)

@@ -82,7 +82,7 @@ func TestNewS3SQSReader(t *testing.T) {
 			},
 		}
 
-		reader, err := newS3SQSReader(t.Context(), logger, cfg)
+		reader, err := newS3SQSReader(t.Context(), logger, cfg, newNopTelemetryBuilder(t))
 		assert.Error(t, err)
 		assert.Nil(t, reader)
 	})
@@ -99,7 +99,7 @@ func TestNewS3SQSReader(t *testing.T) {
 			},
 		}
 
-		r, err := newS3SQSReader(t.Context(), logger, cfg)
+		r, err := newS3SQSReader(t.Context(), logger, cfg, newNopTelemetryBuilder(t))
 		assert.NotNil(t, r)
 		assert.NoError(t, err)
 
@@ -122,7 +122,7 @@ func TestNewS3SQSReader(t *testing.T) {
 			},
 		}
 
-		r, err := newS3SQSReader(t.Context(), logger, cfg)
+		r, err := newS3SQSReader(t.Context(), logger, cfg, newNopTelemetryBuilder(t))
 		assert.NotNil(t, r)
 		assert.NoError(t, err)
 		assert.Equal(t, int32(5), r.maxNumberOfMessages)
@@ -155,6 +155,7 @@ func TestS3SQSReader_ReadAll(t *testing.T) {
 		s3Prefix:            cfg.S3Downloader.S3Prefix,
 		maxNumberOfMessages: 10,
 		waitTimeSeconds:     20,
+		telemetry:           newNopTelemetryBuilder(t),
 	}
 
 	s3Event := s3EventNotification{
@@ -304,6 +305,7 @@ func TestS3SQSReader_ReadAllDirectS3EventNotification(t *testing.T) {
 		s3Prefix:            cfg.S3Downloader.S3Prefix,
 		maxNumberOfMessages: 10,
 		waitTimeSeconds:     20,
+		telemetry:           newNopTelemetryBuilder(t),
 	}
 
 	// Create S3 event notification
@@ -425,6 +427,7 @@ func TestS3SQSReader_ReadAllErrorHandling(t *testing.T) {
 			maxNumberOfMessages:     10,
 			waitTimeSeconds:         20,
 			tagObjectAfterIngestion: true,
+			telemetry:               newNopTelemetryBuilder(t),
 		}
 
 		// Mock error during receive messages
@@ -456,6 +459,7 @@ func TestS3SQSReader_ReadAllErrorHandling(t *testing.T) {
 			maxNumberOfMessages:     10,
 			waitTimeSeconds:         20,
 			tagObjectAfterIngestion: true,
+			telemetry:               newNopTelemetryBuilder(t),
 		}
 
 		// Create S3 event notification
@@ -546,6 +550,7 @@ func TestS3SQSReader_ReadAllErrorHandling(t *testing.T) {
 			maxNumberOfMessages:     10,
 			waitTimeSeconds:         20,
 			tagObjectAfterIngestion: true,
+			telemetry:               newNopTelemetryBuilder(t),
 		}
 
 		// Create S3 event notification with THREE objects:
@@ -677,6 +682,7 @@ func TestS3SQSReader_ReadAllErrorHandling(t *testing.T) {
 			maxNumberOfMessages:     10,
 			waitTimeSeconds:         20,
 			tagObjectAfterIngestion: true,
+			telemetry:               newNopTelemetryBuilder(t),
 		}
 
 		s3Event := s3EventNotification{
@@ -798,7 +804,8 @@ func TestS3SQSReader_ReadAllErrorHandling(t *testing.T) {
 			s3Prefix:                "",
 			maxNumberOfMessages:     10,
 			waitTimeSeconds:         20,
-			tagObjectAfterIngestion: true, // Enable tagging after ingestion
+			tagObjectAfterIngestion: true,
+			telemetry:               newNopTelemetryBuilder(t), // Enable tagging after ingestion
 		}
 
 		ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
@@ -847,6 +854,7 @@ func TestS3SQSReader_ReadAllWithPrefix(t *testing.T) {
 		s3Prefix:            cfg.S3Downloader.S3Prefix,
 		maxNumberOfMessages: 10,
 		waitTimeSeconds:     20,
+		telemetry:           newNopTelemetryBuilder(t),
 	}
 
 	// Create S3 event notification with multiple objects - some matching the prefix, some not
@@ -1162,7 +1170,8 @@ func TestS3SQSReader_Tag(t *testing.T) {
 				s3Prefix:                "",
 				maxNumberOfMessages:     10,
 				waitTimeSeconds:         20,
-				tagObjectAfterIngestion: true, // Enable tagging after ingestion
+				tagObjectAfterIngestion: true,
+				telemetry:               newNopTelemetryBuilder(t), // Enable tagging after ingestion
 			}
 
 			ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
@@ -1219,6 +1228,7 @@ func TestS3SQSReader_ReadAllDirectS3TestEvent(t *testing.T) {
 		s3Prefix:            cfg.S3Downloader.S3Prefix,
 		maxNumberOfMessages: 10,
 		waitTimeSeconds:     20,
+		telemetry:           newNopTelemetryBuilder(t),
 	}
 
 	// This simulates the exact, complete payload AWS sends for an s3:TestEvent
