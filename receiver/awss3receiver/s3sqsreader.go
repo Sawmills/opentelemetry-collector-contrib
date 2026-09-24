@@ -159,9 +159,13 @@ func (r *s3SQSNotificationReader) readAll(ctx context.Context, _ string, callbac
 					var snsMsg snsMessage
 
 					if err = json.Unmarshal([]byte(messageBody), &snsMsg); err != nil {
-						reason := "invalid_json"
-						if json.Valid([]byte(messageBody)) {
-							reason = "not_s3_notification"
+						// A type error still fills Type, so a malformed SNS envelope keeps its own reason.
+						reason := "not_s3_notification"
+						switch {
+						case !json.Valid([]byte(messageBody)):
+							reason = "invalid_json"
+						case snsMsg.Type == "Notification":
+							reason = "invalid_sns_message"
 						}
 						r.dropMessage(ctx, message, reason, zap.Error(err))
 						continue

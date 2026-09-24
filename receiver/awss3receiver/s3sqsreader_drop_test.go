@@ -102,6 +102,7 @@ func TestS3SQSReader_DeletesUnreadableMessages(t *testing.T) {
 	}{
 		{name: "not json", body: "plain text", reason: "invalid_json"},
 		{name: "json array", body: "[]", reason: "not_s3_notification"},
+		{name: "sns with non-string message", body: `{"Type":"Notification","Message":{}}`, reason: "invalid_sns_message"},
 		{name: "eventbridge event", body: `{"version":"0","detail-type":"Object Created","source":"aws.s3"}`, reason: "not_s3_notification"},
 		{name: "sns with bad payload", body: string(snsWithBadPayload), reason: "invalid_sns_message"},
 		{name: "sns without s3 records", body: `{"Type":"Notification","Message":"{}"}`, reason: "invalid_sns_message"},
