@@ -338,7 +338,11 @@ Each failed outer upload attempt increments the failure counter once and emits a
 A retained archive is accepted data, so the generic exporter send-failure counter does not report its retries.
 Alert routing must therefore use the S3-specific failure metrics before enabling recovery in production.
 Retention gauges include the `exporter` component ID so one healthy destination cannot hide another stalled destination.
-For Prometheus, the timestamp metric has a `_seconds` suffix. This expression detects an archive retained for over five minutes:
+With Prometheus unit suffixes enabled, the timestamp metric ends in `_seconds`.
+This includes the Sawmills remote-write pipeline and an explicit Collector pull reader with default options.
+The Collector default pull reader disables suffixes; use `otelcol_exporter_awss3_retained_archive_timestamp` there.
+The archive-count metric keeps the same name in both modes.
+This expression assumes unit suffixes are enabled and detects an archive retained for over five minutes:
 
 ```promql
 (otelcol_exporter_awss3_retained_archives == 1)

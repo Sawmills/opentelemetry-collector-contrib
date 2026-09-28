@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	promclient "github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/otlptranslator"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
@@ -24,6 +26,8 @@ import (
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	"go.opentelemetry.io/collector/exporter/exportertest"
+	promexporter "go.opentelemetry.io/otel/exporters/prometheus"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
@@ -362,5 +366,48 @@ func TestArchiveAdmissionPreservesExpiredCallerDeadline(t *testing.T) {
 	defer cancel()
 	for range 100 {
 		require.ErrorIs(t, recovery.acquire(ctx), context.DeadlineExceeded)
+	}
+}
+
+func TestArchiveRecoveryPrometheusMetricContract(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		strategy      otlptranslator.TranslationStrategyOption
+		timestampName string
+	}{
+		{"explicit_reader", otlptranslator.NoUTF8EscapingWithSuffixes, "otelcol_exporter_awss3_retained_archive_timestamp_seconds"},
+		{"default_reader", otlptranslator.UnderscoreEscapingWithoutSuffixes, "otelcol_exporter_awss3_retained_archive_timestamp"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry := promclient.NewRegistry()
+			reader, err := promexporter.New(promexporter.WithRegisterer(registry), promexporter.WithTranslationStrategy(tc.strategy))
+			require.NoError(t, err)
+			provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+			t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.WithoutCancel(t.Context()))) })
+			settings := exportertest.NewNopSettings(component.MustNewType("awss3"))
+			settings.ID = component.MustNewIDWithName("awss3", "retained")
+			settings.MeterProvider = provider
+			exp := newS3Exporter(createDefaultConfig().(*Config), "logs", settings)
+			exp.telemetry.recordRetainedArchive(t.Context(), "logs", 1, 100)
+
+			families, err := registry.Gather()
+			require.NoError(t, err)
+			values := make(map[string]float64)
+			for _, family := range families {
+				if !strings.HasPrefix(family.GetName(), "otelcol_exporter_awss3_retained_") {
+					continue
+				}
+				require.Len(t, family.Metric, 1)
+				labels := make(map[string]string)
+				for _, label := range family.Metric[0].Label {
+					labels[label.GetName()] = label.GetValue()
+				}
+				require.Equal(t, "awss3/retained", labels["exporter"])
+				values[family.GetName()] = family.Metric[0].Gauge.GetValue()
+			}
+			require.Equal(t, float64(1), values["otelcol_exporter_awss3_retained_archives"])
+			require.Equal(t, float64(100), values["otelcol_exporter_awss3_retained_archive_bytes"])
+			require.Positive(t, values[tc.timestampName])
+		})
 	}
 }

@@ -381,7 +381,7 @@ func newExporterTelemetry(settings component.TelemetrySettings, logger *zap.Logg
 	meter := meterProvider.Meter(metadata.ScopeName)
 	tel := &exporterTelemetry{}
 	tel.retainedArchiveTimestamp = mustGauge(meter, "otelcol_exporter_awss3_retained_archive_timestamp", logger, metric.WithUnit("s"))
-	tel.retainedArchives = mustGauge(meter, "otelcol_exporter_awss3_retained_archives", logger, metric.WithUnit("1"))
+	tel.retainedArchives = mustGauge(meter, "otelcol_exporter_awss3_retained_archives", logger, metric.WithUnit("{archive}"))
 	tel.retainedArchiveBytes = mustGauge(meter, "otelcol_exporter_awss3_retained_archive_bytes", logger, metric.WithUnit("By"))
 	tel.flushStart = mustCounter(meter, flushStartMetricName, logger)
 	tel.flushComplete = mustCounter(meter, flushCompleteMetricName, logger)
