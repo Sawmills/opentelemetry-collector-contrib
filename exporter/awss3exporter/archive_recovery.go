@@ -28,6 +28,9 @@ type archiveRecovery struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	workers      sync.WaitGroup
+	deadlineMu   sync.RWMutex
+	shutdownBy   time.Time
+	cleanupBy    *upload.CleanupDeadline
 	pending      upload.PreparedUpload
 	meta         flushMetadata
 	archiveBytes int64
@@ -35,7 +38,7 @@ type archiveRecovery struct {
 
 func newArchiveRecovery() *archiveRecovery {
 	ctx, cancel := context.WithCancel(context.Background())
-	r := &archiveRecovery{gate: make(chan struct{}, 1), ctx: ctx, cancel: cancel}
+	r := &archiveRecovery{gate: make(chan struct{}, 1), ctx: ctx, cancel: cancel, cleanupBy: new(upload.CleanupDeadline)}
 	r.gate <- struct{}{}
 	return r
 }
@@ -81,6 +84,7 @@ func (r *archiveRecovery) release() { r.gate <- struct{}{} }
 func (e *s3Exporter) attemptArchive(ctx context.Context) error {
 	r := e.recovery
 	attemptCtx, cancel := context.WithTimeout(ctx, e.config.TimeoutSettings.Timeout)
+	attemptCtx = upload.WithCleanupDeadline(attemptCtx, r.cleanupBy)
 	stop := context.AfterFunc(r.ctx, cancel)
 	defer stop()
 	defer cancel()
@@ -119,6 +123,7 @@ func (e *s3Exporter) retryArchive() {
 
 func (e *s3Exporter) shutdownArchives(ctx context.Context) (result error) {
 	if e.recovery != nil {
+		e.recovery.setShutdownDeadline(ctx)
 		stop := context.AfterFunc(ctx, e.recovery.cancel)
 		defer stop()
 		defer func() {
@@ -153,6 +158,26 @@ func (e *s3Exporter) shutdownArchives(ctx context.Context) (result error) {
 	return nil
 }
 
+func (r *archiveRecovery) shutdownDeadline() (time.Time, bool) {
+	r.deadlineMu.RLock()
+	defer r.deadlineMu.RUnlock()
+	if r.shutdownBy.IsZero() {
+		return time.Time{}, false
+	}
+	return r.shutdownBy, true
+}
+
+func (r *archiveRecovery) setShutdownDeadline(ctx context.Context) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return
+	}
+	r.deadlineMu.Lock()
+	r.shutdownBy = deadline
+	r.deadlineMu.Unlock()
+	r.cleanupBy.Set(ctx)
+}
+
 // exporterhelper drains its queue before invoking the exporter shutdown hook.
 // Cancel recovery when the shutdown deadline expires so consumers waiting for
 // archive admission cannot prevent the helper from reaching that hook.
@@ -162,6 +187,7 @@ type archiveRecoveryLifecycle struct {
 }
 
 func (c *archiveRecoveryLifecycle) Shutdown(ctx context.Context) error {
+	c.recovery.setShutdownDeadline(ctx)
 	stop := context.AfterFunc(ctx, c.recovery.cancel)
 	defer stop()
 	return c.Component.Shutdown(ctx)

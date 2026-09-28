@@ -8,6 +8,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -34,6 +35,95 @@ type PreparedUpload interface {
 type PreparingManager interface {
 	Manager
 	Prepare(context.Context, []byte, *UploadOptions) PreparedUpload
+}
+
+// CleanupDeadline shares a shutdown deadline with uploads that outlive their
+// attempt context, including multipart cleanup already in progress.
+type CleanupDeadline struct {
+	mu       sync.RWMutex
+	deadline time.Time
+	shutdown context.Context
+	updated  chan struct{}
+}
+
+// Set records the deadline and cancellation signal from a shutdown context.
+func (d *CleanupDeadline) Set(shutdown context.Context) {
+	deadline, ok := shutdown.Deadline()
+	if !ok {
+		return
+	}
+	d.mu.Lock()
+	d.deadline = deadline
+	d.shutdown = shutdown
+	if d.updated != nil {
+		close(d.updated)
+	}
+	d.updated = make(chan struct{})
+	d.mu.Unlock()
+}
+
+// Get returns the current shutdown deadline, when one is configured.
+func (d *CleanupDeadline) Get() (time.Time, bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.deadline.IsZero() {
+		return time.Time{}, false
+	}
+	return d.deadline, true
+}
+
+// Watch cancels an active cleanup when shutdown reaches its deadline.
+func (d *CleanupDeadline) Watch(ctx context.Context, cancel context.CancelFunc) func() {
+	d.mu.Lock()
+	if d.updated == nil {
+		d.updated = make(chan struct{})
+	}
+	d.mu.Unlock()
+	stop := make(chan struct{})
+	var once sync.Once
+	go func() {
+		for {
+			d.mu.RLock()
+			shutdown, updated := d.shutdown, d.updated
+			d.mu.RUnlock()
+			if updated == nil {
+				updated = make(chan struct{})
+			}
+			var shutdownDone <-chan struct{}
+			var stopAfter func() bool
+			if shutdown != nil {
+				shutdownDone = shutdown.Done()
+				stopAfter = context.AfterFunc(shutdown, cancel)
+			}
+			select {
+			case <-ctx.Done():
+				if stopAfter != nil {
+					stopAfter()
+				}
+				return
+			case <-stop:
+				if stopAfter != nil {
+					stopAfter()
+				}
+				return
+			case <-shutdownDone:
+				return
+			case <-updated:
+				if stopAfter != nil {
+					stopAfter()
+				}
+			}
+		}
+	}()
+	return func() { once.Do(func() { close(stop) }) }
+}
+
+type cleanupDeadlineKey struct{}
+
+// WithCleanupDeadline bounds multipart cleanup by an enclosing shutdown
+// deadline while leaving ordinary per-attempt cancellation independent.
+func WithCleanupDeadline(ctx context.Context, deadline *CleanupDeadline) context.Context {
+	return context.WithValue(ctx, cleanupDeadlineKey{}, deadline)
 }
 
 type ManagerOpt func(Manager)
@@ -139,8 +229,17 @@ func (p *preparedUpload) abortMultipart(ctx context.Context) error {
 	if p.uploadID == "" {
 		return nil
 	}
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	cleanupDeadline := time.Now().Add(5 * time.Second)
+	if shutdown, ok := ctx.Value(cleanupDeadlineKey{}).(*CleanupDeadline); ok {
+		if deadline, ok := shutdown.Get(); ok && deadline.Before(cleanupDeadline) {
+			cleanupDeadline = deadline
+		}
+	}
+	cleanupCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), cleanupDeadline)
 	defer cancel()
+	if shutdown, ok := ctx.Value(cleanupDeadlineKey{}).(*CleanupDeadline); ok {
+		defer shutdown.Watch(cleanupCtx, cancel)()
+	}
 	_, err := p.manager.service.AbortMultipartUpload(cleanupCtx, &s3.AbortMultipartUploadInput{
 		Bucket: p.input.Bucket, Key: p.input.Key, UploadId: aws.String(p.uploadID),
 	})

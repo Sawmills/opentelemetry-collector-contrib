@@ -161,7 +161,7 @@ func (c *Config) Validate() error {
 	}
 	if c.ArchiveRecovery {
 		q := c.QueueSettings.Get()
-		if q == nil || q.WaitForResult || q.BlockOnOverflow || q.StorageID != nil {
+		if !c.QueueSettings.HasValue() || q == nil || q.WaitForResult || q.BlockOnOverflow || q.StorageID != nil {
 			errs = multierr.Append(errs, errors.New("archive_recovery requires an enabled in-memory sending_queue with wait_for_result and block_on_overflow disabled"))
 		}
 	}

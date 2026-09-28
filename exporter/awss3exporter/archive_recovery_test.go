@@ -320,6 +320,8 @@ func TestArchiveRecoveryRejectsUnsafeQueues(t *testing.T) {
 			}
 			if mode != "disabled" {
 				cfg.QueueSettings = configoptional.Some(queue)
+			} else {
+				require.False(t, cfg.QueueSettings.HasValue())
 			}
 			require.ErrorContains(t, cfg.Validate(), "archive_recovery requires")
 		})
@@ -366,6 +368,22 @@ func TestArchiveAdmissionPreservesExpiredCallerDeadline(t *testing.T) {
 	defer cancel()
 	for range 100 {
 		require.ErrorIs(t, recovery.acquire(ctx), context.DeadlineExceeded)
+	}
+}
+
+func TestArchiveRecoveryRecordsShortShutdownDeadline(t *testing.T) {
+	recovery := newArchiveRecovery()
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	recovery.setShutdownDeadline(ctx)
+	deadline, ok := recovery.shutdownDeadline()
+	require.True(t, ok)
+	require.WithinDuration(t, time.Now().Add(50*time.Millisecond), deadline, 20*time.Millisecond)
+
+	select {
+	case <-recovery.ctx.Done():
+		t.Fatal("recording a short shutdown deadline canceled recovery")
+	case <-time.After(10 * time.Millisecond):
 	}
 }
 

@@ -6,6 +6,7 @@ package upload
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,24 @@ import (
 	"go.opentelemetry.io/collector/config/configcompression"
 	"go.uber.org/zap"
 )
+
+func TestCleanupDeadlineCancelsActiveCleanup(t *testing.T) {
+	cleanupCtx, cancelCleanup := context.WithCancel(t.Context())
+	defer cancelCleanup()
+	deadlines := new(CleanupDeadline)
+	stop := deadlines.Watch(cleanupCtx, cancelCleanup)
+	defer stop()
+
+	shutdownCtx, cancelShutdown := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancelShutdown()
+	deadlines.Set(shutdownCtx)
+
+	select {
+	case <-cleanupCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("active cleanup did not observe the shutdown deadline")
+	}
+}
 
 func TestNewS3Manager(t *testing.T) {
 	t.Parallel()
