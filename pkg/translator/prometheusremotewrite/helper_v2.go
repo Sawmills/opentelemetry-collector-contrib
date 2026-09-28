@@ -115,7 +115,7 @@ func (c *prometheusConverterV2) addSummaryDataPoints(dataPoints pmetric.SummaryD
 		// Process quantiles
 		for i := 0; i < pt.QuantileValues().Len(); i++ {
 			qt := pt.QuantileValues().At(i)
-			percentileStr := formatNumericLabel(qt.Quantile(), settings.UseGoFloatFormat)
+			percentileStr := formatNumericLabel(qt.Quantile(), settings)
 			c.addSampleWithLabels(qt.Value(), timestamp, noRecordedValue, baseName, baseLabels, quantileStr, percentileStr, metadata)
 		}
 	}
@@ -152,7 +152,7 @@ func (c *prometheusConverterV2) addHistogramDataPoints(dataPoints pmetric.Histog
 		for i := 0; i < pt.ExplicitBounds().Len() && i < pt.BucketCounts().Len(); i++ {
 			bound := pt.ExplicitBounds().At(i)
 			cumulativeCount += pt.BucketCounts().At(i)
-			boundStr := formatNumericLabel(bound, settings.UseGoFloatFormat)
+			boundStr := formatNumericLabel(bound, settings)
 			c.addSampleWithLabels(float64(cumulativeCount), timestamp, noRecordedValue, baseName+bucketStr, baseLabels, leStr, boundStr, metadata)
 		}
 		// add le=+Inf bucket

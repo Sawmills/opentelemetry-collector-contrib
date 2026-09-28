@@ -57,6 +57,14 @@ The following settings can be optionally configured:
   such as Python's `1.0`. Stored spelling depends on both the exposition format and the scraper.
   Compare stored label spelling before enabling this configuration. Mixed sources need separate exporter configuration and tests before migration.
   The metric type, values, and metadata configuration do not change. Changing this configuration changes series identity.
+- `use_decimal_float_format` (Sawmills fork, default = `false`): Use shortest fixed-point strings for `le` and `quantile`, with `.0` on finite integers.
+  For example, the labels become `0.000001`, `1.0` and `1000000.0`. Signed zero stays `-0.0`; infinity stays `+Inf` or `-Inf`.
+  Both remote-write versions apply it to classic histograms and summaries. It cannot be enabled with `use_go_float_format`.
+  This format matches the audited Needle Wide bounds from September 28, 2026. It does not reproduce arbitrary Rust `dtoa` output.
+  Small or large magnitudes and some computed bounds differ: `dtoa` 1.0.11 formats `1e-7`, `1e21` and `0.30000000000000004` differently.
+  Compare every source label spelling and stored identity before enabling this configuration, and again when the source version changes.
+  Use a separate exporter and pipeline for sources with this format. Keep Go sources on their existing configuration.
+  Metric types, values and metadata are unchanged. Existing fixed-point formatting without the added `.0` remains the default.
 - `send_metadata`: If set to true, prometheus metadata will be generated and sent. Default: false. This option is ignored when using PRW 2.0, which always includes metadata.
 - `remote_write_queue`: fine tuning for queueing and sending of the outgoing remote writes.
   - `enabled`: enable the sending queue (default: `true`)

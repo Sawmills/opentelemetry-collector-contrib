@@ -298,7 +298,7 @@ func (c *prometheusConverter) addHistogramDataPoints(dataPoints pmetric.Histogra
 			if pt.Flags().NoRecordedValue() {
 				bucket.Value = math.Float64frombits(value.StaleNaN)
 			}
-			boundStr := formatNumericLabel(bound, settings.UseGoFloatFormat)
+			boundStr := formatNumericLabel(bound, settings)
 			labels := createLabels(baseName+bucketStr, baseLabels, leStr, boundStr)
 			ts := c.addSample(bucket, labels)
 
@@ -470,7 +470,7 @@ func (c *prometheusConverter) addSummaryDataPoints(dataPoints pmetric.SummaryDat
 			if pt.Flags().NoRecordedValue() {
 				quantile.Value = math.Float64frombits(value.StaleNaN)
 			}
-			percentileStr := formatNumericLabel(qt.Quantile(), settings.UseGoFloatFormat)
+			percentileStr := formatNumericLabel(qt.Quantile(), settings)
 			qtlabels := createLabels(baseName, baseLabels, quantileStr, percentileStr)
 			c.addSample(quantile, qtlabels)
 		}

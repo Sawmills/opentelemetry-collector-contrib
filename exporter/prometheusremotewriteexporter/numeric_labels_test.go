@@ -21,9 +21,9 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/prometheusremotewriteexporter/internal/metadata"
 )
 
-func TestGoFloatFormatRemoteWrite(t *testing.T) {
-	for _, enabled := range []bool{false, true} {
-		t.Run(map[bool]string{false: "default", true: "go"}[enabled], func(t *testing.T) {
+func TestNumericLabelFormatRemoteWrite(t *testing.T) {
+	for _, mode := range []string{"default", "go", "decimal"} {
+		t.Run(mode, func(t *testing.T) {
 			var requests [][]byte
 			var requestMu sync.Mutex
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -38,10 +38,14 @@ func TestGoFloatFormatRemoteWrite(t *testing.T) {
 			}))
 			defer server.Close()
 			cfg := createDefaultConfig().(*Config)
-			require.NoError(t, confmap.NewFromStringMap(map[string]any{
-				"endpoint": server.URL, "use_go_float_format": enabled, "send_metadata": true,
+			config := map[string]any{
+				"endpoint": server.URL, "use_go_float_format": mode == "go", "send_metadata": true,
 				"add_metric_suffixes": false, "target_info": map[string]any{"enabled": false},
-			}).Unmarshal(cfg))
+			}
+			if mode == "decimal" {
+				config["use_decimal_float_format"] = true
+			}
+			require.NoError(t, confmap.NewFromStringMap(config).Unmarshal(cfg))
 			require.NoError(t, cfg.Validate())
 			exp, err := newPRWExporter(cfg, exportertest.NewNopSettings(metadata.Type))
 			require.NoError(t, err)
@@ -89,10 +93,22 @@ func TestGoFloatFormatRemoteWrite(t *testing.T) {
 				}
 			}
 			want := "1000000"
-			if enabled {
+			switch mode {
+			case "go":
 				want = "1e+06"
+			case "decimal":
+				want = "1000000.0"
 			}
 			require.Equal(t, map[string]float64{want: 2, "+Inf": 3}, bounds)
 		})
 	}
+}
+
+func TestNumericLabelFormatsMutuallyExclusive(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	require.False(t, cfg.UseGoFloatFormat)
+	require.False(t, cfg.UseDecimalFloatFormat)
+	cfg.UseGoFloatFormat = true
+	cfg.UseDecimalFloatFormat = true
+	require.EqualError(t, cfg.Validate(), "use_go_float_format and use_decimal_float_format are mutually exclusive")
 }
