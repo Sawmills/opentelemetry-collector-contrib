@@ -50,6 +50,13 @@ The following settings can be optionally configured:
   - *Note the following headers cannot be changed: `Content-Encoding`, `Content-Type`, `X-Prometheus-Remote-Write-Version`, and `User-Agent`.*
 - `namespace`: prefix attached to each exported metric name.
 - `add_metric_suffixes`: If set to false, type and unit suffixes will not be added to metrics. Default: true.
+- `use_go_float_format` (Sawmills fork, default = `false`): Use the Go Prometheus client's classic text format (0.0.4) for `le` and `quantile` labels.
+  For example, `1000000` becomes `1e+06`, and `0.00001` becomes `1e-05`. Integer `1` stays `1`.
+  This applies to classic histogram buckets and summary quantiles in both remote-write versions.
+  Enable it only when the source's existing labels use this format. It does not preserve arbitrary source spelling,
+  such as Python's `1.0`. Stored spelling depends on both the exposition format and the scraper.
+  Compare stored label spelling before enabling this configuration. Mixed sources need separate exporter configuration and tests before migration.
+  The metric type, values, and metadata configuration do not change. Changing this configuration changes series identity.
 - `send_metadata`: If set to true, prometheus metadata will be generated and sent. Default: false. This option is ignored when using PRW 2.0, which always includes metadata.
 - `remote_write_queue`: fine tuning for queueing and sending of the outgoing remote writes.
   - `enabled`: enable the sending queue (default: `true`)

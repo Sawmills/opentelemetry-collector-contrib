@@ -1,0 +1,6 @@
+change_type: enhancement
+component: exporter/prometheusremotewrite
+note: Add opt-in Go float formatting for histogram and summary labels in the Sawmills fork.
+issues: [118]
+subtext: Existing fixed-point formatting remains the default. Enable only for sources with matching numeric label spelling.
+change_logs: [user, api]

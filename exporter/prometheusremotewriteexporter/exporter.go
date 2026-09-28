@@ -218,6 +218,7 @@ func newPRWExporter(cfg *Config, set exporter.Settings) (*prwExporter, error) {
 			DisableScopeInfo:  cfg.DisableScopeInfo,
 			AddMetricSuffixes: cfg.AddMetricSuffixes,
 			SendMetadata:      cfg.SendMetadata,
+			UseGoFloatFormat:  cfg.UseGoFloatFormat,
 		},
 		telemetry:      telemetry,
 		batchStatePool: sync.Pool{New: func() any { return newBatchTimeServicesState() }},
