@@ -26,12 +26,14 @@ type Settings struct {
 	// UseDecimalFloatFormat retains fixed-point formatting and adds .0 to finite integers.
 	// Use only for sources whose numeric labels match this format.
 	UseDecimalFloatFormat bool
-	Namespace             string
-	ExternalLabels        map[string]string
-	DisableTargetInfo     bool
-	DisableScopeInfo      bool
-	AddMetricSuffixes     bool
-	SendMetadata          bool
+	// UseOpenMetricsFloatFormat uses the Prometheus canonical le and quantile spelling.
+	UseOpenMetricsFloatFormat bool
+	Namespace                 string
+	ExternalLabels            map[string]string
+	DisableTargetInfo         bool
+	DisableScopeInfo          bool
+	AddMetricSuffixes         bool
+	SendMetadata              bool
 }
 
 // FromMetrics converts pmetric.Metrics to Prometheus remote write format.

@@ -15,8 +15,8 @@ import (
 )
 
 func TestNumericLabelFormats(t *testing.T) {
-	for _, mode := range []string{"default", "go", "decimal"} {
-		settings := Settings{UseGoFloatFormat: mode == "go", UseDecimalFloatFormat: mode == "decimal", DisableTargetInfo: true, DisableScopeInfo: true}
+	for _, mode := range []string{"default", "go", "decimal", "openmetrics"} {
+		settings := Settings{UseGoFloatFormat: mode == "go", UseDecimalFloatFormat: mode == "decimal", UseOpenMetricsFloatFormat: mode == "openmetrics", DisableTargetInfo: true, DisableScopeInfo: true}
 		metrics := pmetric.NewMetrics()
 		ms := metrics.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty().Metrics()
 		histogram := ms.AppendEmpty()
@@ -48,6 +48,9 @@ func TestNumericLabelFormats(t *testing.T) {
 		case "go":
 			want = []string{"6.399999999999999e-07", "1e-05", "0.1", "1", "10", "100000", "1e+06", "1.048576e+06", "+Inf"}
 			quantiles[0] = "1e-05"
+		case "openmetrics":
+			want = []string{"6.399999999999999e-07", "1e-05", "0.1", "1.0", "10.0", "100000.0", "1e+06", "1.048576e+06", "+Inf"}
+			quantiles = []string{"1e-05", "0.5", "1.0"}
 		case "decimal":
 			want = []string{"0.0000006399999999999999", "0.00001", "0.1", "1.0", "10.0", "100000.0", "1000000.0", "1048576.0", "+Inf"}
 			quantiles[2] = "1.0"
@@ -134,5 +137,26 @@ func TestDecimalFloatEdges(t *testing.T) {
 		{0.30000000000000004, "0.30000000000000004"},
 	} {
 		require.Equal(t, tt.want, formatNumericLabel(tt.value, Settings{UseDecimalFloatFormat: true}))
+	}
+}
+
+func TestOpenMetricsCapturedLabels(t *testing.T) {
+	// Stored Prometheus 3.5.0 bounds, September 28, 2026.
+	for _, want := range []string{"6.399999999999999e-08", "1e-05", "0.1", "1.0", "10.0", "100000.0", "1e+06", "1.048576e+06", "+Inf"} {
+		value, err := strconv.ParseFloat(want, 64)
+		require.NoError(t, err)
+		require.Equal(t, want, formatNumericLabel(value, Settings{UseOpenMetricsFloatFormat: true}))
+	}
+	for _, tt := range []struct {
+		value float64
+		want  string
+	}{
+		{0, "0.0"},
+		{math.Copysign(0, -1), "0.0"},
+		{-1, "-1.0"},
+		{math.Inf(-1), "-Inf"},
+		{math.NaN(), "NaN"},
+	} {
+		require.Equal(t, tt.want, formatNumericLabel(tt.value, Settings{UseOpenMetricsFloatFormat: true}))
 	}
 }

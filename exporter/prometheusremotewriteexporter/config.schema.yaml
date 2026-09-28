@@ -76,6 +76,9 @@ properties:
   use_go_float_format:
     description: 'UseGoFloatFormat renders le and quantile labels with shortest Go float formatting. Enable only for sources whose existing labels use that format. Default: false.'
     type: boolean
+  use_openmetrics_float_format:
+    description: 'UseOpenMetricsFloatFormat uses Prometheus canonical le and quantile labels. Mutually exclusive with the Go and decimal formats. Default: false.'
+    type: boolean
   wal:
     description: WAL enables persisting metrics to a write-ahead-log before sending to the remote storage.
     x-optional: true

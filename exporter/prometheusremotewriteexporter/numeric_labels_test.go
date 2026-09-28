@@ -22,7 +22,7 @@ import (
 )
 
 func TestNumericLabelFormatRemoteWrite(t *testing.T) {
-	for _, mode := range []string{"default", "go", "decimal"} {
+	for _, mode := range []string{"default", "go", "decimal", "openmetrics"} {
 		t.Run(mode, func(t *testing.T) {
 			var requests [][]byte
 			var requestMu sync.Mutex
@@ -42,6 +42,9 @@ func TestNumericLabelFormatRemoteWrite(t *testing.T) {
 				"endpoint": server.URL, "use_go_float_format": mode == "go", "send_metadata": true,
 				"add_metric_suffixes": false, "target_info": map[string]any{"enabled": false},
 			}
+			if mode == "openmetrics" {
+				config["use_openmetrics_float_format"] = true
+			}
 			if mode == "decimal" {
 				config["use_decimal_float_format"] = true
 			}
@@ -59,11 +62,11 @@ func TestNumericLabelFormatRemoteWrite(t *testing.T) {
 			h.SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
 			p := h.DataPoints().AppendEmpty()
 			p.SetTimestamp(1e9)
-			p.SetCount(3)
+			p.SetCount(4)
 			p.SetSum(5)
 			p.Attributes().PutStr("source", "app")
-			p.ExplicitBounds().FromRaw([]float64{1e6})
-			p.BucketCounts().FromRaw([]uint64{2, 1})
+			p.ExplicitBounds().FromRaw([]float64{1, 1e6})
+			p.BucketCounts().FromRaw([]uint64{1, 2, 1})
 			require.NoError(t, exp.PushMetrics(t.Context(), metrics))
 			requestMu.Lock()
 			received := append([][]byte(nil), requests...)
@@ -92,14 +95,16 @@ func TestNumericLabelFormatRemoteWrite(t *testing.T) {
 					}
 				}
 			}
-			want := "1000000"
+			want, one := "1000000", "1"
 			switch mode {
 			case "go":
 				want = "1e+06"
 			case "decimal":
-				want = "1000000.0"
+				want, one = "1000000.0", "1.0"
+			case "openmetrics":
+				want, one = "1e+06", "1.0"
 			}
-			require.Equal(t, map[string]float64{want: 2, "+Inf": 3}, bounds)
+			require.Equal(t, map[string]float64{one: 1, want: 3, "+Inf": 4}, bounds)
 		})
 	}
 }
@@ -108,7 +113,17 @@ func TestNumericLabelFormatsMutuallyExclusive(t *testing.T) {
 	cfg := createDefaultConfig().(*Config)
 	require.False(t, cfg.UseGoFloatFormat)
 	require.False(t, cfg.UseDecimalFloatFormat)
+	require.False(t, cfg.UseOpenMetricsFloatFormat)
 	cfg.UseGoFloatFormat = true
 	cfg.UseDecimalFloatFormat = true
 	require.EqualError(t, cfg.Validate(), "use_go_float_format and use_decimal_float_format are mutually exclusive")
+}
+
+func TestOpenMetricsFormatMutuallyExclusive(t *testing.T) {
+	for _, pair := range []struct{ goFormat, decimalFormat bool }{{true, false}, {false, true}, {true, true}} {
+		cfg := createDefaultConfig().(*Config)
+		cfg.UseOpenMetricsFloatFormat = true
+		cfg.UseGoFloatFormat, cfg.UseDecimalFloatFormat = pair.goFormat, pair.decimalFormat
+		require.EqualError(t, cfg.Validate(), "use_openmetrics_float_format is mutually exclusive with use_go_float_format and use_decimal_float_format")
+	}
 }

@@ -71,6 +71,10 @@ type Config struct {
 	// with .0 on finite integers. Mutually exclusive with UseGoFloatFormat. Default: false.
 	UseDecimalFloatFormat bool `mapstructure:"use_decimal_float_format"`
 
+	// UseOpenMetricsFloatFormat uses Prometheus canonical le and quantile labels.
+	// Mutually exclusive with the Go and decimal formats. Default: false.
+	UseOpenMetricsFloatFormat bool `mapstructure:"use_openmetrics_float_format"`
+
 	// RemoteWriteProtoMsg controls whether prometheus remote write v1 or v2 is sent.
 	RemoteWriteProtoMsg remoteapi.WriteMessageType `mapstructure:"protobuf_message,omitempty"`
 }
@@ -107,6 +111,9 @@ var _ component.Config = (*Config)(nil)
 
 // Validate checks if the exporter configuration is valid
 func (cfg *Config) Validate() error {
+	if cfg.UseOpenMetricsFloatFormat && (cfg.UseGoFloatFormat || cfg.UseDecimalFloatFormat) {
+		return errors.New("use_openmetrics_float_format is mutually exclusive with use_go_float_format and use_decimal_float_format")
+	}
 	if cfg.UseGoFloatFormat && cfg.UseDecimalFloatFormat {
 		return errors.New("use_go_float_format and use_decimal_float_format are mutually exclusive")
 	}
