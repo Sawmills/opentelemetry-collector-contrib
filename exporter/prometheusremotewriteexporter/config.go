@@ -63,6 +63,10 @@ type Config struct {
 	// SendMetadata controls whether prometheus metadata will be generated and sent, this option is ignored when using PRW 2.0, which always includes metadata.
 	SendMetadata bool `mapstructure:"send_metadata"`
 
+	// UseGoFloatFormat renders le and quantile labels with shortest Go float formatting.
+	// Enable only for sources whose existing labels use that format. Default: false.
+	UseGoFloatFormat bool `mapstructure:"use_go_float_format"`
+
 	// RemoteWriteProtoMsg controls whether prometheus remote write v1 or v2 is sent.
 	RemoteWriteProtoMsg remoteapi.WriteMessageType `mapstructure:"protobuf_message,omitempty"`
 }

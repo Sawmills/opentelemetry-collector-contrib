@@ -20,6 +20,9 @@ import (
 )
 
 type Settings struct {
+	// UseGoFloatFormat renders le and quantile labels like the Go Prometheus client.
+	// The zero value retains fixed-point formatting.
+	UseGoFloatFormat  bool
 	Namespace         string
 	ExternalLabels    map[string]string
 	DisableTargetInfo bool
