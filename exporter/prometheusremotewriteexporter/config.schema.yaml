@@ -70,6 +70,9 @@ properties:
   target_info:
     description: TargetInfo allows customizing the target_info metric
     $ref: target_info
+  use_decimal_float_format:
+    description: 'UseDecimalFloatFormat renders le and quantile labels in shortest fixed-point form, with .0 on finite integers. Mutually exclusive with UseGoFloatFormat. Default: false.'
+    type: boolean
   use_go_float_format:
     description: 'UseGoFloatFormat renders le and quantile labels with shortest Go float formatting. Enable only for sources whose existing labels use that format. Default: false.'
     type: boolean

@@ -67,6 +67,10 @@ type Config struct {
 	// Enable only for sources whose existing labels use that format. Default: false.
 	UseGoFloatFormat bool `mapstructure:"use_go_float_format"`
 
+	// UseDecimalFloatFormat renders le and quantile labels in shortest fixed-point form,
+	// with .0 on finite integers. Mutually exclusive with UseGoFloatFormat. Default: false.
+	UseDecimalFloatFormat bool `mapstructure:"use_decimal_float_format"`
+
 	// RemoteWriteProtoMsg controls whether prometheus remote write v1 or v2 is sent.
 	RemoteWriteProtoMsg remoteapi.WriteMessageType `mapstructure:"protobuf_message,omitempty"`
 }
@@ -103,6 +107,9 @@ var _ component.Config = (*Config)(nil)
 
 // Validate checks if the exporter configuration is valid
 func (cfg *Config) Validate() error {
+	if cfg.UseGoFloatFormat && cfg.UseDecimalFloatFormat {
+		return errors.New("use_go_float_format and use_decimal_float_format are mutually exclusive")
+	}
 	if cfg.MaxBatchRequestParallelism != nil && *cfg.MaxBatchRequestParallelism < 1 {
 		return errors.New("max_batch_request_parallelism can't be set to below 1")
 	}

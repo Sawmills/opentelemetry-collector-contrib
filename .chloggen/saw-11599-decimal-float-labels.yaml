@@ -1,0 +1,6 @@
+change_type: enhancement
+component: exporter/prometheusremotewrite
+note: Add opt-in fixed-point numeric labels with a decimal zero for finite integers.
+issues: [118]
+subtext: The Sawmills fork can preserve audited decimal histogram and summary labels. Defaults remain unchanged. The new setting is mutually exclusive with Go float formatting and does not emulate arbitrary source formatters.
+change_logs: [user, api]
