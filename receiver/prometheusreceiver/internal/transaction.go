@@ -59,6 +59,7 @@ type transaction struct {
 	nodeResources         map[resourceKey]pcommon.Resource
 	scopeAttributes       map[resourceKey]map[scopeID]pcommon.Map
 	ignoreScopeInfoMetric bool
+	preserveInfoMetrics   bool
 	logger                *zap.Logger
 	buildInfo             component.BuildInfo
 	obsrecv               *receiverhelper.ObsReport
@@ -156,13 +157,13 @@ func (t *transaction) Append(_ storage.SeriesRef, ls labels.Labels, atMs int64, 
 	}
 
 	// For the `target_info` metric we need to convert it to resource attributes.
-	if metricName == prometheus.TargetInfoMetricName {
+	if metricName == prometheus.TargetInfoMetricName && !t.preserveInfoMetrics {
 		t.AddTargetInfo(*rKey, ls)
 		return 0, nil
 	}
 
 	// For the `otel_scope_info` metric we need to convert it to scope attributes.
-	if metricName == prometheus.ScopeInfoMetricName && !t.ignoreScopeInfoMetric {
+	if metricName == prometheus.ScopeInfoMetricName && !t.ignoreScopeInfoMetric && !t.preserveInfoMetrics {
 		t.addScopeInfo(*rKey, ls)
 		return 0, nil
 	}
@@ -253,6 +254,10 @@ func (t *transaction) getOrCreateMetricFamily(key resourceKey, scope scopeID, mn
 		mf, ok := t.families[key][scope][fnKey]
 		if !ok || !mf.includesMetric(mn) {
 			curMf = newMetricFamily(mn, t.mc, t.logger, t.addingNativeHistogram, t.addingNHCB)
+			if t.preserveInfoMetrics && (mn == prometheus.TargetInfoMetricName || mn == prometheus.ScopeInfoMetricName) {
+				// OpenMetrics info metadata uses the base family name; retain the source sample name.
+				curMf.name = mn
+			}
 			t.families[key][scope][metricFamilyKey{isExponentialHistogram: mfKey.isExponentialHistogram, name: curMf.name}] = curMf
 			return curMf
 		}

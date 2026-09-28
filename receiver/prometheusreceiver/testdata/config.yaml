@@ -1,6 +1,7 @@
 prometheus:
 prometheus/customname:
   trim_metric_suffixes: true
+  preserve_info_metrics: true
   target_allocator:
     endpoint: http://my-targetallocator-service
     interval: 30s

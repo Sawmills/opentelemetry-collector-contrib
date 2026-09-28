@@ -230,6 +230,17 @@ the OpenTelemetry Instrumentation Scope name and version. It drops the `otel_sco
 and uses attributes (other than `otel_scope_name` and `otel_scope_version`) to populate Scope
 Attributes.
 
+Set `preserve_info_metrics: true` on the receiver to retain `target_info` and
+`otel_scope_info` as source metrics with their original TYPE and HELP metadata.
+The receiver then does not use these metrics to populate Resource or Scope
+attributes. This option defaults to `false` and is intended for Prometheus
+scrape forwarding that must preserve these source metrics. Renaming them with
+metric relabeling loses their metadata lookup and is not equivalent.
+
+This option does not change the handling of `otel_scope_*` labels. A forwarding
+pipeline must still preserve those labels separately and disable generated
+scope and target info in its exporter when required by its label contract.
+
 ## Prometheus API Server
 The Prometheus API server can be enabled to host info about the Prometheus targets, config, service discovery, and metrics. The `server_config` can be specified using the OpenTelemetry confighttp package. An example configuration would be:
 

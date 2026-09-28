@@ -15,10 +15,11 @@ import (
 
 // appendable translates Prometheus scraping diffs into OpenTelemetry format.
 type appendable struct {
-	sink           consumer.Metrics
-	useMetadata    bool
-	trimSuffixes   bool
-	externalLabels labels.Labels
+	sink                consumer.Metrics
+	useMetadata         bool
+	trimSuffixes        bool
+	preserveInfoMetrics bool
+	externalLabels      labels.Labels
 
 	settings receiver.Settings
 	obsrecv  *receiverhelper.ObsReport
@@ -31,6 +32,7 @@ func NewAppendable(
 	useMetadata bool,
 	externalLabels labels.Labels,
 	trimSuffixes bool,
+	preserveInfoMetrics bool,
 ) (storage.Appendable, error) {
 	obsrecv, err := receiverhelper.NewObsReport(receiverhelper.ObsReportSettings{ReceiverID: set.ID, Transport: transport, ReceiverCreateSettings: set})
 	if err != nil {
@@ -38,15 +40,18 @@ func NewAppendable(
 	}
 
 	return &appendable{
-		sink:           sink,
-		settings:       set,
-		useMetadata:    useMetadata,
-		externalLabels: externalLabels,
-		obsrecv:        obsrecv,
-		trimSuffixes:   trimSuffixes,
+		sink:                sink,
+		settings:            set,
+		useMetadata:         useMetadata,
+		externalLabels:      externalLabels,
+		obsrecv:             obsrecv,
+		trimSuffixes:        trimSuffixes,
+		preserveInfoMetrics: preserveInfoMetrics,
 	}, nil
 }
 
 func (o *appendable) Appender(ctx context.Context) storage.Appender {
-	return newTransaction(ctx, o.sink, o.externalLabels, o.settings, o.obsrecv, o.trimSuffixes, o.useMetadata)
+	transaction := newTransaction(ctx, o.sink, o.externalLabels, o.settings, o.obsrecv, o.trimSuffixes, o.useMetadata)
+	transaction.preserveInfoMetrics = o.preserveInfoMetrics
+	return transaction
 }
