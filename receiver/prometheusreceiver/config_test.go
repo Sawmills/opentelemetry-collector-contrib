@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
 	"go.opentelemetry.io/collector/confmap/xconfmap"
 	"go.opentelemetry.io/collector/receiver/receivertest"
@@ -63,6 +64,19 @@ func TestLoadConfig(t *testing.T) {
 	assert.Equal(t, promConfig.Secret("changeme"), ta.HTTPSDConfig.HTTPClientConfig.BasicAuth.Password)
 	assert.Equal(t, "scrape_prometheus", ta.HTTPScrapeConfig.BasicAuth.Username)
 	assert.Equal(t, promConfig.Secret("scrape_changeme"), ta.HTTPScrapeConfig.BasicAuth.Password)
+}
+
+func TestPreserveInfoMetricsConfig(t *testing.T) {
+	factory := NewFactory()
+	assert.False(t, factory.CreateDefaultConfig().(*Config).PreserveInfoMetrics)
+	for _, preserve := range []bool{false, true} {
+		t.Run(fmt.Sprintf("preserve=%t", preserve), func(t *testing.T) {
+			cfg := factory.CreateDefaultConfig()
+			cm := confmap.NewFromStringMap(map[string]any{"preserve_info_metrics": preserve})
+			require.NoError(t, cm.Unmarshal(cfg))
+			assert.Equal(t, preserve, cfg.(*Config).PreserveInfoMetrics)
+		})
+	}
 }
 
 func TestLoadTargetAllocatorConfig(t *testing.T) {

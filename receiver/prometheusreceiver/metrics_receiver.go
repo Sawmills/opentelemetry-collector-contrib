@@ -177,6 +177,7 @@ func (r *pReceiver) initPrometheusComponents(
 		!r.cfg.ignoreMetadata,
 		r.cfg.PrometheusConfig.GlobalConfig.ExternalLabels,
 		r.cfg.TrimMetricSuffixes,
+		r.cfg.PreserveInfoMetrics,
 	)
 	if err != nil {
 		return err

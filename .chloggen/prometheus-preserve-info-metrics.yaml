@@ -1,0 +1,5 @@
+change_type: enhancement
+component: receiver/prometheus
+note: Add an opt-in preserve_info_metrics setting for forwarding source info metrics without losing their type or help.
+issues: [118]
+subtext: The default resource and scope enrichment behavior is unchanged.

@@ -29,6 +29,8 @@ import (
 type Config struct {
 	PrometheusConfig   *PromConfig `mapstructure:"config"`
 	TrimMetricSuffixes bool        `mapstructure:"trim_metric_suffixes"`
+	// PreserveInfoMetrics keeps source info metrics instead of converting them to resource or scope attributes.
+	PreserveInfoMetrics bool `mapstructure:"preserve_info_metrics"`
 
 	TargetAllocator configoptional.Optional[targetallocator.Config] `mapstructure:"target_allocator"`
 
