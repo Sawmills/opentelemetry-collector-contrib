@@ -8,7 +8,7 @@ This recommendation addresses failed uploads within a running process. It does n
 
 Research examined fork commit `aeb249f605dbabc0081c700867de1afddc155a93` and the exact Collector dependency revision `76ede073ee8e`. The encoder source came from collector commit `b541a8ec9ffb66df76add1f75c28cd82b2ca241e`, used by the prior source review. No product files changed during this research. The controlled staging report for SAW-11452 found missing records after exhausted uploads and repeated writes after lost responses.
 
-The Datadog encoder copies the completed gzip buffer, then resets it before the exporter sees an upload result. Replaying only the last input batch cannot reconstruct earlier records. See [checkAndFlush and initializeBuilder][encoder].
+The Datadog encoder copies the completed gzip buffer, then resets it before the exporter sees an upload result. Replaying only the last input batch cannot reconstruct earlier records. See `checkAndFlush` and `initializeBuilder` in the private `Sawmills/sawmills-collector` repository, file `extension/datadoglogencodingextension/extension.go`, at the collector commit above.
 
 The S3 [logs factory][factory] uses pdata queueing and timeout, with no helper retry option. Adding helper retry around `ConsumeLogs` repeats stateful encoding. This does not retain the first archive. The [upload manager][writer] also builds a new partition key on every `Upload` call. A retry must reuse the prepared key, bucket, content, and metadata.
 
@@ -74,7 +74,6 @@ A new custom spool duplicates queue lifecycle and persistence logic. Existing he
 - A single oversized input batch exceeds the normal archive threshold. The result must match the documented capacity contract.
 - Real S3 versions and downstream events need separate duplicate-delivery tests. Same-key overwrites do not establish exactly-once downstream delivery.
 
-[encoder]: https://github.com/Sawmills/sawmills-collector/blob/b541a8ec9ffb66df76add1f75c28cd82b2ca241e/extension/datadoglogencodingextension/extension.go
 [factory]: ../factory.go
 [writer]: ../internal/upload/writer.go
 [custom]: https://github.com/open-telemetry/opentelemetry-collector/blob/76ede073ee8e/exporter/exporterhelper/xexporterhelper/new_request.go
