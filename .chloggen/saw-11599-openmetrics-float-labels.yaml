@@ -1,0 +1,6 @@
+change_type: enhancement
+component: exporter/prometheusremotewrite
+note: Add opt-in canonical OpenMetrics numeric labels using the existing Prometheus formatter.
+issues: [118]
+subtext: Preserve audited Prometheus 3.5.0 histogram bounds and summary quantiles. Defaults remain unchanged. The setting is mutually exclusive with the Go and decimal formats.
+change_logs: [user, api]

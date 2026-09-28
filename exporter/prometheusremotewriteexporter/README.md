@@ -65,6 +65,12 @@ The following settings can be optionally configured:
   Compare every source label spelling and stored identity before enabling this configuration, and again when the source version changes.
   Use a separate exporter and pipeline for sources with this format. Keep Go sources on their existing configuration.
   Metric types, values and metadata are unchanged. Existing fixed-point formatting without the added `.0` remains the default.
+- `use_openmetrics_float_format` (Sawmills fork, default = `false`): Use Prometheus canonical OpenMetrics spelling for `le` and `quantile` labels.
+  It uses the existing Prometheus formatter: `1` becomes `1.0`, while `1000000` becomes `1e+06` and `0.00001` becomes `1e-05`.
+  Both signs of zero become `0.0`. Infinity and NaN keep their standard labels.
+  The setting applies to classic histograms and summaries in both remote-write versions. It cannot be combined with either other numeric format setting.
+  Compare stored labels before enabling it. This setting matches the audited Prometheus 3.5.0 labels; it does not preserve arbitrary source spelling.
+  Use separate exporters for sources that require different formats. Metric types, values and metadata remain unchanged.
 - `send_metadata`: If set to true, prometheus metadata will be generated and sent. Default: false. This option is ignored when using PRW 2.0, which always includes metadata.
 - `remote_write_queue`: fine tuning for queueing and sending of the outgoing remote writes.
   - `enabled`: enable the sending queue (default: `true`)

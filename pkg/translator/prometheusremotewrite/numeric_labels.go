@@ -7,9 +7,14 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/prometheus/prometheus/model/labels"
 )
 
 func formatNumericLabel(value float64, settings Settings) string {
+	if settings.UseOpenMetricsFloatFormat {
+		return labels.FormatOpenMetricsFloat(value)
+	}
 	if settings.UseGoFloatFormat {
 		// The Go Prometheus client writes both signs of zero as 0.
 		if value == 0 {
