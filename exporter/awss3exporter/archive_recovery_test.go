@@ -260,7 +260,7 @@ func decompressArchive(t *testing.T, body string) string {
 	t.Helper()
 	reader, err := gzip.NewReader(bytes.NewBufferString(body))
 	require.NoError(t, err)
-	defer reader.Close()
+	defer func() { require.NoError(t, reader.Close()) }()
 	content, err := io.ReadAll(reader)
 	require.NoError(t, err)
 	return string(content)
