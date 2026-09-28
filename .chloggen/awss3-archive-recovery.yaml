@@ -1,0 +1,7 @@
+change_type: bug_fix
+component: exporter/awss3
+note: Add opt-in retention and safe retries for failed encoded archives.
+issues: [46]
+subtext: |
+  Set archive_recovery to true to retain one archive in memory until upload succeeds.
+  Retries preserve the object key and bytes. This does not provide crash recovery.

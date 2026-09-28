@@ -110,6 +110,8 @@ type ResourceAttrsToS3 struct {
 
 // Config contains the main configuration options for the s3 exporter
 type Config struct {
+	// ArchiveRecovery retains one encoded archive in memory until upload succeeds.
+	ArchiveRecovery bool                                                     `mapstructure:"archive_recovery"`
 	QueueSettings   configoptional.Optional[exporterhelper.QueueBatchConfig] `mapstructure:"sending_queue"`
 	TimeoutSettings exporterhelper.TimeoutConfig                             `mapstructure:",squash"` // squash ensures fields are correctly decoded in embedded struct.
 	S3Uploader      S3UploaderConfig                                         `mapstructure:"s3uploader"`
@@ -154,6 +156,15 @@ func (c *Config) normalizedS3PartitionFormat() string {
 
 func (c *Config) Validate() error {
 	var errs error
+	if c.ArchiveRecovery && c.TimeoutSettings.Timeout <= 0 {
+		errs = multierr.Append(errs, errors.New("archive_recovery requires a positive timeout"))
+	}
+	if c.ArchiveRecovery {
+		q := c.QueueSettings.Get()
+		if q == nil || q.WaitForResult || q.BlockOnOverflow || q.StorageID != nil {
+			errs = multierr.Append(errs, errors.New("archive_recovery requires an enabled in-memory sending_queue with wait_for_result and block_on_overflow disabled"))
+		}
+	}
 	validStorageClasses := map[string]bool{
 		"STANDARD":            true,
 		"STANDARD_IA":         true,

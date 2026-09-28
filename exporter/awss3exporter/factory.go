@@ -84,18 +84,18 @@ func createLogsExporter(ctx context.Context,
 		exporterhelper.WithStart(s3Exporter.start),
 		exporterhelper.WithShutdown(s3Exporter.shutdown),
 		exporterhelper.WithQueue(cfg.QueueSettings),
-		exporterhelper.WithTimeout(cfg.TimeoutSettings),
+		exporterhelper.WithTimeout(s3Exporter.helperTimeout()),
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	if cfg.ResourceAttrsToS3.S3Prefix == "" {
-		return logsExporter, err
+		return &baseLogsExporter{Component: s3Exporter.lifecycle(logsExporter), Logs: logsExporter}, nil
 	}
 
 	wrapped := &baseLogsExporter{
-		Component: logsExporter,
+		Component: s3Exporter.lifecycle(logsExporter),
 		Logs:      batchperresourceattr.NewBatchPerResourceLogs(cfg.ResourceAttrsToS3.S3Prefix, logsExporter),
 	}
 	return wrapped, nil
@@ -123,18 +123,18 @@ func createMetricsExporter(ctx context.Context,
 		exporterhelper.WithStart(s3Exporter.start),
 		exporterhelper.WithShutdown(s3Exporter.shutdown),
 		exporterhelper.WithQueue(cfg.QueueSettings),
-		exporterhelper.WithTimeout(cfg.TimeoutSettings),
+		exporterhelper.WithTimeout(s3Exporter.helperTimeout()),
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	if cfg.ResourceAttrsToS3.S3Prefix == "" {
-		return metricsExporter, err
+		return &baseMetricsExporter{Component: s3Exporter.lifecycle(metricsExporter), Metrics: metricsExporter}, nil
 	}
 
 	wrapped := &baseMetricsExporter{
-		Component: metricsExporter,
+		Component: s3Exporter.lifecycle(metricsExporter),
 		Metrics:   batchperresourceattr.NewBatchPerResourceMetrics(cfg.ResourceAttrsToS3.S3Prefix, metricsExporter),
 	}
 	return wrapped, nil
@@ -163,18 +163,18 @@ func createTracesExporter(ctx context.Context,
 		exporterhelper.WithStart(s3Exporter.start),
 		exporterhelper.WithShutdown(s3Exporter.shutdown),
 		exporterhelper.WithQueue(cfg.QueueSettings),
-		exporterhelper.WithTimeout(cfg.TimeoutSettings),
+		exporterhelper.WithTimeout(s3Exporter.helperTimeout()),
 	)
 	if err != nil {
 		return nil, err
 	}
 
 	if cfg.ResourceAttrsToS3.S3Prefix == "" {
-		return tracesExporter, err
+		return &baseTracesExporter{Component: s3Exporter.lifecycle(tracesExporter), Traces: tracesExporter}, nil
 	}
 
 	wrapped := &baseTracesExporter{
-		Component: tracesExporter,
+		Component: s3Exporter.lifecycle(tracesExporter),
 		Traces:    batchperresourceattr.NewBatchPerResourceTraces(cfg.ResourceAttrsToS3.S3Prefix, tracesExporter),
 	}
 	return wrapped, nil

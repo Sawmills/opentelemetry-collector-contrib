@@ -86,6 +86,9 @@ $defs:
 description: Config contains the main configuration options for the s3 exporter
 type: object
 properties:
+  archive_recovery:
+    description: ArchiveRecovery retains one encoded archive in memory until upload succeeds.
+    type: boolean
   encoding:
     description: Encoding to apply. If present, overrides the marshaler configuration option.
     x-pointer: true

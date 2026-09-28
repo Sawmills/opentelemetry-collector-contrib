@@ -36,18 +36,22 @@ type marshalerWithFlushMetadata interface {
 }
 
 type exporterTelemetry struct {
-	flushStart            metric.Int64Counter
-	flushComplete         metric.Int64Counter
-	uploadAttempt         metric.Int64Counter
-	uploadStart           metric.Int64Counter
-	uploadComplete        metric.Int64Counter
-	uploadFailed          metric.Int64Counter
-	uploadBytes           metric.Int64Counter
-	flushDuration         metric.Int64Histogram
-	uploadDuration        metric.Int64Histogram
-	uploadObjectSize      metric.Int64Histogram
-	flushToUploadDuration metric.Int64Histogram
-	lastSuccessfulUpload  metric.Int64Gauge
+	exporterID               string
+	retainedArchiveTimestamp metric.Int64Gauge
+	retainedArchives         metric.Int64Gauge
+	retainedArchiveBytes     metric.Int64Gauge
+	flushStart               metric.Int64Counter
+	flushComplete            metric.Int64Counter
+	uploadAttempt            metric.Int64Counter
+	uploadStart              metric.Int64Counter
+	uploadComplete           metric.Int64Counter
+	uploadFailed             metric.Int64Counter
+	uploadBytes              metric.Int64Counter
+	flushDuration            metric.Int64Histogram
+	uploadDuration           metric.Int64Histogram
+	uploadObjectSize         metric.Int64Histogram
+	flushToUploadDuration    metric.Int64Histogram
+	lastSuccessfulUpload     metric.Int64Gauge
 }
 
 const (
@@ -66,14 +70,18 @@ const (
 )
 
 type s3Exporter struct {
-	config     *Config
-	signalType string
-	uploader   upload.Manager
-	logger     *zap.Logger
-	marshaler  marshaler
-	telemetry  *exporterTelemetry
-	done       chan struct{}
-	shutOnce   sync.Once
+	config      *Config
+	signalType  string
+	uploader    upload.Manager
+	logger      *zap.Logger
+	marshaler   marshaler
+	telemetry   *exporterTelemetry
+	done        chan struct{}
+	shutOnce    sync.Once
+	timerWG     sync.WaitGroup
+	timerCancel context.CancelFunc
+	timerErr    error // Written by the timer worker; read after timerWG.Wait.
+	recovery    *archiveRecovery
 }
 
 func newS3Exporter(
@@ -82,6 +90,7 @@ func newS3Exporter(
 	params exporter.Settings,
 ) *s3Exporter {
 	telemetry := newExporterTelemetry(params.TelemetrySettings, params.Logger)
+	telemetry.exporterID = params.ID.String()
 
 	s3Exporter := &s3Exporter{
 		config:     config,
@@ -89,6 +98,9 @@ func newS3Exporter(
 		logger:     params.Logger,
 		telemetry:  telemetry,
 		done:       make(chan struct{}),
+	}
+	if config.ArchiveRecovery {
+		s3Exporter.recovery = newArchiveRecovery()
 	}
 	return s3Exporter
 }
@@ -156,17 +168,28 @@ func (e *s3Exporter) start(ctx context.Context, host component.Host) error {
 				// PartitionTimeLocation to time.Local when unset.
 				loc = time.Local
 			}
-			go e.runEvery(ctx, e.config.S3Uploader.S3Partition, loc, func() {
-				if err := e.flushMarshaler(ctx, "timer"); err != nil {
-					e.logger.Error("Failed to flush S3 exporter", zap.Error(err))
-				}
+			timerCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+			e.timerCancel = cancel
+			e.timerWG.Add(1)
+			go e.runEvery(timerCtx, e.config.S3Uploader.S3Partition, loc, func() {
+				e.flushOnTimer(timerCtx)
 			})
 		}
 	}
 	return nil
 }
 
+func (e *s3Exporter) flushOnTimer(ctx context.Context) {
+	if err := e.flushMarshaler(ctx, "timer"); err != nil {
+		// Preserve the last failed timer flush for shutdown reporting. A later
+		// successful flush cannot recover an archive lost with recovery disabled.
+		e.timerErr = err
+		e.logger.Error("Failed to flush S3 exporter", zap.Error(err))
+	}
+}
+
 func (e *s3Exporter) runEvery(ctx context.Context, s3Partition string, loc *time.Location, task func()) {
+	defer e.timerWG.Done()
 	var getNextTick func(time.Time) time.Time
 	switch s3Partition {
 	case "minute":
@@ -202,6 +225,10 @@ func (e *s3Exporter) runEvery(ctx context.Context, s3Partition string, loc *time
 }
 
 func (e *s3Exporter) flushMarshaler(ctx context.Context, reason string) error {
+	return e.withArchiveAdmission(ctx, func() error { return e.flushMarshalerAdmitted(ctx, reason) })
+}
+
+func (e *s3Exporter) flushMarshalerAdmitted(ctx context.Context, reason string) error {
 	if e.marshaler == nil {
 		return nil
 	}
@@ -248,8 +275,7 @@ func (e *s3Exporter) flushMarshaler(ctx context.Context, reason string) error {
 }
 
 func (e *s3Exporter) shutdown(ctx context.Context) error {
-	e.shutOnce.Do(func() { close(e.done) })
-	return e.flushMarshaler(ctx, "shutdown")
+	return e.shutdownArchives(ctx)
 }
 
 func (*s3Exporter) Capabilities() consumer.Capabilities {
@@ -257,6 +283,10 @@ func (*s3Exporter) Capabilities() consumer.Capabilities {
 }
 
 func (e *s3Exporter) ConsumeMetrics(ctx context.Context, md pmetric.Metrics) error {
+	return e.withArchiveAdmission(ctx, func() error { return e.consumeMetricsAdmitted(ctx, md) })
+}
+
+func (e *s3Exporter) consumeMetricsAdmitted(ctx context.Context, md pmetric.Metrics) error {
 	buf, err := e.marshaler.MarshalMetrics(md)
 	if err != nil {
 		return err
@@ -267,6 +297,10 @@ func (e *s3Exporter) ConsumeMetrics(ctx context.Context, md pmetric.Metrics) err
 }
 
 func (e *s3Exporter) ConsumeLogs(ctx context.Context, logs plog.Logs) error {
+	return e.withArchiveAdmission(ctx, func() error { return e.consumeLogsAdmitted(ctx, logs) })
+}
+
+func (e *s3Exporter) consumeLogsAdmitted(ctx context.Context, logs plog.Logs) error {
 	flushStartedAt := time.Now()
 	e.telemetry.recordFlushStart(ctx, e.signalType)
 
@@ -290,6 +324,10 @@ func (e *s3Exporter) ConsumeLogs(ctx context.Context, logs plog.Logs) error {
 }
 
 func (e *s3Exporter) ConsumeTraces(ctx context.Context, traces ptrace.Traces) error {
+	return e.withArchiveAdmission(ctx, func() error { return e.consumeTracesAdmitted(ctx, traces) })
+}
+
+func (e *s3Exporter) consumeTracesAdmitted(ctx context.Context, traces ptrace.Traces) error {
 	buf, err := e.marshaler.MarshalTraces(traces)
 	if err != nil {
 		return err
@@ -305,6 +343,17 @@ func (e *s3Exporter) uploadBuffer(
 	flushMeta flushMetadata,
 ) error {
 	if len(buf) == 0 {
+		return nil
+	}
+
+	if e.recovery != nil {
+		e.recovery.pending = e.uploader.(upload.PreparingManager).Prepare(ctx, buf, uploadOpts)
+		e.recovery.meta = flushMeta
+		e.recovery.archiveBytes = int64(len(buf))
+		e.telemetry.recordRetainedArchive(ctx, e.signalType, 1, e.recovery.archiveBytes)
+		if err := e.attemptArchive(ctx); err != nil {
+			return errArchiveRetained
+		}
 		return nil
 	}
 
@@ -331,6 +380,9 @@ func newExporterTelemetry(settings component.TelemetrySettings, logger *zap.Logg
 
 	meter := meterProvider.Meter(metadata.ScopeName)
 	tel := &exporterTelemetry{}
+	tel.retainedArchiveTimestamp = mustGauge(meter, "otelcol_exporter_awss3_retained_archive_timestamp", logger, metric.WithUnit("s"))
+	tel.retainedArchives = mustGauge(meter, "otelcol_exporter_awss3_retained_archives", logger, metric.WithUnit("1"))
+	tel.retainedArchiveBytes = mustGauge(meter, "otelcol_exporter_awss3_retained_archive_bytes", logger, metric.WithUnit("By"))
 	tel.flushStart = mustCounter(meter, flushStartMetricName, logger)
 	tel.flushComplete = mustCounter(meter, flushCompleteMetricName, logger)
 	tel.uploadAttempt = mustCounter(meter, uploadAttemptMetricName, logger, metric.WithUnit("1"))
@@ -504,4 +556,24 @@ func durationMillis(duration time.Duration) int64 {
 		return 0
 	}
 	return duration.Milliseconds()
+}
+
+func (t *exporterTelemetry) recordRetainedArchive(ctx context.Context, signal string, count, size int64) {
+	if t == nil {
+		return
+	}
+	attrs := metric.WithAttributes(attribute.String("signal", signal), attribute.String("exporter", t.exporterID))
+	if t.retainedArchiveTimestamp != nil {
+		var since int64
+		if count > 0 {
+			since = time.Now().Unix()
+		}
+		t.retainedArchiveTimestamp.Record(ctx, since, attrs)
+	}
+	if t.retainedArchives != nil {
+		t.retainedArchives.Record(ctx, count, attrs)
+	}
+	if t.retainedArchiveBytes != nil {
+		t.retainedArchiveBytes.Record(ctx, size, attrs)
+	}
 }
