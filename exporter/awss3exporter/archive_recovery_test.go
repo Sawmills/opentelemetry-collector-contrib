@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/config/configcompression"
 	"go.opentelemetry.io/collector/config/configoptional"
+	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	"go.opentelemetry.io/collector/exporter/exportertest"
@@ -326,6 +327,29 @@ func TestArchiveRecoveryRejectsUnsafeQueues(t *testing.T) {
 			require.ErrorContains(t, cfg.Validate(), "archive_recovery requires")
 		})
 	}
+}
+
+func TestArchiveRecoveryRejectsExplicitlyDisabledQueue(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	err := confmap.NewFromStringMap(map[string]any{
+		"archive_recovery": true,
+		"timeout":          "1s",
+		"s3uploader": map[string]any{
+			"s3_bucket": "archives",
+		},
+		"sending_queue": map[string]any{"enabled": true},
+	}).Unmarshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, cfg.Validate())
+
+	err = confmap.NewFromStringMap(map[string]any{
+		"sending_queue": map[string]any{"enabled": false},
+	}).Unmarshal(cfg)
+	require.NoError(t, err)
+	// configoptional consumes enabled; QueueConfig itself has no Enabled field.
+	require.False(t, cfg.QueueSettings.HasValue())
+	require.Nil(t, cfg.QueueSettings.Get())
+	require.ErrorContains(t, cfg.Validate(), "archive_recovery requires an enabled in-memory sending_queue")
 }
 
 func TestShutdownAllowsActiveTimerUploadToFinishWithoutRecovery(t *testing.T) {
