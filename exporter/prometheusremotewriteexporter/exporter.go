@@ -199,6 +199,10 @@ func newPRWExporter(cfg *Config, set exporter.Settings) (*prwExporter, error) {
 	// Set the desired number of consumers as a metric for the exporter.
 	telemetry.setNumberConsumer(context.Background(), int64(concurrency))
 
+	addMetricSuffixes := cfg.AddMetricSuffixes
+	if cfg.TranslationStrategy != "" {
+		addMetricSuffixes = cfg.TranslationStrategy.ShouldAddSuffixes()
+	}
 	prwe := &prwExporter{
 		endpointURL:         endpointURL,
 		wg:                  new(sync.WaitGroup),
@@ -216,7 +220,8 @@ func newPRWExporter(cfg *Config, set exporter.Settings) (*prwExporter, error) {
 			ExternalLabels:            sanitizedLabels,
 			DisableTargetInfo:         !cfg.TargetInfo.Enabled,
 			DisableScopeInfo:          cfg.DisableScopeInfo,
-			AddMetricSuffixes:         cfg.AddMetricSuffixes,
+			AddMetricSuffixes:         addMetricSuffixes,
+			TranslationStrategy:       cfg.TranslationStrategy,
 			SendMetadata:              cfg.SendMetadata,
 			UseGoFloatFormat:          cfg.UseGoFloatFormat,
 			UseDecimalFloatFormat:     cfg.UseDecimalFloatFormat,
@@ -274,7 +279,7 @@ func (prwe *prwExporter) pushMetricsV1(ctx context.Context, md pmetric.Metrics) 
 
 	var m []*prompb.MetricMetadata
 	if prwe.exporterSettings.SendMetadata {
-		m, err = prometheusremotewrite.OtelMetricsToMetadata(md, prwe.exporterSettings.AddMetricSuffixes, prwe.exporterSettings.Namespace)
+		m, err = prometheusremotewrite.OtelMetricsToMetadataWithSettings(md, prwe.exporterSettings)
 		if err != nil {
 			prwe.settings.Logger.Debug("failed to translate metrics into metadata, exporting remaining metadata", zap.Error(err), zap.Int("translated", len(m)))
 		}
@@ -314,6 +319,7 @@ func (prwe *prwExporter) PushMetrics(ctx context.Context, md pmetric.Metrics) er
 
 func validateAndSanitizeExternalLabels(cfg *Config) (map[string]string, error) {
 	namer := otlptranslator.LabelNamer{
+		UTF8Allowed:                 cfg.TranslationStrategy != "" && !cfg.TranslationStrategy.ShouldEscape(),
 		UnderscoreLabelSanitization: !prometheustranslator.DropSanitizationGate.IsEnabled(),
 	}
 	sanitizedLabels := make(map[string]string)

@@ -50,6 +50,12 @@ The following settings can be optionally configured:
   - *Note the following headers cannot be changed: `Content-Encoding`, `Content-Type`, `X-Prometheus-Remote-Write-Version`, and `User-Agent`.*
 - `namespace`: prefix attached to each exported metric name.
 - `add_metric_suffixes`: If set to false, type and unit suffixes will not be added to metrics. Default: true.
+- `translation_strategy`: Controls metric and label name escaping. When set, it overrides `add_metric_suffixes`.
+  Accepted values are `UnderscoreEscapingWithSuffixes`, `UnderscoreEscapingWithoutSuffixes`, `NoUTF8EscapingWithSuffixes`, and `NoTranslation`.
+  `NoTranslation` preserves source identifiers such as `rpc.server.requests` and `rpc.method`.
+  In this Sawmills fork, UTF-8 strategies also work with remote write v1 when the receiver accepts UTF-8 names, as Prometheus 3.5 does.
+  Enable them only after verifying the destination accepts those names. Older receivers can reject or discard them.
+  Leaving this option unset preserves the existing escaping and suffix behavior.
 - `use_go_float_format` (Sawmills fork, default = `false`): Use the Go Prometheus client's classic text format (0.0.4) for `le` and `quantile` labels.
   For example, `1000000` becomes `1e+06`, and `0.00001` becomes `1e-05`. Integer `1` stays `1`.
   This applies to classic histogram buckets and summary quantiles in both remote-write versions.

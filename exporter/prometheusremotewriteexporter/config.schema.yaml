@@ -70,6 +70,9 @@ properties:
   target_info:
     description: TargetInfo allows customizing the target_info metric
     $ref: target_info
+  translation_strategy:
+    description: TranslationStrategy controls metric and label name escaping and suffixes. When set, it overrides AddMetricSuffixes. UTF-8 strategies require a compatible receiver.
+    x-customType: github.com/prometheus/otlptranslator.translation_strategy_option
   use_decimal_float_format:
     description: 'UseDecimalFloatFormat renders le and quantile labels in shortest fixed-point form, with .0 on finite integers. Mutually exclusive with UseGoFloatFormat. Default: false.'
     type: boolean

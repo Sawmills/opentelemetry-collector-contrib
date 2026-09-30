@@ -1,0 +1,6 @@
+change_type: enhancement
+component: exporter/prometheusremotewrite
+note: Add explicit translation strategies to preserve UTF-8 metric and label names through remote write.
+issues: [118]
+subtext: The default escaping and suffix behavior is unchanged. UTF-8 strategies require a compatible receiver. The Sawmills fork permits UTF-8 names over remote write v1 for destinations such as Prometheus 3.5.
+change_logs: [user, api]

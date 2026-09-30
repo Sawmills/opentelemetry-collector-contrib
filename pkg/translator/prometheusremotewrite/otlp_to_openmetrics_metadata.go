@@ -47,6 +47,11 @@ func otelMetricTypeToPromMetricType(otelMetric pmetric.Metric) prompb.MetricMeta
 }
 
 func OtelMetricsToMetadata(md pmetric.Metrics, addMetricSuffixes bool, namespace string) ([]*prompb.MetricMetadata, error) {
+	return OtelMetricsToMetadataWithSettings(md, Settings{AddMetricSuffixes: addMetricSuffixes, Namespace: namespace})
+}
+
+// OtelMetricsToMetadataWithSettings uses the same name translation as exported samples.
+func OtelMetricsToMetadataWithSettings(md pmetric.Metrics, settings Settings) ([]*prompb.MetricMetadata, error) {
 	resourceMetricsSlice := md.ResourceMetrics()
 
 	metadataLength := 0
@@ -57,7 +62,7 @@ func OtelMetricsToMetadata(md pmetric.Metrics, addMetricSuffixes bool, namespace
 		}
 	}
 
-	metricNamer := otlptranslator.MetricNamer{WithMetricSuffixes: addMetricSuffixes, Namespace: namespace}
+	metricNamer := settings.metricNamer()
 	unitNamer := otlptranslator.UnitNamer{}
 	metadata := make([]*prompb.MetricMetadata, 0, metadataLength)
 	var errs error
