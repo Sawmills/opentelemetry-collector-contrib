@@ -8,6 +8,7 @@ import (
 	"github.com/prometheus/otlptranslator"
 	"github.com/prometheus/prometheus/prompb"
 	prom "github.com/prometheus/prometheus/storage/remote/otlptranslator/prometheusremotewrite"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.uber.org/multierr"
 
@@ -68,6 +69,11 @@ func OtelMetricsToMetadata(md pmetric.Metrics, addMetricSuffixes bool, namespace
 			scopeMetrics := scopeMetricsSlice.At(j)
 			for k := 0; k < scopeMetrics.Metrics().Len(); k++ {
 				metric := scopeMetrics.Metrics().At(k)
+				if present, ok := metric.Metadata().Get(prometheustranslator.MetricMetadataPresentKey); ok && present.Type() == pcommon.ValueTypeBool && !present.Bool() {
+					// Retain samples, but do not invent a declaration that can
+					// overwrite another source's name-scoped metadata.
+					continue
+				}
 				metricName, err := metricNamer.Build(prom.TranslatorMetricFromOtelMetric(metric))
 				if err != nil {
 					errs = multierr.Append(errs, err)

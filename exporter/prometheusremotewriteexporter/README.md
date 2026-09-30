@@ -72,6 +72,9 @@ The following settings can be optionally configured:
   Compare stored labels before enabling it. This setting matches the audited Prometheus 3.5.0 labels; it does not preserve arbitrary source spelling.
   Use separate exporters for sources that require different formats. Metric types, values and metadata remain unchanged.
 - `send_metadata`: If set to true, prometheus metadata will be generated and sent. Default: false. This option is ignored when using PRW 2.0, which always includes metadata.
+  With PRW 1.0, scraped samples that have no metadata in the source cache keep their values but do not generate metadata records.
+  This prevents synthesized UNKNOWN records from replacing declared metadata for the same metric name.
+  Explicit source declarations, native histogram types and ordinary OTLP metadata retain their existing behavior.
 - `remote_write_queue`: fine tuning for queueing and sending of the outgoing remote writes.
   - `enabled`: enable the sending queue (default: `true`)
   - `queue_size`: number of OTLP metrics that can be queued. Ignored if `enabled` is `false` (default: `10000`)

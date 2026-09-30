@@ -26,11 +26,12 @@ import (
 type metricFamily struct {
 	mtype pmetric.MetricType
 	// isMonotonic only applies to sums
-	isMonotonic bool
-	groups      map[uint64]*metricGroup
-	name        string
-	metadata    *scrape.MetricMetadata
-	groupOrders []*metricGroup
+	isMonotonic     bool
+	groups          map[uint64]*metricGroup
+	name            string
+	metadata        *scrape.MetricMetadata
+	metadataPresent bool
+	groupOrders     []*metricGroup
 }
 
 // metricGroup, represents a single metric of a metric family. for example a histogram metric is usually represent by
@@ -58,11 +59,12 @@ type metricGroup struct {
 }
 
 func newMetricFamily(metricName string, mc scrape.MetricMetadataStore, logger *zap.Logger, isNativeHistogram, isNHCB bool) *metricFamily {
-	metadata, familyName := metadataForMetric(metricName, mc)
+	metadata, familyName, metadataPresent := metadataForMetric(metricName, mc)
 	// Native histograms have intrinsic metric type, use it,
 	// regardless of what metadata says.
 	if isNativeHistogram {
 		metadata.Type = model.MetricTypeHistogram
+		metadataPresent = true
 	}
 
 	mtype, isMonotonic := convToMetricType(metadata.Type, isNativeHistogram && !isNHCB)
@@ -71,11 +73,12 @@ func newMetricFamily(metricName string, mc scrape.MetricMetadataStore, logger *z
 	}
 
 	return &metricFamily{
-		mtype:       mtype,
-		isMonotonic: isMonotonic,
-		groups:      make(map[uint64]*metricGroup),
-		name:        familyName,
-		metadata:    metadata,
+		mtype:           mtype,
+		isMonotonic:     isMonotonic,
+		groups:          make(map[uint64]*metricGroup),
+		name:            familyName,
+		metadata:        metadata,
+		metadataPresent: metadataPresent,
 	}
 }
 
@@ -584,6 +587,9 @@ func (mf *metricFamily) appendMetric(metrics pmetric.MetricSlice, trimSuffixes b
 	metric.SetDescription(mf.metadata.Help)
 	metric.SetUnit(prometheus.UnitWordToUCUM(mf.metadata.Unit))
 	metric.Metadata().PutStr(prometheus.MetricMetadataTypeKey, string(mf.metadata.Type))
+	if !mf.metadataPresent {
+		metric.Metadata().PutBool(prometheus.MetricMetadataPresentKey, false)
+	}
 
 	var pointCount int
 

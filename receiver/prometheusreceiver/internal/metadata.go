@@ -45,12 +45,12 @@ var internalMetricMetadata = map[string]*scrape.MetricMetadata{
 	},
 }
 
-func metadataForMetric(metricName string, mc scrape.MetricMetadataStore) (*scrape.MetricMetadata, string) {
+func metadataForMetric(metricName string, mc scrape.MetricMetadataStore) (*scrape.MetricMetadata, string, bool) {
 	if metadata, ok := internalMetricMetadata[metricName]; ok {
-		return metadata, metricName
+		return metadata, metricName, true
 	}
 	if metadata, ok := mc.GetMetadata(metricName); ok {
-		return &metadata, metricName
+		return &metadata, metricName, true
 	}
 	// If we didn't find metadata with the original name,
 	// try with suffixes trimmed, in-case it is a "merged" metric type.
@@ -59,18 +59,18 @@ func metadataForMetric(metricName string, mc scrape.MetricMetadataStore) (*scrap
 		if metadata.Type == model.MetricTypeCounter {
 			// NB (eriksywu): see https://github.com/prometheus/prometheus/issues/14823
 			if strings.HasSuffix(metricName, metricSuffixCreated) {
-				return &metadata, normalizedName + metricSuffixTotal
+				return &metadata, normalizedName + metricSuffixTotal, true
 			}
 			// END NB (eriksywu)
-			return &metadata, metricName
+			return &metadata, metricName, true
 		}
-		return &metadata, normalizedName
+		return &metadata, normalizedName, true
 	}
 	// Otherwise, the metric is unknown
 	return &scrape.MetricMetadata{
 		MetricFamily: metricName,
 		Type:         model.MetricTypeUnknown,
-	}, metricName
+	}, metricName, false
 }
 
 // isCounterCreatedLine determines whether a metric is a _created line for a counter appended by an om-text parser
