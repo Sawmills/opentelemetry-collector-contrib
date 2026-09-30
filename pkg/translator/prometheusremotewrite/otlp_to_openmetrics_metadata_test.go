@@ -335,3 +335,49 @@ func initMetric(m pmetric.Metric, name string, ty pmetric.MetricType, unit, desc
 		m.SetEmptySummary()
 	}
 }
+
+func TestOtelMetadataPresenceMarker(t *testing.T) {
+	tests := []struct {
+		name   string
+		marker any
+		want   bool
+	}{
+		{name: "ordinary OTLP", want: true},
+		{name: "source metadata present", marker: true, want: true},
+		{name: "source metadata absent", marker: false},
+		{name: "nonboolean marker", marker: "false", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			md := pmetric.NewMetrics()
+			m := md.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
+			m.SetName("ordinary_gauge")
+			m.SetDescription("Original help")
+			m.SetUnit("s")
+			dp := m.SetEmptyGauge().DataPoints().AppendEmpty()
+			dp.SetDoubleValue(42)
+			dp.SetTimestamp(pcommon.Timestamp(1000000000))
+			dp.Attributes().PutStr("source", "fixture")
+			switch marker := tt.marker.(type) {
+			case bool:
+				m.Metadata().PutBool(prometheustranslator.MetricMetadataPresentKey, marker)
+			case string:
+				m.Metadata().PutStr(prometheustranslator.MetricMetadataPresentKey, marker)
+			}
+			rows, err := OtelMetricsToMetadata(md, false, "")
+			require.NoError(t, err)
+			if tt.want {
+				require.Equal(t, []*prompb.MetricMetadata{{MetricFamilyName: "ordinary_gauge", Type: prompb.MetricMetadata_GAUGE, Help: "Original help", Unit: "seconds"}}, rows)
+			} else {
+				require.Empty(t, rows)
+			}
+			ts, err := FromMetrics(md, Settings{DisableTargetInfo: true, DisableScopeInfo: true})
+			require.NoError(t, err)
+			require.Len(t, ts, 1)
+			for _, series := range ts {
+				require.Equal(t, []prompb.Label{{Name: "__name__", Value: "ordinary_gauge"}, {Name: "source", Value: "fixture"}}, series.Labels)
+				require.Equal(t, []prompb.Sample{{Value: 42, Timestamp: 1000}}, series.Samples)
+			}
+		})
+	}
+}

@@ -8,6 +8,9 @@ const (
 	// type in metric metadata:
 	// https://github.com/open-telemetry/opentelemetry-specification/blob/e6eccba97ebaffbbfad6d4358408a2cead0ec2df/specification/compatibility/prometheus_and_openmetrics.md#metric-metadata
 	MetricMetadataTypeKey = "prometheus.type"
+	// MetricMetadataPresentKey marks absent source metadata in the Prometheus
+	// scrape cache. It is internal provenance, not a time-series label.
+	MetricMetadataPresentKey = "prometheus.metadata_present"
 	// ExemplarTraceIDKey is the key used to store the trace ID in Prometheus
 	// exemplars:
 	// https://github.com/open-telemetry/opentelemetry-specification/blob/e6eccba97ebaffbbfad6d4358408a2cead0ec2df/specification/compatibility/prometheus_and_openmetrics.md#exemplars

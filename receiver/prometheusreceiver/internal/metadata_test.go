@@ -13,7 +13,7 @@ import (
 
 func TestMetadataForMetric_Internal(t *testing.T) {
 	// Internal metric should return from internalMetricMetadata, ignoring external store.
-	metadata, resolved := metadataForMetric(scrapeUpMetricName, emptyMetadataStore{})
+	metadata, resolved, _ := metadataForMetric(scrapeUpMetricName, emptyMetadataStore{})
 	if resolved != scrapeUpMetricName {
 		t.Fatalf("expected resolved name %q, got %q", scrapeUpMetricName, resolved)
 	}
@@ -34,7 +34,7 @@ func TestMetadataForMetric_ExternalExactHit(t *testing.T) {
 		},
 	},
 	)
-	metadata, resolved := metadataForMetric("http_requests_total", store)
+	metadata, resolved, _ := metadataForMetric("http_requests_total", store)
 	if resolved != "http_requests_total" {
 		t.Fatalf("expected resolved name http_requests_total, got %q", resolved)
 	}
@@ -52,7 +52,7 @@ func TestMetadataForMetric_NormalizedFallback_Gauge(t *testing.T) {
 			Help:         "Histogram base metric",
 		},
 	})
-	metadata, resolved := metadataForMetric("histogram_count", store)
+	metadata, resolved, _ := metadataForMetric("histogram_count", store)
 	// For non-counter types, resolved should be the normalized base name.
 	if resolved != "histogram" {
 		t.Fatalf("expected resolved name histogram, got %q", resolved)
@@ -75,7 +75,7 @@ func TestMetadataForMetric_NormalizedFallback_CounterKeepsOriginal(t *testing.T)
 		},
 	},
 	)
-	metadata, resolved := metadataForMetric("requests_total", store)
+	metadata, resolved, _ := metadataForMetric("requests_total", store)
 	if resolved != "requests_total" {
 		t.Fatalf("expected resolved name requests_total, got %q", resolved)
 	}
@@ -91,7 +91,7 @@ func TestMetadataForMetric_Unknown(t *testing.T) {
 	// Neither internal nor external store has the metric.
 	store := emptyMetadataStore{}
 	const name = "custom_metric_unknown"
-	metadata, resolved := metadataForMetric(name, store)
+	metadata, resolved, _ := metadataForMetric(name, store)
 	if resolved != name {
 		t.Fatalf("expected resolved name %q, got %q", name, resolved)
 	}
@@ -113,7 +113,7 @@ func TestMetadataForMetric_PrefersInternalOverExternal(t *testing.T) {
 		},
 	},
 	)
-	m, resolved := metadataForMetric(scrapeUpMetricName, store)
+	m, resolved, _ := metadataForMetric(scrapeUpMetricName, store)
 	if resolved != scrapeUpMetricName {
 		t.Fatalf("expected resolved name %q, got %q", scrapeUpMetricName, resolved)
 	}

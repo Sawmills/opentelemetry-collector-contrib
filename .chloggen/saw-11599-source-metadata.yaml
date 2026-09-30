@@ -1,0 +1,6 @@
+change_type: bug_fix
+component: exporter/prometheusremotewrite
+note: Preserve absent scrape metadata when forwarding through remote write v1.
+issues: [118]
+subtext: Keep samples without source metadata while omitting synthesized metadata records. Preserve declared unknown types, empty HELP, native histogram types and ordinary OTLP metadata.
+change_logs: [user]
