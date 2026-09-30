@@ -54,6 +54,9 @@ func (s Settings) labelNamer() otlptranslator.LabelNamer {
 
 // FromMetrics converts pmetric.Metrics to Prometheus remote write format.
 func FromMetrics(md pmetric.Metrics, settings Settings) (map[string]*prompb.TimeSeries, error) {
+	if err := ValidateTranslationStrategy(settings.TranslationStrategy); err != nil {
+		return nil, err
+	}
 	c := newPrometheusConverter(settings)
 	errs := c.fromMetrics(md, settings)
 	tss := c.timeSeries()

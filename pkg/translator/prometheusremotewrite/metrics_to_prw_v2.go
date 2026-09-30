@@ -19,6 +19,9 @@ import (
 
 // FromMetricsV2 converts pmetric.Metrics to Prometheus remote write format 2.0.
 func FromMetricsV2(md pmetric.Metrics, settings Settings) (map[string]*writev2.TimeSeries, writev2.SymbolsTable, error) {
+	if err := ValidateTranslationStrategy(settings.TranslationStrategy); err != nil {
+		return nil, writev2.SymbolsTable{}, err
+	}
 	c := newPrometheusConverterV2(settings)
 	errs := c.fromMetrics(md, settings)
 	tss := c.timeSeries()

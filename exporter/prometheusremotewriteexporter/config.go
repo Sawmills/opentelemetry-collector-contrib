@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/resourcetotelemetry"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/prometheusremotewrite"
 )
 
 // Config defines configuration for Remote Write exporter.
@@ -116,13 +117,8 @@ var _ component.Config = (*Config)(nil)
 
 // Validate checks if the exporter configuration is valid
 func (cfg *Config) Validate() error {
-	if cfg.TranslationStrategy != "" {
-		switch cfg.TranslationStrategy {
-		case otlptranslator.UnderscoreEscapingWithSuffixes, otlptranslator.UnderscoreEscapingWithoutSuffixes,
-			otlptranslator.NoUTF8EscapingWithSuffixes, otlptranslator.NoTranslation:
-		default:
-			return fmt.Errorf("invalid translation_strategy: %s", cfg.TranslationStrategy)
-		}
+	if err := prometheusremotewrite.ValidateTranslationStrategy(cfg.TranslationStrategy); err != nil {
+		return err
 	}
 	if cfg.UseOpenMetricsFloatFormat && (cfg.UseGoFloatFormat || cfg.UseDecimalFloatFormat) {
 		return errors.New("use_openmetrics_float_format is mutually exclusive with use_go_float_format and use_decimal_float_format")

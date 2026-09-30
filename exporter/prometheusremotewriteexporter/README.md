@@ -51,8 +51,11 @@ The following settings can be optionally configured:
 - `namespace`: prefix attached to each exported metric name.
 - `add_metric_suffixes`: If set to false, type and unit suffixes will not be added to metrics. Default: true.
 - `translation_strategy`: Controls metric and label name escaping. When set, it overrides `add_metric_suffixes`.
-  Accepted values are `UnderscoreEscapingWithSuffixes`, `UnderscoreEscapingWithoutSuffixes`, `NoUTF8EscapingWithSuffixes`, and `NoTranslation`.
+  Accepted values are `UnderscoreEscapingWithSuffixes`, `UnderscoreEscapingWithoutSuffixes`, and `NoTranslation`.
+  This fork rejects `NoUTF8EscapingWithSuffixes` because the pinned translator can truncate names and merge distinct counters.
   `NoTranslation` preserves source identifiers such as `rpc.server.requests` and `rpc.method`.
+  Upstream marks `NoTranslation` experimental and advises against production use because equal names and labels can collide across units or types.
+  Validate distinct source series and query results before enabling it for a scrape round trip.
   In this Sawmills fork, UTF-8 strategies also work with remote write v1 when the receiver accepts UTF-8 names, as Prometheus 3.5 does.
   Enable them only after verifying the destination accepts those names. Older receivers can reject or discard them.
   Leaving this option unset preserves the existing escaping and suffix behavior.

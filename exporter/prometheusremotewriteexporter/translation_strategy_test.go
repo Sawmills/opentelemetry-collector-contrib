@@ -36,9 +36,9 @@ func TestTranslationStrategyValidation(t *testing.T) {
 		{otlptranslator.UnderscoreEscapingWithSuffixes, remoteapi.WriteV1MessageType, ""},
 		{otlptranslator.UnderscoreEscapingWithoutSuffixes, remoteapi.WriteV1MessageType, ""},
 		{otlptranslator.NoTranslation, remoteapi.WriteV1MessageType, ""},
-		{otlptranslator.NoUTF8EscapingWithSuffixes, remoteapi.WriteV1MessageType, ""},
+		{otlptranslator.NoUTF8EscapingWithSuffixes, remoteapi.WriteV1MessageType, "unsupported translation_strategy"},
 		{otlptranslator.NoTranslation, remoteapi.WriteV2MessageType, ""},
-		{otlptranslator.NoUTF8EscapingWithSuffixes, remoteapi.WriteV2MessageType, ""},
+		{otlptranslator.NoUTF8EscapingWithSuffixes, remoteapi.WriteV2MessageType, "unsupported translation_strategy"},
 		{"misspelled", remoteapi.WriteV2MessageType, "invalid translation_strategy"},
 	} {
 		t.Run(string(tc.strategy)+string(tc.protocol), func(t *testing.T) {
@@ -198,4 +198,13 @@ func TestNoTranslationRemoteWriteV1(t *testing.T) {
 	require.Equal(t, "rpc.server.requests", metadataRows[0].MetricFamilyName)
 	require.Equal(t, prompb.MetricMetadata_COUNTER, metadataRows[0].Type)
 	require.Equal(t, "Scraped request count", metadataRows[0].Help)
+}
+
+func TestNoTranslationUnderscoreExternalLabel(t *testing.T) {
+	cfg := createDefaultConfig().(*Config)
+	cfg.TranslationStrategy = otlptranslator.NoTranslation
+	cfg.ExternalLabels = map[string]string{"_": "source"}
+	exp, err := newPRWExporter(cfg, exportertest.NewNopSettings(metadata.Type))
+	require.NoError(t, err)
+	require.Equal(t, "source", exp.exporterSettings.ExternalLabels["_"])
 }

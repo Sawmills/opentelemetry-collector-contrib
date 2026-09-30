@@ -52,6 +52,9 @@ func OtelMetricsToMetadata(md pmetric.Metrics, addMetricSuffixes bool, namespace
 
 // OtelMetricsToMetadataWithSettings uses the same name translation as exported samples.
 func OtelMetricsToMetadataWithSettings(md pmetric.Metrics, settings Settings) ([]*prompb.MetricMetadata, error) {
+	if err := ValidateTranslationStrategy(settings.TranslationStrategy); err != nil {
+		return nil, err
+	}
 	resourceMetricsSlice := md.ResourceMetrics()
 
 	metadataLength := 0
