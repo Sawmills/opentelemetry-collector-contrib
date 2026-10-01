@@ -1,0 +1,5 @@
+change_type: enhancement
+component: receiver/prometheus
+note: Add opt-in preservation of observed OpenMetrics creation-time samples and declared family metadata with NoTranslation.
+issues: [124]
+subtext: The receiver option defaults to false. Existing translation strategies and explicitly declared gauges retain their behavior.

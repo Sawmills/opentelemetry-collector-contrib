@@ -11,6 +11,15 @@ const (
 	// MetricMetadataPresentKey marks absent source metadata in the Prometheus
 	// scrape cache. It is internal provenance, not a time-series label.
 	MetricMetadataPresentKey = "prometheus.metadata_present"
+	// MetricMetadataFamilyKey retains the declared family when a source sample
+	// name differs, such as an OpenMetrics counter's _total sample.
+	MetricMetadataFamilyKey = "prometheus.metric_family"
+	// MetricMetadataSourceNameKey binds family provenance to the observed sample
+	// name so metric processors can rename samples without stale family metadata.
+	MetricMetadataSourceNameKey = "prometheus.source_metric_name"
+	// MetricMetadataCreatedFamilyKey carries a declared parent family when only
+	// its observed _created sample remains. It never declares a created gauge.
+	MetricMetadataCreatedFamilyKey = "prometheus.created_family_metadata"
 	// ExemplarTraceIDKey is the key used to store the trace ID in Prometheus
 	// exemplars:
 	// https://github.com/open-telemetry/opentelemetry-specification/blob/e6eccba97ebaffbbfad6d4358408a2cead0ec2df/specification/compatibility/prometheus_and_openmetrics.md#exemplars

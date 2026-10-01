@@ -18,6 +18,7 @@ import (
 	"github.com/prometheus/prometheus/discovery"
 	"github.com/prometheus/prometheus/discovery/kubernetes"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
+	"github.com/prometheus/prometheus/model/relabel"
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/confmap"
@@ -31,6 +32,8 @@ type Config struct {
 	TrimMetricSuffixes bool        `mapstructure:"trim_metric_suffixes"`
 	// PreserveInfoMetrics keeps source info metrics instead of converting them to resource or scope attributes.
 	PreserveInfoMetrics bool `mapstructure:"preserve_info_metrics"`
+	// PreserveCreatedMetrics retains observed OpenMetrics creation-time samples alongside start timestamps.
+	PreserveCreatedMetrics bool `mapstructure:"preserve_created_metrics"`
 
 	TargetAllocator configoptional.Optional[targetallocator.Config] `mapstructure:"target_allocator"`
 
@@ -50,11 +53,70 @@ func (cfg *Config) Validate() error {
 		return errors.New("no Prometheus scrape_configs or target_allocator set")
 	}
 
+	if err := cfg.validateCreatedPreservation(); err != nil {
+		return err
+	}
 	if err := cfg.APIServer.Validate(); err != nil {
 		return fmt.Errorf("invalid API server configuration settings: %w", err)
 	}
 
 	return nil
+}
+
+// validateCreatedPreservation rejects name-changing paths whose pre-relabel
+// sample identity is unavailable in the Prometheus V1 appender context.
+func (cfg *Config) validateCreatedPreservation() error {
+	if !cfg.PreserveCreatedMetrics {
+		return nil
+	}
+	if cfg.TargetAllocator.HasValue() {
+		return errors.New("preserve_created_metrics requires static scrape configuration; target_allocator can supply unchecked name relabeling")
+	}
+	if cfg.PrometheusConfig == nil {
+		return nil
+	}
+	if cfg.PrometheusConfig.GlobalConfig.ExternalLabels.Has("__name__") {
+		return errors.New("preserve_created_metrics: external_labels must not contain __name__")
+	}
+	if len(cfg.PrometheusConfig.ScrapeConfigFiles) != 0 {
+		return errors.New("preserve_created_metrics requires inline scrape_configs; scrape_config_files can supply unchecked name relabeling")
+	}
+	jobs, err := (*promconfig.Config)(cfg.PrometheusConfig).GetScrapeConfigs()
+	if err != nil {
+		return fmt.Errorf("preserve_created_metrics: get scrape configs: %w", err)
+	}
+	for _, job := range jobs {
+		if job.ConvertClassicHistogramsToNHCBEnabled() {
+			return fmt.Errorf("preserve_created_metrics is incompatible with convert_classic_histograms_to_nhcb in job %q", job.JobName)
+		}
+		for _, rule := range job.MetricRelabelConfigs {
+			changesName := false
+			switch rule.Action {
+			case relabel.Replace, relabel.HashMod, relabel.Lowercase, relabel.Uppercase:
+				changesName = canTargetMetricName(rule.TargetLabel)
+			case relabel.LabelMap:
+				changesName = canTargetMetricName(rule.Replacement)
+			case relabel.LabelDrop:
+				changesName = rule.Regex.MatchString("__name__")
+			case relabel.LabelKeep:
+				changesName = !rule.Regex.MatchString("__name__")
+			}
+			if changesName {
+				return fmt.Errorf("preserve_created_metrics requires name-preserving metric_relabel_configs in job %q", job.JobName)
+			}
+		}
+	}
+	return nil
+}
+
+func canTargetMetricName(destination string) bool {
+	if prefix, _, dynamic := strings.Cut(destination, "$"); dynamic {
+		// A literal prefix can exclude __name__. Otherwise a substitution can
+		// change the metric name and cannot establish original sample identity.
+		metricName := "__name__"
+		return strings.HasPrefix(metricName, prefix)
+	}
+	return destination == "__name__"
 }
 
 // PromConfig is a redeclaration of promconfig.Config because we need custom unmarshaling

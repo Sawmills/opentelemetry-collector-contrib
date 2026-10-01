@@ -46,23 +46,24 @@ type metricFamilyKey struct {
 }
 
 type transaction struct {
-	isNew                 bool
-	trimSuffixes          bool
-	useMetadata           bool
-	addingNativeHistogram bool // true if the last sample was a native histogram.
-	addingNHCB            bool // true if the last sample was a NHCB.
-	ctx                   context.Context
-	families              map[resourceKey]map[scopeID]map[metricFamilyKey]*metricFamily
-	mc                    scrape.MetricMetadataStore
-	sink                  consumer.Metrics
-	externalLabels        labels.Labels
-	nodeResources         map[resourceKey]pcommon.Resource
-	scopeAttributes       map[resourceKey]map[scopeID]pcommon.Map
-	ignoreScopeInfoMetric bool
-	preserveInfoMetrics   bool
-	logger                *zap.Logger
-	buildInfo             component.BuildInfo
-	obsrecv               *receiverhelper.ObsReport
+	isNew                  bool
+	trimSuffixes           bool
+	useMetadata            bool
+	addingNativeHistogram  bool // true if the last sample was a native histogram.
+	addingNHCB             bool // true if the last sample was a NHCB.
+	ctx                    context.Context
+	families               map[resourceKey]map[scopeID]map[metricFamilyKey]*metricFamily
+	mc                     scrape.MetricMetadataStore
+	sink                   consumer.Metrics
+	externalLabels         labels.Labels
+	nodeResources          map[resourceKey]pcommon.Resource
+	scopeAttributes        map[resourceKey]map[scopeID]pcommon.Map
+	ignoreScopeInfoMetric  bool
+	preserveInfoMetrics    bool
+	preserveCreatedMetrics bool
+	logger                 *zap.Logger
+	buildInfo              component.BuildInfo
+	obsrecv                *receiverhelper.ObsReport
 	// Used as buffer to calculate series ref hash.
 	bufBytes []byte
 }
@@ -254,6 +255,7 @@ func (t *transaction) getOrCreateMetricFamily(key resourceKey, scope scopeID, mn
 		mf, ok := t.families[key][scope][fnKey]
 		if !ok || !mf.includesMetric(mn) {
 			curMf = newMetricFamily(mn, t.mc, t.logger, t.addingNativeHistogram, t.addingNHCB)
+			curMf.preserveCreatedMetrics = t.preserveCreatedMetrics
 			if t.preserveInfoMetrics && (mn == prometheus.TargetInfoMetricName || mn == prometheus.ScopeInfoMetricName) {
 				// OpenMetrics info metadata uses the base family name; retain the source sample name.
 				curMf.name = mn
@@ -482,7 +484,10 @@ func (t *transaction) getMetrics() (pmetric.Metrics, error) {
 			}
 			metrics := ils.Metrics()
 			for _, mf := range mfs {
-				mf.appendMetric(metrics, t.trimSuffixes)
+				parentAppended := mf.appendMetric(metrics, t.trimSuffixes)
+				if t.preserveCreatedMetrics {
+					mf.appendCreatedMetric(metrics, parentAppended)
+				}
 			}
 		}
 	}

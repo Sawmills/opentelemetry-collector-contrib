@@ -20,9 +20,12 @@ import (
 	"github.com/prometheus/prometheus/discovery/file"
 	"github.com/prometheus/prometheus/discovery/http"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
+	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/relabel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/confmap/confmaptest"
 	"go.opentelemetry.io/collector/confmap/xconfmap"
@@ -31,6 +34,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/prometheusreceiver/internal/metadata"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/prometheusreceiver/internal/targetallocator"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -76,6 +80,16 @@ func TestPreserveInfoMetricsConfig(t *testing.T) {
 			require.NoError(t, cm.Unmarshal(cfg))
 			assert.Equal(t, preserve, cfg.(*Config).PreserveInfoMetrics)
 		})
+	}
+}
+
+func TestPreserveCreatedMetricsConfig(t *testing.T) {
+	factory := NewFactory()
+	assert.False(t, factory.CreateDefaultConfig().(*Config).PreserveCreatedMetrics)
+	for _, preserve := range []bool{false, true} {
+		cfg := factory.CreateDefaultConfig()
+		require.NoError(t, confmap.NewFromStringMap(map[string]any{"preserve_created_metrics": preserve}).Unmarshal(cfg))
+		assert.Equal(t, preserve, cfg.(*Config).PreserveCreatedMetrics)
 	}
 }
 
@@ -648,4 +662,90 @@ func TestReloadPromConfigStaticConfigsWithLabels(t *testing.T) {
 	assert.NoError(t, promConfig.Reload())
 	data2, _ := yaml.Marshal(promConfig)
 	assert.Equal(t, string(data1), string(data2), "Reload should not change the config")
+}
+
+func TestPreserveCreatedMetricsRelabelValidation(t *testing.T) {
+	for _, tt := range []struct {
+		name                       string
+		action                     relabel.Action
+		target, replacement, regex string
+		rejected                   bool
+	}{
+		{name: "rename", action: relabel.Replace, target: "__name__", replacement: "requests_total", regex: "(.*)", rejected: true},
+		{name: "dynamic destination", action: relabel.Replace, target: "$1", replacement: "$1", regex: "(.*)", rejected: true},
+		{name: "copy to name", action: relabel.LabelMap, replacement: "__name__", regex: "source", rejected: true},
+		{name: "dynamic label map", action: relabel.LabelMap, replacement: "$1", regex: "(.*)", rejected: true},
+		{name: "scope label map", action: relabel.LabelMap, replacement: "sawmills_source_$1", regex: "(otel_scope_.*)"},
+		{name: "drop metric", action: relabel.Drop, regex: "requests_total"},
+		{name: "drop name", action: relabel.LabelDrop, regex: "__name__", rejected: true},
+		{name: "keep name", action: relabel.LabelKeep, regex: "(__name__|job|instance)"},
+		{name: "remove name with keep", action: relabel.LabelKeep, regex: "job", rejected: true},
+		{name: "rename label", action: relabel.Replace, target: "owner", replacement: "$1", regex: "(.*)"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			rule := relabel.DefaultRelabelConfig
+			rule.Action, rule.TargetLabel, rule.Regex = tt.action, tt.target, relabel.MustNewRegexp(tt.regex)
+			if tt.replacement != "" {
+				rule.Replacement = tt.replacement
+			}
+			cfg := &Config{PreserveCreatedMetrics: true, PrometheusConfig: &PromConfig{ScrapeConfigs: []*promconfig.ScrapeConfig{{JobName: "test", MetricRelabelConfigs: []*relabel.Config{&rule}}}}}
+			require.NoError(t, cfg.PrometheusConfig.Reload())
+			err := cfg.Validate()
+			if tt.rejected {
+				require.ErrorContains(t, err, "requires name-preserving metric_relabel_configs")
+			} else {
+				require.NoError(t, err)
+			}
+			cfg.PreserveCreatedMetrics = false
+			require.NoError(t, cfg.Validate(), "preservation must not change default name-relabel policy")
+		})
+	}
+}
+
+func TestPreserveCreatedMetricsRejectsTargetAllocator(t *testing.T) {
+	cfg := &Config{PreserveCreatedMetrics: true}
+	cfg.TargetAllocator = configoptional.Some(targetallocator.Config{})
+	require.ErrorContains(t, cfg.Validate(), "requires static scrape configuration")
+	cfg.PreserveCreatedMetrics = false
+	require.NoError(t, cfg.Validate())
+}
+
+func TestPreserveCreatedMetricsRejectsDynamicScrapeFiles(t *testing.T) {
+	cfg := &Config{PreserveCreatedMetrics: true, PrometheusConfig: &PromConfig{ScrapeConfigFiles: []string{"testdata/external-configs/*.yaml"}}}
+	require.ErrorContains(t, cfg.Validate(), "requires inline scrape_configs")
+	cfg.PreserveCreatedMetrics = false
+	require.NoError(t, cfg.Validate())
+}
+
+func TestPreserveCreatedMetricsExternalLabelValidation(t *testing.T) {
+	for _, v := range []string{"requests_total", ""} {
+		t.Run(fmt.Sprintf("value=%q", v), func(t *testing.T) {
+			cfg := &Config{PreserveCreatedMetrics: true, PrometheusConfig: &PromConfig{ScrapeConfigs: []*promconfig.ScrapeConfig{{JobName: "test"}}, GlobalConfig: promconfig.GlobalConfig{ExternalLabels: labels.FromStrings("__name__", v)}}}
+			require.NoError(t, cfg.PrometheusConfig.Reload())
+			require.ErrorContains(t, cfg.Validate(), "external_labels must not contain __name__")
+			cfg.PreserveCreatedMetrics = false
+			require.NoError(t, cfg.Validate())
+		})
+	}
+}
+
+func TestPreserveCreatedMetricsGlobalConversionValidation(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("explicitly-disabled=%t", disabled), func(t *testing.T) {
+			job := &promconfig.ScrapeConfig{JobName: "test"}
+			if disabled {
+				no := false
+				job.ConvertClassicHistogramsToNHCB = &no
+			}
+			cfg := &Config{PreserveCreatedMetrics: true, PrometheusConfig: &PromConfig{GlobalConfig: promconfig.GlobalConfig{ConvertClassicHistogramsToNHCB: true}, ScrapeConfigs: []*promconfig.ScrapeConfig{job}}}
+			require.NoError(t, cfg.PrometheusConfig.Reload())
+			if disabled {
+				require.NoError(t, cfg.Validate())
+			} else {
+				require.ErrorContains(t, cfg.Validate(), "incompatible with convert_classic_histograms_to_nhcb")
+			}
+			cfg.PreserveCreatedMetrics = false
+			require.NoError(t, cfg.Validate())
+		})
+	}
 }
