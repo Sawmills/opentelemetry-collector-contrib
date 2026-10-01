@@ -283,3 +283,73 @@ extraEnvs:
 - name: AWS_SECRET_ACCESS_KEY
   value: "< YOUR AWS SECRET ACCESS KEY >"
 ```
+
+### Archive Recovery
+
+Set `archive_recovery: true` to retain one encoded archive in memory until its upload succeeds.
+The default is `false`. With recovery disabled, exhausted uploads can lose earlier buffered records.
+
+```yaml
+exporters:
+  awss3:
+    archive_recovery: true
+    sending_queue:
+      enabled: true
+      wait_for_result: false
+      block_on_overflow: false
+    timeout: 10s
+    s3uploader:
+      region: us-east-1
+      s3_bucket: telemetry-archives
+```
+
+Recovery requires an enabled in-memory sending queue. `wait_for_result` and `block_on_overflow`
+must be false so upstream shutdown cannot wait on retained data. Disk-backed queues are rejected
+because helper cancellation can delete unencoded requests during shutdown.
+
+The first upload runs synchronously within a queue consumer. After failure, a background worker retries the same bytes,
+bucket, key, and metadata with exponential backoff and jitter. The initial delay is 500 ms;
+the nominal maximum is 60 seconds, with random delays from 0.5 to 1.5 times each interval.
+Retries continue until success or exporter shutdown. SDK retries still apply within each attempt.
+The positive `timeout` limits each upload attempt. Multipart cleanup has a separate five-second limit;
+failed cleanup prevents a new multipart upload until the old upload is aborted. It does not limit the wait for archive capacity.
+
+While an archive remains pending, later input waits before the encoder changes.
+Caller cancellation during this wait rejects that input. After encoding, the exporter owns the records
+and retains their archive even if the upload caller cancels. A sending queue can absorb new input
+while upload recovery runs. Its capacity and upstream retry behavior still limit outage tolerance.
+
+The exporter retains at most one complete archive, plus encoder and upstream queue memory.
+This is a count limit, not a byte limit: a large input batch can exceed the encoder's size threshold.
+Compression and upload preparation can need additional memory.
+
+Shutdown drains within its context and returns an error if it cannot finish.
+An incomplete shutdown reports the retained archive count and bytes.
+Memory retention does not survive process exit. This feature does not provide crash recovery.
+
+Retries overwrite the same object key. S3 versioning, events, and downstream consumers can still
+observe repeated writes. This does not provide exactly-once delivery.
+
+Monitor `otelcol_exporter_awss3_upload_failed_total`,
+`otelcol_exporter_awss3_retained_archives`, `otelcol_exporter_awss3_retained_archive_bytes`,
+`otelcol_exporter_awss3_retained_archive_timestamp`,
+and `otelcol_exporter_awss3_last_successful_upload_timestamp`.
+Each failed outer upload attempt increments the failure counter once and emits an error log.
+A retained archive is accepted data, so the generic exporter send-failure counter does not report its retries.
+Alert routing must therefore use the S3-specific failure metrics before enabling recovery in production.
+Retention gauges include the `exporter` component ID so one healthy destination cannot hide another stalled destination.
+With Prometheus unit suffixes enabled, the timestamp metric ends in `_seconds`.
+This includes the Sawmills remote-write pipeline and an explicit Collector pull reader with default options.
+The Collector default pull reader disables suffixes; use `otelcol_exporter_awss3_retained_archive_timestamp` there.
+The archive-count metric keeps the same name in both modes.
+This expression assumes unit suffixes are enabled and detects an archive retained for over five minutes:
+
+```promql
+(otelcol_exporter_awss3_retained_archives == 1)
+and
+(time() - otelcol_exporter_awss3_retained_archive_timestamp_seconds > 300)
+```
+
+Route this warning through the existing collector operations alert route.
+Confirm the external tenant and collector labels and notification route in the target environment.
+See the [design evidence](design/README.md) for the queue admission and durability limits.
