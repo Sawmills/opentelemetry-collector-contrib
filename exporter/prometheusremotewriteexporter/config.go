@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	remoteapi "github.com/prometheus/client_golang/exp/api/remote"
+	"github.com/prometheus/otlptranslator"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/config/configoptional"
@@ -15,6 +16,7 @@ import (
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/resourcetotelemetry"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/translator/prometheusremotewrite"
 )
 
 // Config defines configuration for Remote Write exporter.
@@ -59,6 +61,10 @@ type Config struct {
 
 	// AddMetricSuffixes controls whether unit and type suffixes are added to metrics on export
 	AddMetricSuffixes bool `mapstructure:"add_metric_suffixes"`
+
+	// TranslationStrategy controls metric and label name escaping and suffixes.
+	// When set, it overrides AddMetricSuffixes. UTF-8 strategies require a compatible receiver.
+	TranslationStrategy otlptranslator.TranslationStrategyOption `mapstructure:"translation_strategy"`
 
 	// SendMetadata controls whether prometheus metadata will be generated and sent, this option is ignored when using PRW 2.0, which always includes metadata.
 	SendMetadata bool `mapstructure:"send_metadata"`
@@ -111,6 +117,9 @@ var _ component.Config = (*Config)(nil)
 
 // Validate checks if the exporter configuration is valid
 func (cfg *Config) Validate() error {
+	if err := prometheusremotewrite.ValidateTranslationStrategy(cfg.TranslationStrategy); err != nil {
+		return err
+	}
 	if cfg.UseOpenMetricsFloatFormat && (cfg.UseGoFloatFormat || cfg.UseDecimalFloatFormat) {
 		return errors.New("use_openmetrics_float_format is mutually exclusive with use_go_float_format and use_decimal_float_format")
 	}

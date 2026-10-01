@@ -20,6 +20,8 @@ import (
 )
 
 type Settings struct {
+	// TranslationStrategy overrides legacy escaping and suffix settings when set.
+	TranslationStrategy otlptranslator.TranslationStrategyOption
 	// UseGoFloatFormat renders le and quantile labels like the Go Prometheus client.
 	// The zero value retains fixed-point formatting.
 	UseGoFloatFormat bool
@@ -36,8 +38,25 @@ type Settings struct {
 	SendMetadata              bool
 }
 
+func (s Settings) metricNamer() otlptranslator.MetricNamer {
+	if s.TranslationStrategy != "" {
+		return otlptranslator.NewMetricNamer(s.Namespace, s.TranslationStrategy)
+	}
+	return otlptranslator.MetricNamer{WithMetricSuffixes: s.AddMetricSuffixes, Namespace: s.Namespace}
+}
+
+func (s Settings) labelNamer() otlptranslator.LabelNamer {
+	return otlptranslator.LabelNamer{
+		UTF8Allowed:                 s.TranslationStrategy != "" && !s.TranslationStrategy.ShouldEscape(),
+		UnderscoreLabelSanitization: !prometheus.DropSanitizationGate.IsEnabled(),
+	}
+}
+
 // FromMetrics converts pmetric.Metrics to Prometheus remote write format.
 func FromMetrics(md pmetric.Metrics, settings Settings) (map[string]*prompb.TimeSeries, error) {
+	if err := ValidateTranslationStrategy(settings.TranslationStrategy); err != nil {
+		return nil, err
+	}
 	c := newPrometheusConverter(settings)
 	errs := c.fromMetrics(md, settings)
 	tss := c.timeSeries()
@@ -63,8 +82,8 @@ func newPrometheusConverter(settings Settings) *prometheusConverter {
 	return &prometheusConverter{
 		unique:      map[uint64]*prompb.TimeSeries{},
 		conflicts:   map[uint64][]*prompb.TimeSeries{},
-		metricNamer: otlptranslator.MetricNamer{WithMetricSuffixes: settings.AddMetricSuffixes, Namespace: settings.Namespace},
-		labelNamer:  otlptranslator.LabelNamer{UnderscoreLabelSanitization: !prometheus.DropSanitizationGate.IsEnabled()},
+		metricNamer: settings.metricNamer(),
+		labelNamer:  settings.labelNamer(),
 		unitNamer:   otlptranslator.UnitNamer{},
 	}
 }

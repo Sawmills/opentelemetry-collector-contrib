@@ -141,7 +141,7 @@ func createAttributes(resource pcommon.Resource, attributes pcommon.Map, scope p
 	sort.Stable(ByLabelName(labels))
 
 	for _, label := range labels {
-		finalKey, err := labelNamer.Build(label.Name)
+		finalKey, err := BuildLabelName(label.Name, labelNamer)
 		if err != nil {
 			return nil, err
 		}
@@ -178,17 +178,17 @@ func createAttributes(resource pcommon.Resource, attributes pcommon.Map, scope p
 
 	if !disableScopeInfo {
 		if scope.Name() != "" {
-			if key, err := labelNamer.Build("otel_scope_name"); err == nil {
+			if key, err := BuildLabelName("otel_scope_name", labelNamer); err == nil {
 				l[key] = scope.Name()
 			}
 		}
 		if scope.Version() != "" {
-			if key, err := labelNamer.Build("otel_scope_version"); err == nil {
+			if key, err := BuildLabelName("otel_scope_version", labelNamer); err == nil {
 				l[key] = scope.Version()
 			}
 		}
 		scope.Attributes().Range(func(k string, v pcommon.Value) bool {
-			key, err := labelNamer.Build("otel_scope_" + k)
+			key, err := BuildLabelName("otel_scope_"+k, labelNamer)
 			if err == nil {
 				l[key] = v.AsString()
 			}
@@ -208,7 +208,7 @@ func createAttributes(resource pcommon.Resource, attributes pcommon.Map, scope p
 		name := extras[i]
 		var err error
 		if len(name) <= 4 || name[:2] != "__" || name[len(name)-2:] != "__" {
-			name, err = labelNamer.Build(name)
+			name, err = BuildLabelName(name, labelNamer)
 			if err != nil {
 				return nil, err
 			}
@@ -560,7 +560,7 @@ func addResourceTargetInfo(resource pcommon.Resource, settings Settings, timesta
 		name = settings.Namespace + "_" + name
 	}
 
-	labels, err := createAttributes(resource, attributes, pcommon.NewInstrumentationScope(), settings.ExternalLabels, identifyingAttrs, false, otlptranslator.LabelNamer{PreserveMultipleUnderscores: !prometheustranslator.DropSanitizationGate.IsEnabled()}, settings.DisableScopeInfo, model.MetricNameLabel, name)
+	labels, err := createAttributes(resource, attributes, pcommon.NewInstrumentationScope(), settings.ExternalLabels, identifyingAttrs, false, otlptranslator.LabelNamer{UTF8Allowed: settings.labelNamer().UTF8Allowed, PreserveMultipleUnderscores: !prometheustranslator.DropSanitizationGate.IsEnabled()}, settings.DisableScopeInfo, model.MetricNameLabel, name)
 	if err != nil {
 		return err
 	}
