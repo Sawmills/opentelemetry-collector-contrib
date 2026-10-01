@@ -50,8 +50,8 @@ func OtelMetricsToMetadata(md pmetric.Metrics, addMetricSuffixes bool, namespace
 	return OtelMetricsToMetadataWithSettings(md, Settings{AddMetricSuffixes: addMetricSuffixes, Namespace: namespace})
 }
 
-// OtelMetricsToMetadataWithSettings translates metric metadata and retains
-// declared source families when NoTranslation preserves scraped samples.
+// OtelMetricsToMetadataWithSettings translates remote-write v1 metadata and
+// retains declared source families when NoTranslation preserves scraped samples.
 func OtelMetricsToMetadataWithSettings(md pmetric.Metrics, settings Settings) ([]*prompb.MetricMetadata, error) {
 	if err := ValidateTranslationStrategy(settings.TranslationStrategy); err != nil {
 		return nil, err

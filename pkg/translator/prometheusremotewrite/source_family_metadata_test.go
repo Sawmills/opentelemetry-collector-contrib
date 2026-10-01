@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/prometheus/otlptranslator"
+	writev2 "github.com/prometheus/prometheus/prompb/io/prometheus/write/v2"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 
@@ -68,5 +69,47 @@ func TestNoTranslationPreservesDeclaredFamily(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDeclaredFamilyMetadataRemoteWriteVersionBoundary(t *testing.T) {
+	md := pmetric.NewMetrics()
+	metric := md.ResourceMetrics().AppendEmpty().ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
+	metric.SetName("requests_total")
+	metric.SetDescription("Requests help.")
+	metric.Metadata().PutStr(prometheus.MetricMetadataFamilyKey, "requests")
+	metric.Metadata().PutStr(prometheus.MetricMetadataSourceNameKey, "requests_total")
+	sum := metric.SetEmptySum()
+	sum.SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
+	sum.SetIsMonotonic(true)
+	sum.DataPoints().AppendEmpty().SetDoubleValue(7)
+	settings := Settings{TranslationStrategy: otlptranslator.NoTranslation, DisableTargetInfo: true, DisableScopeInfo: true}
+
+	v1Metadata, err := OtelMetricsToMetadataWithSettings(md, settings)
+	require.NoError(t, err)
+	require.Len(t, v1Metadata, 1)
+	require.Equal(t, "requests", v1Metadata[0].MetricFamilyName, "v1 supports separate declared family metadata")
+	v1Series, err := FromMetrics(md, settings)
+	require.NoError(t, err)
+	require.Len(t, v1Series, 1)
+	for _, series := range v1Series {
+		require.Len(t, series.Labels, 1)
+		require.Equal(t, "__name__", series.Labels[0].Name)
+		require.Equal(t, "requests_total", series.Labels[0].Value)
+		require.Equal(t, float64(7), series.Samples[0].Value)
+	}
+
+	v2Series, table, err := FromMetricsV2(md, settings)
+	require.NoError(t, err)
+	require.Len(t, v2Series, 1)
+	for _, series := range v2Series {
+		symbols := table.Symbols()
+		require.Len(t, series.LabelsRefs, 2, "family provenance must not become a new label")
+		require.Equal(t, "__name__", symbols[series.LabelsRefs[0]])
+		require.Equal(t, "requests_total", symbols[series.LabelsRefs[1]], "v2 metadata remains attached to the original sample identity")
+		require.Equal(t, writev2.Metadata_METRIC_TYPE_COUNTER, series.Metadata.Type)
+		require.Equal(t, "Requests help.", symbols[series.Metadata.HelpRef])
+		require.Equal(t, float64(7), series.Samples[0].Value)
+		require.NotContains(t, symbols, "requests", "v2 has no distinct declared family-name field")
 	}
 }

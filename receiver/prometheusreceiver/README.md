@@ -269,10 +269,13 @@ because they can replace these rules after startup. The Prometheus V1 appender d
 sample name. An `external_labels.__name__` entry is also rejected. Rename metrics in a downstream processor when needed; such renames
 invalidate the recorded source family name.
 
-With `translation_strategy: NoTranslation` in the remote-write exporter and
-`trim_metric_suffixes: false`, the option also preserves declared source family
-names. For example, metadata uses `requests` while samples use `requests_total`.
-Other translation strategies retain their existing behavior.
+With `translation_strategy: NoTranslation`, remote write v1
+(`protobuf_message: prometheus.WriteRequest`), and `trim_metric_suffixes: false`,
+the option also preserves declared source family names. For example, metadata
+uses `requests` while samples use `requests_total`. Remote write v2 attaches
+metadata to individual series and cannot express a separate declared family
+name; this family-name guarantee applies only to v1. Other translation
+strategies retain their existing behavior.
 
 ## Prometheus API Server
 The Prometheus API server can be enabled to host info about the Prometheus targets, config, service discovery, and metrics. The `server_config` can be specified using the OpenTelemetry confighttp package. An example configuration would be:
