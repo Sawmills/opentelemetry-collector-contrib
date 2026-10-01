@@ -18,6 +18,9 @@ properties:
   config:
     x-pointer: true
     $ref: prom_config
+  preserve_created_metrics:
+    description: PreserveCreatedMetrics retains observed OpenMetrics creation-time samples alongside start timestamps.
+    type: boolean
   preserve_info_metrics:
     description: PreserveInfoMetrics keeps source info metrics instead of converting them to resource or scope attributes.
     type: boolean

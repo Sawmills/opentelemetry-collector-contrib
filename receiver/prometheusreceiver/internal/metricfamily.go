@@ -26,36 +26,42 @@ import (
 type metricFamily struct {
 	mtype pmetric.MetricType
 	// isMonotonic only applies to sums
-	isMonotonic     bool
-	groups          map[uint64]*metricGroup
-	name            string
-	metadata        *scrape.MetricMetadata
-	metadataPresent bool
-	groupOrders     []*metricGroup
+	isMonotonic            bool
+	groups                 map[uint64]*metricGroup
+	name                   string
+	metadata               *scrape.MetricMetadata
+	metadataPresent        bool
+	preserveCreatedMetrics bool
+	groupOrders            []*metricGroup
 }
 
 // metricGroup, represents a single metric of a metric family. for example a histogram metric is usually represent by
 // a couple data complexValue (buckets and count/sum), a group of a metric family always share a same set of tags. for
 // simple types like counter and gauge, each data point is a group of itself
 type metricGroup struct {
-	mtype    pmetric.MetricType
-	ts       int64
-	ls       labels.Labels
-	count    float64
-	hasCount bool
-	sum      float64
-	hasSum   bool
+	mtype               pmetric.MetricType
+	ts                  int64
+	parentSamplePresent bool
+	ls                  labels.Labels
+	count               float64
+	hasCount            bool
+	sum                 float64
+	hasSum              bool
 	// This corresponds to the `_created` sample found from the metric parsing.
 	// - https://github.com/prometheus/OpenMetrics/blob/main/specification/OpenMetrics.md#timestamps
 	// - https://github.com/prometheus/OpenMetrics/blob/main/specification/OpenMetrics.md#counter-1
-	createdSeconds float64
-	value          float64
-	hasValue       bool
-	hValue         *histogram.Histogram
-	fhValue        *histogram.FloatHistogram
-	complexValue   []*dataPoint
-	exemplars      pmetric.ExemplarSlice
-	isNHCB         bool // true if this is a Native Histogram Custom Buckets (schema -53)
+	createdSeconds       float64
+	createdSamplePresent bool
+	createdSampleValue   float64
+	createdSampleAtMs    int64
+	createdSampleLabels  labels.Labels
+	value                float64
+	hasValue             bool
+	hValue               *histogram.Histogram
+	fhValue              *histogram.FloatHistogram
+	complexValue         []*dataPoint
+	exemplars            pmetric.ExemplarSlice
+	isNHCB               bool // true if this is a Native Histogram Custom Buckets (schema -53)
 }
 
 func newMetricFamily(metricName string, mc scrape.MetricMetadataStore, logger *zap.Logger, isNativeHistogram, isNHCB bool) *metricFamily {
@@ -464,6 +470,24 @@ func (mf *metricFamily) loadMetricGroupOrCreate(groupKey uint64, ls labels.Label
 
 func (mf *metricFamily) addSeries(seriesRef uint64, metricName string, ls labels.Labels, t int64, v float64) error {
 	mg := mf.loadMetricGroupOrCreate(seriesRef, ls, t)
+	if mf.preserveCreatedMetrics && mf.mtype != pmetric.MetricTypeGauge && mf.mtype != pmetric.MetricTypeEmpty &&
+		metricName == mf.metadata.MetricFamily+metricSuffixCreated {
+		// Keep the observed sample separately from the start timestamp, which
+		// can also arrive from protobuf metadata with millisecond precision.
+		mg.createdSamplePresent = true
+		mg.createdSampleValue = v
+		mg.createdSampleAtMs = t
+		mg.createdSampleLabels = ls
+		if !value.IsStaleNaN(v) {
+			mg.createdSeconds = v
+		}
+		return nil
+	}
+	if mf.preserveCreatedMetrics && !mg.parentSamplePresent {
+		// A creation sample can arrive first with a different timestamp.
+		mg.ts = t
+	}
+	mg.parentSamplePresent = true
 	if mg.ts != t {
 		return fmt.Errorf("inconsistent timestamps on metric points for metric %v", metricName)
 	}
@@ -516,6 +540,11 @@ func (mf *metricFamily) addCreationTimestamp(seriesRef uint64, ls labels.Labels,
 
 func (mf *metricFamily) addExponentialHistogramSeries(seriesRef uint64, metricName string, ls labels.Labels, t int64, h *histogram.Histogram, fh *histogram.FloatHistogram) error {
 	mg := mf.loadMetricGroupOrCreate(seriesRef, ls, t)
+	if mf.preserveCreatedMetrics && !mg.parentSamplePresent {
+		// A creation sample can arrive first with a different timestamp.
+		mg.ts = t
+	}
+	mg.parentSamplePresent = true
 	if mg.ts != t {
 		return fmt.Errorf("inconsistent timestamps on metric points for metric %v", metricName)
 	}
@@ -548,6 +577,11 @@ func (mf *metricFamily) addExponentialHistogramSeries(seriesRef uint64, metricNa
 // addNHCBSeries adds a Native Histogram Custom Buckets (NHCB) series to the metric family.
 func (mf *metricFamily) addNHCBSeries(seriesRef uint64, metricName string, ls labels.Labels, t int64, h *histogram.Histogram, fh *histogram.FloatHistogram) error {
 	mg := mf.loadMetricGroupOrCreate(seriesRef, ls, t)
+	if mf.preserveCreatedMetrics && !mg.parentSamplePresent {
+		// A creation sample can arrive first with a different timestamp.
+		mg.ts = t
+	}
+	mg.parentSamplePresent = true
 	if mg.ts != t {
 		return fmt.Errorf("inconsistent timestamps on metric points for metric %v", metricName)
 	}
@@ -576,7 +610,7 @@ func (mf *metricFamily) addNHCBSeries(seriesRef uint64, metricName string, ls la
 	return nil
 }
 
-func (mf *metricFamily) appendMetric(metrics pmetric.MetricSlice, trimSuffixes bool) {
+func (mf *metricFamily) appendMetric(metrics pmetric.MetricSlice, trimSuffixes bool) bool {
 	metric := pmetric.NewMetric()
 	// Trims type and unit suffixes from metric name
 	name := mf.name
@@ -587,6 +621,10 @@ func (mf *metricFamily) appendMetric(metrics pmetric.MetricSlice, trimSuffixes b
 	metric.SetDescription(mf.metadata.Help)
 	metric.SetUnit(prometheus.UnitWordToUCUM(mf.metadata.Unit))
 	metric.Metadata().PutStr(prometheus.MetricMetadataTypeKey, string(mf.metadata.Type))
+	if mf.preserveCreatedMetrics && mf.metadataPresent && !trimSuffixes {
+		metric.Metadata().PutStr(prometheus.MetricMetadataFamilyKey, mf.metadata.MetricFamily)
+		metric.Metadata().PutStr(prometheus.MetricMetadataSourceNameKey, name)
+	}
 	if !mf.metadataPresent {
 		metric.Metadata().PutBool(prometheus.MetricMetadataPresentKey, false)
 	}
@@ -640,10 +678,53 @@ func (mf *metricFamily) appendMetric(metrics pmetric.MetricSlice, trimSuffixes b
 	}
 
 	if pointCount == 0 {
-		return
+		return false
 	}
 
 	metric.MoveTo(metrics.AppendEmpty())
+	return true
+}
+
+// appendCreatedMetric retains only actual exposition samples. Intrinsic start
+// timestamps do not establish that a separate _created sample was exposed.
+func (mf *metricFamily) appendCreatedMetric(metrics pmetric.MetricSlice, parentAppended bool) {
+	var metric pmetric.Metric
+	initialized := false
+	for _, mg := range mf.groupOrders {
+		if !mg.createdSamplePresent {
+			continue
+		}
+		if !initialized {
+			metric = pmetric.NewMetric()
+			metric.SetName(mf.metadata.MetricFamily + metricSuffixCreated)
+			metric.Metadata().PutStr(prometheus.MetricMetadataTypeKey, string(model.MetricTypeUnknown))
+			metric.Metadata().PutBool(prometheus.MetricMetadataPresentKey, false)
+			metric.SetEmptyGauge()
+			if !parentAppended && mf.metadataPresent {
+				// The observed creation sample can be the sole remaining sample
+				// after relabeling. Carry its parent's actual declaration without
+				// inventing a parent datapoint or a created gauge declaration.
+				declaration := metric.Metadata().PutEmptyMap(prometheus.MetricMetadataCreatedFamilyKey)
+				declaration.PutStr("sample_name", metric.Name())
+				declaration.PutStr("family", mf.metadata.MetricFamily)
+				declaration.PutStr("type", string(mf.metadata.Type))
+				declaration.PutStr("help", mf.metadata.Help)
+				declaration.PutStr("unit", mf.metadata.Unit)
+			}
+			initialized = true
+		}
+		point := metric.Gauge().DataPoints().AppendEmpty()
+		point.SetTimestamp(timestampFromMs(mg.createdSampleAtMs))
+		if value.IsStaleNaN(mg.createdSampleValue) {
+			point.SetFlags(pmetric.DefaultDataPointFlags.WithNoRecordedValue(true))
+		} else {
+			point.SetDoubleValue(mg.createdSampleValue)
+		}
+		populateAttributes(pmetric.MetricTypeGauge, mg.createdSampleLabels, point.Attributes())
+	}
+	if initialized {
+		metric.MoveTo(metrics.AppendEmpty())
+	}
 }
 
 func (mf *metricFamily) addExemplar(seriesRef uint64, e exemplar.Exemplar) {

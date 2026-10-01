@@ -31,6 +31,7 @@ import (
 	toolkit_web "github.com/prometheus/exporter-toolkit/web"
 	promconfig "github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/discovery"
+	"github.com/prometheus/prometheus/model/relabel"
 	"github.com/prometheus/prometheus/promql/parser"
 	"github.com/prometheus/prometheus/scrape"
 	"github.com/prometheus/prometheus/storage"
@@ -80,11 +81,31 @@ type pReceiver struct {
 
 // New creates a new prometheus.Receiver reference.
 func newPrometheusReceiver(set receiver.Settings, cfg *Config, next consumer.Metrics) (*pReceiver, error) {
+	if cfg.PreserveCreatedMetrics && metadata.ReceiverPrometheusreceiverEnableCreatedTimestampZeroIngestionFeatureGate.IsEnabled() {
+		return nil, errors.New("preserve_created_metrics is incompatible with receiver.prometheusreceiver.EnableCreatedTimestampZeroIngestion: the parser skips observed creation samples")
+	}
 	if err := cfg.PrometheusConfig.Reload(); err != nil {
 		return nil, fmt.Errorf("failed to reload Prometheus config: %w", err)
 	}
 
+	if err := cfg.validateCreatedPreservation(); err != nil {
+		return nil, err
+	}
+
 	baseCfg := promconfig.Config(*cfg.PrometheusConfig)
+	if cfg.PreserveCreatedMetrics {
+		// Enforce preservation before parsing, including per-target overrides.
+		// An appender rejection cannot distinguish source and scrape reports.
+		baseCfg.ScrapeConfigs = make([]*promconfig.ScrapeConfig, len(cfg.PrometheusConfig.ScrapeConfigs))
+		for i, job := range cfg.PrometheusConfig.ScrapeConfigs {
+			copyJob := *job
+			conversion := relabel.DefaultRelabelConfig
+			conversion.TargetLabel = "__convert_classic_histograms_to_nhcb__"
+			conversion.Replacement = "false"
+			copyJob.RelabelConfigs = append(append([]*relabel.Config(nil), job.RelabelConfigs...), &conversion)
+			baseCfg.ScrapeConfigs[i] = &copyJob
+		}
+	}
 	registry := prometheus.NewRegistry()
 	registerer := prometheus.WrapRegistererWith(
 		prometheus.Labels{"receiver": set.ID.String()},
@@ -178,6 +199,7 @@ func (r *pReceiver) initPrometheusComponents(
 		r.cfg.PrometheusConfig.GlobalConfig.ExternalLabels,
 		r.cfg.TrimMetricSuffixes,
 		r.cfg.PreserveInfoMetrics,
+		r.cfg.PreserveCreatedMetrics,
 	)
 	if err != nil {
 		return err

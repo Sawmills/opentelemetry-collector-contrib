@@ -241,6 +241,39 @@ This option does not change the handling of `otel_scope_*` labels. A forwarding
 pipeline must still preserve those labels separately and disable generated
 scope and target info in its exporter when required by its label contract.
 
+## Preserving Creation-Time Samples
+
+Set `preserve_created_metrics: true` to retain observed OpenMetrics `_created`
+samples alongside the existing metric start timestamps. The default is `false`.
+This option keeps their names, labels, seconds values and sample timestamps. It
+does not create samples from intrinsic protobuf start timestamps or add TYPE,
+HELP or UNIT declarations absent from the source. Explicitly declared Prometheus
+text gauges retain their metadata. If only a creation sample remains, the option
+retains its declared parent metadata without adding a parent sample.
+
+The option is incompatible with
+`receiver.prometheusreceiver.EnableCreatedTimestampZeroIngestion`, which skips
+creation samples during parsing. Receiver creation returns an error when both
+are enabled. Classic-to-native histogram conversion also skips exposed creation
+samples. Job configuration with `convert_classic_histograms_to_nhcb: true` is
+incompatible. The receiver appends a target relabel rule that disables this
+conversion for every job, including discovery and target-relabel overrides.
+It leaves the supplied configuration unchanged and retains generated scrape
+health reports for successful, empty, filtered and failed scrapes.
+
+Use inline `scrape_configs` with name-preserving `metric_relabel_configs`.
+Receiver creation rejects rules that can change or delete `__name__`. Dynamic
+relabel destinations must have a literal prefix that excludes `__name__`.
+Target Allocator and `scrape_config_files` are incompatible with this option
+because they can replace these rules after startup. The Prometheus V1 appender does not expose the pre-relabel
+sample name. An `external_labels.__name__` entry is also rejected. Rename metrics in a downstream processor when needed; such renames
+invalidate the recorded source family name.
+
+With `translation_strategy: NoTranslation` in the remote-write exporter and
+`trim_metric_suffixes: false`, the option also preserves declared source family
+names. For example, metadata uses `requests` while samples use `requests_total`.
+Other translation strategies retain their existing behavior.
+
 ## Prometheus API Server
 The Prometheus API server can be enabled to host info about the Prometheus targets, config, service discovery, and metrics. The `server_config` can be specified using the OpenTelemetry confighttp package. An example configuration would be:
 
