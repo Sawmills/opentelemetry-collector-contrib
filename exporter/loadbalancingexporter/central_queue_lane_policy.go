@@ -110,7 +110,8 @@ func (p centralQueueLanePolicy) compute(inputs centralQueueLaneInputs) int {
 		if previous > 0 && p.hysteresisFactor > 1 {
 			factor := p.hysteresisFactor
 			if candidate > previous/factor && candidate < previous*factor {
-				return previous
+				// Hysteresis must not leave newly routable backends without lanes.
+				return max(previous, backendFloor)
 			}
 		}
 	}

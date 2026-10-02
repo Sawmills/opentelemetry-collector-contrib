@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -62,6 +63,107 @@ func TestLogExporterCentralQueueUsesRoutableBackendCountForDynamicLanes(t *testi
 	}
 
 	require.Equal(t, 2, p.effectiveCentralQueueLaneCount(time.Unix(10, 0)))
+}
+
+func TestCentralQueueLaneModesAcrossBackendChanges(t *testing.T) {
+	for _, mode := range []string{"dynamic logs", "dynamic metrics", "fixed logs", "trace preserving logs"} {
+		t.Run(mode, func(t *testing.T) {
+			controller := centralQueueLanePathTestController()
+			if mode == "fixed logs" {
+				controller.fixedLaneCount = 3
+			}
+			logs := &logExporterImp{centralQueueLanes: controller, ignoreTraceID: mode != "trace preserving logs"}
+			metrics := &metricExporterImp{centralQueueLanes: controller}
+			for i, step := range []struct{ routable, resolved, want int }{
+				{25, 25, 25}, // Initial membership.
+				{35, 35, 35}, // Scale up inside the hysteresis band.
+				{20, 35, 35}, // Quarantine retains hysteresis above the floor.
+				{35, 35, 35}, // Recovery.
+				{17, 17, 17}, // Large shrink crosses the hysteresis threshold.
+				{25, 35, 25}, // Partial recovery raises the floor immediately.
+				{35, 35, 35}, // Full recovery raises it again.
+			} {
+				lb := loadBalancerWithRoutableBackendCount(step.routable, step.resolved)
+				logs.loadBalancer = lb
+				metrics.loadBalancer = lb
+				now := time.Unix(10+int64(i), 0)
+				want := step.want
+				switch mode {
+				case "dynamic metrics":
+					require.Equal(t, want, metrics.effectiveCentralQueueLaneCount(now))
+				case "fixed logs":
+					want = 3
+				case "trace preserving logs":
+					want = 64
+				}
+				if mode != "dynamic metrics" {
+					require.Equal(t, want, logs.effectiveCentralQueueLaneCount(now))
+				}
+			}
+		})
+	}
+}
+
+func TestConsumeLogsCentralQueueBackendChangesCoverEndpointsAndPreserveRecords(t *testing.T) {
+	for _, striping := range []bool{false, true} {
+		t.Run(fmt.Sprintf("record_striping=%t", striping), func(t *testing.T) {
+			p := newCentralQueueLogExporter(t, 1<<20)
+			p.centralQueueLaneCount = 0
+			p.centralQueueLanes = centralQueueLanePathTestController()
+			p.ignoreTraceID = true
+			p.recordStripingEnabled = striping
+			var wantBodies []string
+			for phase, step := range []struct{ backends, lanes int }{{25, 25}, {35, 35}, {20, 35}, {35, 35}, {17, 17}, {25, 25}} {
+				p.loadBalancer = loadBalancerWithRoutableBackendCount(step.backends, 35)
+				ids := distinctCentralQueueLaneTraceIDs(t, step.lanes, step.lanes)
+				next := 0
+				p.randomTraceID = func() pcommon.TraceID {
+					id := ids[next%len(ids)]
+					next++
+					return id
+				}
+				input := plog.NewLogs()
+				scopes := input.ResourceLogs().AppendEmpty().ScopeLogs()
+				for i := range step.lanes * 2 {
+					body := fmt.Sprintf("phase-%d-record-%d", phase, i)
+					// Unstriped routing chooses one random key per scope.
+					scopes.AppendEmpty().LogRecords().AppendEmpty().Body().SetStr(body)
+					wantBodies = append(wantBodies, body)
+				}
+				splitter := newCentralQueueLogSplitter(p, 1<<20, time.Unix(10+int64(phase), 0))
+				require.NoError(t, splitter.consume(t.Context(), input))
+				distribution := make(map[string]int)
+				for _, item := range splitter.pending {
+					distribution[p.loadBalancer.ring.endpointFor(item.routingKey)] += item.count
+				}
+				require.Len(t, distribution, step.backends, "phase %d must reach every routable endpoint", phase)
+			}
+
+			// Drain work queued before and after membership changes, including lanes
+			// above the final effective count. Each input record must survive once.
+			var gotBodies []string
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			for p.centralQueue.len() > 0 {
+				lease, err := p.centralQueue.lease(ctx)
+				require.NoError(t, err)
+				for _, item := range lease.window.items {
+					logs, decodeErr := decodeCentralQueueLogsItem(item, p.centralCodec)
+					require.NoError(t, decodeErr)
+					for _, rl := range logs.ResourceLogs().All() {
+						for _, sl := range rl.ScopeLogs().All() {
+							for _, record := range sl.LogRecords().All() {
+								gotBodies = append(gotBodies, record.Body().Str())
+							}
+						}
+					}
+				}
+				lease.done()
+			}
+			require.ElementsMatch(t, wantBodies, gotBodies)
+			require.Zero(t, p.centralQueue.compressedBytes())
+		})
+	}
 }
 
 func TestLogExporterCentralQueueLaneBootstrapUsesHealthyBackendFloor(t *testing.T) {
