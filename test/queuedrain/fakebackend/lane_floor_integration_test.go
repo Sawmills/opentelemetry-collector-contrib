@@ -152,6 +152,16 @@ func TestLaneFloorEndToEnd(t *testing.T) {
 		{"shrink", 17, 17, 17, 3 * time.Second},
 		{"regrowth", 25, 25, 25, 3 * time.Second},
 	} {
+		var release func()
+		if phase.name != "initial" {
+			block := make(chan struct{})
+			ledger.mu.Lock()
+			ledger.block = block
+			ledger.mu.Unlock()
+			release = sync.OnceFunc(func() { close(block) })
+			t.Cleanup(release)
+			sendBatch("transition-"+phase.name, 0, 3500)
+		}
 		membership.Store(int32(phase.resolved))
 		if phase.name == "quarantine" {
 			for _, srv := range backends[20:] {
@@ -168,14 +178,35 @@ func TestLaneFloorEndToEnd(t *testing.T) {
 			return laneFloorMetric(text, "otelcol_loadbalancer_num_backends", "") == float64(phase.resolved) &&
 				laneFloorMetric(text, "otelcol_loadbalancer_backend_state", `state="eligible"`) == float64(phase.healthy)
 		})
+		if release != nil {
+			// This request recalculates lanes after discovery/health changed while
+			// the sink barrier keeps already accepted work outstanding.
+			sendBatch(phase.name, -1, 350)
+			wait(phase.name+" pending work after topology update", func() bool {
+				return laneFloorMetric(metrics(), "otelcol_loadbalancer_central_queue_items", "") > 0
+			})
+			text := metrics()
+			laneFloorMust(t, os.WriteFile(filepath.Join(artifacts, phase.name+"-transition.prom"), []byte(text), 0o600))
+			t.Logf("transition=%s observed_resolved=%.0f eligible=%.0f lanes=%.0f pending_items=%.0f", phase.name,
+				laneFloorMetric(text, "otelcol_loadbalancer_num_backends", ""),
+				laneFloorMetric(text, "otelcol_loadbalancer_backend_state", `state="eligible"`),
+				laneFloorMetric(text, "otelcol_loadbalancer_central_queue_effective_lanes", ""),
+				laneFloorMetric(text, "otelcol_loadbalancer_central_queue_items", ""))
+			release()
+		}
 		started := time.Now()
 		var peakQueue, peakAge float64
 		batches := int(phase.duration / (100 * time.Millisecond))
 		for batch := range batches {
 			sendBatch(phase.name, batch, 350)
 			text := metrics()
-			peakQueue = max(peakQueue, laneFloorMetric(text, "otelcol_loadbalancer_central_queue_compressed_bytes", ""))
-			peakAge = max(peakAge, laneFloorMetric(text, "otelcol_loadbalancer_central_queue_oldest_item_age", ""))
+			queue := laneFloorMetric(text, "otelcol_loadbalancer_central_queue_compressed_bytes", "")
+			age := laneFloorMetric(text, "otelcol_loadbalancer_central_queue_oldest_item_age", "")
+			if queue < 0 || age < 0 {
+				t.Fatal("missing required queue byte/age telemetry")
+			}
+			peakQueue = max(peakQueue, queue)
+			peakAge = max(peakAge, age)
 			time.Sleep(100 * time.Millisecond)
 		}
 		wait(phase.name+" delivery", delivered)
@@ -204,24 +235,15 @@ func TestLaneFloorEndToEnd(t *testing.T) {
 		if peakQueue <= 0 || peakQueue >= 16<<20 || peakAge > 10_000 {
 			t.Errorf("%s: unexpected queue pressure: bytes=%.0f age_ms=%.0f", phase.name, peakQueue, peakAge)
 		}
+		if refused := laneFloorMetric(text, "otelcol_receiver_refused_log_records", ""); refused != 0 {
+			t.Errorf("%s: receiver refusal counter must be present and zero, got %.0f", phase.name, refused)
+		}
+		// The queue rejection series is created only on rejection. Unlike the
+		// receiver refusal counter above, its absence is expected on success.
 		if rejected := laneFloorMetric(text, "otelcol_loadbalancer_central_queue_rejected_compressed_bytes", ""); rejected > 0 {
 			t.Errorf("%s: rejected %.0f compressed bytes", phase.name, rejected)
 		}
 	}
-	// Change discovery while accepted records are still queued, rather than
-	// inferring preservation across topology changes from the steady phases.
-	sendBatch("queued-growth", 0, 3500)
-	queued := laneFloorMetric(metrics(), "otelcol_loadbalancer_central_queue_compressed_bytes", "")
-	if queued <= 0 {
-		t.Fatal("queued-growth must start with pending records")
-	}
-	membership.Store(35)
-	wait("queued-growth discovery", func() bool {
-		return laneFloorMetric(metrics(), "otelcol_loadbalancer_num_backends", "") == 35
-	})
-	wait("queued-growth delivery", delivered)
-	wait("queued-growth drain", drained)
-	t.Logf("queued-growth: changed 25 -> 35 backends with %.0f queued bytes; all 3500 additional records delivered", queued)
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
 	for _, id := range expected {
@@ -237,6 +259,7 @@ func TestLaneFloorEndToEnd(t *testing.T) {
 
 type laneFloorLedger struct {
 	mu        sync.Mutex
+	block     <-chan struct{}
 	records   map[string]int
 	endpoints map[string]map[int]int
 }
@@ -248,6 +271,16 @@ type laneFloorSink struct {
 }
 
 func (s *laneFloorSink) Export(ctx context.Context, request *logspb.ExportLogsServiceRequest) (*logspb.ExportLogsServiceResponse, error) {
+	s.ledger.mu.Lock()
+	block := s.ledger.block
+	s.ledger.mu.Unlock()
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	select {
 	case <-time.After(100 * time.Millisecond): // Exercise asynchronous queueing and draining.
 	case <-ctx.Done():
@@ -360,7 +393,9 @@ exporters:
       record_striping_enabled: true
     endpoint_health:
       enabled: true
-      quarantine_duration: 1m
+      # In-flight transport failures may outlive the failed TCP probe. Keep
+      # their quarantine below the recovery wait; probes still exclude stopped sinks.
+      quarantine_duration: 1s
       max_quarantined_percent: 100
       active_probe:
         enabled: true

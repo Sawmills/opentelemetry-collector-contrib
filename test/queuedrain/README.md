@@ -148,8 +148,11 @@ DNS unchanged, recovers them, shrinks to 17, and grows again to 25. Growth runs 
 lanes below the backend floor, so rate growth cannot hide the hysteresis defect.
 The sinks delay responses and tally unique record IDs, checking endpoint coverage,
 queue pressure/drain, rejection, and missing/duplicate delivery in each run.
-Both runs send the same fixed record sequence. A final growth transition occurs
-with accepted records still queued, and verifies their eventual delivery too.
+Both runs send the same fixed record sequence. A sink barrier holds accepted work
+through every growth, quarantine, recovery, and shrink transition. The test records
+the new discovery/health state alongside positive queued-item counts before releasing
+delivery, then verifies all record IDs. Queue age and receiver refusal telemetry
+must be present; the queue rejection counter is absent until its first rejection.
 
 Build minimal static collector binaries from the comparison revisions with the
 repository's pinned OpenTelemetry Collector Builder. Use this builder manifest,
@@ -190,6 +193,7 @@ mkdir -p "$LANE_LAB/artifacts"
 cp /absolute/path/OUTPUT/otelcol-lanefloor "$LANE_LAB/collector"
 printf 'nameserver 127.0.0.1\noptions timeout:1 attempts:1\n' > "$LANE_LAB/resolv.conf"
 docker run --rm --network none --read-only --tmpfs /tmp \
+  --user "$(id -u):$(id -g)" --sysctl net.ipv4.ip_unprivileged_port_start=0 \
   -v "$LANE_LAB:/harness:ro" \
   -v "$LANE_LAB/resolv.conf:/etc/resolv.conf:ro" \
   -v "$LANE_LAB/artifacts:/artifacts" \
