@@ -118,6 +118,43 @@ func TestCentralQueueLanePolicyUsesHysteresis(t *testing.T) {
 	require.Equal(t, 16, lanes)
 }
 
+func TestCentralQueueLanePolicyHysteresisRespectsBackendFloor(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		backends int
+		previous int
+		minLanes int
+		maxLanes int
+		rate     int64
+		want     int
+	}{
+		{name: "scale up with unknown rate", backends: 35, previous: 25, maxLanes: 64, want: 35},
+		{name: "scale up with low rate", backends: 35, previous: 25, maxLanes: 64, rate: 1, want: 35},
+		{name: "health recovery", backends: 35, previous: 30, maxLanes: 64, want: 35},
+		{name: "small shrink keeps hysteresis", backends: 25, previous: 35, maxLanes: 64, want: 35},
+		{name: "large shrink", backends: 17, previous: 35, maxLanes: 64, want: 17},
+		{name: "configured maximum", backends: 35, previous: 25, maxLanes: 30, want: 30},
+		{name: "configured minimum", backends: 10, previous: 25, minLanes: 30, maxLanes: 64, want: 30},
+		{name: "rate growth within hysteresis", backends: 25, previous: 35, maxLanes: 64, rate: 25 << 20, want: 35},
+		{name: "rate growth outside hysteresis", backends: 35, previous: 25, maxLanes: 64, rate: 64 << 20, want: 64},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := createDefaultConfig().(*Config).CentralQueue
+			cfg.MinLanes = tt.minLanes
+			cfg.MaxLanes = tt.maxLanes
+			cfg.TargetLaneFillDuration = 500 * time.Millisecond
+			cfg.TargetCompressedBytes = 256 << 10
+			policy := newCentralQueueLanePolicy(cfg)
+			require.Equal(t, tt.want, policy.compute(centralQueueLaneInputs{
+				healthyBackends:               tt.backends,
+				compressedIngestBytesPerSec:   tt.rate,
+				previousEffectiveLaneCount:    tt.previous,
+				previousEffectiveLaneCountSet: true,
+			}))
+		})
+	}
+}
+
 func TestCentralQueueLanePolicyUsesBackendCountWhenRateUnknown(t *testing.T) {
 	policy := centralQueueLanePolicy{
 		minLanes:           1,

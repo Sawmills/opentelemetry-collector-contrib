@@ -136,3 +136,82 @@ probe can be tightened with `--liveness-timeout-seconds` and
 If red does not fail any incident predicate, the load/rollout simulation is too weak.
 Use `--strict-red` when you specifically need the full historical incident shape
 instead of the default "any incident-shaped signature" gate.
+
+## Dynamic lane-floor network test
+
+`fakebackend/lane_floor_integration_test.go` exercises a collector **process** through
+OTLP gRPC, a controlled DNS server, real TCP health probes, and 35 networked OTLP
+sinks. It does not import the load-balancing exporter's internal implementation.
+It establishes 25 lanes, grows DNS membership to 35, stops 15 sinks while keeping
+DNS unchanged, recovers them, shrinks to 17, and grows again to 25. Growth runs for
+35 seconds to cross the ingest-rate window. Compressible input keeps rate-derived
+lanes below the backend floor, so rate growth cannot hide the hysteresis defect.
+The sinks delay responses and tally unique record IDs, checking endpoint coverage,
+queue pressure/drain, rejection, and missing/duplicate delivery in each run.
+Both runs send the same fixed record sequence. A sink barrier holds accepted work
+through every growth, quarantine, recovery, and shrink transition. The test records
+the new discovery/health state alongside positive queued-item counts before releasing
+delivery, then verifies all record IDs. Queue age and receiver refusal telemetry
+must be present; the queue rejection counter is absent until its first rejection.
+
+Build minimal static collector binaries from the comparison revisions with the
+repository's pinned OpenTelemetry Collector Builder. Use this builder manifest,
+substituting absolute paths for `CHECKOUT` and `OUTPUT`:
+
+```yaml
+dist:
+  module: example.com/lanefloor
+  name: otelcol-lanefloor
+  version: 0.149.0
+  output_path: OUTPUT
+receivers:
+  - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.149.1-0.20260402195938-76ede073ee8e
+exporters:
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter v0.149.0
+providers:
+  - gomod: go.opentelemetry.io/collector/confmap/provider/fileprovider v1.55.1-0.20260402195938-76ede073ee8e
+  - gomod: go.opentelemetry.io/collector/confmap/provider/envprovider v1.55.1-0.20260402195938-76ede073ee8e
+replaces:
+  - github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter => CHECKOUT/exporter/loadbalancingexporter
+  - github.com/open-telemetry/opentelemetry-collector-contrib/pkg/batchpersignal => CHECKOUT/pkg/batchpersignal
+  - github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatautil => CHECKOUT/pkg/pdatautil
+  - github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest => CHECKOUT/pkg/pdatatest
+  - github.com/open-telemetry/opentelemetry-collector-contrib/pkg/golden => CHECKOUT/pkg/golden
+  - github.com/open-telemetry/opentelemetry-collector-contrib/internal/exp/metrics => CHECKOUT/internal/exp/metrics
+```
+
+From the repository root, with a Go toolchain satisfying the module's `go.mod`:
+
+```sh
+CGO_ENABLED=0 go tool -modfile=internal/tools/go.mod \
+  go.opentelemetry.io/collector/cmd/builder --config /absolute/path/builder.yaml
+
+# LANE_LAB is an absolute scratch directory, not a production configuration path.
+LANE_LAB=/tmp/lane-floor-lab
+mkdir -p "$LANE_LAB/artifacts"
+(cd test/queuedrain/fakebackend && CGO_ENABLED=0 go test -c -tags integration -o "$LANE_LAB/lane-floor.test" .)
+cp /absolute/path/OUTPUT/otelcol-lanefloor "$LANE_LAB/collector"
+printf 'nameserver 127.0.0.1\noptions timeout:1 attempts:1\n' > "$LANE_LAB/resolv.conf"
+docker run --rm --network none --read-only --tmpfs /tmp \
+  --user "$(id -u):$(id -g)" --sysctl net.ipv4.ip_unprivileged_port_start=0 \
+  -v "$LANE_LAB:/harness:ro" \
+  -v "$LANE_LAB/resolv.conf:/etc/resolv.conf:ro" \
+  -v "$LANE_LAB/artifacts:/artifacts" \
+  -e QUEUEDRAIN_COLLECTOR_BINARY=/harness/collector \
+  -e QUEUEDRAIN_ARTIFACTS=/artifacts \
+  ubuntu:22.04 /harness/lane-floor.test \
+  -test.run '^TestLaneFloorEndToEnd$' -test.v -test.timeout 4m
+```
+
+The container has only loopback networking and owns its DNS port 53; it never
+changes the host resolver or an existing cluster. Run the **same test binary and
+configuration** against both collectors, retaining separate artifact directories.
+The pre-fix collector must fail the growth lane/coverage assertions; the patched
+collector must pass. A startup error, discovery timeout, or delivery failure alone
+does not count as reproducing the lane-floor defect. Collector logs, effective
+configuration, Prometheus snapshots, and per-phase endpoint delivery counts are
+written to the artifact directory; test output includes unique-ID verification.
+
+This is a controlled network regression, not a customer-load capacity benchmark
+or evidence of successful production deployment. The ordinary unit-test lane skips
+it unless explicitly built with `integration` and given a collector binary.
