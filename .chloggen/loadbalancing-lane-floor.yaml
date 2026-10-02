@@ -1,7 +1,7 @@
 change_type: bug_fix
 component: exporter/loadbalancing
 note: Honor the dynamic backend lane floor when retaining lane counts through hysteresis.
-issues: []
+issues: [126]
 subtext: |
   Backend growth and health recovery now raise dynamic lanes to the backend floor,
   bounded by max_lanes. Fixed lane counts and trace-preserving log lanes are unchanged.
