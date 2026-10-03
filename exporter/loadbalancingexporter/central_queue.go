@@ -955,9 +955,7 @@ func (q *centralQueue) leaseReadyWindowLocked() *centralQueueLease {
 	copy(q.ready, q.ready[1:])
 	q.ready[len(q.ready)-1] = centralQueueWindow{}
 	q.ready = q.ready[:len(q.ready)-1]
-	for i := range window.items {
-		q.untrackOldestEnqueuedAtLocked(window.items[i])
-	}
+	q.untrackWindowEnqueuedAtLocked(window.items)
 	snapshot := q.snapshotLocked()
 	q.settings.telemetry.record(context.Background(), snapshot)
 	q.settings.telemetry.recordWindow(context.Background(), window, q.settings.targetCompressedBytes)
@@ -1281,13 +1279,33 @@ func (q *centralQueue) untrackOldestEnqueuedAtLocked(item centralQueueItem) {
 	if item.enqueuedAtUnixNano == 0 || q.enqueuedAtCounts == nil {
 		return
 	}
-	count := q.enqueuedAtCounts[item.enqueuedAtUnixNano]
-	if count <= 1 {
-		delete(q.enqueuedAtCounts, item.enqueuedAtUnixNano)
-	} else {
-		q.enqueuedAtCounts[item.enqueuedAtUnixNano] = count - 1
+	q.untrackEnqueuedAtCountLocked(item.enqueuedAtUnixNano, 1)
+	q.pruneOldestEnqueuedAtLocked()
+}
+
+func (q *centralQueue) untrackWindowEnqueuedAtLocked(items []centralQueueItem) {
+	for len(items) > 0 {
+		enqueuedAt := items[0].enqueuedAtUnixNano
+		end := 1
+		for end < len(items) && items[end].enqueuedAtUnixNano == enqueuedAt {
+			end++
+		}
+		q.untrackEnqueuedAtCountLocked(enqueuedAt, end)
+		items = items[end:]
 	}
 	q.pruneOldestEnqueuedAtLocked()
+}
+
+func (q *centralQueue) untrackEnqueuedAtCountLocked(enqueuedAt int64, removed int) {
+	if enqueuedAt == 0 || q.enqueuedAtCounts == nil {
+		return
+	}
+	count := q.enqueuedAtCounts[enqueuedAt]
+	if count <= removed {
+		delete(q.enqueuedAtCounts, enqueuedAt)
+	} else {
+		q.enqueuedAtCounts[enqueuedAt] = count - removed
+	}
 }
 
 func (q *centralQueue) pruneOldestEnqueuedAtLocked() {

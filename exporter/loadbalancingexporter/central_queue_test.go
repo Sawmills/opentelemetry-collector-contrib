@@ -1210,6 +1210,42 @@ func TestCentralQueueRequeueUsesPerItemRetryDelay(t *testing.T) {
 	requireNextAttemptWithinRetryDelay(t, now, 0, items[1].nextAttemptUnixNano)
 }
 
+func TestCentralQueueLeaseKeepsTimestampSharedWithQueuedItems(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{maxCompressedBytes: 100, maxInflightUncompressedBytes: 100, maxUncompressedBatchBytes: 20, targetCompressedBytes: 20})
+	base := time.Unix(10, 0)
+	items := []centralQueueItem{
+		{compressedBytes: 10, uncompressedBytes: 10, enqueuedAtUnixNano: base.UnixNano()},
+		{compressedBytes: 10, uncompressedBytes: 10, enqueuedAtUnixNano: base.UnixNano()},
+		{compressedBytes: 10, uncompressedBytes: 10, enqueuedAtUnixNano: base.UnixNano()},
+		{compressedBytes: 10, uncompressedBytes: 10, enqueuedAtUnixNano: base.Add(time.Millisecond).UnixNano()},
+	}
+
+	enqueueErr := q.enqueueAllAt(items, base)
+	_, leaseErr := q.tryLease(base.Add(time.Second))
+
+	require.NoError(t, enqueueErr)
+	require.NoError(t, leaseErr)
+	require.Equal(t, time.Second.Milliseconds(), q.oldestItemAgeMillisLocked(base.Add(time.Second)))
+}
+
+func TestCentralQueueLeaseClearsRepeatedAndMixedTimestamps(t *testing.T) {
+	q := newCentralQueue(centralQueueSettings{maxCompressedBytes: 100, maxInflightUncompressedBytes: 100, maxUncompressedBatchBytes: 100, targetCompressedBytes: 100})
+	base := time.Unix(10, 0)
+	items := []centralQueueItem{
+		{compressedBytes: 10, uncompressedBytes: 10, enqueuedAtUnixNano: base.UnixNano()},
+		{compressedBytes: 10, uncompressedBytes: 10, enqueuedAtUnixNano: base.UnixNano()},
+		{compressedBytes: 10, uncompressedBytes: 10, enqueuedAtUnixNano: base.Add(time.Millisecond).UnixNano()},
+		{compressedBytes: 10, uncompressedBytes: 10, enqueuedAtUnixNano: base.UnixNano()},
+	}
+
+	enqueueErr := q.enqueueAllAt(items, base)
+	_, leaseErr := q.tryLease(base.Add(time.Second))
+
+	require.NoError(t, enqueueErr)
+	require.NoError(t, leaseErr)
+	require.Zero(t, q.oldestItemAgeMillisLocked(base.Add(time.Second)))
+}
+
 func TestCentralQueueSnapshotReportsOldestQueuedItemAge(t *testing.T) {
 	q := newCentralQueue(centralQueueSettings{
 		maxCompressedBytes:           100,

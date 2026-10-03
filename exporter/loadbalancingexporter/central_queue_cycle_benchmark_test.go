@@ -29,6 +29,7 @@ func BenchmarkCentralQueueFullCycle(b *testing.B) {
 		requeuedWindows   int
 		shutdownBeforeRun bool
 		reuseQueue        bool
+		timestampStep     time.Duration
 	}{
 		{name: "healthy_balanced_batch_8", lanes: 64, batchItems: 8},
 		{name: "healthy_hot_batch_64", lanes: 64, hotPercent: 80, batchItems: 64},
@@ -38,6 +39,8 @@ func BenchmarkCentralQueueFullCycle(b *testing.B) {
 		{name: "shutdown_hot_batch_64", lanes: 64, hotPercent: 80, batchItems: 64, shutdownBeforeRun: true},
 		{name: "steady_healthy_hot_batch_256", lanes: 64, hotPercent: 80, batchItems: 256, reuseQueue: true},
 		{name: "steady_unavailable_hot_batch_256", lanes: 64, hotPercent: 80, batchItems: 256, deferredWindows: 2, requeuedWindows: 2, reuseQueue: true},
+		{name: "steady_healthy_unique_timestamps", lanes: 64, hotPercent: 80, batchItems: 256, reuseQueue: true, timestampStep: time.Nanosecond},
+		{name: "steady_unavailable_unique_timestamps", lanes: 64, hotPercent: 80, batchItems: 256, deferredWindows: 2, requeuedWindows: 2, reuseQueue: true, timestampStep: time.Nanosecond},
 	} {
 		b.Run(scenario.name, func(b *testing.B) {
 			laneKeys := make([][]byte, scenario.lanes)
@@ -84,7 +87,7 @@ func BenchmarkCentralQueueFullCycle(b *testing.B) {
 						compressedBytes:   compressedBytes,
 						uncompressedBytes: uncompressedBytes,
 						count:             1,
-					}, now); err != nil {
+					}, now.Add(time.Duration(record)*scenario.timestampStep)); err != nil {
 						b.Fatal(err)
 					}
 				}
