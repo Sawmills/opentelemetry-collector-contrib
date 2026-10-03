@@ -27,6 +27,16 @@ var (
 	spanID2  = [8]byte{8, 7, 6, 5, 4, 3, 2, 1}
 )
 
+func TestResetReleasesLowercaseCache(t *testing.T) {
+	rLogs, sLogs, log := createTelemetry("string")
+	tc := NewTransformContextPtr(rLogs, sLogs, log)
+	defer tc.Close()
+	require.Equal(t, "ω", tc.LowercaseString("Ω"))
+	tc.reset()
+	require.Empty(t, tc.cachedLowercaseInput)
+	require.Empty(t, tc.cachedLowercaseOutput)
+}
+
 func Test_newPathGetSetter(t *testing.T) {
 	_, _, refLog := createTelemetry("string")
 

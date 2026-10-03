@@ -51,6 +51,13 @@ func containsAny(s string, substrings []string) bool {
 	return false
 }
 
+func lowercaseForContains[K any](tCtx K, value string) string {
+	if cache, ok := any(tCtx).(interface{ LowercaseString(string) string }); ok {
+		return cache.LowercaseString(value)
+	}
+	return strings.ToLower(value)
+}
+
 // lowerBufPool hands out reusable byte slices for the case-insensitive
 // substring search. The previous fallback was `val = strings.ToLower(val)`
 // which allocates len(val) bytes per record × per filter rule. On customer's
@@ -157,7 +164,7 @@ func contains[K any](
 		// on the hot pipeline.
 		firstUpper, ascii := asciiUpperIndex(val)
 		if !ascii {
-			return containsAny(strings.ToLower(val), patterns), nil
+			return containsAny(lowercaseForContains(tCtx, val), patterns), nil
 		}
 		if firstUpper < 0 {
 			return false, nil
@@ -174,7 +181,7 @@ func contains[K any](
 		*bufPtr = (*bufPtr)[:0]
 		lowerBufPool.Put(bufPtr)
 		if !ascii {
-			return containsAny(strings.ToLower(val), patterns), nil
+			return containsAny(lowercaseForContains(tCtx, val), patterns), nil
 		}
 		return hit, nil
 	}

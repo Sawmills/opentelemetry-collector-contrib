@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 
 	"go.opentelemetry.io/collector/component"
@@ -49,6 +50,8 @@ type TransformContext struct {
 	cache                 pcommon.Map
 	cachedBodyString      string
 	cachedBodyStringValid bool
+	cachedLowercaseInput  string
+	cachedLowercaseOutput string
 }
 
 type logRecord plog.LogRecord
@@ -128,13 +131,33 @@ func NewTransformContextPtr(resourceLogs plog.ResourceLogs, scopeLogs plog.Scope
 // Close the current TransformContext.
 // After this function returns this instance cannot be used.
 func (tCtx *TransformContext) Close() {
+	tCtx.reset()
+	tcPool.Put(tCtx)
+}
+
+func (tCtx *TransformContext) reset() {
 	tCtx.resourceLogs = plog.ResourceLogs{}
 	tCtx.scopeLogs = plog.ScopeLogs{}
 	tCtx.logRecord = plog.LogRecord{}
 	tCtx.cache.Clear()
 	tCtx.cachedBodyString = ""
 	tCtx.cachedBodyStringValid = false
-	tcPool.Put(tCtx)
+	tCtx.cachedLowercaseInput = ""
+	tCtx.cachedLowercaseOutput = ""
+}
+
+// LowercaseString reuses the last Unicode lowercase conversion for this record.
+// The input value is the cache key, so changes to the body or attributes cannot
+// return an earlier value. Close releases both strings before pooling the context.
+func (tCtx *TransformContext) LowercaseString(value string) string {
+	if tCtx == nil {
+		return strings.ToLower(value)
+	}
+	if value != tCtx.cachedLowercaseInput {
+		tCtx.cachedLowercaseInput = value
+		tCtx.cachedLowercaseOutput = strings.ToLower(value)
+	}
+	return tCtx.cachedLowercaseOutput
 }
 
 // GetLogRecord returns the log record from the TransformContext.
