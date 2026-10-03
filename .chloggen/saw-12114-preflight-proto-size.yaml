@@ -1,0 +1,7 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Reduce CPU and allocations when the central queue checks log record sizes.
+issues: [131]
+subtext: |
+  Use the exact protobuf size to check the item limit before serialization.
+  Preserve rejection metrics for oversized records and queue atomicity.
