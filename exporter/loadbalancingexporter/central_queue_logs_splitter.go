@@ -160,9 +160,15 @@ func (s *centralQueueLogSplitter) rejectUnsplittableRecords(ctx context.Context,
 		rl := ld.ResourceLogs().At(i)
 		for j := 0; j < rl.ScopeLogs().Len(); j++ {
 			sl := rl.ScopeLogs().At(j)
+			if sl.LogRecords().Len() == 0 {
+				continue
+			}
+			single := plog.NewLogs()
+			targetRL := findOrCreateResourceLogs(single, rl)
+			targetSL := findOrCreateScopeLogs(targetRL, sl)
+			targetRecord := targetSL.LogRecords().AppendEmpty()
 			for k := 0; k < sl.LogRecords().Len(); k++ {
-				single := plog.NewLogs()
-				insertLogRecord(single, rl, sl, sl.LogRecords().At(k))
+				sl.LogRecords().At(k).CopyTo(targetRecord)
 				if s.marshaler.LogsSize(single) <= s.hardLimit {
 					continue
 				}
