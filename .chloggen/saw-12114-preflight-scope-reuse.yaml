@@ -1,0 +1,7 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Reuse resource and scope metadata during central queue log size checks.
+issues: [132]
+subtext: |
+  Copy each record into one scratch batch per scope to reduce CPU and allocations.
+  Preserve exact size limits, rejection metrics, and source data.

@@ -35,6 +35,25 @@ func TestCentralQueuePreflightRejectsOneByteAboveLimit(t *testing.T) {
 	require.Zero(t, exporter.centralQueue.len())
 }
 
+func TestCentralQueuePreflightKeepsRecordSizesSeparate(t *testing.T) {
+	first := sharedResourceScopeLog("small")
+	first.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Attributes().PutStr("large", strings.Repeat("x", 1024))
+	second := sharedResourceScopeLog(strings.Repeat("y", 1024))
+	limit := max(mustMarshalLogsSize(t, first), mustMarshalLogsSize(t, second))
+	second.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).CopyTo(first.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().AppendEmpty())
+	marshaler := &plog.ProtoMarshaler{}
+	before, err := marshaler.MarshalLogs(first)
+	require.NoError(t, err)
+	exporter := newPreflightTestExporter(t, limit)
+
+	require.NoError(t, exporter.ConsumeLogs(t.Context(), first))
+
+	require.Equal(t, 2, exporter.centralQueue.len())
+	after, err := marshaler.MarshalLogs(first)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+}
+
 func newPreflightTestExporter(tb testing.TB, limit int) *logExporterImp {
 	tb.Helper()
 	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
