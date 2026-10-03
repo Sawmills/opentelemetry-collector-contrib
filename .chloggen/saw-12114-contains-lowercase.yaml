@@ -1,0 +1,7 @@
+change_type: enhancement
+component: pkg/ottl
+note: Avoid redundant lowercase conversion for case-insensitive Contains misses on lowercase ASCII strings.
+issues: [128]
+subtext: |
+  Mixed ASCII strings reuse their lowercase prefix while folding uppercase bytes.
+  Unicode matching and invalid UTF-8 behavior remain unchanged.
