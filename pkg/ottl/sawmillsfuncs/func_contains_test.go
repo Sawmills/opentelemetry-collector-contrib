@@ -105,6 +105,58 @@ func TestContainsDoesNotMutatePatterns(t *testing.T) {
 	require.Equal(t, []string{"TEST"}, patterns)
 }
 
+func FuzzContainsCaseInsensitive(f *testing.F) {
+	for _, seed := range [][2]string{
+		{"lowercase body", "missing"},
+		{"lowercase body", "BODY"},
+		{"lowercase bodY", "BODY"},
+		{"UPPERCASE BODY", "body"},
+		{"lowercase Ω", "ω"},
+		{"lowercase \xff", "\ufffd"},
+		{"body\x00\x7f", "\x7f"},
+		{"", ""},
+	} {
+		f.Add(seed[0], seed[1])
+	}
+	f.Fuzz(func(t *testing.T, value, pattern string) {
+		boxed := any(value)
+		fn := contains(&ottl.StandardStringGetter[any]{
+			Getter: func(context.Context, any) (any, error) { return boxed, nil },
+		}, []string{pattern}, false)
+		got, err := fn(t.Context(), nil)
+		require.NoError(t, err)
+		require.Equal(t, strings.Contains(strings.ToLower(value), strings.ToLower(pattern)), got)
+	})
+}
+
+func BenchmarkContainsCaseInsensitive(b *testing.B) {
+	for _, tc := range []struct {
+		name    string
+		value   string
+		pattern string
+	}{
+		{"short_lower_miss", "service=payments level=info status=ok", "missing"},
+		{"long_lower_miss", strings.Repeat("service=payments level=info status=ok ", 114), "missing"},
+		{"long_mixed_miss", "Service=payments " + strings.Repeat("level=info status=ok ", 204), "missing"},
+		{"long_upper_at_end_hit", strings.Repeat("level=info status=ok ", 204) + "ERROR", "error"},
+		{"long_lower_hit", strings.Repeat("level=info status=ok ", 204) + "error", "ERROR"},
+		{"long_unicode_hit", strings.Repeat("level=info status=ok ", 204) + "Ω", "ω"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			boxed := any(tc.value)
+			fn := contains(&ottl.StandardStringGetter[any]{
+				Getter: func(context.Context, any) (any, error) { return boxed, nil },
+			}, []string{tc.pattern}, false)
+			b.ReportAllocs()
+			b.SetBytes(int64(len(tc.value)))
+			b.ResetTimer()
+			for b.Loop() {
+				_, _ = fn(b.Context(), nil)
+			}
+		})
+	}
+}
+
 // TestContainsCaseInsensitiveUnicode pins the SAW-7559 fix's Unicode
 // fallback: the new ASCII-only fast path doesn't change matching semantics
 // for non-ASCII haystacks (architect catch on PR #75). For any value with
