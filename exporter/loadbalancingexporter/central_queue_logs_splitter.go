@@ -163,12 +163,12 @@ func (s *centralQueueLogSplitter) rejectUnsplittableRecords(ctx context.Context,
 			for k := 0; k < sl.LogRecords().Len(); k++ {
 				single := plog.NewLogs()
 				insertLogRecord(single, rl, sl, sl.LogRecords().At(k))
+				if s.marshaler.LogsSize(single) <= s.hardLimit {
+					continue
+				}
 				payload, err := s.marshaler.MarshalLogs(single)
 				if err != nil {
 					return err
-				}
-				if len(payload) <= s.hardLimit {
-					continue
 				}
 				encoded, err := s.codec.Encode(payload)
 				if err != nil {
