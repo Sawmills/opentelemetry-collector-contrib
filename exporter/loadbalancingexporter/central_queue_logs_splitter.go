@@ -355,9 +355,6 @@ func (s *centralQueueLogSizeState) deltaForRecord(srcRL plog.ResourceLogs, srcSL
 }
 
 func (s *centralQueueLogSizeState) addRecord(srcRL plog.ResourceLogs, srcSL plog.ScopeLogs, rec plog.LogRecord, marshaler *plog.ProtoMarshaler) {
-	delta := s.deltaForRecord(srcRL, srcSL, rec, marshaler)
-	s.bytes += delta
-
 	recordDelta := logProtoDeltaSize(marshaler.LogRecordSize(rec))
 	resourceIndex := s.findResource(srcRL)
 	if resourceIndex == -1 {
@@ -369,9 +366,11 @@ func (s *centralQueueLogSizeState) addRecord(srcRL plog.ResourceLogs, srcSL plog
 		srcSL.Scope().CopyTo(scope.Scope())
 		scope.SetSchemaUrl(srcSL.SchemaUrl())
 		scopeSize := marshaler.ScopeLogsSize(scope) + recordDelta
+		resourceSize += logProtoDeltaSize(scopeSize)
+		s.bytes += logProtoDeltaSize(resourceSize)
 		s.resources = append(s.resources, centralQueueLogResourceSizeState{
 			resource: resource,
-			size:     resourceSize + logProtoDeltaSize(scopeSize),
+			size:     resourceSize,
 			scopes: []centralQueueLogScopeSizeState{{
 				scope: scope,
 				size:  scopeSize,
@@ -380,6 +379,7 @@ func (s *centralQueueLogSizeState) addRecord(srcRL plog.ResourceLogs, srcSL plog
 		return
 	}
 
+	oldResourceSize := s.resources[resourceIndex].size
 	scopeIndex := s.findScope(resourceIndex, srcSL)
 	if scopeIndex == -1 {
 		scope := s.resources[resourceIndex].resource.ScopeLogs().AppendEmpty()
@@ -391,6 +391,7 @@ func (s *centralQueueLogSizeState) addRecord(srcRL plog.ResourceLogs, srcSL plog
 			size:  scopeSize,
 		})
 		s.resources[resourceIndex].size += logProtoDeltaSize(scopeSize)
+		s.bytes += logProtoDeltaSize(s.resources[resourceIndex].size) - logProtoDeltaSize(oldResourceSize)
 		return
 	}
 
@@ -398,6 +399,7 @@ func (s *centralQueueLogSizeState) addRecord(srcRL plog.ResourceLogs, srcSL plog
 	newScopeSize := oldScopeSize + recordDelta
 	s.resources[resourceIndex].scopes[scopeIndex].size = newScopeSize
 	s.resources[resourceIndex].size += logProtoDeltaSize(newScopeSize) - logProtoDeltaSize(oldScopeSize)
+	s.bytes += logProtoDeltaSize(s.resources[resourceIndex].size) - logProtoDeltaSize(oldResourceSize)
 }
 
 func (s *centralQueueLogSizeState) findResource(resource plog.ResourceLogs) int {

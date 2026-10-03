@@ -1,0 +1,7 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Avoid duplicate size calculations when adding logs to central queue lanes.
+issues: [133]
+subtext: |
+  Update the total size from the resource size change already calculated during insertion.
+  Preserve wire size accounting, batch limits, and atomic queue delivery.
