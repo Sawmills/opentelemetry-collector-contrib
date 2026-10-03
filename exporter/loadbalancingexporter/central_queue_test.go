@@ -1221,10 +1221,12 @@ func TestCentralQueueLeaseKeepsTimestampSharedWithQueuedItems(t *testing.T) {
 	}
 
 	enqueueErr := q.enqueueAllAt(items, base)
-	_, leaseErr := q.tryLease(base.Add(time.Second))
+	lease, leaseErr := q.tryLease(base.Add(time.Second))
 
 	require.NoError(t, enqueueErr)
 	require.NoError(t, leaseErr)
+	require.NotNil(t, lease)
+	require.Len(t, lease.window.items, 2)
 	require.Equal(t, time.Second.Milliseconds(), q.oldestItemAgeMillisLocked(base.Add(time.Second)))
 }
 
@@ -1239,10 +1241,12 @@ func TestCentralQueueLeaseClearsRepeatedAndMixedTimestamps(t *testing.T) {
 	}
 
 	enqueueErr := q.enqueueAllAt(items, base)
-	_, leaseErr := q.tryLease(base.Add(time.Second))
+	lease, leaseErr := q.tryLease(base.Add(time.Second))
 
 	require.NoError(t, enqueueErr)
 	require.NoError(t, leaseErr)
+	require.NotNil(t, lease)
+	require.Len(t, lease.window.items, len(items))
 	require.Zero(t, q.oldestItemAgeMillisLocked(base.Add(time.Second)))
 }
 
