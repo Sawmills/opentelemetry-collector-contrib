@@ -112,6 +112,8 @@ func FuzzContainsCaseInsensitive(f *testing.F) {
 		{"lowercase bodY", "BODY"},
 		{"UPPERCASE BODY", "body"},
 		{"lowercase Ω", "ω"},
+		{"Mixed ASCII then Ω", "ω"},
+		{"Mixed ASCII then \xff", "\ufffd"},
 		{"lowercase \xff", "\ufffd"},
 		{"body\x00\x7f", "\x7f"},
 		{"", ""},
@@ -141,6 +143,7 @@ func BenchmarkContainsCaseInsensitive(b *testing.B) {
 		{"long_upper_at_end_hit", strings.Repeat("level=info status=ok ", 204) + "ERROR", "error"},
 		{"long_lower_hit", strings.Repeat("level=info status=ok ", 204) + "error", "ERROR"},
 		{"long_unicode_hit", strings.Repeat("level=info status=ok ", 204) + "Ω", "ω"},
+		{"long_mixed_unicode_hit", "Service=payments " + strings.Repeat("level=info status=ok ", 204) + "Ω", "ω"},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			boxed := any(tc.value)
@@ -173,6 +176,9 @@ func TestContainsCaseInsensitiveUnicode(t *testing.T) {
 		{"cyrillic upper haystack lower pattern", "Привет МИР", "мир", true},
 		// Greek omega case pair.
 		{"greek omega upper → lower", "GREETING Ω", "ω", true},
+		{"late unicode after uppercase ascii", "Service=" + strings.Repeat("x", 8192) + "Ω", "ω", true},
+		{"late unicode miss after uppercase ascii", "Service=" + strings.Repeat("x", 8192) + "Ω", "missing", false},
+		{"invalid utf8 after uppercase ascii", "Service=\xff", "\ufffd", true},
 		// Latin-1 with diacritic — ÷ is not a letter, ensure it doesn't match.
 		{"diacritic case", "Ëxample log line", "ëxample", true},
 		// ASCII haystack must still match (regression guard for fast path).

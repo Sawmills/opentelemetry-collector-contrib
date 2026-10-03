@@ -1,0 +1,7 @@
+change_type: enhancement
+component: pkg/ottl
+note: Reduce redundant scanning in case-insensitive Contains on mixed-case ASCII values.
+issues: [128]
+subtext: |
+  Validate the remaining ASCII bytes while folding them into the pooled buffer.
+  Unicode and invalid UTF-8 matching retain the existing lowercase fallback.
