@@ -1,0 +1,7 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Batch timestamp bookkeeping when leasing central queue windows.
+issues: [129]
+subtext: |
+  Group adjacent equal enqueue timestamps and prune the oldest-age heap once per lease.
+  Preserve queue age values and timestamp counts for items that remain queued.
