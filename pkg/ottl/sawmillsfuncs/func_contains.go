@@ -86,22 +86,40 @@ func isASCII(s string) bool {
 	return true
 }
 
+// asciiUpperIndex finds the first uppercase ASCII byte and checks the whole
+// string for non-ASCII bytes. A negative index means an ASCII string is already
+// lowercase; its earlier substring miss cannot change after folding.
+func asciiUpperIndex(s string) (int, bool) {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 0x80 {
+			return -1, false
+		}
+		if c >= 'A' && c <= 'Z' {
+			return i, isASCII(s[i+1:])
+		}
+	}
+	return -1, true
+}
+
 // lowerASCIIInto folds A-Z to a-z in-place into the pointed-to buffer and
-// returns a string view of the result. Callers must verify `isASCII(s)`
-// first — non-ASCII bytes are passed through unchanged, which is wrong for
+// returns a string view of the result. firstUpper must identify the first
+// uppercase byte, and asciiUpperIndex must have confirmed the string is ASCII.
+// Non-ASCII bytes are passed through unchanged, which is wrong for
 // Unicode case-folding. If the buffer needs to grow the caller's pointer
 // is updated to point at the resized slice so the new backing memory goes
 // back into the pool. The returned string aliases `*bufPtr`'s backing
 // memory — caller must keep using it only until the pointer is returned
 // to the pool.
-func lowerASCIIInto(bufPtr *[]byte, s string) string {
+func lowerASCIIInto(bufPtr *[]byte, s string, firstUpper int) string {
 	if cap(*bufPtr) < len(s) {
 		*bufPtr = make([]byte, len(s))
 	} else {
 		*bufPtr = (*bufPtr)[:len(s)]
 	}
 	buf := *bufPtr
-	for i := 0; i < len(s); i++ {
+	copy(buf, s[:firstUpper])
+	for i := firstUpper; i < len(s); i++ {
 		c := s[i]
 		if c >= 'A' && c <= 'Z' {
 			c += 'a' - 'A'
@@ -151,8 +169,12 @@ func contains[K any](
 		// `unicode.ToLower` which handles all case-folding the original
 		// behavior promised. Customer's logs are ASCII so this branch is cold
 		// on the hot pipeline.
-		if !isASCII(val) {
+		firstUpper, ascii := asciiUpperIndex(val)
+		if !ascii {
 			return containsAny(strings.ToLower(val), patterns), nil
+		}
+		if firstUpper < 0 {
+			return false, nil
 		}
 		// ASCII fast slow path: fold val into a pooled buffer and run
 		// strings.Contains. The pool replaces the per-record
@@ -160,7 +182,7 @@ func contains[K any](
 		// source on the filter-sampling pipeline (SAW-7559). Pool holds
 		// *[]byte to avoid slice-header boxing on Pool.Get/Put.
 		bufPtr := lowerBufPool.Get().(*[]byte)
-		lowered := lowerASCIIInto(bufPtr, val)
+		lowered := lowerASCIIInto(bufPtr, val, firstUpper)
 		hit := containsAny(lowered, patterns)
 		// Reset length before returning to pool — keep the backing array.
 		*bufPtr = (*bufPtr)[:0]
