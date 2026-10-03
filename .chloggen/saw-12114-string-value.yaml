@@ -1,0 +1,6 @@
+change_type: enhancement
+component: pkg/ottl
+note: Reduce allocations when String converts an existing string value.
+issues: [127]
+subtext: StandardStringLikeGetter.GetStringValue returns the converted string or nil without an intermediate pointer. Other conversions and custom getters retain their behavior.
+change_logs: [user, api]
