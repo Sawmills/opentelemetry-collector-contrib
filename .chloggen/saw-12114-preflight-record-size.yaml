@@ -1,0 +1,7 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Avoid copying accepted log records during central queue size checks.
+issues: [132]
+subtext: |
+  Calculate the exact protobuf size from each record and its resource and scope metadata.
+  Preserve size limits, rejection metrics, and source data.
