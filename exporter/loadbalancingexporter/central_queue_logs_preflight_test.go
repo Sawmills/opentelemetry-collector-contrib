@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/pcommon"
@@ -52,6 +53,42 @@ func TestCentralQueuePreflightKeepsRecordSizesSeparate(t *testing.T) {
 	after, err := marshaler.MarshalLogs(first)
 	require.NoError(t, err)
 	require.Equal(t, before, after)
+}
+
+func TestCentralQueuePreflightPreservesWireSizeBoundaries(t *testing.T) {
+	for _, size := range []int{0, 1, 120, 127, 128, 255, 16370, 16383, 16384} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			logs := sharedResourceScopeLog(strings.Repeat("x", size))
+			rl := logs.ResourceLogs().At(0)
+			rl.SetSchemaUrl(strings.Repeat("r", size))
+			rl.Resource().SetDroppedAttributesCount(123)
+			sl := rl.ScopeLogs().At(0)
+			sl.SetSchemaUrl(strings.Repeat("s", size))
+			sl.Scope().SetDroppedAttributesCount(456)
+			sl.Scope().SetName(strings.Repeat("scope", size/5))
+			sl.LogRecords().At(0).Attributes().PutEmptySlice("nested").AppendEmpty().SetEmptyMap().PutStr("value", "escaped\n☺")
+			limit := mustMarshalLogsSize(t, logs)
+			exporter := newPreflightTestExporter(t, limit)
+			splitter := newCentralQueueLogSplitter(exporter, limit, time.Time{})
+
+			require.NoError(t, splitter.rejectUnsplittableRecords(t.Context(), logs))
+			splitter.hardLimit = limit - 1
+			require.ErrorIs(t, splitter.rejectUnsplittableRecords(t.Context(), logs), errCentralQueueItemTooLarge)
+			require.Equal(t, limit, mustMarshalLogsSize(t, logs))
+		})
+	}
+}
+
+func TestCentralQueuePreflightEmptyMetadataAndRecord(t *testing.T) {
+	logs := plog.NewLogs()
+	logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+	limit := mustMarshalLogsSize(t, logs)
+	exporter := newPreflightTestExporter(t, limit)
+	splitter := newCentralQueueLogSplitter(exporter, limit, time.Time{})
+
+	require.NoError(t, splitter.rejectUnsplittableRecords(t.Context(), logs))
+	splitter.hardLimit = limit - 1
+	require.ErrorIs(t, splitter.rejectUnsplittableRecords(t.Context(), logs), errCentralQueueItemTooLarge)
 }
 
 func newPreflightTestExporter(tb testing.TB, limit int) *logExporterImp {
