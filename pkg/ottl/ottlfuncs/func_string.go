@@ -29,6 +29,16 @@ func createStringFunction[K any](_ ottl.FunctionContext, oArgs ottl.Arguments) (
 }
 
 func stringFunc[K any](target ottl.StringLikeGetter[K]) ottl.ExprFunc[K] {
+	// Only the concrete standard getter can bypass Get. Custom getters,
+	// including types that embed a standard getter, retain their own behavior.
+	switch getter := target.(type) {
+	case ottl.StandardStringLikeGetter[K]:
+		return getter.GetStringValue
+	case *ottl.StandardStringLikeGetter[K]:
+		return func(ctx context.Context, tCtx K) (any, error) {
+			return getter.GetStringValue(ctx, tCtx)
+		}
+	}
 	return func(ctx context.Context, tCtx K) (any, error) {
 		value, err := target.Get(ctx, tCtx)
 		if err != nil {

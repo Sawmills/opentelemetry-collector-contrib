@@ -761,6 +761,32 @@ func (g StandardStringLikeGetter[K]) Get(ctx context.Context, tCtx K) (*string, 
 	if val == nil {
 		return nil, nil
 	}
+	result, err := stringLikeValue(val)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// GetStringValue applies the same conversion as Get, but returns a string or nil
+// directly. An existing string keeps its interface value without pointer or
+// interface allocations.
+func (g StandardStringLikeGetter[K]) GetStringValue(ctx context.Context, tCtx K) (any, error) {
+	val, err := g.Getter(ctx, tCtx)
+	if err != nil {
+		return nil, fmt.Errorf("error getting value in %T: %w", g, err)
+	}
+	if _, ok := val.(string); ok || val == nil {
+		return val, nil
+	}
+	result, err := stringLikeValue(val)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func stringLikeValue(val any) (string, error) {
 	var result string
 	switch v := val.(type) {
 	case string:
@@ -770,13 +796,13 @@ func (g StandardStringLikeGetter[K]) Get(ctx context.Context, tCtx K) (*string, 
 	case pcommon.Map:
 		resultBytes, err := json.Marshal(v.AsRaw())
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 		result = string(resultBytes)
 	case pcommon.Slice:
 		resultBytes, err := json.Marshal(v.AsRaw())
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 		result = string(resultBytes)
 	case pcommon.Value:
@@ -784,11 +810,11 @@ func (g StandardStringLikeGetter[K]) Get(ctx context.Context, tCtx K) (*string, 
 	default:
 		resultBytes, err := json.Marshal(v)
 		if err != nil {
-			return nil, TypeError(fmt.Sprintf("unsupported type: %T", v))
+			return "", TypeError(fmt.Sprintf("unsupported type: %T", v))
 		}
 		result = string(resultBytes)
 	}
-	return &result, nil
+	return result, nil
 }
 
 // FloatLikeGetter is a Getter that returns a float64 by converting the underlying value to a float64 if necessary.
