@@ -28,6 +28,10 @@ func backendRequestSignalAttributeSet(signal string) attribute.Set {
 	return attribute.NewSet(attribute.String("signal", signal))
 }
 
+func backendFailureSignalAttributeSet(signal string) attribute.Set {
+	return attribute.NewSet(attribute.String("signal", signal))
+}
+
 func backendRequestMetricOptions(attrs attribute.Set) metric.MeasurementOption {
 	return metric.WithAttributeSet(attrs)
 }

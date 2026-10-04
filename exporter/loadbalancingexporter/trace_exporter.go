@@ -160,7 +160,7 @@ func (e *traceExporterImp) consumeTraces(ctx context.Context, td ptrace.Traces, 
 		exp.doneConsume()
 		duration := time.Since(start)
 		if hasData || err != nil {
-			recordBackendFailedOutcome(ctx, e.telemetry, exp.traceSignalAttr, err)
+			recordBackendFailedOutcome(ctx, e.telemetry, exp.traceFailureSignalAttr, err)
 		}
 		decision := e.recordBackendResult(ctx, exp, duration, err)
 		if err != nil && shouldRerouteDirectFailure(e.loadBalancer, exp.endpoint, decision, rerouteAttempt) {

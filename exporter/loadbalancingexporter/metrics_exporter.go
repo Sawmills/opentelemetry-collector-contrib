@@ -425,7 +425,7 @@ func (e *metricExporterImp) consumeCentralQueueMetricWindowAttempt(ctx context.C
 	err := exp.ConsumeMetrics(ctx, md)
 	duration := time.Since(start)
 	if hasData || err != nil {
-		recordBackendFailedOutcome(ctx, e.telemetry, exp.metricSignalAttr, err)
+		recordBackendFailedOutcome(ctx, e.telemetry, exp.metricFailureSignalAttr, err)
 	}
 	decision := e.recordBackendResultWithoutDrain(ctx, exp, duration, err, true)
 	backendLease.release()
@@ -658,7 +658,7 @@ func (e *metricExporterImp) consumeMetricsByExporterAttempt(
 
 		exp.doneConsume()
 		if hasData || err != nil {
-			recordBackendFailedOutcome(ctx, e.telemetry, exp.metricSignalAttr, err)
+			recordBackendFailedOutcome(ctx, e.telemetry, exp.metricFailureSignalAttr, err)
 		}
 		decision := e.recordBackendResult(ctx, exp, duration, err, true)
 		if err != nil && shouldRerouteDirectFailure(e.loadBalancer, exp.endpoint, decision, rerouteAttempt) {
@@ -750,7 +750,7 @@ func (e *metricExporterImp) consumeBatch(ctx context.Context, we *wrappedExporte
 	err := we.ConsumeMetrics(ctx, md)
 	duration := time.Since(start)
 	if hasData || err != nil {
-		recordBackendFailedOutcome(ctx, e.telemetry, we.metricSignalAttr, err)
+		recordBackendFailedOutcome(ctx, e.telemetry, we.metricFailureSignalAttr, err)
 	}
 	decision := e.recordBackendResultHealthOnly(ctx, we, duration, err, reason != metricFlushReasonShutdown)
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, we.endpoint, decision, 0) {
@@ -845,7 +845,7 @@ func (e *metricExporterImp) rerouteDrainBatch(ctx context.Context, md pmetric.Me
 
 		exp.doneConsume()
 		if hasData || err != nil {
-			recordBackendFailedOutcome(ctx, e.telemetry, exp.metricSignalAttr, err)
+			recordBackendFailedOutcome(ctx, e.telemetry, exp.metricFailureSignalAttr, err)
 		}
 		decision := e.recordBackendResultHealthOnly(ctx, exp, duration, err, true)
 		if err != nil && decision.endpointLocal && !decision.failOpen && !endpointListContains(decision.eligible, exp.endpoint) {

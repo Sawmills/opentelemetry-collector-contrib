@@ -18,7 +18,7 @@ Current number of resolved backends for a telemetry signal.
 
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
-| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics``, ``traces`` | - |
+| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics`` | - |
 
 ### otelcol_loadbalancer_backend_fail_open_total
 
@@ -36,8 +36,8 @@ Each failed backend export attempt increments one reason series once.
 Successful non-empty exports record zero with reason `success` so an
 active backend has a measurable zero during clean windows. Successful
 empty exports do not create coverage, while failed empty exports still
-record the failed backend attempt. Values are cumulative for the process
-lifetime and reset on collector restart. Reasons use the
+record the failed backend attempt. Values are cumulative for the
+process lifetime and reset on collector restart. Reasons use the
 bounded endpoint failure vocabulary plus `success` and `other`.
 
 
@@ -49,7 +49,7 @@ bounded endpoint failure vocabulary plus `success` and `other`.
 
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
-| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics``, ``traces`` | - |
+| signal | Telemetry signal for backend failure outcome metrics | Str: ``logs``, ``metrics``, ``traces`` | - |
 | reason | Low-cardinality endpoint health or backend outcome reason | Any Str | - |
 
 ### otelcol_loadbalancer_backend_latency
@@ -121,7 +121,7 @@ Serialized OTLP bytes per backend request before transport compression.
 
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
-| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics``, ``traces`` | - |
+| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics`` | - |
 
 ### otelcol_loadbalancer_backend_request_bytes_total
 
@@ -135,7 +135,7 @@ Serialized OTLP bytes sent to each backend before transport compression.
 
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
-| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics``, ``traces`` | - |
+| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics`` | - |
 | endpoint | The endpoint of the backend | Any Str | - |
 
 ### otelcol_loadbalancer_backend_request_items
@@ -150,7 +150,7 @@ Log records or metric datapoints per backend request.
 
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
-| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics``, ``traces`` | - |
+| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics`` | - |
 
 ### otelcol_loadbalancer_backend_request_items_total
 
@@ -164,7 +164,7 @@ Log records or metric datapoints sent to each backend.
 
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
-| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics``, ``traces`` | - |
+| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics`` | - |
 | endpoint | The endpoint of the backend | Any Str | - |
 
 ### otelcol_loadbalancer_backend_request_total
@@ -179,7 +179,7 @@ Number of backend requests by signal and endpoint.
 
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
-| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics``, ``traces`` | - |
+| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics`` | - |
 | endpoint | The endpoint of the backend | Any Str | - |
 
 ### otelcol_loadbalancer_backend_reroute_total
@@ -247,7 +247,7 @@ Number of backend requests that failed because of a timeout.
 
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
-| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics``, ``traces`` | - |
+| signal | Telemetry signal for backend request metrics | Str: ``logs``, ``metrics`` | - |
 | endpoint | The endpoint of the backend | Any Str | - |
 
 ### otelcol_loadbalancer_backend_unquarantine_total
