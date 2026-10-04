@@ -250,24 +250,31 @@ func accessBodyKey[K Context](key []ottl.Key[K]) ottl.StandardGetSetter[K] {
 	}
 }
 
-func accessStringBody[K Context]() ottl.StandardGetSetter[K] {
-	return ottl.StandardGetSetter[K]{
-		Getter: func(_ context.Context, tCtx K) (any, error) {
-			if bodyString, ok := getOrCacheCompositeBodyString(tCtx); ok {
-				return bodyString, nil
-			}
-			return tCtx.GetLogRecord().Body().AsString(), nil
-		},
-		Setter: func(_ context.Context, tCtx K, val any) error {
-			str, err := ctxutil.ExpectType[string](val)
-			if err != nil {
-				return err
-			}
-			tCtx.GetLogRecord().Body().SetStr(str)
-			invalidateCachedBodyString(tCtx)
-			return nil
-		},
+type stringBodyGetSetter[K Context] struct{}
+
+func (g stringBodyGetSetter[K]) Get(ctx context.Context, tCtx K) (any, error) {
+	return g.GetString(ctx, tCtx)
+}
+
+func (stringBodyGetSetter[K]) GetString(_ context.Context, tCtx K) (string, error) {
+	if bodyString, ok := getOrCacheCompositeBodyString(tCtx); ok {
+		return bodyString, nil
 	}
+	return tCtx.GetLogRecord().Body().AsString(), nil
+}
+
+func (stringBodyGetSetter[K]) Set(_ context.Context, tCtx K, val any) error {
+	str, err := ctxutil.ExpectType[string](val)
+	if err != nil {
+		return err
+	}
+	tCtx.GetLogRecord().Body().SetStr(str)
+	invalidateCachedBodyString(tCtx)
+	return nil
+}
+
+func accessStringBody[K Context]() stringBodyGetSetter[K] {
+	return stringBodyGetSetter[K]{}
 }
 
 func getOrCacheCompositeBodyString[K Context](tCtx K) (string, bool) {
