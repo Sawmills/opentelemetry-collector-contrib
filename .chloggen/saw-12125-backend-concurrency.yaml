@@ -1,0 +1,6 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Expose the number of log export calls in progress at each backend exporter.
+issues: [137]
+subtext: The metric excludes central queue wait and decoding and returns to zero after completion, errors, or cancellation. It does not count network connections or individual retry attempts inside child exporters.
+change_logs: [user]

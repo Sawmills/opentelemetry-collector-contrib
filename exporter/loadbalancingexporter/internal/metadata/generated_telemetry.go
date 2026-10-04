@@ -28,6 +28,7 @@ type TelemetryBuilder struct {
 	LoadbalancerBackendCount                   metric.Int64Gauge
 	LoadbalancerBackendFailOpenTotal           metric.Int64Counter
 	LoadbalancerBackendLatency                 metric.Int64Histogram
+	LoadbalancerBackendLogRequestsInFlight     metric.Int64UpDownCounter
 	LoadbalancerBackendOutcome                 metric.Int64Counter
 	LoadbalancerBackendQuarantineTotal         metric.Int64Counter
 	LoadbalancerBackendRequestBytes            metric.Int64Histogram
@@ -93,6 +94,12 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 		metric.WithDescription("Response latency in ms for the backends. [Development]"),
 		metric.WithUnit("ms"),
 		metric.WithExplicitBucketBoundaries([]float64{5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000}...),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerBackendLogRequestsInFlight, err = builder.meter.Int64UpDownCounter(
+		"otelcol_loadbalancer_backend_log_requests_in_flight",
+		metric.WithDescription("Active log export calls to each backend exporter, excluding central queue wait and decoding. [Development]"),
+		metric.WithUnit("{requests}"),
 	)
 	errs = errors.Join(errs, err)
 	builder.LoadbalancerBackendOutcome, err = builder.meter.Int64Counter(
