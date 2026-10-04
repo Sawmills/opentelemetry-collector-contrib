@@ -34,9 +34,10 @@ Cumulative backend export failures by signal and bounded outcome reason.
 
 Each failed backend export attempt increments one reason series once.
 Successful non-empty exports record zero with reason `success` so an
-active backend has a measurable zero during clean windows. Empty
-exports do not create coverage. Values are cumulative for the
-process lifetime and reset on collector restart. Reasons use the
+active backend has a measurable zero during clean windows. Successful
+empty exports do not create coverage, while failed empty exports still
+record the failed backend attempt. Values are cumulative for the process
+lifetime and reset on collector restart. Reasons use the
 bounded endpoint failure vocabulary plus `success` and `other`.
 
 
