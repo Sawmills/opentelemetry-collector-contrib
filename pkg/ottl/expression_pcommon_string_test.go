@@ -88,7 +88,7 @@ func TestPcommonStringLikeGetterUsesValueWithoutBoxing(t *testing.T) {
 		want  *string
 	}{
 		{name: "missing", want: nil},
-		{name: "empty", value: pcommon.NewValueEmpty(), found: true, want: ptr("")},
+		{name: "empty", value: pcommon.NewValueEmpty(), found: true, want: nil},
 		{name: "string", value: pcommon.NewValueStr("hello"), found: true, want: ptr("hello")},
 		{name: "bool", value: pcommon.NewValueBool(true), found: true, want: ptr("true")},
 		{name: "integer", value: pcommon.NewValueInt(42), found: true, want: ptr("42")},

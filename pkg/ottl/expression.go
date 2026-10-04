@@ -823,6 +823,9 @@ func (g standardStringLikeGetterWithPcommonValue[K]) Get(ctx context.Context, tC
 	if !found {
 		return nil, nil
 	}
+	if value.Type() == pcommon.ValueTypeEmpty {
+		return nil, nil
+	}
 	result := value.AsString()
 	return &result, nil
 }
