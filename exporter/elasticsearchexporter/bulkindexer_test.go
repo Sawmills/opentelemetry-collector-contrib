@@ -128,7 +128,7 @@ func TestSyncBulkIndexer(t *testing.T) {
 			require.NoError(t, err)
 
 			core, observed := observer.New(zap.NewAtomicLevelAt(zapcore.DebugLevel))
-			bi := newSyncBulkIndexer(esClient, &cfg, false, tb, zap.New(core), nil)
+			bi := newSyncBulkIndexer(esClient, &cfg, false, tb, zap.New(core), nil, "")
 
 			info := client.Info{Metadata: client.NewMetadata(map[string][]string{"x-test": {"test"}})}
 			ctx := client.NewContext(t.Context(), info)
@@ -208,6 +208,168 @@ func TestSyncBulkIndexer(t *testing.T) {
 	}
 }
 
+func TestSyncBulkIndexerFailedDocumentsByExporter(t *testing.T) {
+	const failedMetric = "otelcol.elasticsearch.docs.failed"
+
+	tests := []struct {
+		name          string
+		exporterID    string
+		responseBody  string
+		responseCode  int
+		docs          int
+		retryOnStatus []int
+		maxRetries    int
+		wantAttempts  int64
+		wantFailures  int64
+		wantFlushErr  bool
+	}{
+		{
+			name:         "success exposes zero",
+			exporterID:   "elasticsearch/bigid",
+			responseBody: successResp,
+			responseCode: http.StatusOK,
+		},
+		{
+			name:         "partial item rejection",
+			exporterID:   "elasticsearch/bigid",
+			responseBody: `{"errors":true,"items":[{"create":{"_index":"foo","status":201}},{"create":{"_index":"foo","status":400,"error":{"type":"mapper_parsing_exception","reason":"bad field"}}}]}`,
+			responseCode: http.StatusOK,
+			docs:         2,
+			wantFailures: 1,
+		},
+		{
+			name:          "retryable backend failure",
+			exporterID:    "elasticsearch/blackhawk",
+			responseBody:  `{}`,
+			responseCode:  http.StatusServiceUnavailable,
+			docs:          2,
+			retryOnStatus: []int{http.StatusServiceUnavailable},
+			maxRetries:    2,
+			wantAttempts:  3,
+			wantFailures:  2,
+			wantFlushErr:  true,
+		},
+		{
+			name:         "partial response decoding failure",
+			exporterID:   "elasticsearch/bigid",
+			responseBody: `{"errors":false,"items":[{"create":{"_index":"foo","status":201}},`,
+			responseCode: http.StatusOK,
+			docs:         2,
+			wantFailures: 1,
+			wantFlushErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{QueueBatchConfig: configoptional.Default(exporterhelper.QueueBatchConfig{NumConsumers: 1})}
+			var requestCount atomic.Int64
+			esClient, err := elastictransport.New(elastictransport.Config{
+				URLs:          []*url.URL{{Scheme: "http", Host: "localhost:9200"}},
+				RetryOnStatus: tt.retryOnStatus,
+				MaxRetries:    tt.maxRetries,
+				DisableRetry:  tt.maxRetries == 0,
+				Transport: &mockTransport{RoundTripFunc: func(*http.Request) (*http.Response, error) {
+					requestCount.Add(1)
+					return &http.Response{
+						Header:     http.Header{"X-Elastic-Product": []string{"Elasticsearch"}},
+						Body:       io.NopCloser(strings.NewReader(tt.responseBody)),
+						StatusCode: tt.responseCode,
+					}, nil
+				}},
+			})
+			require.NoError(t, err)
+
+			ct := componenttest.NewTelemetry()
+			tb, err := metadata.NewTelemetryBuilder(metadatatest.NewSettings(ct).TelemetrySettings)
+			require.NoError(t, err)
+			bi := newSyncBulkIndexer(esClient, &cfg, false, tb, zap.NewNop(), nil, tt.exporterID)
+			ctx := t.Context()
+			session := bi.StartSession(ctx)
+			for range max(tt.docs, 1) {
+				require.NoError(t, session.Add(ctx, "foo", "", "", strings.NewReader(`{"foo":"bar"}`), nil, docappender.ActionCreate))
+			}
+			flushErr := session.Flush(ctx)
+			if tt.wantFlushErr {
+				require.Error(t, flushErr)
+			} else {
+				require.NoError(t, flushErr)
+			}
+			if tt.wantAttempts != 0 {
+				require.Equal(t, tt.wantAttempts, requestCount.Load())
+			}
+			session.End()
+
+			metric, err := ct.GetMetric(failedMetric)
+			require.NoError(t, err)
+			sum := metric.Data.(metricdata.Sum[int64])
+			require.Len(t, sum.DataPoints, 1)
+			dp := sum.DataPoints[0]
+			require.Equal(t, tt.wantFailures, dp.Value)
+			require.Equal(t, attribute.String("exporter", tt.exporterID), dp.Attributes.ToSlice()[0])
+
+			time.Sleep(10 * time.Millisecond)
+			quietMetric, err := ct.GetMetric(failedMetric)
+			require.NoError(t, err)
+			quietDataPoint := quietMetric.Data.(metricdata.Sum[int64]).DataPoints[0]
+			require.Equal(t, dp.Value, quietDataPoint.Value)
+			require.Equal(t, dp.Attributes, quietDataPoint.Attributes)
+		})
+	}
+
+}
+
+func TestSyncBulkIndexerFailedDocumentsKeepExporterSeriesIsolated(t *testing.T) {
+	ct := componenttest.NewTelemetry()
+	cfg := Config{QueueBatchConfig: configoptional.Default(exporterhelper.QueueBatchConfig{NumConsumers: 1})}
+
+	newClient := func(response string) elastictransport.Interface {
+		client, err := elastictransport.New(elastictransport.Config{
+			URLs: []*url.URL{{Scheme: "http", Host: "localhost:9200"}},
+			Transport: &mockTransport{RoundTripFunc: func(*http.Request) (*http.Response, error) {
+				return &http.Response{
+					Header:     http.Header{"X-Elastic-Product": []string{"Elasticsearch"}},
+					Body:       io.NopCloser(strings.NewReader(response)),
+					StatusCode: http.StatusOK,
+				}, nil
+			}},
+		})
+		require.NoError(t, err)
+		return client
+	}
+
+	for _, test := range []struct {
+		exporterID string
+		response   string
+		want       int64
+	}{
+		{exporterID: "elasticsearch/bigid", response: successResp, want: 0},
+		{exporterID: "elasticsearch/blackhawk", response: `{"errors":true,"items":[{"create":{"_index":"foo","status":400,"error":{"type":"mapper_parsing_exception"}}}]}`, want: 1},
+	} {
+		tb, err := metadata.NewTelemetryBuilder(metadatatest.NewSettings(ct).TelemetrySettings)
+		require.NoError(t, err)
+		bi := newSyncBulkIndexer(newClient(test.response), &cfg, false, tb, zap.NewNop(), nil, test.exporterID)
+		session := bi.StartSession(t.Context())
+		require.NoError(t, session.Add(t.Context(), "foo", "", "", strings.NewReader(`{"foo":"bar"}`), nil, docappender.ActionCreate))
+		require.NoError(t, session.Flush(t.Context()))
+		session.End()
+	}
+
+	metric, err := ct.GetMetric("otelcol.elasticsearch.docs.failed")
+	require.NoError(t, err)
+	dataPoints := metric.Data.(metricdata.Sum[int64]).DataPoints
+	require.Len(t, dataPoints, 2)
+	for _, dataPoint := range dataPoints {
+		exporterID, ok := dataPoint.Attributes.Value("exporter")
+		require.True(t, ok)
+		if exporterID.AsString() == "elasticsearch/bigid" {
+			require.Equal(t, int64(0), dataPoint.Value)
+		} else {
+			require.Equal(t, int64(1), dataPoint.Value)
+		}
+	}
+}
+
 func TestSyncBulkIndexerRequestRetriesMetric(t *testing.T) {
 	tests := []struct {
 		name               string
@@ -282,7 +444,7 @@ func TestSyncBulkIndexerRequestRetriesMetric(t *testing.T) {
 			require.NoError(t, err)
 
 			core, _ := observer.New(zap.NewAtomicLevelAt(zapcore.DebugLevel))
-			bi := newSyncBulkIndexer(esClient, &cfg, false, tb, zap.New(core), nil)
+			bi := newSyncBulkIndexer(esClient, &cfg, false, tb, zap.New(core), nil, "")
 
 			info := client.Info{Metadata: client.NewMetadata(map[string][]string{"x-test": {"test"}})}
 			ctx := client.NewContext(t.Context(), info)
@@ -348,7 +510,7 @@ func TestBulkIndexerLogsStatusCode(t *testing.T) {
 	require.NoError(t, err)
 
 	core, observed := observer.New(zap.NewAtomicLevelAt(zapcore.DebugLevel))
-	bi := newSyncBulkIndexer(esClient, &cfg, false, tb, zap.New(core), nil)
+	bi := newSyncBulkIndexer(esClient, &cfg, false, tb, zap.New(core), nil, "")
 
 	ctx := t.Context()
 	session := bi.StartSession(ctx)
@@ -414,7 +576,7 @@ func TestBulkIndexerLogsFailedDocsInputWithoutDebugLevel(t *testing.T) {
 	require.NoError(t, err)
 
 	core, observed := observer.New(zap.NewAtomicLevelAt(zapcore.InfoLevel))
-	bi := newSyncBulkIndexer(esClient, &cfg, false, tb, zap.New(core), nil)
+	bi := newSyncBulkIndexer(esClient, &cfg, false, tb, zap.New(core), nil, "")
 
 	ctx := t.Context()
 	session := bi.StartSession(ctx)
@@ -470,7 +632,7 @@ func TestBulkIndexerSamplesFailedDocsInputByIndex(t *testing.T) {
 	require.NoError(t, err)
 
 	core, observed := observer.New(zap.NewAtomicLevelAt(zapcore.InfoLevel))
-	bi := newSyncBulkIndexer(esClient, &cfg, false, tb, zap.New(core), nil)
+	bi := newSyncBulkIndexer(esClient, &cfg, false, tb, zap.New(core), nil, "")
 
 	ctx := t.Context()
 	session := bi.StartSession(ctx)
@@ -601,7 +763,7 @@ func TestNewBulkIndexer(t *testing.T) {
 	client, err := newElasticsearchClient(t.Context(), cfg, componenttest.NewNopHost(), componenttest.NewTelemetry().NewTelemetrySettings(), "")
 	require.NoError(t, err)
 
-	bi := newBulkIndexer(client, cfg, true, nil, nil, nil)
+	bi := newBulkIndexer(client, cfg, true, nil, nil, nil, "")
 	t.Cleanup(func() { bi.Close(t.Context()) })
 }
 

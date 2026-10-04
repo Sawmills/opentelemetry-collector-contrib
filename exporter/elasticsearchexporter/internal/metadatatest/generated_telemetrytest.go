@@ -52,6 +52,22 @@ func AssertEqualElasticsearchBulkRequestsLatency(t *testing.T, tt *componenttest
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }
 
+func AssertEqualElasticsearchDocsFailed(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol.elasticsearch.docs.failed",
+		Description: "Count of documents that failed to be accepted by an Elasticsearch destination. [Alpha]",
+		Unit:        "1",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol.elasticsearch.docs.failed")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
 func AssertEqualElasticsearchDocsProcessed(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol.elasticsearch.docs.processed",

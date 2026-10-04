@@ -7,11 +7,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata/metricdatatest"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metadata"
+	"go.opentelemetry.io/collector/component/componenttest"
 )
 
 func TestSetupTelemetry(t *testing.T) {
@@ -21,6 +21,7 @@ func TestSetupTelemetry(t *testing.T) {
 	defer tb.Shutdown()
 	tb.ElasticsearchBulkRequestsCount.Add(context.Background(), 1)
 	tb.ElasticsearchBulkRequestsLatency.Record(context.Background(), 1)
+	tb.ElasticsearchDocsFailed.Add(context.Background(), 1)
 	tb.ElasticsearchDocsProcessed.Add(context.Background(), 1)
 	tb.ElasticsearchDocsReceived.Add(context.Background(), 1)
 	tb.ElasticsearchDocsRetried.Add(context.Background(), 1)
@@ -32,6 +33,9 @@ func TestSetupTelemetry(t *testing.T) {
 		metricdatatest.IgnoreTimestamp())
 	AssertEqualElasticsearchBulkRequestsLatency(t, testTel,
 		[]metricdata.HistogramDataPoint[float64]{{}}, metricdatatest.IgnoreValue(),
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualElasticsearchDocsFailed(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
 	AssertEqualElasticsearchDocsProcessed(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
