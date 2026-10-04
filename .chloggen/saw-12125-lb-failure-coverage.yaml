@@ -1,0 +1,6 @@
+change_type: bug_fix
+component: exporter/loadbalancing
+note: Expose measured zero queue rejections and backend log failures during successful traffic.
+issues: [137]
+subtext: Successful nonempty admissions and log sends preserve cumulative failure counts. Queue shutdown rejections now count compressed bytes. Idle queues and endpoints remain unmeasured.
+change_logs: [user]

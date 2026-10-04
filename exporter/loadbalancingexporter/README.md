@@ -554,7 +554,7 @@ The following metrics are recorded by this exporter:
 * `otelcol_loadbalancer_num_selected_backends` reports the number of backends currently selected for routing.
 * `otelcol_loadbalancer_backend_subset_displacement_total` counts backends admitted after the initial bounded-subset selection changes.
 * `otelcol_loadbalancer_backend_latency` measures the latency for each backend.
-* `otelcol_loadbalancer_backend_outcome` counts what the outcomes were for each endpoint, `success=true|false`.
+* `otelcol_loadbalancer_backend_outcome` counts what the outcomes were for each endpoint, `success=true|false`. Successful nonempty log sends also record zero for `success=false`. This exposes measured zero failures without resetting earlier failures. Idle endpoints and successful empty log sends do not create failure coverage.
 * `otelcol_loadbalancer_backend_request_bytes_total` and `otelcol_loadbalancer_backend_request_items_total` count serialized bytes and items sent to each endpoint, split by signal.
 * `otelcol_loadbalancer_backend_timeout_total` counts backend requests that fail because of a context, gRPC, or transport timeout, split by endpoint and signal.
 * When the internal LB batchers are active, age metrics are also emitted for post-routing backlog:
@@ -566,6 +566,7 @@ The following metrics are recorded by this exporter:
   * `otelcol_loadbalancer_metric_batch_flush_oldest_datapoint_age` records the age of the oldest metric datapoint in each flushed batch.
 * When central queue mode is active, `otelcol_loadbalancer_central_queue_oldest_item_age` reports the age in milliseconds of the oldest item waiting in the central queue.
 * When central queue mode is active, `otelcol_loadbalancer_backend_inflight_oldest_age` reports the original queue age in milliseconds of the oldest active request window for each endpoint and signal. Completed endpoints report zero for 30 seconds after the first post-completion collection before their series is removed.
+* `otelcol_loadbalancer_central_queue_rejected_compressed_bytes` counts compressed bytes rejected at queue admission, including admission after shutdown starts. Successful admission of nonempty data records zero without resetting the total. Idle queues and successful empty admissions remain unmeasured. This counter excludes failures before payload encoding and does not measure final delivery or permanent loss.
 * Central queue worker metrics show whether each LB pod is draining queue windows in parallel:
   * `otelcol_loadbalancer_central_queue_configured_consumers` reports the configured maximum drain workers per signal exporter.
   * `otelcol_loadbalancer_central_queue_active_load_balancer_replicas` reports the LB replica count used to divide backend-safe drain concurrency.

@@ -586,6 +586,7 @@ func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrapp
 	defer le.doneConsume()
 
 	recordLogBackendRequest(ctx, e.telemetry, le.logSignalAttr, le.logRequestAttr, ld)
+	numRecords := ld.LogRecordCount()
 	start := time.Now()
 	err := le.ConsumeLogs(ctx, ld)
 	duration := time.Since(start)
@@ -593,6 +594,9 @@ func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrapp
 	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(le.endpointAttr))
 	if err == nil {
 		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.successAttr))
+		if numRecords > 0 {
+			e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 0, metric.WithAttributeSet(le.failureAttr))
+		}
 		if updateEndpointHealth {
 			e.loadBalancer.handleBackendSuccess(le.endpoint)
 		}
