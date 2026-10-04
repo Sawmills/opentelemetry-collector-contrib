@@ -444,7 +444,7 @@ func (t *centralQueueTelemetry) record(ctx context.Context, snapshot centralQueu
 }
 
 func (t *centralQueueTelemetry) recordRejected(ctx context.Context, compressedBytes int64) {
-	if t == nil || compressedBytes <= 0 {
+	if t == nil || compressedBytes < 0 {
 		return
 	}
 	t.rejectedBytes.Add(ctx, compressedBytes, t.signalAttrs)

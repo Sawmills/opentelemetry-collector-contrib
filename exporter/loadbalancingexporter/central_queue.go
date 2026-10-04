@@ -163,8 +163,10 @@ func (q *centralQueue) enqueueAllAt(items []centralQueueItem, now time.Time) err
 	// Sum the request first, then validate, so rejected-byte telemetry always
 	// reflects the complete rejected request, not just the offending item.
 	var totalCompressed int64
+	var totalItems int
 	for i := range items {
 		totalCompressed += int64(items[i].compressedBytes)
+		totalItems += items[i].count
 	}
 	// Validate per-item hard limits (same as enqueueAt) before taking the lock.
 	for i := range items {
@@ -186,6 +188,7 @@ func (q *centralQueue) enqueueAllAt(items []centralQueueItem, now time.Time) err
 	q.mu.Lock()
 	if q.stopped || q.draining {
 		q.mu.Unlock()
+		q.settings.telemetry.recordRejected(context.Background(), totalCompressed)
 		return errCentralQueueStopped
 	}
 	// All-or-nothing capacity check: reserve room for the WHOLE request.
@@ -213,6 +216,9 @@ func (q *centralQueue) enqueueAllAt(items []centralQueueItem, now time.Time) err
 	q.mu.Unlock()
 	q.notifyLeaseWaiters()
 	q.settings.telemetry.record(context.Background(), snapshot)
+	if totalItems > 0 {
+		q.settings.telemetry.recordRejected(context.Background(), 0)
+	}
 	return nil
 }
 
@@ -229,6 +235,7 @@ func (q *centralQueue) enqueueAt(item centralQueueItem, now time.Time) error {
 	q.mu.Lock()
 	if q.stopped || q.draining {
 		q.mu.Unlock()
+		q.settings.telemetry.recordRejected(context.Background(), int64(item.compressedBytes))
 		return errCentralQueueStopped
 	}
 	if q.currentCompressedBytes+int64(item.compressedBytes) > q.settings.maxCompressedBytes {
@@ -252,6 +259,9 @@ func (q *centralQueue) enqueueAt(item centralQueueItem, now time.Time) error {
 	q.mu.Unlock()
 	q.notifyLeaseWaiters()
 	q.settings.telemetry.record(context.Background(), snapshot)
+	if item.count > 0 {
+		q.settings.telemetry.recordRejected(context.Background(), 0)
+	}
 	return nil
 }
 
