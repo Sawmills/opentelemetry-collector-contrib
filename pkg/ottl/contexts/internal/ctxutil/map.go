@@ -11,24 +11,34 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/internal/ottlcommon"
 )
 
 func GetMapValue[K any](ctx context.Context, tCtx K, m pcommon.Map, keys []ottl.Key[K]) (any, error) {
+	val, found, err := GetMapPcommonValue(ctx, tCtx, m, keys)
+	if err != nil || !found {
+		return nil, err
+	}
+	return ottlcommon.GetValue(val), nil
+}
+
+// GetMapPcommonValue resolves the same path as GetMapValue without boxing its value.
+func GetMapPcommonValue[K any](ctx context.Context, tCtx K, m pcommon.Map, keys []ottl.Key[K]) (pcommon.Value, bool, error) {
 	if len(keys) == 0 {
-		return nil, errors.New("cannot get map value without keys")
+		return pcommon.Value{}, false, errors.New("cannot get map value without keys")
 	}
 
 	s, err := GetMapKeyName(ctx, tCtx, keys[0])
 	if err != nil {
-		return nil, fmt.Errorf("cannot get map value: %w", err)
+		return pcommon.Value{}, false, fmt.Errorf("cannot get map value: %w", err)
 	}
 
 	val, ok := m.Get(*s)
 	if !ok {
-		return nil, nil
+		return pcommon.Value{}, false, nil
 	}
 
-	return getIndexableValue[K](ctx, tCtx, val, keys[1:])
+	return getIndexablePcommonValue[K](ctx, tCtx, val, keys[1:])
 }
 
 func SetMapValue[K any](ctx context.Context, tCtx K, m pcommon.Map, keys []ottl.Key[K], val any) error {
