@@ -20,8 +20,8 @@ func TestBackendFailedOutcomeRecordsMeasuredZeroAndClassifiedFailures(t *testing
 	_, telemetryBuilder, reader := getTelemetryAssetsWithReader(t)
 	endpoint := attribute.NewSet(attribute.String("signal", "logs"))
 
-	recordBackendFailedOutcome(context.Background(), telemetryBuilder, endpoint, nil)
-	recordBackendFailedOutcome(context.Background(), telemetryBuilder, endpoint, status.Error(codes.Unavailable, "backend unavailable"))
+	recordBackendFailedOutcome(t.Context(), telemetryBuilder, endpoint, nil)
+	recordBackendFailedOutcome(t.Context(), telemetryBuilder, endpoint, status.Error(codes.Unavailable, "backend unavailable"))
 
 	metric, err := reader.GetMetric("otelcol_loadbalancer_backend_failed")
 	require.NoError(t, err)
@@ -41,7 +41,7 @@ func TestBackendFailedOutcomeDoesNotCreateUnboundedReasons(t *testing.T) {
 	_, telemetryBuilder, reader := getTelemetryAssetsWithReader(t)
 	endpoint := attribute.NewSet(attribute.String("signal", "logs"))
 
-	recordBackendFailedOutcome(context.Background(), telemetryBuilder, endpoint, errors.New("secret customer payload"))
+	recordBackendFailedOutcome(t.Context(), telemetryBuilder, endpoint, errors.New("secret customer payload"))
 
 	metric, err := reader.GetMetric("otelcol_loadbalancer_backend_failed")
 	require.NoError(t, err)

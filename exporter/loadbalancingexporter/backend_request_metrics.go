@@ -74,8 +74,10 @@ func recordBackendTimeout(ctx context.Context, tb *metadata.TelemetryBuilder, en
 	tb.LoadbalancerBackendTimeoutTotal.Add(ctx, 1, backendRequestMetricOptions(endpointAttrs))
 }
 
-const backendOutcomeSuccessReason endpointFailureReason = "success"
-const backendOutcomeOtherReason endpointFailureReason = "other"
+const (
+	backendOutcomeSuccessReason endpointFailureReason = "success"
+	backendOutcomeOtherReason   endpointFailureReason = "other"
+)
 
 // recordBackendFailedOutcome records one backend attempt. Successful non-empty
 // attempts add zero to a stable success series so active clean backends remain
