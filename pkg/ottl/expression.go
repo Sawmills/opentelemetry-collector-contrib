@@ -401,7 +401,34 @@ func newStandardStringGetter[K any](getter Getter[K]) (StringGetter[K], error) {
 	if custom, ok := getter.(customStringGetter[K]); ok {
 		return stringGetterWithCustom[K]{getter: custom}, nil
 	}
+	if custom, ok := getter.(pcommonValueGetter[K]); ok {
+		return stringGetterWithPcommonValue[K]{getter: custom}, nil
+	}
 	return g, nil
+}
+
+// pcommonValueGetter preserves the pdata value until a typed getter reads it.
+// The boolean distinguishes a missing value from a present empty value.
+type pcommonValueGetter[K any] interface {
+	GetPcommonValue(context.Context, K) (pcommon.Value, bool, error)
+}
+
+type stringGetterWithPcommonValue[K any] struct {
+	getter pcommonValueGetter[K]
+}
+
+func (g stringGetterWithPcommonValue[K]) Get(ctx context.Context, tCtx K) (string, error) {
+	value, found, err := g.getter.GetPcommonValue(ctx, tCtx)
+	if err != nil {
+		return "", fmt.Errorf("error getting value in %T: %w", StandardStringGetter[K]{}, err)
+	}
+	if !found || value.Type() == pcommon.ValueTypeEmpty {
+		return "", TypeError("expected string but got nil")
+	}
+	if value.Type() == pcommon.ValueTypeStr {
+		return value.Str(), nil
+	}
+	return "", TypeError(fmt.Sprintf("expected string but got %T", ottlcommon.GetValue(value)))
 }
 
 // customStringGetter reads the same string as Getter.Get without boxing it.

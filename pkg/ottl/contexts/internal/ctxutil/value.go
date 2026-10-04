@@ -81,6 +81,14 @@ func SetValue(value pcommon.Value, val any) error {
 }
 
 func getIndexableValue[K any](ctx context.Context, tCtx K, value pcommon.Value, keys []ottl.Key[K]) (any, error) {
+	val, found, err := getIndexablePcommonValue(ctx, tCtx, value, keys)
+	if err != nil || !found {
+		return nil, err
+	}
+	return ottlcommon.GetValue(val), nil
+}
+
+func getIndexablePcommonValue[K any](ctx context.Context, tCtx K, value pcommon.Value, keys []ottl.Key[K]) (pcommon.Value, bool, error) {
 	val := value
 	var ok bool
 	for index := range keys {
@@ -88,33 +96,33 @@ func getIndexableValue[K any](ctx context.Context, tCtx K, value pcommon.Value, 
 		case pcommon.ValueTypeMap:
 			s, err := GetMapKeyName(ctx, tCtx, keys[index])
 			if err != nil {
-				return nil, err
+				return pcommon.Value{}, false, err
 			}
 			val, ok = val.Map().Get(*s)
 			if !ok {
-				return nil, nil
+				return pcommon.Value{}, false, nil
 			}
 		case pcommon.ValueTypeSlice:
 			i, err := keys[index].Int(ctx, tCtx)
 			if err != nil {
-				return nil, err
+				return pcommon.Value{}, false, err
 			}
 			if i == nil {
 				resInt, err := FetchValueFromExpression[K, int64](ctx, tCtx, keys[index])
 				if err != nil {
-					return nil, fmt.Errorf("unable to resolve an integer index in slice: %w", err)
+					return pcommon.Value{}, false, fmt.Errorf("unable to resolve an integer index in slice: %w", err)
 				}
 				i = resInt
 			}
 			if int(*i) >= val.Slice().Len() || int(*i) < 0 {
-				return nil, fmt.Errorf("index %v out of bounds", *i)
+				return pcommon.Value{}, false, fmt.Errorf("index %v out of bounds", *i)
 			}
 			val = val.Slice().At(int(*i))
 		default:
-			return nil, fmt.Errorf("type %v does not support string indexing", val.Type())
+			return pcommon.Value{}, false, fmt.Errorf("type %v does not support string indexing", val.Type())
 		}
 	}
-	return ottlcommon.GetValue(val), nil
+	return val, true, nil
 }
 
 func SetIndexableValue[K any](ctx context.Context, tCtx K, currentValue pcommon.Value, val any, keys []ottl.Key[K]) error {

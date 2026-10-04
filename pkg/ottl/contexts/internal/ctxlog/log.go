@@ -312,15 +312,24 @@ func accessAttributes[K Context]() ottl.StandardGetSetter[K] {
 	}
 }
 
-func accessAttributesKey[K Context](key []ottl.Key[K]) ottl.StandardGetSetter[K] {
-	return ottl.StandardGetSetter[K]{
-		Getter: func(ctx context.Context, tCtx K) (any, error) {
-			return ctxutil.GetMapValue[K](ctx, tCtx, tCtx.GetLogRecord().Attributes(), key)
-		},
-		Setter: func(ctx context.Context, tCtx K, val any) error {
-			return ctxutil.SetMapValue[K](ctx, tCtx, tCtx.GetLogRecord().Attributes(), key, val)
-		},
-	}
+type attributesKeyGetSetter[K Context] struct {
+	keys []ottl.Key[K]
+}
+
+func (g attributesKeyGetSetter[K]) Get(ctx context.Context, tCtx K) (any, error) {
+	return ctxutil.GetMapValue[K](ctx, tCtx, tCtx.GetLogRecord().Attributes(), g.keys)
+}
+
+func (g attributesKeyGetSetter[K]) GetPcommonValue(ctx context.Context, tCtx K) (pcommon.Value, bool, error) {
+	return ctxutil.GetMapPcommonValue[K](ctx, tCtx, tCtx.GetLogRecord().Attributes(), g.keys)
+}
+
+func (g attributesKeyGetSetter[K]) Set(ctx context.Context, tCtx K, val any) error {
+	return ctxutil.SetMapValue[K](ctx, tCtx, tCtx.GetLogRecord().Attributes(), g.keys, val)
+}
+
+func accessAttributesKey[K Context](key []ottl.Key[K]) attributesKeyGetSetter[K] {
+	return attributesKeyGetSetter[K]{keys: key}
 }
 
 func accessDroppedAttributesCount[K Context]() ottl.StandardGetSetter[K] {
