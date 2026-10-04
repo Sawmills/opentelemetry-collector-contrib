@@ -1,0 +1,6 @@
+change_type: enhancement
+component: pkg/ottl
+note: Avoid boxing log attribute values for functions that require string arguments.
+issues: [139]
+subtext:
+change_logs: [user]
