@@ -212,13 +212,16 @@ func TestSyncBulkIndexerFailedDocumentsByExporter(t *testing.T) {
 	const failedMetric = "otelcol.elasticsearch.docs.failed"
 
 	tests := []struct {
-		name         string
-		exporterID   string
-		responseBody string
-		responseCode int
-		docs         int
-		wantFailures int64
-		wantFlushErr bool
+		name          string
+		exporterID    string
+		responseBody  string
+		responseCode  int
+		docs          int
+		retryOnStatus []int
+		maxRetries    int
+		wantAttempts  int64
+		wantFailures  int64
+		wantFlushErr  bool
 	}{
 		{
 			name:         "success exposes zero",
@@ -229,27 +232,36 @@ func TestSyncBulkIndexerFailedDocumentsByExporter(t *testing.T) {
 		{
 			name:         "partial item rejection",
 			exporterID:   "elasticsearch/bigid",
-			responseBody: `{"errors":true,"items":[{"create":{"_index":"foo","status":400,"error":{"type":"mapper_parsing_exception","reason":"bad field"}}}]}`,
+			responseBody: `{"errors":true,"items":[{"create":{"_index":"foo","status":201}},{"create":{"_index":"foo","status":400,"error":{"type":"mapper_parsing_exception","reason":"bad field"}}}]}`,
 			responseCode: http.StatusOK,
+			docs:         2,
 			wantFailures: 1,
 		},
 		{
-			name:         "retryable backend failure",
-			exporterID:   "elasticsearch/blackhawk",
-			responseBody: `{}`,
-			responseCode: http.StatusServiceUnavailable,
-			docs:         2,
-			wantFailures: 2,
-			wantFlushErr: true,
+			name:          "retryable backend failure",
+			exporterID:    "elasticsearch/blackhawk",
+			responseBody:  `{}`,
+			responseCode:  http.StatusServiceUnavailable,
+			docs:          2,
+			retryOnStatus: []int{http.StatusServiceUnavailable},
+			maxRetries:    2,
+			wantAttempts:  3,
+			wantFailures:  2,
+			wantFlushErr:  true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := Config{QueueBatchConfig: configoptional.Default(exporterhelper.QueueBatchConfig{NumConsumers: 1})}
+			var requestCount atomic.Int64
 			esClient, err := elastictransport.New(elastictransport.Config{
-				URLs: []*url.URL{{Scheme: "http", Host: "localhost:9200"}},
+				URLs:          []*url.URL{{Scheme: "http", Host: "localhost:9200"}},
+				RetryOnStatus: tt.retryOnStatus,
+				MaxRetries:    tt.maxRetries,
+				DisableRetry:  tt.maxRetries == 0,
 				Transport: &mockTransport{RoundTripFunc: func(*http.Request) (*http.Response, error) {
+					requestCount.Add(1)
 					return &http.Response{
 						Header:     http.Header{"X-Elastic-Product": []string{"Elasticsearch"}},
 						Body:       io.NopCloser(strings.NewReader(tt.responseBody)),
@@ -274,6 +286,9 @@ func TestSyncBulkIndexerFailedDocumentsByExporter(t *testing.T) {
 			} else {
 				require.NoError(t, flushErr)
 			}
+			if tt.wantAttempts != 0 {
+				require.Equal(t, tt.wantAttempts, requestCount.Load())
+			}
 			session.End()
 
 			metric, err := ct.GetMetric(failedMetric)
@@ -284,6 +299,7 @@ func TestSyncBulkIndexerFailedDocumentsByExporter(t *testing.T) {
 			require.Equal(t, tt.wantFailures, dp.Value)
 			require.Equal(t, attribute.String("exporter", tt.exporterID), dp.Attributes.ToSlice()[0])
 
+			time.Sleep(10 * time.Millisecond)
 			quietMetric, err := ct.GetMetric(failedMetric)
 			require.NoError(t, err)
 			quietDataPoint := quietMetric.Data.(metricdata.Sum[int64]).DataPoints[0]

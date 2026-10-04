@@ -43,7 +43,8 @@ Count of documents that failed to be accepted by an Elasticsearch destination.
 Counts each document rejected in a partially failed bulk request once.
 If a bulk request fails after the configured HTTP retries, counts all
 documents in that request once. HTTP retries are not counted separately.
-The cumulative sum is reported with the configured exporter identifier.
+The cumulative sum is reported with the configured exporter identifier
+and resets when the exporter process restarts.
 
 
 | Unit | Metric Type | Value Type | Monotonic | Stability |
