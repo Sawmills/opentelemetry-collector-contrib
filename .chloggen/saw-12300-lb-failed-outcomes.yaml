@@ -1,0 +1,6 @@
+change_type: bug_fix
+component: exporter/loadbalancing
+note: Expose cumulative failed backend outcomes by bounded reason.
+issues: [12300]
+subtext: Failed backend attempts are counted once per signal. Labels use a bounded classified reason vocabulary with `other` as the fallback. Successful non-empty exports publish a zero success series for clean-window queries; counters reset on collector restart.
+change_logs: [user]

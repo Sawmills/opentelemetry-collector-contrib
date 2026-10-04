@@ -20,11 +20,12 @@ attributes:
     enum:
       - logs
       - metrics
+      - traces
   endpoint:
     description: The endpoint of the backend
     type: string
   reason:
-    description: Low-cardinality endpoint health reason
+    description: Low-cardinality endpoint health or backend outcome reason
     type: string
   resolver:
     description: Resolver used
@@ -74,6 +75,22 @@ telemetry:
       stability: development
       description: Number of times endpoint health failed open because quarantine would leave too few eligible resolver-present backends.
       unit: "{events}"
+      sum:
+        value_type: int
+        monotonic: true
+    loadbalancer_backend_failed:
+      attributes: [backend_request_signal, reason]
+      enabled: true
+      stability: development
+      description: Cumulative backend export failures by signal and bounded outcome reason.
+      extended_documentation: |
+        Each failed backend export attempt increments one reason series once.
+        Successful non-empty exports record zero with reason `success` so an
+        active backend has a measurable zero during clean windows. Empty
+        exports do not create coverage. Values are cumulative for the
+        process lifetime and reset on collector restart. Reasons use the
+        bounded endpoint failure vocabulary plus `success` and `other`.
+      unit: "{failures}"
       sum:
         value_type: int
         monotonic: true

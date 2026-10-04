@@ -647,11 +647,15 @@ func (e *metricExporterImp) consumeMetricsByExporterAttempt(
 		}
 
 		recordMetricBackendRequest(ctx, e.telemetry, exp.metricSignalAttr, exp.metricRequestAttr, mds)
+		hasData := mds.DataPointCount() > 0
 		start := time.Now()
 		err := exp.ConsumeMetrics(ctx, mds)
 		duration := time.Since(start)
 
 		exp.doneConsume()
+		if hasData || err != nil {
+			recordBackendFailedOutcome(ctx, e.telemetry, exp.metricSignalAttr, err)
+		}
 		decision := e.recordBackendResult(ctx, exp, duration, err, true)
 		if err != nil && shouldRerouteDirectFailure(e.loadBalancer, exp.endpoint, decision, rerouteAttempt) {
 			retryMetrics := metricFailureSubset(mds, preservedMetrics, preservedMetricsValid)
