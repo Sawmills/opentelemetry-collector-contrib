@@ -412,9 +412,13 @@ func flushBulkIndexer(
 	}
 	failedDocs := int64(len(stat.FailedDocs))
 	if err != nil {
-		// A failed bulk request leaves every document in the request failed
-		// from the destination's point of view, even when the client retried it.
-		failedDocs = int64(itemsCount)
+		// Count only documents without a confirmed success when response
+		// decoding fails after a partial response. A request-level failure
+		// with no confirmed successes still counts the whole batch once.
+		failedDocs = int64(itemsCount) - stat.Indexed
+		if failedDocs < 0 {
+			failedDocs = 0
+		}
 	}
 	tb.ElasticsearchDocsFailed.Add(ctx, failedDocs, metric.WithAttributeSet(attribute.NewSet(attribute.String("exporter", exporterID))))
 

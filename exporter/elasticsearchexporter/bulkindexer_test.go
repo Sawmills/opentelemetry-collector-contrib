@@ -249,6 +249,15 @@ func TestSyncBulkIndexerFailedDocumentsByExporter(t *testing.T) {
 			wantFailures:  2,
 			wantFlushErr:  true,
 		},
+		{
+			name:         "partial response decoding failure",
+			exporterID:   "elasticsearch/bigid",
+			responseBody: `{"errors":false,"items":[{"create":{"_index":"foo","status":201}},`,
+			responseCode: http.StatusOK,
+			docs:         2,
+			wantFailures: 1,
+			wantFlushErr: true,
+		},
 	}
 
 	for _, tt := range tests {
