@@ -398,7 +398,28 @@ func newStandardStringGetter[K any](getter Getter[K]) (StringGetter[K], error) {
 		}
 		return newLiteral[K, string](val), nil
 	}
+	if custom, ok := getter.(customStringGetter[K]); ok {
+		return stringGetterWithCustom[K]{getter: custom}, nil
+	}
 	return g, nil
+}
+
+// customStringGetter reads the same string as Getter.Get without boxing it.
+// Only getters whose values are always strings implement this capability.
+type customStringGetter[K any] interface {
+	GetString(context.Context, K) (string, error)
+}
+
+type stringGetterWithCustom[K any] struct {
+	getter customStringGetter[K]
+}
+
+func (g stringGetterWithCustom[K]) Get(ctx context.Context, tCtx K) (string, error) {
+	value, err := g.getter.GetString(ctx, tCtx)
+	if err != nil {
+		return "", fmt.Errorf("error getting value in %T: %w", StandardStringGetter[K]{}, err)
+	}
+	return value, nil
 }
 
 // StandardStringGetter is a basic implementation of StringGetter
