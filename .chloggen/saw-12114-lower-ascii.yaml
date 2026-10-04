@@ -1,0 +1,6 @@
+change_type: enhancement
+component: pkg/ottl
+note: Reduce CPU cost for ASCII case-insensitive Contains matching.
+issues: [12114]
+subtext: The pooled ASCII folding path now uses a fixed lookup table while preserving Unicode fallback behavior.
+change_logs: [user]

@@ -201,6 +201,16 @@ func TestContainsCaseInsensitiveUnicode(t *testing.T) {
 	}
 }
 
+func TestLowerASCIITable(t *testing.T) {
+	for i := range 0x80 {
+		b := byte(i)
+		require.Equalf(t, strings.ToLower(string([]byte{b})), string([]byte{lowerASCII[i]}), "ASCII byte 0x%02x", i)
+	}
+	for i := 0x80; i < len(lowerASCII); i++ {
+		require.Equalf(t, byte(i), lowerASCII[i], "non-ASCII byte 0x%02x", i)
+	}
+}
+
 // TestContainsCaseInsensitiveSlowPathConstantAlloc pins the SAW-7559 fix:
 // the pool-backed fold path must allocate a *constant* (small, body-size-
 // independent) number of objects per call. Before the fix, the slow path
