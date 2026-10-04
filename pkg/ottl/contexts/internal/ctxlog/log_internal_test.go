@@ -25,6 +25,7 @@ func (c *compileTimeTestContext) GetCache() pcommon.Map {
 
 var _ interface {
 	Get(context.Context, *compileTimeTestContext) (any, error)
+	GetPcommonValue(context.Context, *compileTimeTestContext) (pcommon.Value, bool, error)
 	Set(context.Context, *compileTimeTestContext, any) error
 	GetStringLike(context.Context, *compileTimeTestContext) (*string, bool, error)
 } = bodyGetSetter[*compileTimeTestContext]{}

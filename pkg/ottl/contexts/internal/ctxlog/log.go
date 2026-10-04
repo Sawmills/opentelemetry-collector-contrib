@@ -186,6 +186,10 @@ func (bodyGetSetter[K]) Get(_ context.Context, tCtx K) (any, error) {
 	return val, nil
 }
 
+func (bodyGetSetter[K]) GetPcommonValue(_ context.Context, tCtx K) (pcommon.Value, bool, error) {
+	return tCtx.GetLogRecord().Body(), true, nil
+}
+
 func (bodyGetSetter[K]) Set(_ context.Context, tCtx K, val any) error {
 	if err := ctxutil.SetValue(tCtx.GetLogRecord().Body(), val); err != nil {
 		return err
