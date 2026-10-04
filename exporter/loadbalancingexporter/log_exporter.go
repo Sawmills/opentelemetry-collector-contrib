@@ -588,7 +588,7 @@ func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrapp
 	recordLogBackendRequest(ctx, e.telemetry, le.logSignalAttr, le.logRequestAttr, ld)
 	numRecords := ld.LogRecordCount()
 	start := time.Now()
-	err := le.ConsumeLogs(ctx, ld)
+	err := e.consumeBackendLogs(ctx, le, ld)
 	duration := time.Since(start)
 	recordBackendTimeout(ctx, e.telemetry, le.logRequestAttr, err)
 	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(le.endpointAttr))
@@ -615,6 +615,13 @@ func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrapp
 		return e.loadBalancer.handleBackendFailure(ctx, le.endpoint, err), err
 	}
 	return e.loadBalancer.handleBackendFailureWithoutDrain(ctx, le.endpoint, err), err
+}
+
+func (e *logExporterImp) consumeBackendLogs(ctx context.Context, le *wrappedExporter, ld plog.Logs) error {
+	attrs := metric.WithAttributeSet(le.endpointAttr)
+	e.telemetry.LoadbalancerBackendLogRequestsInFlight.Add(ctx, 1, attrs)
+	defer e.telemetry.LoadbalancerBackendLogRequestsInFlight.Add(ctx, -1, attrs)
+	return le.ConsumeLogs(ctx, ld)
 }
 
 // insertLogRecord adds a log record into the destination plog.Logs, reusing

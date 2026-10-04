@@ -42,6 +42,20 @@ Response latency in ms for the backends.
 | ---- | ----------- | ------ | ------------------- |
 | endpoint | The endpoint of the backend | Any Str | - |
 
+### otelcol_loadbalancer_backend_log_requests_in_flight
+
+Active log export calls to each backend exporter, excluding central queue wait and decoding.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| {requests} | Sum | Int | false | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| endpoint | The endpoint of the backend | Any Str | - |
+
 ### otelcol_loadbalancer_backend_outcome
 
 Number of successes and failures for each endpoint.
