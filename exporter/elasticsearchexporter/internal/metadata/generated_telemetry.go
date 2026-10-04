@@ -6,9 +6,10 @@ import (
 	"errors"
 	"sync"
 
-	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
+
+	"go.opentelemetry.io/collector/component"
 )
 
 func Meter(settings component.TelemetrySettings) metric.Meter {
@@ -27,6 +28,7 @@ type TelemetryBuilder struct {
 	registrations                         []metric.Registration
 	ElasticsearchBulkRequestsCount        metric.Int64Counter
 	ElasticsearchBulkRequestsLatency      metric.Float64Histogram
+	ElasticsearchDocsFailed               metric.Int64Counter
 	ElasticsearchDocsProcessed            metric.Int64Counter
 	ElasticsearchDocsReceived             metric.Int64Counter
 	ElasticsearchDocsRetried              metric.Int64Counter
@@ -75,6 +77,12 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 		metric.WithDescription("Latency of Elasticsearch bulk operations in seconds. [Alpha]"),
 		metric.WithUnit("s"),
 		metric.WithExplicitBucketBoundaries([]float64{0, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000}...),
+	)
+	errs = errors.Join(errs, err)
+	builder.ElasticsearchDocsFailed, err = builder.meter.Int64Counter(
+		"otelcol.elasticsearch.docs.failed",
+		metric.WithDescription("Count of documents that failed to be accepted by an Elasticsearch destination. [Alpha]"),
+		metric.WithUnit("1"),
 	)
 	errs = errors.Join(errs, err)
 	builder.ElasticsearchDocsProcessed, err = builder.meter.Int64Counter(

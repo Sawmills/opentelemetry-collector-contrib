@@ -76,8 +76,9 @@ func newBulkIndexer(
 	tb *metadata.TelemetryBuilder,
 	logger *zap.Logger,
 	getErrorHintFunc func(index, errorType string) string,
+	exporterID string,
 ) bulkIndexer {
-	return newSyncBulkIndexer(client, config, requireDataStream, tb, logger, getErrorHintFunc)
+	return newSyncBulkIndexer(client, config, requireDataStream, tb, logger, getErrorHintFunc, exporterID)
 }
 
 func bulkIndexerConfig(client elastictransport.Interface, config *Config, requireDataStream bool, logger *zap.Logger) docappender.BulkIndexerConfig {
@@ -172,6 +173,7 @@ func newSyncBulkIndexer(
 	tb *metadata.TelemetryBuilder,
 	logger *zap.Logger,
 	getErrorHintFunc func(index, errorType string) string,
+	exporterID string,
 ) *syncBulkIndexer {
 	var maxFlushBytes int64
 	if config.QueueBatchConfig.HasValue() && config.QueueBatchConfig.Get().Batch.HasValue() {
@@ -191,6 +193,7 @@ func newSyncBulkIndexer(
 		failedDocsInputSampler: newFailedDocsInputSampler(config),
 		getErrorHintFunc:       getErrorHintFunc,
 		requireDataStream:      requireDataStream,
+		exporterID:             exporterID,
 	}
 }
 
@@ -205,6 +208,7 @@ type syncBulkIndexer struct {
 	failedDocsInputSampler *failedDocsInputSampler
 	getErrorHintFunc       func(index, errorType string) string
 	requireDataStream      bool
+	exporterID             string
 }
 
 // StartSession creates a new docappender.BulkIndexer, and wraps
@@ -281,6 +285,7 @@ func (s *syncBulkIndexerSession) Flush(ctx context.Context) error {
 			s.s.logger,
 			s.s.failedDocsInputSampler,
 			s.s.getErrorHintFunc,
+			s.s.exporterID,
 		); err != nil {
 			return err
 		}
@@ -317,6 +322,7 @@ func flushBulkIndexer(
 	logger *zap.Logger,
 	failedDocsInputSampler *failedDocsInputSampler,
 	getErrorHintFunc func(index, errorType string) string,
+	exporterID string,
 ) error {
 	itemsCount := bi.Items()
 	if itemsCount == 0 {
@@ -404,6 +410,13 @@ func flushBulkIndexer(
 		tb.ElasticsearchBulkRequestsCount.Add(ctx, int64(1), successAttrSet)
 		tb.ElasticsearchBulkRequestsLatency.Record(ctx, latency, successAttrSet)
 	}
+	failedDocs := int64(len(stat.FailedDocs))
+	if err != nil {
+		// A failed bulk request leaves every document in the request failed
+		// from the destination's point of view, even when the client retried it.
+		failedDocs = int64(itemsCount)
+	}
+	tb.ElasticsearchDocsFailed.Add(ctx, failedDocs, metric.WithAttributeSet(attribute.NewSet(attribute.String("exporter", exporterID))))
 
 	for _, resp := range stat.FailedDocs {
 		// Collect telemetry
@@ -567,6 +580,7 @@ type bulkIndexers struct {
 	profilingExecutables bulkIndexer // For profiling-executables
 
 	telemetryBuilder *metadata.TelemetryBuilder
+	exporterID       string
 }
 
 func (b *bulkIndexers) start(
@@ -594,7 +608,7 @@ func (b *bulkIndexers) start(
 		modeSpecificErrorHintFunc := func(index, errorType string) string {
 			return getErrorHint(mode, index, errorType)
 		}
-		bi := newBulkIndexer(esClient, cfg, requireDataStream, b.telemetryBuilder, set.Logger, modeSpecificErrorHintFunc)
+		bi := newBulkIndexer(esClient, cfg, requireDataStream, b.telemetryBuilder, set.Logger, modeSpecificErrorHintFunc, b.exporterID)
 		b.modes[mode] = &wgTrackingBulkIndexer{bulkIndexer: bi, wg: &b.wg}
 	}
 
@@ -602,16 +616,16 @@ func (b *bulkIndexers) start(
 		return getErrorHint(MappingNone, index, errorType)
 	}
 
-	profilingEvents := newBulkIndexer(esClient, cfg, true, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc)
+	profilingEvents := newBulkIndexer(esClient, cfg, true, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID)
 	b.profilingEvents = &wgTrackingBulkIndexer{bulkIndexer: profilingEvents, wg: &b.wg}
 
-	profilingStackTraces := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc)
+	profilingStackTraces := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID)
 	b.profilingStackTraces = &wgTrackingBulkIndexer{bulkIndexer: profilingStackTraces, wg: &b.wg}
 
-	profilingStackFrames := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc)
+	profilingStackFrames := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID)
 	b.profilingStackFrames = &wgTrackingBulkIndexer{bulkIndexer: profilingStackFrames, wg: &b.wg}
 
-	profilingExecutables := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc)
+	profilingExecutables := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID)
 	b.profilingExecutables = &wgTrackingBulkIndexer{bulkIndexer: profilingExecutables, wg: &b.wg}
 	return nil
 }

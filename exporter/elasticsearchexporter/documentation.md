@@ -36,6 +36,26 @@ Latency of Elasticsearch bulk operations in seconds.
 | outcome | The operation outcome. | Str: ``success``, ``failed_client``, ``failed_server``, ``timeout``, ``too_many``, ``failure_store``, ``internal_server_error`` | - |
 | http.response.status_code | HTTP status code. | Any Int | - |
 
+### otelcol.elasticsearch.docs.failed
+
+Count of documents that failed to be accepted by an Elasticsearch destination.
+
+Counts each document rejected in a partially failed bulk request once.
+If a bulk request fails after the configured HTTP retries, counts all
+documents in that request once. HTTP retries are not counted separately.
+The cumulative sum is reported with the configured exporter identifier.
+
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| 1 | Sum | Int | true | Alpha |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| exporter | The configured Elasticsearch exporter identifier. | Any Str | - |
+
 ### otelcol.elasticsearch.docs.processed
 
 Count of documents flushed to Elasticsearch.

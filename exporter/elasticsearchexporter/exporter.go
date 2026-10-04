@@ -62,7 +62,7 @@ func newExporter(cfg *Config, set exporter.Settings, index string) (*elasticsear
 		allowedMappingModes: allowedMappingModes,
 		defaultMappingMode:  MappingOTel,
 		bufferPool:          pool.NewBufferPool(),
-		bulkIndexers:        bulkIndexers{telemetryBuilder: telemetryBuilder},
+		bulkIndexers:        bulkIndexers{telemetryBuilder: telemetryBuilder, exporterID: set.ID.String()},
 		telemetryBuilder:    telemetryBuilder,
 	}
 	for mappingMode := range NumMappingModes {
