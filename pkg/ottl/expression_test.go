@@ -2699,6 +2699,32 @@ func (g mockedCustomStringLikeGetter[K]) GetStringLike(_ context.Context, _ K) (
 	return g.customValue, g.handled, g.err
 }
 
+type mockedDirectStringGetter struct {
+	err error
+}
+
+func (g mockedDirectStringGetter) Get(context.Context, any) (any, error) {
+	return "value", g.err
+}
+
+func (g mockedDirectStringGetter) GetString(context.Context, any) (string, error) {
+	return "value", g.err
+}
+
+func TestDirectStringGetterPreservesError(t *testing.T) {
+	cause := errors.New("getter failed")
+	getter := mockedDirectStringGetter{err: cause}
+	direct, err := newStandardStringGetter[any](getter)
+	require.NoError(t, err)
+	standard := StandardStringGetter[any]{Getter: getter.Get}
+
+	_, gotErr := direct.Get(t.Context(), nil)
+	_, wantErr := standard.Get(t.Context(), nil)
+
+	require.ErrorIs(t, gotErr, cause)
+	require.EqualError(t, gotErr, wantErr.Error())
+}
+
 func Test_newStandardStringGetter(t *testing.T) {
 	type args[K any] struct {
 		getter Getter[K]
