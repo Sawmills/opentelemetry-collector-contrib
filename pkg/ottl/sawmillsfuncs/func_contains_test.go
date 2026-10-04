@@ -202,7 +202,7 @@ func TestContainsCaseInsensitiveUnicode(t *testing.T) {
 }
 
 func TestLowerASCIITable(t *testing.T) {
-	for i := 0; i < 0x80; i++ {
+	for i := range 0x80 {
 		b := byte(i)
 		require.Equalf(t, strings.ToLower(string([]byte{b})), string([]byte{lowerASCII[i]}), "ASCII byte 0x%02x", i)
 	}
