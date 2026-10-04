@@ -709,7 +709,28 @@ func newStandardPMapGetter[K any](getter Getter[K]) (PMapGetter[K], error) {
 		}
 		return newLiteral[K, pcommon.Map](val), nil
 	}
+	if pcommonValue, ok := getter.(pcommonValueGetter[K]); ok {
+		return pMapGetterWithPcommonValue[K]{getter: pcommonValue}, nil
+	}
 	return g, nil
+}
+
+type pMapGetterWithPcommonValue[K any] struct {
+	getter pcommonValueGetter[K]
+}
+
+func (g pMapGetterWithPcommonValue[K]) Get(ctx context.Context, tCtx K) (pcommon.Map, error) {
+	value, found, err := g.getter.GetPcommonValue(ctx, tCtx)
+	if err != nil {
+		return pcommon.Map{}, fmt.Errorf("error getting value in %T: %w", StandardPMapGetter[K]{}, err)
+	}
+	if !found {
+		return pcommon.Map{}, TypeError("expected pcommon.Map but got nil")
+	}
+	if value.Type() == pcommon.ValueTypeMap {
+		return value.Map(), nil
+	}
+	return pcommon.Map{}, TypeError(fmt.Sprintf("expected pcommon.Map but got %v", value.Type()))
 }
 
 // StandardPMapGetter is a basic implementation of PMapGetter
@@ -773,6 +794,11 @@ func newStandardStringLikeGetter[K any](getter Getter[K]) (StringLikeGetter[K], 
 			custom:   custom,
 			standard: standard,
 		}
+	} else if pcommonValue, ok := getter.(pcommonValueGetter[K]); ok {
+		g = standardStringLikeGetterWithPcommonValue[K]{
+			getter:   pcommonValue,
+			standard: standard,
+		}
 	}
 	if isLiteralGetter(getter) {
 		val, err := g.Get(context.Background(), *new(K))
@@ -782,6 +808,26 @@ func newStandardStringLikeGetter[K any](getter Getter[K]) (StringLikeGetter[K], 
 		return newLiteral[K, *string](val), nil
 	}
 	return g, nil
+}
+
+type standardStringLikeGetterWithPcommonValue[K any] struct {
+	getter   pcommonValueGetter[K]
+	standard StandardStringLikeGetter[K]
+}
+
+func (g standardStringLikeGetterWithPcommonValue[K]) Get(ctx context.Context, tCtx K) (*string, error) {
+	value, found, err := g.getter.GetPcommonValue(ctx, tCtx)
+	if err != nil {
+		return nil, fmt.Errorf("error getting value in %T: %w", g.standard, err)
+	}
+	if !found {
+		return nil, nil
+	}
+	if value.Type() == pcommon.ValueTypeEmpty {
+		return nil, nil
+	}
+	result := value.AsString()
+	return &result, nil
 }
 
 type standardStringLikeGetterWithCustom[K any] struct {

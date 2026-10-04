@@ -1,0 +1,6 @@
+change_type: enhancement
+component: pkg/ottl
+note: Avoid boxing pdata values in OTTL string-like and map getters.
+issues: [12114]
+subtext: Preserve existing conversions while reducing allocations on log paths that read pdata values.
+change_logs: [user]
