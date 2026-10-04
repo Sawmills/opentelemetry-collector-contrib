@@ -77,6 +77,17 @@ var lowerBufPool = sync.Pool{
 	},
 }
 
+var lowerASCII = func() [256]byte {
+	var table [256]byte
+	for i := range table {
+		table[i] = byte(i)
+	}
+	for c := byte('A'); c <= 'Z'; c++ {
+		table[c] = c + ('a' - 'A')
+	}
+	return table
+}()
+
 // asciiUpperIndex finds the first uppercase ASCII byte, stopping if the
 // prefix contains a non-ASCII byte. The fold checks the remaining suffix.
 func asciiUpperIndex(s string) (int, bool) {
@@ -114,10 +125,7 @@ func lowerASCIIInto(bufPtr *[]byte, s string, firstUpper int) (string, bool) {
 		if c >= 0x80 {
 			return "", false
 		}
-		if c >= 'A' && c <= 'Z' {
-			c += 'a' - 'A'
-		}
-		buf[i] = c
+		buf[i] = lowerASCII[c]
 	}
 	// `string(buf)` would copy; unsafe.String reuses the buffer's backing
 	// memory. Safe here because strings.Contains is read-only.
