@@ -1,0 +1,6 @@
+change_type: enhancement
+component: pkg/ottl
+note: Reduce CPU cost of IsMatch for case-sensitive literal substring patterns.
+issues: [12114]
+subtext: Keep other regular expressions on the existing matcher path.
+change_logs: [user]
