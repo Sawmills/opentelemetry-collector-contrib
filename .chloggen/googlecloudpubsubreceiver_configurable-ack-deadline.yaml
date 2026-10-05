@@ -1,0 +1,10 @@
+change_type: enhancement
+component: receiver/googlecloudpubsub
+note: Make the StreamingPull ack deadline and ack-batch interval configurable and raise the default ack deadline to 600s to prevent delivery throttling on high-volume subscriptions.
+issues: [148]
+subtext: |
+  The receiver previously hardcoded a 60s StreamingPull ack deadline and a 10s ack-batch interval. Under high
+  message volume, acknowledgements could miss the 60s deadline, triggering redelivery and Pub/Sub delivery
+  back-off that collapsed effective throughput. New options `ack_deadline_seconds` (10-600, default 600) and
+  `ack_batch_wait` (default 5s) make this tunable, with safe defaults.
+change_logs: [user]

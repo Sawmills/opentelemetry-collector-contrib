@@ -30,8 +30,11 @@ func TestLoadConfig(t *testing.T) {
 		expectedErr error
 	}{
 		{
-			id:       component.NewIDWithName(metadata.Type, ""),
-			expected: &Config{},
+			id: component.NewIDWithName(metadata.Type, ""),
+			expected: &Config{
+				AckDeadlineSeconds: defaultAckDeadlineSeconds,
+				AckBatchWait:       defaultAckBatchWait,
+			},
 		},
 		{
 			id: component.NewIDWithName(metadata.Type, "customname"),
@@ -41,7 +44,9 @@ func TestLoadConfig(t *testing.T) {
 				TimeoutSettings: exporterhelper.TimeoutConfig{
 					Timeout: 20 * time.Second,
 				},
-				Subscription: "projects/my-project/subscriptions/otlp-subscription",
+				Subscription:       "projects/my-project/subscriptions/otlp-subscription",
+				AckDeadlineSeconds: defaultAckDeadlineSeconds,
+				AckBatchWait:       defaultAckBatchWait,
 			},
 		},
 	}
@@ -59,6 +64,56 @@ func TestLoadConfig(t *testing.T) {
 			assert.Equal(t, tt.expected, cfg)
 		})
 	}
+}
+
+func TestAckConfig(t *testing.T) {
+	// defaults come from the factory
+	c := NewFactory().CreateDefaultConfig().(*Config)
+	assert.Equal(t, defaultAckDeadlineSeconds, c.AckDeadlineSeconds)
+	assert.Equal(t, defaultAckBatchWait, c.AckBatchWait)
+	assert.Equal(t, defaultAckDeadlineSeconds, c.resolvedAckDeadlineSeconds())
+	assert.Equal(t, defaultAckBatchWait, c.resolvedAckBatchWait())
+
+	// zero values resolve to the defaults
+	zero := &Config{}
+	assert.Equal(t, defaultAckDeadlineSeconds, zero.resolvedAckDeadlineSeconds())
+	assert.Equal(t, defaultAckBatchWait, zero.resolvedAckBatchWait())
+
+	// explicit values are honored
+	custom := &Config{AckDeadlineSeconds: 120, AckBatchWait: 2 * time.Second}
+	assert.Equal(t, int32(120), custom.resolvedAckDeadlineSeconds())
+	assert.Equal(t, 2*time.Second, custom.resolvedAckBatchWait())
+
+	// validation of the ack fields
+	valid := NewFactory().CreateDefaultConfig().(*Config)
+	valid.Subscription = "projects/my-project/subscriptions/my-subscription"
+	assert.NoError(t, valid.validate())
+
+	tooLow := *valid
+	tooLow.AckDeadlineSeconds = minAckDeadlineSeconds - 1
+	assert.Error(t, tooLow.validate())
+
+	tooHigh := *valid
+	tooHigh.AckDeadlineSeconds = maxAckDeadlineSeconds + 1
+	assert.Error(t, tooHigh.validate())
+
+	negativeWait := *valid
+	negativeWait.AckBatchWait = -1 * time.Second
+	assert.Error(t, negativeWait.validate())
+
+	// ack_batch_wait at/above the resolved deadline is rejected (acks would be held past expiry)
+	batchAtDeadline := *valid
+	batchAtDeadline.AckDeadlineSeconds = minAckDeadlineSeconds // 10s
+	batchAtDeadline.AckBatchWait = time.Duration(minAckDeadlineSeconds) * time.Second
+	assert.Error(t, batchAtDeadline.validate())
+
+	batchAboveDefaultDeadline := *valid // deadline resolves to default 600s
+	batchAboveDefaultDeadline.AckBatchWait = time.Duration(defaultAckDeadlineSeconds+1) * time.Second
+	assert.Error(t, batchAboveDefaultDeadline.validate())
+
+	batchBelowDeadline := *valid
+	batchBelowDeadline.AckBatchWait = 30 * time.Second
+	assert.NoError(t, batchBelowDeadline.validate())
 }
 
 func TestConfigValidation(t *testing.T) {
