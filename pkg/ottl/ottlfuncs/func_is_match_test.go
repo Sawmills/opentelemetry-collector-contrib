@@ -19,6 +19,36 @@ import (
 	ottlregexp "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/regexp"
 )
 
+func TestIsMatchLiteralSubstringAdmission(t *testing.T) {
+	// Guard the fast path. TestIsMatchLiteralParity checks public behavior.
+	for _, tt := range []struct {
+		name    string
+		pattern string
+		want    string
+	}{
+		{"literal", `ecs_scaler`, "ecs_scaler"},
+		{"leading wildcard", `.*ecs_scaler`, "ecs_scaler"},
+		{"trailing wildcard", `ecs_scaler.*`, "ecs_scaler"},
+		{"wrapped wildcard", `.*ecs_scaler.*`, "ecs_scaler"},
+		{"captured wildcard and literal", `(.*)(ecs_scaler)`, "ecs_scaler"},
+		{"start anchor", `^ecs_scaler`, ""},
+		{"end anchor", `ecs_scaler$`, ""},
+		{"case folded", `(?i)ecs_scaler`, ""},
+		{"folded character class", `[Ee]cs_scaler`, ""},
+		{"dot all", `(?s).*ecs_scaler`, ""},
+		{"multiline", `(?m)^ecs_scaler`, ""},
+		{"alternation", `ecs_scaler|other`, ""},
+		{"two literal segments", `ecs.*scaler`, ""},
+		{"repetition", `ecs_scaler+`, ""},
+		{"replacement rune", `.*�`, ""},
+		{"empty pattern", ``, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isMatchLiteralSubstring(tt.pattern))
+		})
+	}
+}
+
 func TestIsMatchLiteralParity(t *testing.T) {
 	t.Parallel()
 
@@ -35,6 +65,8 @@ func TestIsMatchLiteralParity(t *testing.T) {
 		{"leading wildcard invalid utf8", `.*ecs_scaler`, "\xffecs_scaler"},
 		{"trailing wildcard", `ecs_scaler.*`, "ecs_scaler\nnext line"},
 		{"wrapped wildcard", `.*ecs_scaler.*`, "first line\necs_scaler\nlast line"},
+		{"captured wildcard literal match", `(.*)(ecs_scaler)`, "first line\necs_scaler"},
+		{"captured wildcard literal miss", `(.*)(ecs_scaler)`, "another service"},
 		{"long literal go-re2", strings.Repeat("x", 210), strings.Repeat("x", 210)},
 		{"long wildcard go-re2 invalid utf8", `.*` + strings.Repeat("x", 210), "\xff" + strings.Repeat("x", 210)},
 		{"anchored miss", `^scanner_log\s+-$`, "prefix scanner_log -"},
@@ -44,6 +76,8 @@ func TestIsMatchLiteralParity(t *testing.T) {
 		{"dot all", `(?s).*scanner_log.*`, "line\nscanner_log\nline"},
 		{"multiline", `(?m)^scanner_log`, "line\nscanner_log"},
 		{"alternation", `scanner_log|ecs_scaler`, "ecs_scaler"},
+		{"two literal segments require both", `ecs.*scaler`, "ecs only"},
+		{"two literal segments reject second only", `ecs.*scaler`, "scaler only"},
 		{"one or more prefix", `.+ecs_scaler`, "ecs_scaler"},
 		{"repeated literal", `ecs{2}`, "ecs"},
 		{"unicode", `café\s+-`, "café -"},
