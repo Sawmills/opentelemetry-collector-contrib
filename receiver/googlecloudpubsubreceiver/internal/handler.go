@@ -112,10 +112,21 @@ func (handler *StreamHandler) initStream(ctx context.Context) error {
 		ClientId:                 handler.clientID,
 		AckIds:                   handler.acks,
 	}
+	// SAW-12344 verbose diagnostics: log the exact StreamingPull init parameters so we can
+	// confirm the stream is (re)established and with which ack deadline / pending acks.
+	handler.settings.Logger.Info("pubsub StreamingPull init request sent",
+		zap.String("subscription", handler.subscription),
+		zap.String("client_id", handler.clientID),
+		zap.Int32("stream_ack_deadline_seconds", handler.streamAckDeadlineSeconds),
+		zap.Duration("ack_batch_wait", handler.ackBatchWait),
+		zap.Int("carried_over_acks", len(request.AckIds)),
+	)
 	if err := handler.stream.Send(&request); err != nil {
+		handler.settings.Logger.Warn("pubsub StreamingPull init Send failed", zap.Error(err))
 		_ = handler.stream.CloseSend()
 		return err
 	}
+	handler.settings.Logger.Info("pubsub StreamingPull stream established", zap.String("subscription", handler.subscription))
 	handler.acks = nil
 	handler.telemetryBuilder.ReceiverGooglecloudpubsubStreamRestarts.Add(ctx, 1,
 		metric.WithAttributes(
@@ -123,6 +134,22 @@ func (handler *StreamHandler) initStream(ctx context.Context) error {
 			attribute.String("otelcol.component.id", handler.settings.ID.String()),
 		))
 	return nil
+}
+
+// firstNStrings returns up to n elements of s, for bounded logging of ack-id lists.
+func firstNStrings(s []string, n int) []string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+// firstNChars returns up to n runes of s, for bounded logging of a single ack id.
+func firstNChars(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 // RecoverableStream starts the Pub/Sub stream loop and recovers it if it fails
@@ -140,7 +167,9 @@ func (handler *StreamHandler) recoverableStream(ctx context.Context) {
 		var loopCtx context.Context
 		loopCtx, cancel := context.WithCancel(ctx)
 
-		handler.settings.Logger.Debug("Starting Streaming Pull")
+		handler.settings.Logger.Info("pubsub Starting Streaming Pull loop",
+			zap.String("subscription", handler.subscription),
+			zap.Int("retry_attempt", handler.retryAttempt))
 		handler.streamWaitGroup.Add(2)
 		go handler.requestStream(loopCtx, cancel)
 		go handler.responseStream(loopCtx, cancel)
@@ -155,14 +184,16 @@ func (handler *StreamHandler) recoverableStream(ctx context.Context) {
 		if handler.isRunning.Load() {
 			err := handler.initStream(ctx)
 			if err != nil {
-				handler.settings.Logger.Error("Failed to recovery stream.")
+				handler.settings.Logger.Error("pubsub Failed to recover stream", zap.Int("retry_attempt", handler.retryAttempt+1), zap.Error(err))
 				handler.retryAttempt++
 			} else {
 				handler.retryAttempt = 0
 			}
 		}
-		handler.settings.Logger.Debug("End of recovery loop, restarting.")
-		time.Sleep(exponentialBackoff(handler.retryAttempt))
+		backoff := exponentialBackoff(handler.retryAttempt)
+		handler.settings.Logger.Info("pubsub End of recovery loop, backing off before restart",
+			zap.Int("retry_attempt", handler.retryAttempt), zap.Duration("backoff", backoff))
+		time.Sleep(backoff)
 	}
 	handler.settings.Logger.Warn("Shutting down recovery loop.")
 	handler.handlerWaitGroup.Done()
@@ -188,12 +219,16 @@ func (handler *StreamHandler) acknowledgeMessages() error {
 	if len(handler.acks) == 0 {
 		return nil
 	}
+	n := len(handler.acks)
 	request := pubsubpb.StreamingPullRequest{
 		AckIds: handler.acks,
 	}
 	err := handler.stream.Send(&request)
 	if err == nil {
+		handler.settings.Logger.Info("pubsub flushed acks to stream", zap.Int("ack_count", n))
 		handler.acks = nil
+	} else {
+		handler.settings.Logger.Warn("pubsub ack flush Send failed", zap.Int("ack_count", n), zap.Error(err))
 	}
 	return err
 }
@@ -203,11 +238,23 @@ func (handler *StreamHandler) acknowledgeMessages() error {
 // of the new stream, so we don't need to start with an acknowledgeMessages.
 func (handler *StreamHandler) requestStream(ctx context.Context, cancel context.CancelFunc) {
 	timer := time.NewTimer(handler.ackBatchWait)
+	var ticks uint64
 	for {
 		select {
 		case <-ctx.Done():
 			handler.settings.Logger.Debug("requestStream <-ctx.Done()")
 		case <-timer.C:
+		}
+		ticks++
+		// SAW-12344 idle heartbeat: confirms the stream/handler is alive even while Pub/Sub
+		// delivers nothing. Logged every ~6 ticks (~30s at the 5s default) to bound volume.
+		if ticks%6 == 0 {
+			handler.mutex.Lock()
+			pending := len(handler.acks)
+			handler.mutex.Unlock()
+			handler.settings.Logger.Info("pubsub ack-loop heartbeat (stream alive)",
+				zap.String("subscription", handler.subscription),
+				zap.Uint64("ticks", ticks), zap.Int("pending_acks", pending))
 		}
 		// whatever happens, we need to acknowledge the messages
 		if err := handler.acknowledgeMessages(); err != nil {
@@ -233,18 +280,63 @@ func (handler *StreamHandler) requestStream(ctx context.Context, cancel context.
 
 func (handler *StreamHandler) responseStream(ctx context.Context, cancel context.CancelFunc) {
 	activeStreaming := true
+	var recvCount uint64
 	for activeStreaming {
 		// block until the next message or timeout expires
 		resp, err := handler.stream.Recv()
 		if err == nil {
-			for _, message := range resp.ReceivedMessages {
+			recvCount++
+			msgs := resp.GetReceivedMessages()
+			// SAW-12344 verbose diagnostics: log every StreamingPull response so we can see whether
+			// Pub/Sub is delivering messages, sending empty keep-alives, rejecting our acks
+			// (exactly-once), or advertising subscription properties. This is the key RCA signal for
+			// "stream healthy but receiving ~0".
+			fields := []zap.Field{
+				zap.Uint64("recv_seq", recvCount),
+				zap.Int("received_messages", len(msgs)),
+			}
+			if sp := resp.GetSubscriptionProperties(); sp != nil {
+				fields = append(fields,
+					zap.Bool("exactly_once_delivery", sp.GetExactlyOnceDeliveryEnabled()),
+					zap.Bool("message_ordering", sp.GetMessageOrderingEnabled()),
+				)
+			}
+			if ac := resp.GetAcknowledgeConfirmation(); ac != nil {
+				fields = append(fields,
+					zap.Int("ack_confirmed", len(ac.GetAckIds())),
+					zap.Int("ack_invalid", len(ac.GetInvalidAckIds())),
+					zap.Int("ack_unordered", len(ac.GetUnorderedAckIds())),
+					zap.Int("ack_temp_failed", len(ac.GetTemporaryFailedAckIds())),
+					zap.Strings("ack_invalid_ids", firstNStrings(ac.GetInvalidAckIds(), 5)),
+					zap.Strings("ack_temp_failed_ids", firstNStrings(ac.GetTemporaryFailedAckIds(), 5)),
+				)
+			}
+			if len(msgs) > 0 {
+				first := msgs[0]
+				fields = append(fields,
+					zap.Int("first_delivery_attempt", int(first.GetDeliveryAttempt())),
+					zap.Time("first_publish_time", first.GetMessage().GetPublishTime().AsTime()),
+					zap.Int("first_data_bytes", len(first.GetMessage().GetData())),
+				)
+			}
+			handler.settings.Logger.Info("pubsub StreamingPull recv", fields...)
+
+			acked := 0
+			for _, message := range msgs {
 				// handle all the messages in the response, could be one or more
 				err = handler.pushMessage(context.Background(), message)
 				if err == nil {
 					// When sending a message though the pipeline fails, we ignore the error. We'll let Pubsub
 					// handle the flow control.
 					handler.ack(message.AckId)
+					acked++
+				} else {
+					handler.settings.Logger.Warn("pubsub pushMessage failed; leaving message unacked",
+						zap.String("ack_id_prefix", firstNChars(message.GetAckId(), 12)), zap.Error(err))
 				}
+			}
+			if len(msgs) > 0 {
+				handler.settings.Logger.Info("pubsub batch processed", zap.Int("messages", len(msgs)), zap.Int("acked", acked))
 			}
 		} else {
 			s, grpcStatus := status.FromError(err)
