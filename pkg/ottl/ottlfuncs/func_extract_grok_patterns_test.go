@@ -9,10 +9,36 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
 )
+
+func TestExtractGrokPatternsLiteralMatchesInvalidUTF8(t *testing.T) {
+	parser, err := ottl.NewParser[any](
+		StandardConverters[any](),
+		func(path ottl.Path[any]) (ottl.GetSetter[any], error) {
+			require.Equal(t, "body", path.Name())
+			return &ottl.StandardGetSetter[any]{
+				Getter: func(context.Context, any) (any, error) { return "\xff -", nil },
+				Setter: func(context.Context, any, any) error { return nil },
+			}, nil
+		},
+		componenttest.NewNopTelemetrySettings(),
+	)
+	require.NoError(t, err)
+
+	expr, err := parser.ParseValueExpression(`ExtractGrokPatterns(body, "(?P<value>�) -")`)
+	require.NoError(t, err)
+	result, err := expr.Eval(t.Context(), nil)
+	require.NoError(t, err)
+	resultMap, ok := result.(pcommon.Map)
+	require.True(t, ok)
+	value, ok := resultMap.Get("value")
+	require.True(t, ok)
+	require.Equal(t, "\xff", value.Str())
+}
 
 func Test_extractGrokPatterns_patterns(t *testing.T) {
 	tests := []struct {
