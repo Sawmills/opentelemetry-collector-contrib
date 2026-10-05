@@ -15,8 +15,16 @@ var subscriptionMatcher = regexp.MustCompile(`projects/[a-z][a-z0-9\-]*(:[a-z0-9
 
 const (
 	// defaultAckDeadlineSeconds is the StreamingPull ack deadline requested per stream. Pub/Sub
-	// allows 10-600s; the receiver defaults to the maximum so acknowledgements are not missed under
-	// high volume, which would otherwise trigger redelivery and Pub/Sub delivery throttling.
+	// allows 10-600s; the receiver defaults to the maximum.
+	//
+	// Tradeoff: a high deadline is the safer default because the dominant production failure mode is
+	// successful messages whose acks arrive late under high volume (the response loop pushes messages
+	// one at a time, so a backlog delays their acks); missing the deadline triggers redelivery and
+	// Pub/Sub then throttles delivery to the whole subscription. The cost is slower recovery of the
+	// error path: when pushMessage returns an error the message is left unacked, so Pub/Sub keeps it
+	// leased until the deadline before redelivering it. That path is exceptional (pipeline failure),
+	// whereas the throttle it prevents degrades the steady state, so the maximum is preferred.
+	// Operators sensitive to error-path redelivery latency can lower ack_deadline_seconds.
 	defaultAckDeadlineSeconds int32 = 600
 	minAckDeadlineSeconds     int32 = 10
 	maxAckDeadlineSeconds     int32 = 600
@@ -52,7 +60,9 @@ type Config struct {
 	// AckDeadlineSeconds is the per-stream StreamingPull ack deadline requested from Pub/Sub, in
 	// the range 10-600. A high deadline prevents messages from expiring before the collector can
 	// acknowledge them under high volume; expiry causes redelivery and Pub/Sub throttles delivery
-	// to the subscription. Defaults to 600.
+	// to the subscription. It also bounds error-path recovery: a message whose pushMessage errors
+	// stays leased until this deadline before Pub/Sub redelivers it. Defaults to 600; see
+	// defaultAckDeadlineSeconds for the tradeoff.
 	AckDeadlineSeconds int32 `mapstructure:"ack_deadline_seconds"`
 	// AckBatchWait is how long the acknowledge loop batches acks before flushing them to Pub/Sub.
 	// Keep it well below AckDeadlineSeconds. Defaults to 5s.
@@ -91,6 +101,13 @@ func (config *Config) validate() error {
 	}
 	if config.AckBatchWait < 0 {
 		return fmt.Errorf("ack_batch_wait %s must not be negative", config.AckBatchWait)
+	}
+	// The ack loop only flushes AckIds once per ack_batch_wait, so it must be safely below the
+	// resolved deadline or acks are held until after messages have already expired and been
+	// redelivered. Compare against the resolved values so the defaults are covered too.
+	deadline := time.Duration(config.resolvedAckDeadlineSeconds()) * time.Second
+	if config.resolvedAckBatchWait() >= deadline {
+		return fmt.Errorf("ack_batch_wait %s must be less than the ack deadline (%s)", config.resolvedAckBatchWait(), deadline)
 	}
 	return nil
 }

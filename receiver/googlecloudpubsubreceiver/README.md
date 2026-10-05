@@ -37,9 +37,14 @@ The following configuration options are supported:
   metric to monitor the number of errors. Ignoring the error will cause the receiver to drop the message.
 * `ack_deadline_seconds` (Optional): The per-stream ack deadline requested on the StreamingPull, in the Pub/Sub range
   `10`–`600`. Defaults to `600`. A high deadline prevents messages from expiring before the collector can acknowledge
-  them under high volume; expiry causes redelivery and Pub/Sub throttles delivery to the subscription.
+  them under high volume; expiry causes redelivery and Pub/Sub throttles delivery to the subscription. Tradeoff: a
+  message whose processing fails is left unacknowledged and stays leased until this deadline before Pub/Sub redelivers
+  it, so a higher value slows error-path recovery. The maximum is the default because the throttle it prevents degrades
+  the steady state, whereas the redelivery delay only affects the exceptional pipeline-failure path; lower it if your
+  deployment is sensitive to that redelivery latency.
 * `ack_batch_wait` (Optional): How long the acknowledge loop batches acks before flushing them to Pub/Sub. Defaults to
-  `5s`. Keep it well below `ack_deadline_seconds` so acks are not held near the deadline.
+  `5s`. Must be less than `ack_deadline_seconds`, and should be kept well below it so acks are not held near the
+  deadline.
 
 ```yaml
 receivers:

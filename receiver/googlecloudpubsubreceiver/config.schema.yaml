@@ -5,7 +5,7 @@ properties:
     type: string
     format: duration
   ack_deadline_seconds:
-    description: AckDeadlineSeconds is the per-stream StreamingPull ack deadline requested from Pub/Sub, in the range 10-600. A high deadline prevents messages from expiring before the collector can acknowledge them under high volume; expiry causes redelivery and Pub/Sub throttles delivery to the subscription. Defaults to 600.
+    description: 'AckDeadlineSeconds is the per-stream StreamingPull ack deadline requested from Pub/Sub, in the range 10-600. A high deadline prevents messages from expiring before the collector can acknowledge them under high volume; expiry causes redelivery and Pub/Sub throttles delivery to the subscription. It also bounds error-path recovery: a message whose pushMessage errors stays leased until this deadline before Pub/Sub redelivers it. Defaults to 600; see defaultAckDeadlineSeconds for the tradeoff.'
     type: integer
     x-customType: int32
   client_id:

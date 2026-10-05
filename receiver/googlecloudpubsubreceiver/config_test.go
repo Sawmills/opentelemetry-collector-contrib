@@ -100,6 +100,20 @@ func TestAckConfig(t *testing.T) {
 	negativeWait := *valid
 	negativeWait.AckBatchWait = -1 * time.Second
 	assert.Error(t, negativeWait.validate())
+
+	// ack_batch_wait at/above the resolved deadline is rejected (acks would be held past expiry)
+	batchAtDeadline := *valid
+	batchAtDeadline.AckDeadlineSeconds = minAckDeadlineSeconds // 10s
+	batchAtDeadline.AckBatchWait = time.Duration(minAckDeadlineSeconds) * time.Second
+	assert.Error(t, batchAtDeadline.validate())
+
+	batchAboveDefaultDeadline := *valid // deadline resolves to default 600s
+	batchAboveDefaultDeadline.AckBatchWait = time.Duration(defaultAckDeadlineSeconds+1) * time.Second
+	assert.Error(t, batchAboveDefaultDeadline.validate())
+
+	batchBelowDeadline := *valid
+	batchBelowDeadline.AckBatchWait = 30 * time.Second
+	assert.NoError(t, batchBelowDeadline.validate())
 }
 
 func TestConfigValidation(t *testing.T) {
