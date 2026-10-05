@@ -8,6 +8,7 @@ import (
 	"slices"
 	sortpkg "sort"
 	"strings"
+	"unicode/utf8"
 )
 
 const maxRegexPrefilterLiterals = 4
@@ -80,6 +81,10 @@ func selectPrefilterLiterals(literals []string, maxLiterals int) []string {
 	selected := make([]string, 0, len(literals))
 	for _, literal := range literals {
 		literal = strings.TrimSpace(literal)
+		// Regexp maps malformed UTF-8 to RuneError. Byte searches do not.
+		if strings.ContainsRune(literal, utf8.RuneError) {
+			continue
+		}
 		if len(literal) < 3 {
 			continue
 		}

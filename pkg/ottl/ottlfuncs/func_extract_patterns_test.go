@@ -263,3 +263,28 @@ func Test_extractPatternsLiteralPrefilterReturnsEmptyMap(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, 0, resultMap.Len())
 }
+
+func TestExtractPatternsLiteralMatchesInvalidUTF8(t *testing.T) {
+	parser, err := ottl.NewParser[any](
+		StandardConverters[any](),
+		func(path ottl.Path[any]) (ottl.GetSetter[any], error) {
+			require.Equal(t, "body", path.Name())
+			return &ottl.StandardGetSetter[any]{
+				Getter: func(context.Context, any) (any, error) { return "\xff -", nil },
+				Setter: func(context.Context, any, any) error { return nil },
+			}, nil
+		},
+		componenttest.NewNopTelemetrySettings(),
+	)
+	require.NoError(t, err)
+
+	expr, err := parser.ParseValueExpression(`ExtractPatterns(body, "(?P<value>�) -")`)
+	require.NoError(t, err)
+	result, err := expr.Eval(t.Context(), nil)
+	require.NoError(t, err)
+	resultMap, ok := result.(pcommon.Map)
+	require.True(t, ok)
+	value, ok := resultMap.Get("value")
+	require.True(t, ok)
+	require.Equal(t, "\xff", value.Str())
+}

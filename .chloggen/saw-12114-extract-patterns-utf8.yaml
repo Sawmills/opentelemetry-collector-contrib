@@ -1,0 +1,6 @@
+change_type: bug_fix
+component: pkg/ottl
+note: Preserve ExtractPatterns and ExtractGrokPatterns matches on malformed UTF-8 input.
+issues: [12114]
+subtext: Skip replacement-rune literals in the shared byte-based prefilter selector.
+change_logs: [user]
