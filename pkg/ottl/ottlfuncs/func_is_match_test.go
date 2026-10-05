@@ -19,6 +19,33 @@ import (
 	ottlregexp "github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/regexp"
 )
 
+func TestIsMatchLiteralSubstringAdmission(t *testing.T) {
+	// Guard the fast path. TestIsMatchLiteralParity checks public behavior.
+	for _, tt := range []struct {
+		name    string
+		pattern string
+		want    string
+	}{
+		{"literal", `ecs_scaler`, "ecs_scaler"},
+		{"leading wildcard", `.*ecs_scaler`, "ecs_scaler"},
+		{"trailing wildcard", `ecs_scaler.*`, "ecs_scaler"},
+		{"wrapped wildcard", `.*ecs_scaler.*`, "ecs_scaler"},
+		{"start anchor", `^ecs_scaler`, ""},
+		{"end anchor", `ecs_scaler$`, ""},
+		{"case folded", `(?i)ecs_scaler`, ""},
+		{"dot all", `(?s).*ecs_scaler`, ""},
+		{"multiline", `(?m)^ecs_scaler`, ""},
+		{"alternation", `ecs_scaler|other`, ""},
+		{"repetition", `ecs_scaler+`, ""},
+		{"replacement rune", `.*�`, ""},
+		{"empty pattern", ``, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isMatchLiteralSubstring(tt.pattern))
+		})
+	}
+}
+
 func TestIsMatchLiteralParity(t *testing.T) {
 	t.Parallel()
 
