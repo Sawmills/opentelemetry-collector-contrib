@@ -17,6 +17,7 @@ import (
 const (
 	backendRequestSignalLogs    = "logs"
 	backendRequestSignalMetrics = "metrics"
+	backendRequestSignalTraces  = "traces"
 )
 
 func backendRequestAttributeSet(signal, endpoint string) attribute.Set {
@@ -24,6 +25,10 @@ func backendRequestAttributeSet(signal, endpoint string) attribute.Set {
 }
 
 func backendRequestSignalAttributeSet(signal string) attribute.Set {
+	return attribute.NewSet(attribute.String("signal", signal))
+}
+
+func backendFailureSignalAttributeSet(signal string) attribute.Set {
 	return attribute.NewSet(attribute.String("signal", signal))
 }
 
@@ -71,6 +76,33 @@ func recordBackendTimeout(ctx context.Context, tb *metadata.TelemetryBuilder, en
 		return
 	}
 	tb.LoadbalancerBackendTimeoutTotal.Add(ctx, 1, backendRequestMetricOptions(endpointAttrs))
+}
+
+const (
+	backendOutcomeSuccessReason endpointFailureReason = "success"
+	backendOutcomeOtherReason   endpointFailureReason = "other"
+)
+
+// recordBackendFailedOutcome records one backend attempt. Successful non-empty
+// attempts add zero to a stable success series so active clean backends remain
+// queryable after quiet-state filtering. Failure reasons are classified into
+// the bounded endpoint health vocabulary and never include error text.
+func recordBackendFailedOutcome(ctx context.Context, tb *metadata.TelemetryBuilder, signalAttrs attribute.Set, err error) {
+	if tb == nil {
+		return
+	}
+	reason := backendOutcomeSuccessReason
+	value := int64(0)
+	if err != nil {
+		var classified bool
+		reason, classified = classifyEndpointFailure(err)
+		if !classified {
+			reason = backendOutcomeOtherReason
+		}
+		value = 1
+	}
+	attrs := append(signalAttrs.ToSlice(), attribute.String("reason", string(reason)))
+	tb.LoadbalancerBackendFailed.Add(ctx, value, metric.WithAttributeSet(attribute.NewSet(attrs...)))
 }
 
 func serializedLogsSize(ld plog.Logs) int64 {

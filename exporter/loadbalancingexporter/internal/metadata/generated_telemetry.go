@@ -27,6 +27,7 @@ type TelemetryBuilder struct {
 	registrations                              []metric.Registration
 	LoadbalancerBackendCount                   metric.Int64Gauge
 	LoadbalancerBackendFailOpenTotal           metric.Int64Counter
+	LoadbalancerBackendFailed                  metric.Int64Counter
 	LoadbalancerBackendLatency                 metric.Int64Histogram
 	LoadbalancerBackendLogRequestsInFlight     metric.Int64UpDownCounter
 	LoadbalancerBackendOutcome                 metric.Int64Counter
@@ -87,6 +88,12 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 		"otelcol_loadbalancer_backend_fail_open_total",
 		metric.WithDescription("Number of times endpoint health failed open because quarantine would leave too few eligible resolver-present backends. [Development]"),
 		metric.WithUnit("{events}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerBackendFailed, err = builder.meter.Int64Counter(
+		"otelcol_loadbalancer_backend_failed",
+		metric.WithDescription("Cumulative backend export failures by signal and bounded outcome reason. [Development]"),
+		metric.WithUnit("{failures}"),
 	)
 	errs = errors.Join(errs, err)
 	builder.LoadbalancerBackendLatency, err = builder.meter.Int64Histogram(

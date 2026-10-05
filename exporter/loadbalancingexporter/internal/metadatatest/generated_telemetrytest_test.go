@@ -21,6 +21,7 @@ func TestSetupTelemetry(t *testing.T) {
 	defer tb.Shutdown()
 	tb.LoadbalancerBackendCount.Record(context.Background(), 1)
 	tb.LoadbalancerBackendFailOpenTotal.Add(context.Background(), 1)
+	tb.LoadbalancerBackendFailed.Add(context.Background(), 1)
 	tb.LoadbalancerBackendLatency.Record(context.Background(), 1)
 	tb.LoadbalancerBackendLogRequestsInFlight.Add(context.Background(), 1)
 	tb.LoadbalancerBackendOutcome.Add(context.Background(), 1)
@@ -44,6 +45,9 @@ func TestSetupTelemetry(t *testing.T) {
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
 	AssertEqualLoadbalancerBackendFailOpenTotal(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerBackendFailed(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
 	AssertEqualLoadbalancerBackendLatency(t, testTel,

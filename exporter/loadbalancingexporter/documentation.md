@@ -28,6 +28,30 @@ Number of times endpoint health failed open because quarantine would leave too f
 | ---- | ----------- | ---------- | --------- | --------- |
 | {events} | Sum | Int | true | Development |
 
+### otelcol_loadbalancer_backend_failed
+
+Cumulative backend export failures by signal and bounded outcome reason.
+
+Each failed backend export attempt increments one reason series once.
+Successful non-empty exports record zero with reason `success` so an
+active backend has a measurable zero during clean windows. Successful
+empty exports do not create coverage, while failed empty exports still
+record the failed backend attempt. Values are cumulative for the
+process lifetime and reset on collector restart. Reasons use the
+bounded endpoint failure vocabulary plus `success` and `other`.
+
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| {failures} | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| signal | Telemetry signal for backend failure outcome metrics | Str: ``logs``, ``metrics``, ``traces`` | - |
+| reason | Low-cardinality endpoint health or backend outcome reason | Any Str | - |
+
 ### otelcol_loadbalancer_backend_latency
 
 Response latency in ms for the backends.
@@ -83,7 +107,7 @@ Number of times a backend endpoint was quarantined.
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
 | endpoint | The endpoint of the backend | Any Str | - |
-| reason | Low-cardinality endpoint health reason | Any Str | - |
+| reason | Low-cardinality endpoint health or backend outcome reason | Any Str | - |
 
 ### otelcol_loadbalancer_backend_request_bytes
 
@@ -172,7 +196,7 @@ Number of endpoint-failure reroute attempts.
 | ---- | ----------- | ------ | ------------------- |
 | signal | Telemetry signal | Str: ``traces``, ``logs``, ``metrics`` | - |
 | result | Reroute result | Str: ``success``, ``failure``, ``skipped`` | - |
-| reason | Low-cardinality endpoint health reason | Any Str | - |
+| reason | Low-cardinality endpoint health or backend outcome reason | Any Str | - |
 
 ### otelcol_loadbalancer_backend_stale_total
 
@@ -239,7 +263,7 @@ Number of times a backend endpoint was admitted after quarantine.
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
 | endpoint | The endpoint of the backend | Any Str | - |
-| reason | Low-cardinality endpoint health reason | Any Str | - |
+| reason | Low-cardinality endpoint health or backend outcome reason | Any Str | - |
 
 ### otelcol_loadbalancer_num_backend_updates
 
