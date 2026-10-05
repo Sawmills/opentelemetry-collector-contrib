@@ -35,6 +35,11 @@ The following configuration options are supported:
 * `ignore_encoding_error` (Optional): Ignore errors when the configured encoder fails to decoding a PubSub messages.
   It's advised to set this to `true` when using a custom encoder, and use `receiver.googlecloudpubsub.encoding_error`
   metric to monitor the number of errors. Ignoring the error will cause the receiver to drop the message.
+* `ack_deadline_seconds` (Optional): The per-stream ack deadline requested on the StreamingPull, in the Pub/Sub range
+  `10`–`600`. Defaults to `600`. A high deadline prevents messages from expiring before the collector can acknowledge
+  them under high volume; expiry causes redelivery and Pub/Sub throttles delivery to the subscription.
+* `ack_batch_wait` (Optional): How long the acknowledge loop batches acks before flushing them to Pub/Sub. Defaults to
+  `5s`. Keep it well below `ack_deadline_seconds` so acks are not held near the deadline.
 
 ```yaml
 receivers:

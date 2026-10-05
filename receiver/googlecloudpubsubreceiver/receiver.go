@@ -355,6 +355,8 @@ func (receiver *pubsubReceiver) createMultiplexingReceiverHandler(ctx context.Co
 		receiver.client,
 		receiver.config.ClientID,
 		receiver.config.Subscription,
+		receiver.config.resolvedAckDeadlineSeconds(),
+		receiver.config.resolvedAckBatchWait(),
 		func(ctx context.Context, message *pubsubpb.ReceivedMessage) error {
 			payload := message.Message.Data
 			encoding, compression := receiver.detectEncoding(message.Message.Attributes)
@@ -417,6 +419,8 @@ func (receiver *pubsubReceiver) createReceiverHandler(ctx context.Context) error
 		receiver.client,
 		receiver.config.ClientID,
 		receiver.config.Subscription,
+		receiver.config.resolvedAckDeadlineSeconds(),
+		receiver.config.resolvedAckBatchWait(),
 		handlerFn)
 	if err != nil {
 		return err

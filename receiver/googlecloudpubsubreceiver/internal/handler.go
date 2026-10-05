@@ -25,6 +25,14 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/receiver/googlecloudpubsubreceiver/internal/metadata"
 )
 
+const (
+	// fallbackStreamAckDeadlineSeconds and fallbackAckBatchWait preserve the receiver's historical
+	// behavior when NewHandler is called with non-positive values (e.g. a direct caller that does
+	// not thread the config through).
+	fallbackStreamAckDeadlineSeconds int32 = 60
+	fallbackAckBatchWait                   = 10 * time.Second
+)
+
 type StreamHandler struct {
 	stream      pubsubpb.Subscriber_StreamingPullClient
 	pushMessage func(ctx context.Context, message *pubsubpb.ReceivedMessage) error
@@ -44,6 +52,8 @@ type StreamHandler struct {
 	telemetryBuilder *metadata.TelemetryBuilder
 	// time that acknowledge loop waits before acknowledging messages
 	ackBatchWait time.Duration
+	// StreamAckDeadlineSeconds requested on the StreamingPull stream
+	streamAckDeadlineSeconds int32
 
 	isRunning    atomic.Bool
 	retryAttempt int
@@ -63,16 +73,25 @@ func NewHandler(
 	client SubscriberClient,
 	clientID string,
 	subscription string,
+	ackDeadlineSeconds int32,
+	ackBatchWait time.Duration,
 	callback func(ctx context.Context, message *pubsubpb.ReceivedMessage) error,
 ) (*StreamHandler, error) {
+	if ackDeadlineSeconds <= 0 {
+		ackDeadlineSeconds = fallbackStreamAckDeadlineSeconds
+	}
+	if ackBatchWait <= 0 {
+		ackBatchWait = fallbackAckBatchWait
+	}
 	handler := StreamHandler{
-		settings:         settings,
-		telemetryBuilder: telemetryBuilder,
-		client:           client,
-		clientID:         clientID,
-		subscription:     subscription,
-		pushMessage:      callback,
-		ackBatchWait:     10 * time.Second,
+		settings:                 settings,
+		telemetryBuilder:         telemetryBuilder,
+		client:                   client,
+		clientID:                 clientID,
+		subscription:             subscription,
+		pushMessage:              callback,
+		ackBatchWait:             ackBatchWait,
+		streamAckDeadlineSeconds: ackDeadlineSeconds,
 	}
 	return &handler, handler.initStream(ctx)
 }
@@ -89,7 +108,7 @@ func (handler *StreamHandler) initStream(ctx context.Context) error {
 
 	request := pubsubpb.StreamingPullRequest{
 		Subscription:             handler.subscription,
-		StreamAckDeadlineSeconds: 60,
+		StreamAckDeadlineSeconds: handler.streamAckDeadlineSeconds,
 		ClientId:                 handler.clientID,
 		AckIds:                   handler.acks,
 	}

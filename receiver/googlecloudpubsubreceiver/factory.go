@@ -38,7 +38,10 @@ type pubsubReceiverFactory struct {
 }
 
 func (*pubsubReceiverFactory) CreateDefaultConfig() component.Config {
-	return &Config{}
+	return &Config{
+		AckDeadlineSeconds: defaultAckDeadlineSeconds,
+		AckBatchWait:       defaultAckBatchWait,
+	}
 }
 
 func (factory *pubsubReceiverFactory) ensureReceiver(settings receiver.Settings, config component.Config) (*pubsubReceiver, error) {

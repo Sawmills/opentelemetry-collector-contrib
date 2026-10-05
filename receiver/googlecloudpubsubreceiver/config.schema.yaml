@@ -1,5 +1,13 @@
 type: object
 properties:
+  ack_batch_wait:
+    description: AckBatchWait is how long the acknowledge loop batches acks before flushing them to Pub/Sub. Keep it well below AckDeadlineSeconds. Defaults to 5s.
+    type: string
+    format: duration
+  ack_deadline_seconds:
+    description: AckDeadlineSeconds is the per-stream StreamingPull ack deadline requested from Pub/Sub, in the range 10-600. A high deadline prevents messages from expiring before the collector can acknowledge them under high volume; expiry causes redelivery and Pub/Sub throttles delivery to the subscription. Defaults to 600.
+    type: integer
+    x-customType: int32
   client_id:
     description: The client id that will be used by Pubsub to make load balancing decisions
     type: string
