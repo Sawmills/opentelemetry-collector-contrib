@@ -1396,12 +1396,26 @@ func centralQueueLaneRoutingKey(signal signalKind, routingKey []byte, laneCount 
 }
 
 func centralQueueBalancedLaneRoutingKeyForLoadBalancerLane(lb *loadBalancer, signal signalKind, lane uint32) []byte {
+	key, _ := centralQueueBalancedLaneRoutingKeyForLoadBalancerLaneWithError(lb, signal, lane)
+	return key
+}
+
+func centralQueueBalancedLaneRoutingKeyForLoadBalancerLaneWithError(lb *loadBalancer, signal signalKind, lane uint32) ([]byte, error) {
 	if lb == nil {
-		return centralQueueLaneKey(signal, lane, 0)
+		return centralQueueLaneKey(signal, lane, 0), nil
 	}
 	lb.updateLock.RLock()
 	defer lb.updateLock.RUnlock()
-	return centralQueueBalancedLaneRoutingKeyForRing(lb.ring, signal, lane)
+	key := centralQueueBalancedLaneRoutingKeyForRing(lb.ring, signal, lane)
+	if lb.ring == nil || len(lb.ring.endpoints) <= 1 {
+		return key, nil
+	}
+	target := lb.ring.endpoints[int(lane)%len(lb.ring.endpoints)]
+	if endpointWithPort(lb.ring.endpointFor(key)) != endpointWithPort(target) {
+		centralQueueBalancedLaneFallbacks.Add(1)
+		return nil, centralQueueBalancedLaneRoutingKeySearchError(signal, lane, target)
+	}
+	return key, nil
 }
 
 func centralQueueBalancedLaneRoutingKeyForRing(ring *hashRing, signal signalKind, lane uint32) []byte {

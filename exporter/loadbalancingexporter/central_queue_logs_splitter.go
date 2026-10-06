@@ -116,12 +116,16 @@ func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) err
 			for k := 0; k < sl.LogRecords().Len(); k++ {
 				rec := sl.LogRecords().At(k)
 				var queueRoutingKey []byte
+				var routingErr error
 				if s.exporter.recordStripingEnabled && s.laneCount > 0 {
-					queueRoutingKey = s.balancedLaneRoutingKeyForLane(s.nextStripingLane)
+					queueRoutingKey, routingErr = s.balancedLaneRoutingKeyForLane(s.nextStripingLane)
 					s.nextStripingLane = (s.nextStripingLane + 1) % uint32(s.laneCount)
 				} else {
 					balancingKey := s.exporter.routingKeyForLogRecord(rec, [2]int{i, j}, s.emptyTraceFallbackKeys)
-					queueRoutingKey = s.balancedLaneRoutingKey(balancingKey)
+					queueRoutingKey, routingErr = s.balancedLaneRoutingKey(balancingKey)
+				}
+				if routingErr != nil {
+					return routingErr
 				}
 				lane := s.lane(queueRoutingKey)
 				if !lane.empty() && !lane.canFit(rl, sl, rec, s.marshaler, s.limit) {
@@ -156,24 +160,27 @@ func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) err
 	return nil
 }
 
-func (s *centralQueueLogSplitter) balancedLaneRoutingKey(balancingKey pcommon.TraceID) []byte {
+func (s *centralQueueLogSplitter) balancedLaneRoutingKey(balancingKey pcommon.TraceID) ([]byte, error) {
 	if s.laneCount <= 0 {
-		return balancingKey[:]
+		return balancingKey[:], nil
 	}
 	lane := centralQueueLaneIndex(signalKindLogs, balancingKey[:], s.laneCount)
 	return s.balancedLaneRoutingKeyForLane(lane)
 }
 
-func (s *centralQueueLogSplitter) balancedLaneRoutingKeyForLane(lane uint32) []byte {
+func (s *centralQueueLogSplitter) balancedLaneRoutingKeyForLane(lane uint32) ([]byte, error) {
 	if s.routingSnapshot != nil {
-		return s.routingSnapshot.routingKeys[lane]
+		return s.routingSnapshot.routingKeys[lane], nil
 	}
 	if key, ok := s.laneRoutingKeys[lane]; ok {
-		return key
+		return key, nil
 	}
-	key := centralQueueBalancedLaneRoutingKeyForLoadBalancerLane(s.exporter.loadBalancer, signalKindLogs, lane)
+	key, err := centralQueueBalancedLaneRoutingKeyForLoadBalancerLaneWithError(s.exporter.loadBalancer, signalKindLogs, lane)
+	if err != nil {
+		return nil, err
+	}
 	s.laneRoutingKeys[lane] = key
-	return key
+	return key, nil
 }
 
 func (s *centralQueueLogSplitter) rejectUnsplittableRecords(ctx context.Context, ld plog.Logs) error {
