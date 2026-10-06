@@ -361,16 +361,24 @@ func (lb *loadBalancer) centralQueueLogRoutingSnapshotWithError() (*centralQueue
 	if lb.ring == nil {
 		return nil, nil
 	}
+	ring := lb.ring
+	ring.centralQueueLogSnapshotOnce.Do(func() {
+		ring.centralQueueLogSnapshot, ring.centralQueueLogSnapshotErr = buildCentralQueueLogRoutingSnapshot(ring)
+	})
+	return ring.centralQueueLogSnapshot, ring.centralQueueLogSnapshotErr
+}
+
+func buildCentralQueueLogRoutingSnapshot(ring *hashRing) (*centralQueueLogRoutingSnapshot, error) {
 	snapshot := &centralQueueLogRoutingSnapshot{}
-	if len(lb.ring.endpoints) == 0 {
+	if len(ring.endpoints) == 0 {
 		return snapshot, nil
 	}
 
-	snapshot.endpoints = slices.Clone(lb.ring.endpoints)
+	snapshot.endpoints = slices.Clone(ring.endpoints)
 	snapshot.routingKeys = make([][]byte, len(snapshot.endpoints))
 	for lane := range snapshot.endpoints {
-		key := centralQueueBalancedLaneRoutingKeyForRing(lb.ring, signalKindLogs, uint32(lane))
-		if endpointWithPort(lb.ring.endpointFor(key)) != endpointWithPort(snapshot.endpoints[lane]) {
+		key := centralQueueBalancedLaneRoutingKeyForRing(ring, signalKindLogs, uint32(lane))
+		if endpointWithPort(ring.endpointFor(key)) != endpointWithPort(snapshot.endpoints[lane]) {
 			return nil, centralQueueBalancedLaneRoutingKeySearchError(signalKindLogs, uint32(lane), snapshot.endpoints[lane])
 		}
 		snapshot.routingKeys[lane] = slices.Clone(key)

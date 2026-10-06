@@ -1414,6 +1414,9 @@ func centralQueueBalancedLaneRoutingKeyForRing(ring *hashRing, signal signalKind
 		return centralQueueLaneKey(signal, lane, 0)
 	}
 	cacheKey := centralQueueBalancedLaneCacheKey{signal: signal, lane: lane}
+	if _, failed := ring.balancedLaneRoutingKeyFailures.Load(cacheKey); failed {
+		return centralQueueLaneKey(signal, lane, 0)
+	}
 	if routingKey, ok := ring.balancedLaneRoutingKeys.Load(cacheKey); ok {
 		return routingKey.([]byte)
 	}
@@ -1421,8 +1424,8 @@ func centralQueueBalancedLaneRoutingKeyForRing(ring *hashRing, signal signalKind
 	if len(ring.endpoints) > 1 {
 		target := ring.endpoints[int(lane)%len(ring.endpoints)]
 		if endpointWithPort(ring.endpointFor(routingKey)) != endpointWithPort(target) {
-			// Do not retain an unverified base-key fallback. A later resolver
-			// update or retry may make the bounded search succeed.
+			// Remember the failure for this immutable ring so retries fail fast.
+			ring.balancedLaneRoutingKeyFailures.Store(cacheKey, struct{}{})
 			return routingKey
 		}
 	}

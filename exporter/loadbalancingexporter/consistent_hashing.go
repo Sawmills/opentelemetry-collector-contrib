@@ -37,6 +37,11 @@ type hashRing struct {
 	configuredEndpoints []string
 	// balancedLaneRoutingKeys caches central queue routing keys for this immutable ring.
 	balancedLaneRoutingKeys sync.Map
+	// balancedLaneRoutingKeyFailures remembers bounded-search failures for this immutable ring.
+	balancedLaneRoutingKeyFailures sync.Map
+	centralQueueLogSnapshotOnce    sync.Once
+	centralQueueLogSnapshot        *centralQueueLogRoutingSnapshot
+	centralQueueLogSnapshotErr     error
 }
 
 // newHashRing builds a new immutable consistent hash ring based on the given endpoints.
