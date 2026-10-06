@@ -357,11 +357,11 @@ func (lb *loadBalancer) centralQueueLogRoutingSnapshotWithError() (*centralQueue
 	}
 
 	lb.updateLock.RLock()
-	defer lb.updateLock.RUnlock()
-	if lb.ring == nil {
+	ring := lb.ring
+	lb.updateLock.RUnlock()
+	if ring == nil {
 		return nil, nil
 	}
-	ring := lb.ring
 	ring.centralQueueLogSnapshotOnce.Do(func() {
 		ring.centralQueueLogSnapshot, ring.centralQueueLogSnapshotErr = buildCentralQueueLogRoutingSnapshot(ring)
 	})
