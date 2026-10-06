@@ -15,12 +15,13 @@ import (
 const centralQueueLogSplitHeadroom = 4096
 
 type centralQueueLogSplitter struct {
-	exporter  *logExporterImp
-	codec     *queuePayloadCodec
-	hardLimit int
-	limit     int
-	now       time.Time
-	laneCount int
+	exporter        *logExporterImp
+	codec           *queuePayloadCodec
+	hardLimit       int
+	limit           int
+	now             time.Time
+	laneCount       int
+	routingSnapshot *centralQueueLogRoutingSnapshot
 
 	marshaler              *plog.ProtoMarshaler
 	emptyTraceFallbackKeys map[[2]int]pcommon.TraceID
@@ -58,13 +59,26 @@ func newCentralQueueLogSplitter(exporter *logExporterImp, limit int, now time.Ti
 	if effectiveLimit > centralQueueLogSplitHeadroom {
 		effectiveLimit -= centralQueueLogSplitHeadroom
 	}
+	routingSnapshot := (*centralQueueLogRoutingSnapshot)(nil)
+	laneCount := 0
+	if exporter.ignoreTraceID && exporter.loadBalancer != nil {
+		routingSnapshot = exporter.loadBalancer.centralQueueLogRoutingSnapshot()
+		if routingSnapshot != nil {
+			laneCount = len(routingSnapshot.routingKeys)
+		} else {
+			laneCount = exporter.effectiveCentralQueueLaneCount(now)
+		}
+	} else {
+		laneCount = exporter.effectiveCentralQueueLaneCount(now)
+	}
 	splitter := &centralQueueLogSplitter{
 		exporter:               exporter,
 		codec:                  exporter.centralCodec,
 		hardLimit:              limit,
 		limit:                  effectiveLimit,
 		now:                    now,
-		laneCount:              exporter.effectiveCentralQueueLaneCount(now),
+		laneCount:              laneCount,
+		routingSnapshot:        routingSnapshot,
 		marshaler:              &plog.ProtoMarshaler{},
 		emptyTraceFallbackKeys: make(map[[2]int]pcommon.TraceID),
 		laneRoutingKeys:        make(map[uint32][]byte),
@@ -129,7 +143,11 @@ func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) err
 		return err
 	}
 	for i := range s.pending {
-		s.exporter.observeCentralQueueLaneBytes(s.pending[i].compressedBytes, s.now)
+		if s.routingSnapshot != nil {
+			s.exporter.observeCentralQueueLaneAssignment(s.laneCount)
+		} else {
+			s.exporter.observeCentralQueueLaneBytes(s.pending[i].compressedBytes, s.now)
+		}
 	}
 	return nil
 }
@@ -143,6 +161,9 @@ func (s *centralQueueLogSplitter) balancedLaneRoutingKey(balancingKey pcommon.Tr
 }
 
 func (s *centralQueueLogSplitter) balancedLaneRoutingKeyForLane(lane uint32) []byte {
+	if s.routingSnapshot != nil {
+		return s.routingSnapshot.routingKeys[lane]
+	}
 	if key, ok := s.laneRoutingKeys[lane]; ok {
 		return key
 	}

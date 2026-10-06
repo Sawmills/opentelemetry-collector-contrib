@@ -325,6 +325,39 @@ func (lb *loadBalancer) installRingForEndpointsLocked(endpoints []string) bool {
 	return true
 }
 
+// centralQueueLogRoutingSnapshot captures the immutable assignment used for
+// one no-affinity log consume batch. The ring and all lane keys are selected
+// while the load balancer update lock is held, so a resolver update cannot
+// change the assignment halfway through splitting a batch.
+type centralQueueLogRoutingSnapshot struct {
+	endpoints   []string
+	routingKeys [][]byte
+}
+
+func (lb *loadBalancer) centralQueueLogRoutingSnapshot() *centralQueueLogRoutingSnapshot {
+	if lb == nil {
+		return nil
+	}
+
+	lb.updateLock.RLock()
+	defer lb.updateLock.RUnlock()
+	if lb.ring == nil {
+		return nil
+	}
+	snapshot := &centralQueueLogRoutingSnapshot{}
+	if len(lb.ring.endpoints) == 0 {
+		return snapshot
+	}
+
+	snapshot.endpoints = slices.Clone(lb.ring.endpoints)
+	snapshot.routingKeys = make([][]byte, len(snapshot.endpoints))
+	for lane := range snapshot.endpoints {
+		key := centralQueueBalancedLaneRoutingKeyForRing(lb.ring, signalKindLogs, uint32(lane))
+		snapshot.routingKeys[lane] = slices.Clone(key)
+	}
+	return snapshot
+}
+
 type removedExporter struct {
 	endpoint string
 	exporter *wrappedExporter

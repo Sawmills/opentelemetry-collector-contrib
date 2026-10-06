@@ -24,6 +24,9 @@ const (
 const (
 	centralQueueLeaseFallbackInitialDelay = 50 * time.Millisecond
 	centralQueueLeaseFallbackMaxDelay     = time.Second
+	// A ring endpoint can own a very small interval. Searching only 1,024
+	// salts made the base key silently miss its assigned endpoint on such rings.
+	centralQueueBalancedLaneMaxSalt uint32 = 1 << 20
 )
 
 const (
@@ -1426,7 +1429,7 @@ func centralQueueBalancedLaneRoutingKeyForRingUncached(ring *hashRing, signal si
 	if endpointWithPort(ring.endpointFor(base)) == endpointWithPort(target) {
 		return base
 	}
-	for salt := uint32(1); salt <= 1024; salt++ {
+	for salt := uint32(1); salt <= centralQueueBalancedLaneMaxSalt; salt++ {
 		candidate := centralQueueLaneKey(signal, lane, salt)
 		if endpointWithPort(ring.endpointFor(candidate)) == endpointWithPort(target) {
 			return candidate
