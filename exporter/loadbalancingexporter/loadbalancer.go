@@ -334,6 +334,18 @@ type centralQueueLogRoutingSnapshot struct {
 	routingKeys [][]byte
 }
 
+func (lb *loadBalancer) centralQueueLogRoutingEndpointCount() (int, bool) {
+	if lb == nil {
+		return 0, false
+	}
+	lb.updateLock.RLock()
+	defer lb.updateLock.RUnlock()
+	if lb.ring == nil {
+		return 0, false
+	}
+	return len(lb.ring.endpoints), true
+}
+
 func (lb *loadBalancer) centralQueueLogRoutingSnapshot() *centralQueueLogRoutingSnapshot {
 	snapshot, _ := lb.centralQueueLogRoutingSnapshotWithError()
 	return snapshot

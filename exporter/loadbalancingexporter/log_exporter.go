@@ -248,8 +248,8 @@ func (e *logExporterImp) consumeLogsCentralQueue(ctx context.Context, ld plog.Lo
 
 func (e *logExporterImp) effectiveCentralQueueLaneCount(now time.Time) int {
 	if e.ignoreTraceID && e.loadBalancer != nil {
-		if snapshot := e.loadBalancer.centralQueueLogRoutingSnapshot(); snapshot != nil {
-			return len(snapshot.routingKeys)
+		if count, ok := e.loadBalancer.centralQueueLogRoutingEndpointCount(); ok {
+			return count
 		}
 	}
 	if !e.ignoreTraceID {

@@ -150,10 +150,10 @@ func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) err
 	if err := s.exporter.centralQueue.enqueueAll(s.pending); err != nil {
 		return err
 	}
-	for i := range s.pending {
-		if s.routingSnapshot != nil {
-			s.exporter.observeCentralQueueLaneAssignment(s.laneCount)
-		} else {
+	if s.routingSnapshot != nil && len(s.pending) > 0 {
+		s.exporter.observeCentralQueueLaneAssignment(s.laneCount)
+	} else {
+		for i := range s.pending {
 			s.exporter.observeCentralQueueLaneBytes(s.pending[i].compressedBytes, s.now)
 		}
 	}

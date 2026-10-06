@@ -1427,6 +1427,14 @@ func centralQueueBalancedLaneRoutingKeyForRing(ring *hashRing, signal signalKind
 		return routingKey.([]byte)
 	}
 	routingKey := centralQueueBalancedLaneRoutingKeyForRingUncached(ring, signal, lane)
+	if len(ring.endpoints) > 1 {
+		target := ring.endpoints[int(lane)%len(ring.endpoints)]
+		if endpointWithPort(ring.endpointFor(routingKey)) != endpointWithPort(target) {
+			// Do not retain an unverified base-key fallback. A later resolver
+			// update or retry may make the bounded search succeed.
+			return routingKey
+		}
+	}
 	actual, _ := ring.balancedLaneRoutingKeys.LoadOrStore(cacheKey, routingKey)
 	return actual.([]byte)
 }
