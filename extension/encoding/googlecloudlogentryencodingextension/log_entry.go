@@ -232,21 +232,9 @@ func handleHTTPRequestField(attributes pcommon.Map, req *httpRequest) error {
 	}
 
 	if req.Protocol != "" {
-		if strings.Count(req.Protocol, "/") != 1 {
-			return fmt.Errorf(
-				`invalid protocol %q: expected exactly one "/" (format "<name>/<version>", e.g. "HTTP/1.1")`,
-				req.Protocol,
-			)
-		}
-		name, version, found := strings.Cut(req.Protocol, "/")
-		if !found || name == "" || version == "" {
-			return fmt.Errorf(
-				`invalid protocol %q: name or version is missing (expected format "<name>/<version>", e.g. "HTTP/1.1")`,
-				req.Protocol,
-			)
-		}
-		attributes.PutStr(string(conventions.NetworkProtocolNameKey), strings.ToLower(name))
-		attributes.PutStr(string(conventions.NetworkProtocolVersionKey), version)
+		name, version := parseHTTPProtocol(req.Protocol)
+		attributes.PutStr(string(conventions.NetworkProtocolNameKey), name)
+		shared.PutStr(string(conventions.NetworkProtocolVersionKey), version, attributes)
 	}
 
 	shared.PutInt(string(conventions.HTTPResponseStatusCodeKey), req.Status, attributes)
@@ -259,6 +247,30 @@ func handleHTTPRequestField(attributes pcommon.Map, req *httpRequest) error {
 	shared.PutBool(gcpCacheHitField, req.CacheHit, attributes)
 	shared.PutBool(gcpCacheValidatedWithOriginSeverField, req.CacheValidatedWithOriginServer, attributes)
 	return nil
+}
+
+// alpnHTTPVersions maps ALPN protocol identifiers (RFC 7301 registry) to the HTTP version they
+// denote. Envoy-based Google load balancers (e.g. GKE Gateway) report the ALPN token in
+// `httpRequest.protocol` ("h2") instead of the "HTTP/2" form used by classic load balancers.
+var alpnHTTPVersions = map[string]string{
+	"h2":  "2",
+	"h2c": "2",
+	"h3":  "3",
+}
+
+// parseHTTPProtocol splits an `httpRequest.protocol` value into `network.protocol.name` and
+// `network.protocol.version`. It understands the "<name>/<version>" form ("HTTP/1.1") and ALPN
+// tokens ("h2"); any other value is kept verbatim (lower-cased) as the protocol name with no
+// version, so an unrecognised protocol string never rejects the whole log entry.
+func parseHTTPProtocol(protocol string) (name, version string) {
+	lower := strings.ToLower(protocol)
+	if v, ok := alpnHTTPVersions[lower]; ok {
+		return "http", v
+	}
+	if n, v, found := strings.Cut(lower, "/"); found && n != "" && v != "" && !strings.Contains(v, "/") {
+		return n, v
+	}
+	return lower, ""
 }
 
 // handleOperationField will place the operation attributes in the log record

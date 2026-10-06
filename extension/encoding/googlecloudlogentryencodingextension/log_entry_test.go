@@ -112,18 +112,83 @@ func TestHandleHTTPRequestField(t *testing.T) {
 			expectsErr: "failed to parse request url",
 		},
 		{
-			name: "invalid protocol",
+			name: "protocol HTTP/2 name and version",
 			request: &httpRequest{
-				Protocol: "invalid",
+				Protocol: "HTTP/2",
 			},
-			expectsErr: `expected exactly one "/"`,
+			expectsAttributes: map[string]any{
+				"network.protocol.name":    "http",
+				"network.protocol.version": "2",
+			},
 		},
 		{
-			name: "invalid protocol 2",
+			// GKE Gateway / Envoy-based load balancers log the ALPN token instead of "HTTP/2".
+			name: "protocol ALPN h2 token",
+			request: &httpRequest{
+				Protocol: "h2",
+			},
+			expectsAttributes: map[string]any{
+				"network.protocol.name":    "http",
+				"network.protocol.version": "2",
+			},
+		},
+		{
+			name: "protocol ALPN h2c token",
+			request: &httpRequest{
+				Protocol: "h2c",
+			},
+			expectsAttributes: map[string]any{
+				"network.protocol.name":    "http",
+				"network.protocol.version": "2",
+			},
+		},
+		{
+			name: "protocol ALPN h3 token",
+			request: &httpRequest{
+				Protocol: "h3",
+			},
+			expectsAttributes: map[string]any{
+				"network.protocol.name":    "http",
+				"network.protocol.version": "3",
+			},
+		},
+		{
+			name: "protocol ALPN token is case-insensitive",
+			request: &httpRequest{
+				Protocol: "H2",
+			},
+			expectsAttributes: map[string]any{
+				"network.protocol.name":    "http",
+				"network.protocol.version": "2",
+			},
+		},
+		{
+			name: "protocol without version is kept as name",
+			request: &httpRequest{
+				Protocol: "websocket",
+			},
+			expectsAttributes: map[string]any{
+				"network.protocol.name": "websocket",
+			},
+		},
+		{
+			// An unrecognised protocol string must never reject the whole log entry.
+			name: "protocol with trailing slash is kept raw",
 			request: &httpRequest{
 				Protocol: "invalid/",
 			},
-			expectsErr: "name or version is missing",
+			expectsAttributes: map[string]any{
+				"network.protocol.name": "invalid/",
+			},
+		},
+		{
+			name: "protocol with multiple slashes is kept raw",
+			request: &httpRequest{
+				Protocol: "a/b/c",
+			},
+			expectsAttributes: map[string]any{
+				"network.protocol.name": "a/b/c",
+			},
 		},
 		{
 			name: "latency without suffix",
