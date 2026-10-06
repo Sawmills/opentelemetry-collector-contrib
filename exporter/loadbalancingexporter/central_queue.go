@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"sort"
 	"sync"
@@ -24,6 +25,9 @@ const (
 const (
 	centralQueueLeaseFallbackInitialDelay = 50 * time.Millisecond
 	centralQueueLeaseFallbackMaxDelay     = time.Second
+	// A ring endpoint can own a very small interval. Keep the search bounded so
+	// a malformed or adversarial ring cannot stall a consume batch indefinitely.
+	centralQueueBalancedLaneMaxSalt uint32 = 1 << 20
 )
 
 const (
@@ -33,6 +37,8 @@ const (
 )
 
 var errCentralQueueConsumersFull = errors.New("central queue effective consumers full")
+
+var errCentralQueueBalancedLaneRoutingKeySearch = errors.New("central queue balanced lane routing key search exhausted")
 
 // centralQueueDefaultForceScheduleAgeMultiplier bounds oldest_item_age under
 // continuous hot-key arrivals: once a fallback candidate has been waiting longer
@@ -1386,13 +1392,21 @@ func centralQueueLaneRoutingKey(signal signalKind, routingKey []byte, laneCount 
 	return centralQueueLaneKey(signal, lane, 0)
 }
 
-func centralQueueBalancedLaneRoutingKeyForLoadBalancerLane(lb *loadBalancer, signal signalKind, lane uint32) []byte {
+func centralQueueBalancedLaneRoutingKeyForLoadBalancerLaneWithError(lb *loadBalancer, signal signalKind, lane uint32) ([]byte, error) {
 	if lb == nil {
-		return centralQueueLaneKey(signal, lane, 0)
+		return centralQueueLaneKey(signal, lane, 0), nil
 	}
 	lb.updateLock.RLock()
 	defer lb.updateLock.RUnlock()
-	return centralQueueBalancedLaneRoutingKeyForRing(lb.ring, signal, lane)
+	key := centralQueueBalancedLaneRoutingKeyForRing(lb.ring, signal, lane)
+	if lb.ring == nil || len(lb.ring.endpoints) <= 1 {
+		return key, nil
+	}
+	target := lb.ring.endpoints[int(lane)%len(lb.ring.endpoints)]
+	if endpointWithPort(lb.ring.endpointFor(key)) != endpointWithPort(target) {
+		return nil, centralQueueBalancedLaneRoutingKeySearchError(signal, lane, target)
+	}
+	return key, nil
 }
 
 func centralQueueBalancedLaneRoutingKeyForRing(ring *hashRing, signal signalKind, lane uint32) []byte {
@@ -1400,10 +1414,21 @@ func centralQueueBalancedLaneRoutingKeyForRing(ring *hashRing, signal signalKind
 		return centralQueueLaneKey(signal, lane, 0)
 	}
 	cacheKey := centralQueueBalancedLaneCacheKey{signal: signal, lane: lane}
+	if _, failed := ring.balancedLaneRoutingKeyFailures.Load(cacheKey); failed {
+		return centralQueueLaneKey(signal, lane, 0)
+	}
 	if routingKey, ok := ring.balancedLaneRoutingKeys.Load(cacheKey); ok {
 		return routingKey.([]byte)
 	}
 	routingKey := centralQueueBalancedLaneRoutingKeyForRingUncached(ring, signal, lane)
+	if len(ring.endpoints) > 1 {
+		target := ring.endpoints[int(lane)%len(ring.endpoints)]
+		if endpointWithPort(ring.endpointFor(routingKey)) != endpointWithPort(target) {
+			// Remember the failure for this immutable ring so retries fail fast.
+			ring.balancedLaneRoutingKeyFailures.Store(cacheKey, struct{}{})
+			return routingKey
+		}
+	}
 	actual, _ := ring.balancedLaneRoutingKeys.LoadOrStore(cacheKey, routingKey)
 	return actual.([]byte)
 }
@@ -1426,13 +1451,17 @@ func centralQueueBalancedLaneRoutingKeyForRingUncached(ring *hashRing, signal si
 	if endpointWithPort(ring.endpointFor(base)) == endpointWithPort(target) {
 		return base
 	}
-	for salt := uint32(1); salt <= 1024; salt++ {
+	for salt := uint32(1); salt <= centralQueueBalancedLaneMaxSalt; salt++ {
 		candidate := centralQueueLaneKey(signal, lane, salt)
 		if endpointWithPort(ring.endpointFor(candidate)) == endpointWithPort(target) {
 			return candidate
 		}
 	}
 	return base
+}
+
+func centralQueueBalancedLaneRoutingKeySearchError(signal signalKind, lane uint32, target string) error {
+	return fmt.Errorf("%w: signal=%s lane=%d target=%s", errCentralQueueBalancedLaneRoutingKeySearch, signal, lane, target)
 }
 
 var (

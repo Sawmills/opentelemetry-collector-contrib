@@ -1,0 +1,14 @@
+change_type: bug_fix
+
+component: exporter/loadbalancing
+
+note: Keep central queue log lanes balanced with the current backend ring.
+
+issues: [12420]
+
+subtext: |
+  Logs with `log_routing.ignore_trace_id: true` now assign one central queue lane
+  to each sorted backend in the ring for every consume batch, including after
+  backend membership changes.
+
+change_logs: [user]

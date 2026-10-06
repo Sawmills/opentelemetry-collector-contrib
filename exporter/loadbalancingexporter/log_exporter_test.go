@@ -1891,7 +1891,8 @@ func TestConsumeLogsCentralQueueLowCardinalityThreeWorkerReplayRebalancesBeforeD
 			var candidate pcommon.TraceID
 			copy(candidate[:], strconv.Itoa(i))
 			lane := centralQueueLaneIndex(signalKindLogs, candidate[:], cfg.CentralQueue.LaneCount)
-			laneKey := centralQueueBalancedLaneRoutingKeyForLoadBalancerLane(lb, signalKindLogs, lane)
+			laneKey, err := centralQueueBalancedLaneRoutingKeyForLoadBalancerLaneWithError(lb, signalKindLogs, lane)
+			require.NoError(t, err)
 			if lb.ring.endpointFor(laneKey) == hotEndpoint {
 				return candidate
 			}
@@ -1930,6 +1931,73 @@ func TestConsumeLogsCentralQueueLowCardinalityThreeWorkerReplayRebalancesBeforeD
 		"endpoint-2:4317": 30,
 		"endpoint-3:4317": 30,
 	}, deliveredRecords)
+}
+
+func TestConsumeLogsCentralQueueWarmTenToEightWorkersDeliversEvenly(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	cfg := createDefaultConfig().(*Config)
+	hostnames := make([]string, 10)
+	for i := range hostnames {
+		hostnames[i] = fmt.Sprintf("endpoint-%d:4317", i)
+	}
+	cfg.Resolver = ResolverSettings{Static: configoptional.Some(StaticResolver{Hostnames: hostnames})}
+	cfg.LogRouting.IgnoreTraceID = true
+	cfg.LogRouting.RecordStripingEnabled = true
+	cfg.CentralQueue.Enabled = true
+	cfg.CentralQueue.MaxCompressedBytes = 64 << 20
+	cfg.CentralQueue.MaxUncompressedBatchBytes = 1 << 20
+	cfg.CentralQueue.MaxInflightUncompressedBytes = 10 << 20
+	cfg.CentralQueue.TargetCompressedBytes = 1
+	cfg.CentralQueue.MaxBatchDelay = time.Second
+	cfg.CentralQueue.NumConsumers = 10
+
+	type delivery struct {
+		endpoint string
+		records  int
+	}
+	received := make(chan delivery, 256)
+	componentFactory := func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockLogsExporter(func(_ context.Context, logs plog.Logs) error {
+			received <- delivery{endpoint: endpoint, records: logs.LogRecordCount()}
+			return nil
+		}), nil
+	}
+
+	p, lb := newTestLogsExporter(t, ts, tb, cfg, componentFactory)
+	require.NoError(t, p.Start(t.Context(), componenttest.NewNopHost()))
+	defer func() { require.NoError(t, p.Shutdown(context.WithoutCancel(t.Context()))) }()
+
+	waitForDeliveries := func(expected int) map[string]int {
+		delivered := make(map[string]int)
+		total := 0
+		deadline := time.NewTimer(5 * time.Second)
+		defer deadline.Stop()
+		for total < expected {
+			select {
+			case item := <-received:
+				delivered[item.endpoint] += item.records
+				total += item.records
+			case <-deadline.C:
+				require.FailNow(t, "central queue delivery timed out", "delivered=%v total=%d", delivered, total)
+			}
+		}
+		return delivered
+	}
+
+	const recordsPerPhase = 80
+	require.NoError(t, p.ConsumeLogs(t.Context(), sharedScopeLogsWithTraceIDs(repeatedTraceIDs(recordsPerPhase)...)))
+	_ = waitForDeliveries(recordsPerPhase)
+
+	lb.onBackendChanges(hostnames[:8])
+	require.NoError(t, p.ConsumeLogs(t.Context(), sharedScopeLogsWithTraceIDs(repeatedTraceIDs(recordsPerPhase)...)))
+	delivered := waitForDeliveries(recordsPerPhase)
+
+	for _, endpoint := range hostnames[:8] {
+		require.Equal(t, recordsPerPhase/8, delivered[endpoint], "endpoint %s received an unbalanced share", endpoint)
+	}
+	for _, endpoint := range hostnames[8:] {
+		require.Zero(t, delivered[endpoint], "removed endpoint %s received new records", endpoint)
+	}
 }
 
 func TestConsumeLogsIgnoreTraceIDWithoutCentralByteBatchingKeepsTraceSplit(t *testing.T) {

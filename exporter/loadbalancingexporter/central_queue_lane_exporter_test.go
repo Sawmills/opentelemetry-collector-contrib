@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/crc32"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -97,6 +99,9 @@ func TestCentralQueueLaneModesAcrossBackendChanges(t *testing.T) {
 					want = 64
 				}
 				if mode != "dynamic metrics" {
+					if mode == "dynamic logs" || mode == "fixed logs" {
+						want = step.routable
+					}
 					require.Equal(t, want, logs.effectiveCentralQueueLaneCount(now))
 				}
 			}
@@ -115,7 +120,7 @@ func TestConsumeLogsCentralQueueBackendChangesCoverEndpointsAndPreserveRecords(t
 			var wantBodies []string
 			for phase, step := range []struct{ backends, lanes int }{{25, 25}, {35, 35}, {20, 35}, {35, 35}, {17, 17}, {25, 25}} {
 				p.loadBalancer = loadBalancerWithRoutableBackendCount(step.backends, 35)
-				ids := distinctCentralQueueLaneTraceIDs(t, step.lanes, step.lanes)
+				ids := distinctCentralQueueLaneTraceIDs(t, step.backends, step.backends)
 				next := 0
 				p.randomTraceID = func() pcommon.TraceID {
 					id := ids[next%len(ids)]
@@ -123,14 +128,16 @@ func TestConsumeLogsCentralQueueBackendChangesCoverEndpointsAndPreserveRecords(t
 					return id
 				}
 				input := plog.NewLogs()
-				scopes := input.ResourceLogs().AppendEmpty().ScopeLogs()
+				resourceLogs := input.ResourceLogs().AppendEmpty()
 				for i := range step.lanes * 2 {
 					body := fmt.Sprintf("phase-%d-record-%d", phase, i)
 					// Unstriped routing chooses one random key per scope.
-					scopes.AppendEmpty().LogRecords().AppendEmpty().Body().SetStr(body)
+					scope := resourceLogs.ScopeLogs().AppendEmpty()
+					scope.LogRecords().AppendEmpty().Body().SetStr(body)
 					wantBodies = append(wantBodies, body)
 				}
-				splitter := newCentralQueueLogSplitter(p, 1<<20, time.Unix(10+int64(phase), 0))
+				splitter, err := newCentralQueueLogSplitter(p, 1<<20, time.Unix(10+int64(phase), 0))
+				require.NoError(t, err)
 				require.NoError(t, splitter.consume(t.Context(), input))
 				distribution := make(map[string]int)
 				for _, item := range splitter.pending {
@@ -164,6 +171,161 @@ func TestConsumeLogsCentralQueueBackendChangesCoverEndpointsAndPreserveRecords(t
 			require.Zero(t, p.centralQueue.compressedBytes())
 		})
 	}
+}
+
+func TestConsumeLogsCentralQueueWarmScaleInWrapsFirstSortedWorkers(t *testing.T) {
+	p := newCentralQueueLogExporter(t, 1<<20)
+	p.centralQueueLaneCount = 0
+	p.centralQueueLanes = centralQueueLanePathTestController()
+	p.ignoreTraceID = true
+	p.recordStripingEnabled = true
+	p.randomTraceID = func() pcommon.TraceID { return pcommon.TraceID{1} }
+
+	p.loadBalancer = loadBalancerWithRoutableBackendCount(10, 10)
+	require.Equal(t, 10, p.effectiveCentralQueueLaneCount(time.Now()))
+	warm := plog.NewLogs()
+	warm.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+	require.NoError(t, p.ConsumeLogs(t.Context(), warm))
+
+	// Keep the lane controller warm while replacing the queue for the delivery
+	// phase. The real incident retained 10 lanes after DNS removed two workers.
+	p.centralQueue = newCentralQueue(centralQueueSettings{
+		maxCompressedBytes:           1 << 20,
+		maxInflightUncompressedBytes: 1 << 20,
+		maxUncompressedBatchBytes:    1 << 20,
+	})
+	p.loadBalancer = loadBalancerWithRoutableBackendCount(8, 10)
+	require.Equal(t, 8, p.effectiveCentralQueueLaneCount(time.Now()), "assignment lanes follow the post-scale-in ring snapshot")
+
+	input := plog.NewLogs()
+	scope := input.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+	for i := range 80 {
+		scope.LogRecords().AppendEmpty().Body().SetInt(int64(i))
+	}
+	require.NoError(t, p.ConsumeLogs(t.Context(), input))
+
+	distribution := make(map[string]int)
+	p.centralQueue.mu.Lock()
+	for _, bucket := range p.centralQueue.buckets {
+		for _, item := range bucket.items {
+			distribution[p.loadBalancer.ring.endpointFor(item.routingKey)] += item.count
+		}
+	}
+	p.centralQueue.mu.Unlock()
+
+	endpoints := append([]string(nil), p.loadBalancer.ring.endpoints...)
+	sort.Strings(endpoints)
+	require.Len(t, distribution, len(endpoints))
+	for _, endpoint := range endpoints {
+		require.Equal(t, 10, distribution[endpoint], "endpoint %s received an unbalanced number of lanes", endpoint)
+	}
+}
+
+func TestCentralQueueNoAffinityAssignmentsStayBalancedAcrossMembershipHistories(t *testing.T) {
+	for _, workers := range []int{10, 8, 50, 45, 62, 55, 15, 17, 15, 65, 64} {
+		t.Run(fmt.Sprintf("workers=%d", workers), func(t *testing.T) {
+			lb := loadBalancerWithRoutableBackendCount(workers, workers)
+			snapshot := lb.centralQueueLogRoutingSnapshot()
+			require.Len(t, snapshot.routingKeys, workers)
+
+			distribution := make(map[string]int, workers)
+			for lane, key := range snapshot.routingKeys {
+				target := snapshot.endpoints[lane]
+				require.Equal(t, target, lb.ring.endpointFor(key), "lane %d must target its sorted endpoint", lane)
+				distribution[target]++
+			}
+			require.Len(t, distribution, workers)
+			for _, endpoint := range snapshot.endpoints {
+				require.Equal(t, 1, distribution[endpoint], "worker %s must receive exactly one lane", endpoint)
+			}
+		})
+	}
+}
+
+func TestCentralQueueBalancedLaneRoutingKeySearchesPastLegacySaltLimit(t *testing.T) {
+	seen := make(map[int]struct{}, 1025)
+	for salt := uint32(0); salt <= 1024; salt++ {
+		key := centralQueueLaneKey(signalKindLogs, 1, salt)
+		seen[int(crc32.ChecksumIEEE(key)%maxPositions)] = struct{}{}
+	}
+
+	targetPosition := -1
+	for salt := uint32(1025); salt < 1<<20; salt++ {
+		position := int(crc32.ChecksumIEEE(centralQueueLaneKey(signalKindLogs, 1, salt)) % maxPositions)
+		if _, exists := seen[position]; !exists {
+			targetPosition = position
+			break
+		}
+	}
+	require.NotEqual(t, -1, targetPosition)
+
+	items := make([]ringItem, maxPositions)
+	for i := range items {
+		items[i] = ringItem{pos: position(i), endpoint: "other"}
+	}
+	items[targetPosition].endpoint = "target"
+	ring := &hashRing{items: items, endpoints: []string{"other", "target"}}
+
+	key := centralQueueBalancedLaneRoutingKeyForRingUncached(ring, signalKindLogs, 1)
+	require.Equal(t, "target", ring.endpointFor(key))
+}
+
+func TestCentralQueueBalancedLaneRoutingKeySearchFallbackIsBoundedAndReported(t *testing.T) {
+	items := make([]ringItem, maxPositions)
+	for i := range items {
+		items[i] = ringItem{pos: position(i), endpoint: "other"}
+	}
+	ring := &hashRing{items: items, endpoints: []string{"other", "target"}}
+	lb := &loadBalancer{ring: ring}
+
+	_, err := lb.centralQueueLogRoutingSnapshotWithError()
+	require.ErrorIs(t, err, errCentralQueueBalancedLaneRoutingKeySearch)
+}
+
+func TestCentralQueueNoAffinityEmptyRingKeepsRoutingBounded(t *testing.T) {
+	p := newCentralQueueLogExporter(t, 1<<20)
+	p.ignoreTraceID = true
+	p.loadBalancer = &loadBalancer{ring: newHashRing(nil)}
+	p.randomTraceID = func() pcommon.TraceID { return pcommon.TraceID{1} }
+
+	input := plog.NewLogs()
+	for range 100 {
+		input.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+	}
+	require.NoError(t, p.ConsumeLogs(t.Context(), input))
+	require.LessOrEqual(t, p.centralQueue.len(), 100)
+	require.Equal(t, 0, p.effectiveCentralQueueLaneCount(time.Now()))
+}
+
+func TestLogExporterCentralQueueRecordsAssignmentSnapshotLanes(t *testing.T) {
+	reader := componenttest.NewTelemetry()
+	t.Cleanup(func() {
+		require.NoError(t, reader.Shutdown(context.WithoutCancel(t.Context())))
+	})
+	telemetry, err := newCentralQueueTelemetry(reader.NewTelemetrySettings(), signalKindLogs)
+	require.NoError(t, err)
+	codec := newQueuePayloadCodec(QueuePayloadCompressionZstd)
+	t.Cleanup(func() { require.NoError(t, codec.Close()) })
+	p := &logExporterImp{
+		centralQueue: newCentralQueue(centralQueueSettings{
+			maxCompressedBytes:           1 << 20,
+			maxInflightUncompressedBytes: 1 << 20,
+			maxUncompressedBatchBytes:    1 << 20,
+			telemetry:                    telemetry,
+		}),
+		centralCodec:          codec,
+		centralQueueLanes:     centralQueueLanePathTestController(),
+		centralQueueLaneCount: 64,
+		loadBalancer:          loadBalancerWithRoutableBackendCount(8, 8),
+		ignoreTraceID:         true,
+		randomTraceID:         func() pcommon.TraceID { return pcommon.TraceID{1} },
+	}
+	p.started.Store(true)
+
+	input := plog.NewLogs()
+	input.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+	require.NoError(t, p.ConsumeLogs(t.Context(), input))
+	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_effective_lanes", "{lanes}", attribute.NewSet(attribute.String("signal", string(signalKindLogs))), 8)
 }
 
 func TestLogExporterCentralQueueLaneBootstrapUsesHealthyBackendFloor(t *testing.T) {

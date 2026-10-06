@@ -234,8 +234,17 @@ func (e *logExporterImp) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
 }
 
 func (e *logExporterImp) consumeLogsCentralQueue(ctx context.Context, ld plog.Logs) error {
-	splitter := newCentralQueueLogSplitter(e, centralQueueEffectiveUncompressedItemLimit(e.centralQueue.settings), time.Now())
-	err := splitter.consume(ctx, ld)
+	splitter, err := newCentralQueueLogSplitter(e, centralQueueEffectiveUncompressedItemLimit(e.centralQueue.settings), time.Now())
+	if err != nil {
+		e.centralQueue.settings.telemetry.recordRoutingKeyFailure(ctx)
+		e.logger.Warn("failed to build central log queue routing snapshot", zap.Error(err))
+		return err
+	}
+	err = splitter.consume(ctx, ld)
+	if errors.Is(err, errCentralQueueBalancedLaneRoutingKeySearch) {
+		e.centralQueue.settings.telemetry.recordRoutingKeyFailure(ctx)
+		e.logger.Warn("failed to route central log queue batch", zap.Error(err))
+	}
 	if errors.Is(err, errCentralQueueRequestTooLarge) {
 		return consumererror.NewPermanent(err)
 	}
@@ -243,6 +252,11 @@ func (e *logExporterImp) consumeLogsCentralQueue(ctx context.Context, ld plog.Lo
 }
 
 func (e *logExporterImp) effectiveCentralQueueLaneCount(now time.Time) int {
+	if e.ignoreTraceID && e.loadBalancer != nil {
+		if count, ok := e.loadBalancer.centralQueueLogRoutingEndpointCount(); ok {
+			return count
+		}
+	}
 	if !e.ignoreTraceID {
 		return centralQueueStableLaneCount(e.centralQueueLanes, e.centralQueueLaneCount)
 	}
@@ -259,6 +273,13 @@ func (e *logExporterImp) observeCentralQueueLaneBytes(compressedBytes int, now t
 		return
 	}
 	observeCentralQueueLaneBytes(e.centralQueue.settings.telemetry, e.centralQueueLanes, e.centralQueueLaneCount, compressedBytes, now)
+}
+
+func (e *logExporterImp) observeCentralQueueLaneAssignment(lanes int) {
+	if e.centralQueue == nil {
+		return
+	}
+	e.centralQueue.settings.telemetry.recordEffectiveLanes(context.Background(), int64(lanes))
 }
 
 func (e *logExporterImp) runCentralQueue(ctx context.Context) {

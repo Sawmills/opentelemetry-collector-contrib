@@ -41,6 +41,7 @@ func TestCentralQueueTelemetryRecordsInstruments(t *testing.T) {
 		oldestItemAgeMillis:          125,
 	})
 	telemetry.recordRejected(t.Context(), 7)
+	telemetry.recordRoutingKeyFailure(t.Context())
 	telemetry.recordRetry(t.Context())
 	telemetry.recordDecodeFailure(t.Context(), 5)
 	telemetry.recordConfiguredConsumers(t.Context(), 30)
@@ -89,6 +90,7 @@ func TestCentralQueueTelemetryRecordsInstruments(t *testing.T) {
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_effective_lanes", "{lanes}", attrs, 64)
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_oldest_item_age", "ms", attrs, 125)
 	requireCentralQueueIntSum(t, reader, "otelcol_loadbalancer_central_queue_rejected_compressed_bytes", "By", attrs, 7)
+	requireCentralQueueIntSum(t, reader, "otelcol_loadbalancer_central_queue_routing_key_failures", "{failures}", attrs, 1)
 	requireCentralQueueIntSum(t, reader, "otelcol_loadbalancer_central_queue_retries", "{retries}", attrs, 1)
 	requireCentralQueueIntSum(t, reader, "otelcol_loadbalancer_central_queue_decode_failures", "{items}", attrs, 5)
 	requireCentralQueueIntHistogram(t, reader, "otelcol_loadbalancer_central_queue_window_compressed_bytes", "By", attrs, 32)

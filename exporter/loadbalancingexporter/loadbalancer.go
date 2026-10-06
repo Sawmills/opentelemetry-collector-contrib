@@ -325,6 +325,67 @@ func (lb *loadBalancer) installRingForEndpointsLocked(endpoints []string) bool {
 	return true
 }
 
+// centralQueueLogRoutingSnapshot captures the immutable assignment used for
+// one no-affinity log consume batch. The ring and all lane keys are selected
+// while the load balancer update lock is held, so a resolver update cannot
+// change the assignment halfway through splitting a batch.
+type centralQueueLogRoutingSnapshot struct {
+	endpoints   []string
+	routingKeys [][]byte
+}
+
+func (lb *loadBalancer) centralQueueLogRoutingEndpointCount() (int, bool) {
+	if lb == nil {
+		return 0, false
+	}
+	lb.updateLock.RLock()
+	defer lb.updateLock.RUnlock()
+	if lb.ring == nil {
+		return 0, false
+	}
+	return len(lb.ring.endpoints), true
+}
+
+func (lb *loadBalancer) centralQueueLogRoutingSnapshot() *centralQueueLogRoutingSnapshot {
+	snapshot, _ := lb.centralQueueLogRoutingSnapshotWithError()
+	return snapshot
+}
+
+func (lb *loadBalancer) centralQueueLogRoutingSnapshotWithError() (*centralQueueLogRoutingSnapshot, error) {
+	if lb == nil {
+		return nil, nil
+	}
+
+	lb.updateLock.RLock()
+	ring := lb.ring
+	lb.updateLock.RUnlock()
+	if ring == nil {
+		return nil, nil
+	}
+	ring.centralQueueLogSnapshotOnce.Do(func() {
+		ring.centralQueueLogSnapshot, ring.centralQueueLogSnapshotErr = buildCentralQueueLogRoutingSnapshot(ring)
+	})
+	return ring.centralQueueLogSnapshot, ring.centralQueueLogSnapshotErr
+}
+
+func buildCentralQueueLogRoutingSnapshot(ring *hashRing) (*centralQueueLogRoutingSnapshot, error) {
+	snapshot := &centralQueueLogRoutingSnapshot{}
+	if len(ring.endpoints) == 0 {
+		return snapshot, nil
+	}
+
+	snapshot.endpoints = slices.Clone(ring.endpoints)
+	snapshot.routingKeys = make([][]byte, len(snapshot.endpoints))
+	for lane := range snapshot.endpoints {
+		key := centralQueueBalancedLaneRoutingKeyForRing(ring, signalKindLogs, uint32(lane))
+		if endpointWithPort(ring.endpointFor(key)) != endpointWithPort(snapshot.endpoints[lane]) {
+			return nil, centralQueueBalancedLaneRoutingKeySearchError(signalKindLogs, uint32(lane), snapshot.endpoints[lane])
+		}
+		snapshot.routingKeys[lane] = slices.Clone(key)
+	}
+	return snapshot, nil
+}
+
 type removedExporter struct {
 	endpoint string
 	exporter *wrappedExporter
