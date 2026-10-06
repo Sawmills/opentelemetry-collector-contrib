@@ -1,0 +1,12 @@
+change_type: bug_fix
+component: extension/google_cloud_logentry_encoding
+note: Accept ALPN tokens in `httpRequest.protocol` and stop rejecting log entries over an unrecognised protocol string.
+issues: [150]
+subtext: |
+  Envoy-based Google load balancers (GKE Gateway, Cloud Run) report the ALPN identifier
+  ("h2", "h2c", "h3") in `httpRequest.protocol` rather than "HTTP/2". The strict
+  `<name>/<version>` parser failed the whole log entry, and the googlecloudpubsub receiver
+  then left every such message unacked, so a subscription dominated by HTTP/2 load balancer
+  logs degraded into a redelivery loop and stopped making progress.
+  ALPN tokens now map to `network.protocol.name=http` with version `2`/`2`/`3`; any other
+  value is kept verbatim as `network.protocol.name` with no version instead of erroring.
