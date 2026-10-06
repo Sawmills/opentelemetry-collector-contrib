@@ -1,5 +1,5 @@
 change_type: bug_fix
-component: extension/googlecloudlogentryencoding
+component: extension/google_cloud_logentry_encoding
 note: Accept ALPN tokens in `httpRequest.protocol` and stop rejecting log entries over an unrecognised protocol string.
 issues: [150]
 subtext: |
