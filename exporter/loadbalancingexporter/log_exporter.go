@@ -234,8 +234,12 @@ func (e *logExporterImp) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
 }
 
 func (e *logExporterImp) consumeLogsCentralQueue(ctx context.Context, ld plog.Logs) error {
-	splitter := newCentralQueueLogSplitter(e, centralQueueEffectiveUncompressedItemLimit(e.centralQueue.settings), time.Now())
-	err := splitter.consume(ctx, ld)
+	splitter, err := newCentralQueueLogSplitter(e, centralQueueEffectiveUncompressedItemLimit(e.centralQueue.settings), time.Now())
+	if err != nil {
+		e.logger.Warn("failed to build central log queue routing snapshot", zap.Error(err))
+		return err
+	}
+	err = splitter.consume(ctx, ld)
 	if errors.Is(err, errCentralQueueRequestTooLarge) {
 		return consumererror.NewPermanent(err)
 	}

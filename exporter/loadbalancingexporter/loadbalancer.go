@@ -335,27 +335,36 @@ type centralQueueLogRoutingSnapshot struct {
 }
 
 func (lb *loadBalancer) centralQueueLogRoutingSnapshot() *centralQueueLogRoutingSnapshot {
+	snapshot, _ := lb.centralQueueLogRoutingSnapshotWithError()
+	return snapshot
+}
+
+func (lb *loadBalancer) centralQueueLogRoutingSnapshotWithError() (*centralQueueLogRoutingSnapshot, error) {
 	if lb == nil {
-		return nil
+		return nil, nil
 	}
 
 	lb.updateLock.RLock()
 	defer lb.updateLock.RUnlock()
 	if lb.ring == nil {
-		return nil
+		return nil, nil
 	}
 	snapshot := &centralQueueLogRoutingSnapshot{}
 	if len(lb.ring.endpoints) == 0 {
-		return snapshot
+		return snapshot, nil
 	}
 
 	snapshot.endpoints = slices.Clone(lb.ring.endpoints)
 	snapshot.routingKeys = make([][]byte, len(snapshot.endpoints))
 	for lane := range snapshot.endpoints {
 		key := centralQueueBalancedLaneRoutingKeyForRing(lb.ring, signalKindLogs, uint32(lane))
+		if endpointWithPort(lb.ring.endpointFor(key)) != endpointWithPort(snapshot.endpoints[lane]) {
+			centralQueueBalancedLaneFallbacks.Add(1)
+			return nil, centralQueueBalancedLaneRoutingKeySearchError(signalKindLogs, uint32(lane), snapshot.endpoints[lane])
+		}
 		snapshot.routingKeys[lane] = slices.Clone(key)
 	}
-	return snapshot
+	return snapshot, nil
 }
 
 type removedExporter struct {

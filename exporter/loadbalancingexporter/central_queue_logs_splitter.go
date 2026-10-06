@@ -54,7 +54,7 @@ type centralQueueLogScopeSizeState struct {
 	size  int
 }
 
-func newCentralQueueLogSplitter(exporter *logExporterImp, limit int, now time.Time) *centralQueueLogSplitter {
+func newCentralQueueLogSplitter(exporter *logExporterImp, limit int, now time.Time) (*centralQueueLogSplitter, error) {
 	effectiveLimit := limit
 	if effectiveLimit > centralQueueLogSplitHeadroom {
 		effectiveLimit -= centralQueueLogSplitHeadroom
@@ -62,7 +62,11 @@ func newCentralQueueLogSplitter(exporter *logExporterImp, limit int, now time.Ti
 	routingSnapshot := (*centralQueueLogRoutingSnapshot)(nil)
 	laneCount := 0
 	if exporter.ignoreTraceID && exporter.loadBalancer != nil {
-		routingSnapshot = exporter.loadBalancer.centralQueueLogRoutingSnapshot()
+		var err error
+		routingSnapshot, err = exporter.loadBalancer.centralQueueLogRoutingSnapshotWithError()
+		if err != nil {
+			return nil, err
+		}
 		if routingSnapshot != nil {
 			laneCount = len(routingSnapshot.routingKeys)
 		} else {
@@ -88,7 +92,7 @@ func newCentralQueueLogSplitter(exporter *logExporterImp, limit int, now time.Ti
 		startKey := exporter.nextRandomTraceID()
 		splitter.nextStripingLane = centralQueueLaneIndex(signalKindLogs, startKey[:], splitter.laneCount)
 	}
-	return splitter
+	return splitter, nil
 }
 
 func centralQueueEffectiveUncompressedItemLimit(settings centralQueueSettings) int {

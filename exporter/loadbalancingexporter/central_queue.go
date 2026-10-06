@@ -9,9 +9,11 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,9 +26,9 @@ const (
 const (
 	centralQueueLeaseFallbackInitialDelay = 50 * time.Millisecond
 	centralQueueLeaseFallbackMaxDelay     = time.Second
-	// A ring endpoint can own a very small interval. Searching only 1,024
-	// salts made the base key silently miss its assigned endpoint on such rings.
-	centralQueueBalancedLaneMaxSalt uint32 = ^uint32(0)
+	// A ring endpoint can own a very small interval. Keep the search bounded so
+	// a malformed or adversarial ring cannot stall a consume batch indefinitely.
+	centralQueueBalancedLaneMaxSalt uint32 = 1 << 20
 )
 
 const (
@@ -36,6 +38,10 @@ const (
 )
 
 var errCentralQueueConsumersFull = errors.New("central queue effective consumers full")
+
+var errCentralQueueBalancedLaneRoutingKeySearch = errors.New("central queue balanced lane routing key search exhausted")
+
+var centralQueueBalancedLaneFallbacks atomic.Uint64
 
 // centralQueueDefaultForceScheduleAgeMultiplier bounds oldest_item_age under
 // continuous hot-key arrivals: once a fallback candidate has been waiting longer
@@ -1429,16 +1435,21 @@ func centralQueueBalancedLaneRoutingKeyForRingUncached(ring *hashRing, signal si
 	if endpointWithPort(ring.endpointFor(base)) == endpointWithPort(target) {
 		return base
 	}
-	for salt := uint32(1); ; salt++ {
+	for salt := uint32(1); salt <= centralQueueBalancedLaneMaxSalt; salt++ {
 		candidate := centralQueueLaneKey(signal, lane, salt)
 		if endpointWithPort(ring.endpointFor(candidate)) == endpointWithPort(target) {
 			return candidate
 		}
-		if salt == centralQueueBalancedLaneMaxSalt {
-			break
-		}
 	}
-	panic("central queue lane routing key search exhausted")
+	return base
+}
+
+func centralQueueBalancedLaneFallbackCount() uint64 {
+	return centralQueueBalancedLaneFallbacks.Load()
+}
+
+func centralQueueBalancedLaneRoutingKeySearchError(signal signalKind, lane uint32, target string) error {
+	return fmt.Errorf("%w: signal=%s lane=%d target=%s fallback_count=%d", errCentralQueueBalancedLaneRoutingKeySearch, signal, lane, target, centralQueueBalancedLaneFallbackCount())
 }
 
 var (

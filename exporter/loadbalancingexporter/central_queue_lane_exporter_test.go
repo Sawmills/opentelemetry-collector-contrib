@@ -136,7 +136,8 @@ func TestConsumeLogsCentralQueueBackendChangesCoverEndpointsAndPreserveRecords(t
 					scope.LogRecords().AppendEmpty().Body().SetStr(body)
 					wantBodies = append(wantBodies, body)
 				}
-				splitter := newCentralQueueLogSplitter(p, 1<<20, time.Unix(10+int64(phase), 0))
+				splitter, err := newCentralQueueLogSplitter(p, 1<<20, time.Unix(10+int64(phase), 0))
+				require.NoError(t, err)
 				require.NoError(t, splitter.consume(t.Context(), input))
 				distribution := make(map[string]int)
 				for _, item := range splitter.pending {
@@ -269,6 +270,18 @@ func TestCentralQueueBalancedLaneRoutingKeySearchesPastLegacySaltLimit(t *testin
 	require.Equal(t, "target", ring.endpointFor(key))
 }
 
+func TestCentralQueueBalancedLaneRoutingKeySearchFallbackIsBoundedAndReported(t *testing.T) {
+	items := make([]ringItem, maxPositions)
+	for i := range items {
+		items[i] = ringItem{pos: position(i), endpoint: "other"}
+	}
+	ring := &hashRing{items: items, endpoints: []string{"other", "target"}}
+	lb := &loadBalancer{ring: ring}
+
+	_, err := lb.centralQueueLogRoutingSnapshotWithError()
+	require.ErrorIs(t, err, errCentralQueueBalancedLaneRoutingKeySearch)
+}
+
 func TestCentralQueueNoAffinityEmptyRingKeepsRoutingBounded(t *testing.T) {
 	p := newCentralQueueLogExporter(t, 1<<20)
 	p.ignoreTraceID = true
@@ -300,12 +313,12 @@ func TestLogExporterCentralQueueRecordsAssignmentSnapshotLanes(t *testing.T) {
 			maxUncompressedBatchBytes:    1 << 20,
 			telemetry:                    telemetry,
 		}),
-		centralCodec:        codec,
-		centralQueueLanes:   centralQueueLanePathTestController(),
+		centralCodec:          codec,
+		centralQueueLanes:     centralQueueLanePathTestController(),
 		centralQueueLaneCount: 64,
-		loadBalancer:        loadBalancerWithRoutableBackendCount(8, 8),
-		ignoreTraceID:       true,
-		randomTraceID:       func() pcommon.TraceID { return pcommon.TraceID{1} },
+		loadBalancer:          loadBalancerWithRoutableBackendCount(8, 8),
+		ignoreTraceID:         true,
+		randomTraceID:         func() pcommon.TraceID { return pcommon.TraceID{1} },
 	}
 	p.started.Store(true)
 

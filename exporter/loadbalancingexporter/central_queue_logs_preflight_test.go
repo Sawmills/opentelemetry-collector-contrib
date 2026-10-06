@@ -69,7 +69,8 @@ func TestCentralQueuePreflightPreservesWireSizeBoundaries(t *testing.T) {
 			sl.LogRecords().At(0).Attributes().PutEmptySlice("nested").AppendEmpty().SetEmptyMap().PutStr("value", "escaped\n☺")
 			limit := mustMarshalLogsSize(t, logs)
 			exporter := newPreflightTestExporter(t, limit)
-			splitter := newCentralQueueLogSplitter(exporter, limit, time.Time{})
+			splitter, err := newCentralQueueLogSplitter(exporter, limit, time.Time{})
+			require.NoError(t, err)
 
 			require.NoError(t, splitter.rejectUnsplittableRecords(t.Context(), logs))
 			splitter.hardLimit = limit - 1
@@ -84,7 +85,8 @@ func TestCentralQueuePreflightEmptyMetadataAndRecord(t *testing.T) {
 	logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
 	limit := mustMarshalLogsSize(t, logs)
 	exporter := newPreflightTestExporter(t, limit)
-	splitter := newCentralQueueLogSplitter(exporter, limit, time.Time{})
+	splitter, err := newCentralQueueLogSplitter(exporter, limit, time.Time{})
+	require.NoError(t, err)
 
 	require.NoError(t, splitter.rejectUnsplittableRecords(t.Context(), logs))
 	splitter.hardLimit = limit - 1
