@@ -241,6 +241,10 @@ func (e *logExporterImp) consumeLogsCentralQueue(ctx context.Context, ld plog.Lo
 		return err
 	}
 	err = splitter.consume(ctx, ld)
+	if errors.Is(err, errCentralQueueBalancedLaneRoutingKeySearch) {
+		e.centralQueue.settings.telemetry.recordRoutingKeyFailure(ctx)
+		e.logger.Warn("failed to route central log queue batch", zap.Error(err))
+	}
 	if errors.Is(err, errCentralQueueRequestTooLarge) {
 		return consumererror.NewPermanent(err)
 	}
