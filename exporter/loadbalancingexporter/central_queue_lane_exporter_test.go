@@ -199,7 +199,7 @@ func TestConsumeLogsCentralQueueWarmScaleInWrapsFirstSortedWorkers(t *testing.T)
 
 	input := plog.NewLogs()
 	scope := input.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
-	for i := 0; i < 80; i++ {
+	for i := range 80 {
 		scope.LogRecords().AppendEmpty().Body().SetInt(int64(i))
 	}
 	require.NoError(t, p.ConsumeLogs(t.Context(), input))
@@ -289,7 +289,7 @@ func TestCentralQueueNoAffinityEmptyRingKeepsRoutingBounded(t *testing.T) {
 	p.randomTraceID = func() pcommon.TraceID { return pcommon.TraceID{1} }
 
 	input := plog.NewLogs()
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		input.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
 	}
 	require.NoError(t, p.ConsumeLogs(t.Context(), input))

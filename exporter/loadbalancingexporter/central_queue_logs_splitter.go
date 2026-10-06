@@ -60,7 +60,7 @@ func newCentralQueueLogSplitter(exporter *logExporterImp, limit int, now time.Ti
 		effectiveLimit -= centralQueueLogSplitHeadroom
 	}
 	routingSnapshot := (*centralQueueLogRoutingSnapshot)(nil)
-	laneCount := 0
+	laneCount := exporter.effectiveCentralQueueLaneCount(now)
 	if exporter.ignoreTraceID && exporter.loadBalancer != nil {
 		var err error
 		routingSnapshot, err = exporter.loadBalancer.centralQueueLogRoutingSnapshotWithError()
@@ -69,11 +69,7 @@ func newCentralQueueLogSplitter(exporter *logExporterImp, limit int, now time.Ti
 		}
 		if routingSnapshot != nil {
 			laneCount = len(routingSnapshot.routingKeys)
-		} else {
-			laneCount = exporter.effectiveCentralQueueLaneCount(now)
 		}
-	} else {
-		laneCount = exporter.effectiveCentralQueueLaneCount(now)
 	}
 	splitter := &centralQueueLogSplitter{
 		exporter:               exporter,
