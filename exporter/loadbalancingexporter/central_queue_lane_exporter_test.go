@@ -278,8 +278,10 @@ func TestCentralQueueBalancedLaneRoutingKeySearchFallbackIsBoundedAndReported(t 
 	ring := &hashRing{items: items, endpoints: []string{"other", "target"}}
 	lb := &loadBalancer{ring: ring}
 
+	before := centralQueueBalancedLaneFallbackCount()
 	_, err := lb.centralQueueLogRoutingSnapshotWithError()
 	require.ErrorIs(t, err, errCentralQueueBalancedLaneRoutingKeySearch)
+	require.Greater(t, centralQueueBalancedLaneFallbackCount(), before)
 }
 
 func TestCentralQueueNoAffinityEmptyRingKeepsRoutingBounded(t *testing.T) {
