@@ -24,6 +24,7 @@ type centralQueueTelemetry struct {
 	saturation            metric.Float64Gauge
 	items                 metric.Int64Gauge
 	rejectedBytes         metric.Int64Counter
+	routingKeyFailures    metric.Int64Counter
 	retries               metric.Int64Counter
 	decodeFailures        metric.Int64Counter
 	inflightUncompressed  metric.Int64Gauge
@@ -162,6 +163,12 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 		"otelcol_loadbalancer_central_queue_rejected_compressed_bytes",
 		metric.WithDescription("Compressed bytes rejected by the central load-balancing queue."),
 		metric.WithUnit("By"),
+	)
+	errs = errors.Join(errs, err)
+	t.routingKeyFailures, err = meter.Int64Counter(
+		"otelcol_loadbalancer_central_queue_routing_key_failures",
+		metric.WithDescription("Central load-balancing queue routing-key search failures that rejected intake before enqueue."),
+		metric.WithUnit("{failures}"),
 	)
 	errs = errors.Join(errs, err)
 	t.retries, err = meter.Int64Counter(
@@ -448,6 +455,13 @@ func (t *centralQueueTelemetry) recordRejected(ctx context.Context, compressedBy
 		return
 	}
 	t.rejectedBytes.Add(ctx, compressedBytes, t.signalAttrs)
+}
+
+func (t *centralQueueTelemetry) recordRoutingKeyFailure(ctx context.Context) {
+	if t == nil {
+		return
+	}
+	t.routingKeyFailures.Add(ctx, 1, t.signalAttrs)
 }
 
 func (t *centralQueueTelemetry) recordRetry(ctx context.Context) {

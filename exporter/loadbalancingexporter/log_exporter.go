@@ -236,6 +236,7 @@ func (e *logExporterImp) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
 func (e *logExporterImp) consumeLogsCentralQueue(ctx context.Context, ld plog.Logs) error {
 	splitter, err := newCentralQueueLogSplitter(e, centralQueueEffectiveUncompressedItemLimit(e.centralQueue.settings), time.Now())
 	if err != nil {
+		e.centralQueue.settings.telemetry.recordRoutingKeyFailure(ctx)
 		e.logger.Warn("failed to build central log queue routing snapshot", zap.Error(err))
 		return err
 	}

@@ -13,7 +13,6 @@ import (
 	"hash/crc32"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -40,8 +39,6 @@ const (
 var errCentralQueueConsumersFull = errors.New("central queue effective consumers full")
 
 var errCentralQueueBalancedLaneRoutingKeySearch = errors.New("central queue balanced lane routing key search exhausted")
-
-var centralQueueBalancedLaneFallbacks atomic.Uint64
 
 // centralQueueDefaultForceScheduleAgeMultiplier bounds oldest_item_age under
 // continuous hot-key arrivals: once a fallback candidate has been waiting longer
@@ -1395,11 +1392,6 @@ func centralQueueLaneRoutingKey(signal signalKind, routingKey []byte, laneCount 
 	return centralQueueLaneKey(signal, lane, 0)
 }
 
-func centralQueueBalancedLaneRoutingKeyForLoadBalancerLane(lb *loadBalancer, signal signalKind, lane uint32) []byte {
-	key, _ := centralQueueBalancedLaneRoutingKeyForLoadBalancerLaneWithError(lb, signal, lane)
-	return key
-}
-
 func centralQueueBalancedLaneRoutingKeyForLoadBalancerLaneWithError(lb *loadBalancer, signal signalKind, lane uint32) ([]byte, error) {
 	if lb == nil {
 		return centralQueueLaneKey(signal, lane, 0), nil
@@ -1412,7 +1404,6 @@ func centralQueueBalancedLaneRoutingKeyForLoadBalancerLaneWithError(lb *loadBala
 	}
 	target := lb.ring.endpoints[int(lane)%len(lb.ring.endpoints)]
 	if endpointWithPort(lb.ring.endpointFor(key)) != endpointWithPort(target) {
-		centralQueueBalancedLaneFallbacks.Add(1)
 		return nil, centralQueueBalancedLaneRoutingKeySearchError(signal, lane, target)
 	}
 	return key, nil
@@ -1466,12 +1457,8 @@ func centralQueueBalancedLaneRoutingKeyForRingUncached(ring *hashRing, signal si
 	return base
 }
 
-func centralQueueBalancedLaneFallbackCount() uint64 {
-	return centralQueueBalancedLaneFallbacks.Load()
-}
-
 func centralQueueBalancedLaneRoutingKeySearchError(signal signalKind, lane uint32, target string) error {
-	return fmt.Errorf("%w: signal=%s lane=%d target=%s fallback_count=%d", errCentralQueueBalancedLaneRoutingKeySearch, signal, lane, target, centralQueueBalancedLaneFallbackCount())
+	return fmt.Errorf("%w: signal=%s lane=%d target=%s", errCentralQueueBalancedLaneRoutingKeySearch, signal, lane, target)
 }
 
 var (

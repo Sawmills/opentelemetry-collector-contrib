@@ -371,7 +371,6 @@ func (lb *loadBalancer) centralQueueLogRoutingSnapshotWithError() (*centralQueue
 	for lane := range snapshot.endpoints {
 		key := centralQueueBalancedLaneRoutingKeyForRing(lb.ring, signalKindLogs, uint32(lane))
 		if endpointWithPort(lb.ring.endpointFor(key)) != endpointWithPort(snapshot.endpoints[lane]) {
-			centralQueueBalancedLaneFallbacks.Add(1)
 			return nil, centralQueueBalancedLaneRoutingKeySearchError(signalKindLogs, uint32(lane), snapshot.endpoints[lane])
 		}
 		snapshot.routingKeys[lane] = slices.Clone(key)

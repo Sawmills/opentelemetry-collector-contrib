@@ -1891,7 +1891,8 @@ func TestConsumeLogsCentralQueueLowCardinalityThreeWorkerReplayRebalancesBeforeD
 			var candidate pcommon.TraceID
 			copy(candidate[:], strconv.Itoa(i))
 			lane := centralQueueLaneIndex(signalKindLogs, candidate[:], cfg.CentralQueue.LaneCount)
-			laneKey := centralQueueBalancedLaneRoutingKeyForLoadBalancerLane(lb, signalKindLogs, lane)
+			laneKey, err := centralQueueBalancedLaneRoutingKeyForLoadBalancerLaneWithError(lb, signalKindLogs, lane)
+			require.NoError(t, err)
 			if lb.ring.endpointFor(laneKey) == hotEndpoint {
 				return candidate
 			}
