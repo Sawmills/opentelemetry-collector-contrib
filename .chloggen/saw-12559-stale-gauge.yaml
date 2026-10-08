@@ -1,0 +1,13 @@
+change_type: bug_fix
+
+component: exporter/loadbalancing
+
+note: Clear stale backend state metrics when DNS endpoints are removed.
+
+issues: [12559]
+
+subtext: |
+  Removed endpoints no longer retain the stale backend-state gauge, so exported
+  load-balancer telemetry reflects the current backend set.
+
+change_logs: [user]
