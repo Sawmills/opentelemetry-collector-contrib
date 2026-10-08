@@ -2083,7 +2083,7 @@ func TestLoadBalancerEndpointHealthActiveProbeLoopWaitsBeforeFirstCycle(t *testi
 }
 
 func TestLoadBalancerEndpointHealthRemovesDNSStaleEndpoint(t *testing.T) {
-	ts, tb := getTelemetryAssets(t)
+	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
 	cfg := simpleConfig()
 	enableEndpointHealth(cfg)
 	var shutdowns sync.Map
@@ -2103,6 +2103,32 @@ func TestLoadBalancerEndpointHealthRemovesDNSStaleEndpoint(t *testing.T) {
 		count, ok := shutdowns.Load("endpoint-1:4317")
 		return ok && count.(*atomic.Int64).Load() > 0
 	}, time.Second, 10*time.Millisecond)
+	metadatatest.AssertEqualLoadbalancerBackendState(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "eligible")),
+			Value:      0,
+		},
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "quarantined")),
+			Value:      0,
+		},
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "stale")),
+			Value:      0,
+		},
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "eligible")),
+			Value:      1,
+		},
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "quarantined")),
+			Value:      0,
+		},
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "stale")),
+			Value:      0,
+		},
+	}, metricdatatest.IgnoreTimestamp())
 }
 
 func TestLoadBalancerEndpointHealthFailOpenRefreshesFailedExporter(t *testing.T) {

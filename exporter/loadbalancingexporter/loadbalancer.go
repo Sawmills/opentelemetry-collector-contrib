@@ -264,7 +264,10 @@ func (lb *loadBalancer) onBackendChangesWithEndpointHealth(resolved []string) {
 	if len(removed) > 0 {
 		lb.runCleanup(func() {
 			lb.drainRemovedExporters(ctx, removed)
+			lb.clearEndpointStale(ctx, reconcile.removed)
 		})
+	} else {
+		lb.clearEndpointStale(ctx, reconcile.removed)
 	}
 }
 
@@ -1022,6 +1025,12 @@ func (lb *loadBalancer) recordEndpointStale(ctx context.Context, endpoint string
 	lb.recordEndpointState(ctx, endpoint, "eligible", 0)
 	lb.recordEndpointState(ctx, endpoint, "quarantined", 0)
 	lb.recordEndpointState(ctx, endpoint, "stale", 1)
+}
+
+func (lb *loadBalancer) clearEndpointStale(ctx context.Context, endpoints []string) {
+	for _, endpoint := range endpoints {
+		lb.recordEndpointState(ctx, endpoint, "stale", 0)
+	}
 }
 
 func (lb *loadBalancer) recordEndpointFailOpen(ctx context.Context) {
