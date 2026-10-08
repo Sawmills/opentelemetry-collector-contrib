@@ -261,6 +261,10 @@ func (lb *loadBalancer) onBackendChangesWithEndpointHealth(resolved []string) {
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)
+	// Clear removed endpoint state before draining. Draining can wait for
+	// in-flight exporter work, so telemetry must reflect resolver membership
+	// without waiting for that synchronous cleanup.
+	lb.clearEndpointStale(ctx, reconcile.removed)
 	if len(removed) > 0 {
 		lb.runCleanup(func() {
 			lb.drainRemovedExporters(ctx, removed)
@@ -1022,6 +1026,12 @@ func (lb *loadBalancer) recordEndpointStale(ctx context.Context, endpoint string
 	lb.recordEndpointState(ctx, endpoint, "eligible", 0)
 	lb.recordEndpointState(ctx, endpoint, "quarantined", 0)
 	lb.recordEndpointState(ctx, endpoint, "stale", 1)
+}
+
+func (lb *loadBalancer) clearEndpointStale(ctx context.Context, endpoints []string) {
+	for _, endpoint := range endpoints {
+		lb.recordEndpointState(ctx, endpoint, "stale", 0)
+	}
 }
 
 func (lb *loadBalancer) recordEndpointFailOpen(ctx context.Context) {

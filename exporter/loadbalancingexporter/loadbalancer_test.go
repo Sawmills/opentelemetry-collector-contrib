@@ -2083,7 +2083,7 @@ func TestLoadBalancerEndpointHealthActiveProbeLoopWaitsBeforeFirstCycle(t *testi
 }
 
 func TestLoadBalancerEndpointHealthRemovesDNSStaleEndpoint(t *testing.T) {
-	ts, tb := getTelemetryAssets(t)
+	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
 	cfg := simpleConfig()
 	enableEndpointHealth(cfg)
 	var shutdowns sync.Map
@@ -2095,10 +2095,62 @@ func TestLoadBalancerEndpointHealthRemovesDNSStaleEndpoint(t *testing.T) {
 	require.NoError(t, err)
 
 	p.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
-	p.onBackendChanges([]string{"endpoint-2"})
+	drainStarted := make(chan struct{})
+	releaseDrain := make(chan struct{})
+	var drainStartedOnce sync.Once
+	var releaseDrainOnce sync.Once
+	defer releaseDrainOnce.Do(func() { close(releaseDrain) })
+	p.onExporterRemove = func(context.Context, string, *wrappedExporter) error {
+		drainStartedOnce.Do(func() { close(drainStarted) })
+		<-releaseDrain
+		return nil
+	}
+
+	removalDone := make(chan struct{})
+	go func() {
+		p.onBackendChanges([]string{"endpoint-2"})
+		close(removalDone)
+	}()
+	select {
+	case <-drainStarted:
+	case <-time.After(time.Second):
+		t.Fatal("expected removed exporter drain to start")
+	}
 
 	require.NotContains(t, p.exporters, "endpoint-1:4317")
 	require.Contains(t, p.exporters, "endpoint-2:4317")
+	metadatatest.AssertEqualLoadbalancerBackendState(t, telemetry, []metricdata.DataPoint[int64]{
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "eligible")),
+			Value:      0,
+		},
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "quarantined")),
+			Value:      0,
+		},
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "stale")),
+			Value:      0,
+		},
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "eligible")),
+			Value:      1,
+		},
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "quarantined")),
+			Value:      0,
+		},
+		{
+			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "stale")),
+			Value:      0,
+		},
+	}, metricdatatest.IgnoreTimestamp())
+	releaseDrainOnce.Do(func() { close(releaseDrain) })
+	select {
+	case <-removalDone:
+	case <-time.After(time.Second):
+		t.Fatal("removed exporter drain did not finish")
+	}
 	require.Eventually(t, func() bool {
 		count, ok := shutdowns.Load("endpoint-1:4317")
 		return ok && count.(*atomic.Int64).Load() > 0
