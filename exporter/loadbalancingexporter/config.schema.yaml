@@ -12,6 +12,39 @@ $defs:
         type: string
   central_queue_config:
     type: object
+    allOf:
+      - if:
+          required: [enabled]
+          properties:
+            enabled:
+              const: true
+        then:
+          properties:
+            load_balancer_dns:
+              required: [hostname, self_ip]
+              properties:
+                hostname:
+                  minLength: 1
+                  pattern: '^\S(?:.*\S)?$'
+                self_ip:
+                  anyOf:
+                    - format: ipv4
+                    - format: ipv6
+                  not:
+                    enum: ["0.0.0.0", "::"]
+                interval:
+                  pattern: '^[+0-9.]'
+                timeout:
+                  pattern: '^[+0-9.]'
+                max_age:
+                  pattern: '^[+0-9.]'
+          not:
+            required: [load_balancer_dns, load_balancer_service]
+            properties:
+              load_balancer_dns:
+                type: object
+              load_balancer_service:
+                minLength: 1
     properties:
       enabled:
         type: boolean
@@ -43,6 +76,32 @@ $defs:
       load_balancer_service:
         type: string
         description: Kubernetes Service identifying this collector's LB peers. Fresh EndpointSlice membership replaces the static replica count; unknown membership retains batches.
+      load_balancer_dns:
+        x-pointer: true
+        type: [object, "null"]
+        description: Optional DNS membership without Kubernetes API access. Unknown membership restores the configured per-LB policy without holding sends. Validation of required hostname and self_ip applies when central_queue.enabled is true.
+        properties:
+          hostname:
+            type: string
+            description: Dedicated membership-only headless Service with publishNotReadyAddresses enabled. Must be nonempty without surrounding whitespace when the queue is enabled.
+          self_ip:
+            type: string
+            description: Workload Pod IP from the Downward API; its family selects counted peers. Schema address checks are a portable approximation. Runtime netip validation is authoritative for alternate unspecified IPv6 spellings and zone suffixes.
+          interval:
+            type: string
+            format: duration
+            default: 5s
+            description: Nonnegative Go duration between lookups. Zero uses the default.
+          timeout:
+            type: string
+            format: duration
+            default: 1s
+            description: Nonnegative Go duration bounding each lookup. Zero uses the default.
+          max_age:
+            type: string
+            format: duration
+            default: 15s
+            description: Nonnegative Go duration since the last valid answer. Zero uses the default. Runtime validation requires at least interval plus timeout after defaults.
       lane_count:
         type: integer
         minimum: 0

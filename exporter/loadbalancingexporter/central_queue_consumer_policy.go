@@ -224,10 +224,11 @@ func ceilDivInt64ToInt(numerator, denominator int64) int {
 }
 
 type centralQueueConsumerController struct {
-	mu               sync.Mutex
-	policy           centralQueueConsumerPolicy
-	last             centralQueueConsumerResult
-	membershipSource func() (int, bool)
+	mu                        sync.Mutex
+	policy                    centralQueueConsumerPolicy
+	last                      centralQueueConsumerResult
+	membershipSource          func() (int, bool)
+	legacyOnUnknownMembership bool
 }
 
 func (c *centralQueueConsumerController) setMembershipSource(source func() (int, bool)) {
@@ -244,7 +245,7 @@ func (c *centralQueueConsumerController) currentPolicyLocked() (centralQueueCons
 	if c.membershipSource != nil {
 		replicas, known := c.membershipSource()
 		if !known || replicas <= 0 {
-			return policy, false
+			return policy, c.legacyOnUnknownMembership
 		}
 		policy.activeLoadBalancerReplicas = replicas
 	}

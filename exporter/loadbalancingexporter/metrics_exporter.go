@@ -90,6 +90,7 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 	}
 	if cfg.(*Config).CentralQueue.Enabled {
 		centralCfg := cfg.(*Config).CentralQueue
+		metricExporter.centralQueueConsumers.legacyOnUnknownMembership = centralCfg.LoadBalancerDNS != nil
 		metricExporter.centralQueueMembership, err = centralQueueMembershipFromConfig(centralCfg, params.Logger)
 		if err != nil {
 			return nil, err

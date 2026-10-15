@@ -92,6 +92,7 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 	}
 	if cfg.(*Config).CentralQueue.Enabled {
 		centralCfg := cfg.(*Config).CentralQueue
+		logExporter.centralQueueConsumers.legacyOnUnknownMembership = centralCfg.LoadBalancerDNS != nil
 		logExporter.centralQueueMembership, err = centralQueueMembershipFromConfig(centralCfg, params.Logger)
 		if err != nil {
 			return nil, err
