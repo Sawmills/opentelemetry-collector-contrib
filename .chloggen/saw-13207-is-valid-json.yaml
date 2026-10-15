@@ -1,0 +1,5 @@
+change_type: enhancement
+component: pkg/ottl
+note: Add IsValidJSON to guard JSON parsing with the same complete-input decoder as ParseJSON.
+issues: [156]
+change_logs: [user, api]
