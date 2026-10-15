@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/exporter/exportertest"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
@@ -240,6 +241,40 @@ func TestMembershipWatchStopWaitsForObservation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Stop did not finish")
 	}
+}
+
+type membershipReplicaGauge struct {
+	metric.Int64Gauge
+	values []int64
+}
+
+func (g *membershipReplicaGauge) Record(_ context.Context, value int64, _ ...metric.RecordOption) {
+	g.values = append(g.values, value)
+}
+
+func TestCentralQueueMembershipRecordsReplicaChangesOnly(t *testing.T) {
+	cl := fake.NewClientset(membershipSlice("a", "lb", "customer", "one", "two"))
+	m, err := newCentralQueueMembership(cl, zap.NewNop(), "lb.customer", time.Minute)
+	require.NoError(t, err)
+	gauge := &membershipReplicaGauge{}
+	controller := newCentralQueueConsumerController(30, 256<<10, 1)
+	m.bind(t.Context(), controller, &centralQueueTelemetry{activeLBReplicas: gauge}, nil)
+	t.Cleanup(m.shutdown)
+	requireMembership(t, m, 2, true)
+	var active atomic.Int64
+	for range 10 {
+		controller.tryAcquire(&active, 1<<30, 18, false)
+	}
+	require.Equal(t, []int64{2}, gauge.values)
+	_, err = cl.DiscoveryV1().EndpointSlices("customer").Update(t.Context(), membershipSlice("a", "lb", "customer", "one", "two", "three"), metav1.UpdateOptions{})
+	require.NoError(t, err)
+	requireMembership(t, m, 3, true)
+	controller.tryAcquire(&active, 1<<30, 18, false)
+	require.Equal(t, []int64{2, 3}, gauge.values)
+	m.shutdown()
+	controller.tryAcquire(&active, 1<<30, 18, false)
+	controller.tryAcquire(&active, 1<<30, 18, false)
+	require.Equal(t, []int64{2, 3, 0}, gauge.values)
 }
 
 func TestCentralQueueMembershipDeniedRetainsConfiguredBehavior(t *testing.T) {

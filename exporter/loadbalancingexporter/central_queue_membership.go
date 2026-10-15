@@ -69,9 +69,13 @@ func (m *centralQueueMembership) bind(ctx context.Context, controller *centralQu
 	m.mu.Lock()
 	m.telemetry = resolverTelemetry
 	m.mu.Unlock()
+	lastCount := -1
 	controller.setMembershipSource(func() (int, bool) {
 		count, known := m.snapshot()
-		telemetry.recordActiveLoadBalancerReplicas(ctx, int64(count))
+		if count != lastCount {
+			telemetry.recordActiveLoadBalancerReplicas(ctx, int64(count))
+			lastCount = count
+		}
 		return count, known
 	})
 	m.start(context.Background())
