@@ -258,7 +258,7 @@ telemetry:
       gauge:
         value_type: int
     loadbalancer_num_resolutions:
-      attributes: [success, resolver, scope]
+      attributes: [success, resolver, scope, reason]
       enabled: true
       stability: development
       description: Number of times the resolver has triggered new resolutions.

@@ -17,10 +17,13 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes/fake"
@@ -55,17 +58,17 @@ func TestCentralQueueMembershipContextCancellation(t *testing.T) {
 }
 
 func TestCentralQueueMembershipExpiry(t *testing.T) {
-	m, err := newCentralQueueMembership(fake.NewClientset(membershipSlice("a", "lb", "customer", "one")), zap.NewNop(), "lb.customer", 250*time.Millisecond)
+	m, err := newCentralQueueMembership(fake.NewClientset(membershipSlice("a", "lb", "customer", "one", "two", "three", "four", "five", "six")), zap.NewNop(), "lb.customer", 250*time.Millisecond)
 	require.NoError(t, err)
 	m.start(t.Context())
 	t.Cleanup(m.shutdown)
+	requireMembership(t, m, 6, true)
+	// Expired discovery restores configured behavior instead of blocking sends.
 	requireMembership(t, m, 1, true)
-	// A watch that never reconnects cannot keep a cached count fresh forever.
-	requireMembership(t, m, 0, false)
 }
 
 func TestCentralQueueMembershipListWatchFailureRecovery(t *testing.T) {
-	cl := fake.NewClientset(membershipSlice("a", "lb", "customer", "one"))
+	cl := fake.NewClientset(membershipSlice("a", "lb", "customer", "one", "two", "three", "four", "five", "six"))
 	var listFailed, watchFailed atomic.Bool
 	listFailed.Store(true)
 	cl.PrependReactor("list", "endpointslices", func(ktesting.Action) (bool, runtime.Object, error) {
@@ -100,18 +103,18 @@ func TestCentralQueueMembershipListWatchFailureRecovery(t *testing.T) {
 		}
 		return false
 	}, 3*time.Second, 5*time.Millisecond)
-	requireCentralQueueIntSum(t, reader, "otelcol_loadbalancer_num_resolutions", "{resolutions}", attribute.NewSet(k8sResolverAttr, attribute.String("scope", "load_balancer_membership"), attribute.Bool("success", false)), 1)
-	requireMembership(t, m, 0, false)
-	listFailed.Store(false)
+	requireCentralQueueIntSum(t, reader, "otelcol_loadbalancer_num_resolutions", "{resolutions}", attribute.NewSet(k8sResolverAttr, attribute.String("scope", "load_balancer_membership"), attribute.Bool("success", false), attribute.String("reason", "list_failed")), 1)
 	requireMembership(t, m, 1, true)
+	listFailed.Store(false)
+	requireMembership(t, m, 6, true)
 	watchFailed.Store(true)
 	watcher.Load().Error(&metav1.Status{Status: metav1.StatusFailure, Code: 410, Reason: metav1.StatusReasonExpired})
 	watcher.Load().Stop()
-	requireMembership(t, m, 0, false)
+	requireMembership(t, m, 1, true)
 	// A new list and watch restore a complete membership view.
 	watcher.Store(watch.NewRaceFreeFake())
 	watchFailed.Store(false)
-	requireMembership(t, m, 1, true)
+	requireMembership(t, m, 6, true)
 }
 
 func requireMembership(t *testing.T, m *centralQueueMembership, count int, known bool) {
@@ -236,6 +239,45 @@ func TestMembershipWatchStopWaitsForObservation(t *testing.T) {
 	case <-stopped:
 	case <-time.After(time.Second):
 		t.Fatal("Stop did not finish")
+	}
+}
+
+func TestCentralQueueMembershipDeniedRetainsConfiguredBehavior(t *testing.T) {
+	for _, operation := range []string{"list", "watch"} {
+		t.Run(operation, func(t *testing.T) {
+			cl := fake.NewClientset()
+			denied := apierrors.NewForbidden(schema.GroupResource{Group: "discovery.k8s.io", Resource: "endpointslices"}, "lb", errors.New("denied"))
+			if operation == "list" {
+				cl.PrependReactor("list", "endpointslices", func(ktesting.Action) (bool, runtime.Object, error) { return true, nil, denied })
+			} else {
+				cl.PrependWatchReactor("endpointslices", func(ktesting.Action) (bool, watch.Interface, error) { return true, nil, denied })
+			}
+			core, logs := observer.New(zap.WarnLevel)
+			m, err := newCentralQueueMembership(cl, zap.New(core), "lb.customer", time.Minute)
+			require.NoError(t, err)
+			_, tb, reader := getTelemetryAssetsWithReader(t)
+			controller := newCentralQueueConsumerController(30, 256<<10, 1)
+			m.bind(t.Context(), controller, nil, tb)
+			t.Cleanup(m.shutdown)
+			requireMembership(t, m, 1, true)
+			var active atomic.Int64
+			decision, acquired, _ := controller.tryAcquire(&active, 1<<30, 18, false)
+			require.True(t, acquired)
+			require.Equal(t, 18, decision.effectiveConsumers)
+			measurement, err := reader.GetMetric("otelcol_loadbalancer_num_resolutions")
+			require.NoError(t, err)
+			attrs := attribute.NewSet(k8sResolverAttr, attribute.String("scope", "load_balancer_membership"), attribute.Bool("success", false), attribute.String("reason", operation+"_denied"))
+			matches := 0
+			for _, point := range measurement.Data.(metricdata.Sum[int64]).DataPoints {
+				if point.Attributes.Equals(&attrs) {
+					require.EqualValues(t, 1, point.Value)
+					matches++
+				}
+			}
+			require.Equal(t, 1, matches)
+			require.Equal(t, 1, logs.Len())
+			require.Equal(t, operation+"_denied", logs.All()[0].ContextMap()["reason"])
+		})
 	}
 }
 

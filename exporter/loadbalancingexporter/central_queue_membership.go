@@ -5,6 +5,7 @@ package loadbalancingexporter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,6 +42,9 @@ type centralQueueMembership struct {
 	slices             map[string]*discoveryv1.EndpointSlice
 	count              int
 	initialized        bool
+	fallback           bool
+	fallbackReplicas   int
+	failureReported    bool
 }
 
 func centralQueueMembershipFromConfig(cfg CentralQueueConfig, logger *zap.Logger) (*centralQueueMembership, error) {
@@ -50,7 +55,11 @@ func centralQueueMembershipFromConfig(cfg CentralQueueConfig, logger *zap.Logger
 	if err != nil {
 		return nil, err
 	}
-	return newCentralQueueMembership(cl, logger, cfg.LoadBalancerService, defaultListWatchTimeout)
+	m, err := newCentralQueueMembership(cl, logger, cfg.LoadBalancerService, defaultListWatchTimeout)
+	if err == nil {
+		m.fallbackReplicas = configuredCentralQueueActiveLBReplicas(cfg.ActiveLoadBalancerReplicas)
+	}
+	return m, err
 }
 
 func (m *centralQueueMembership) bind(ctx context.Context, controller *centralQueueConsumerController, telemetry *centralQueueTelemetry, resolverTelemetry *metadata.TelemetryBuilder) {
@@ -83,9 +92,12 @@ func newCentralQueueMembership(cl kubernetes.Interface, logger *zap.Logger, serv
 	if err != nil {
 		return nil, err
 	}
-	m := &centralQueueMembership{service: name, namespace: ns, logger: logger, timeout: timeout, slices: make(map[string]*discoveryv1.EndpointSlice)}
+	m := &centralQueueMembership{service: name, namespace: ns, logger: logger, timeout: timeout, slices: make(map[string]*discoveryv1.EndpointSlice), fallbackReplicas: 1}
 	tracked := &cache.ListWatch{
 		ListWithContextFunc: func(ctx context.Context, options metav1.ListOptions) (runtime.Object, error) {
+			m.beginAttempt()
+			ctx, cancel := context.WithTimeout(ctx, m.timeout)
+			defer cancel()
 			obj, _, err := pager.New(lw.ListWithContext).ListWithAlloc(ctx, options)
 			var objects []runtime.Object
 			if err == nil {
@@ -101,11 +113,12 @@ func newCentralQueueMembership(cl kubernetes.Interface, logger *zap.Logger, serv
 				m.initialized = true
 				m.recountLocked()
 			}
-			m.observeLocked(err)
+			m.observeLocked(err, "list")
 			m.mu.Unlock()
 			return obj, err
 		},
 		WatchFuncWithContext: func(ctx context.Context, options metav1.ListOptions) (watch.Interface, error) {
+			m.beginAttempt()
 			if options.SendInitialEvents != nil && *options.SendInitialEvents {
 				m.mu.Lock()
 				m.initialized = false
@@ -121,7 +134,7 @@ func newCentralQueueMembership(cl kubernetes.Interface, logger *zap.Logger, serv
 				m.mu.Lock()
 				defer m.mu.Unlock()
 				if event.Type == watch.Error {
-					m.freshUntil = time.Time{}
+					m.failLocked("watch", apierrors.FromObject(event.Object))
 				}
 				if slice, ok := event.Object.(*discoveryv1.EndpointSlice); ok {
 					key := slice.Namespace + "/" + slice.Name
@@ -145,9 +158,7 @@ func newCentralQueueMembership(cl kubernetes.Interface, logger *zap.Logger, serv
 	if err := m.informer.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		m.freshUntil = time.Time{}
-		m.recordResolution(false)
-		m.logger.Warn("load balancer membership discovery failed; retaining queued batches", zap.String("service", m.service), zap.String("namespace", m.namespace), zap.Error(err))
+		m.failLocked("watch", err)
 	}); err != nil {
 		return nil, err
 	}
@@ -199,25 +210,51 @@ func (w *membershipWatch) stopSource()                    { w.once.Do(func() { c
 func (m *centralQueueMembership) observe(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.observeLocked(err)
+	m.observeLocked(err, "watch")
 }
 
-func (m *centralQueueMembership) observeLocked(err error) {
-	if err != nil {
-		m.freshUntil = time.Time{}
+func (m *centralQueueMembership) beginAttempt() {
+	m.mu.Lock()
+	m.failureReported = false
+	m.mu.Unlock()
+}
+
+func (m *centralQueueMembership) failLocked(operation string, err error) {
+	m.fallback = true
+	m.freshUntil = time.Time{}
+	if m.failureReported {
 		return
 	}
+	m.failureReported = true
+	reason := operation + "_failed"
+	if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+		reason = operation + "_denied"
+	}
+	m.recordResolution(false, reason)
+	m.logger.Warn("load balancer membership discovery failed; using configured replica behavior", zap.String("reason", reason), zap.String("service", m.service), zap.String("namespace", m.namespace), zap.Error(err))
+}
+
+func (m *centralQueueMembership) observeLocked(err error, operation string) {
+	if err != nil {
+		m.failLocked(operation, err)
+		return
+	}
+	m.fallback = false
 	// The API server bounds each watch by timeout. A new successful watch
 	// renews freshness even when membership does not change.
 	m.freshUntil = time.Now().Add(2 * m.timeout)
-	m.recordResolution(true)
+	m.recordResolution(true, "")
 }
 
-func (m *centralQueueMembership) recordResolution(success bool) {
+func (m *centralQueueMembership) recordResolution(success bool, reason string) {
 	if m.telemetry == nil {
 		return
 	}
-	m.telemetry.LoadbalancerNumResolutions.Add(context.Background(), 1, metric.WithAttributes(k8sResolverAttr, attribute.String("scope", "load_balancer_membership"), attribute.Bool("success", success)))
+	attrs := []attribute.KeyValue{k8sResolverAttr, attribute.String("scope", "load_balancer_membership"), attribute.Bool("success", success)}
+	if reason != "" {
+		attrs = append(attrs, attribute.String("reason", reason))
+	}
+	m.telemetry.LoadbalancerNumResolutions.Add(context.Background(), 1, metric.WithAttributes(attrs...))
 }
 
 func (m *centralQueueMembership) start(ctx context.Context) {
@@ -227,6 +264,7 @@ func (m *centralQueueMembership) start(ctx context.Context) {
 		return
 	}
 	ctx, m.cancel = context.WithCancel(ctx)
+	m.freshUntil = time.Now().Add(2 * m.timeout)
 	m.done = make(chan struct{})
 	go func() {
 		defer close(m.done)
@@ -240,7 +278,16 @@ func (m *centralQueueMembership) start(ctx context.Context) {
 func (m *centralQueueMembership) snapshot() (int, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.stopped || !m.initialized || !time.Now().Before(m.freshUntil) {
+	if m.stopped || m.cancel == nil {
+		return 0, false
+	}
+	if !m.fallback && !time.Now().Before(m.freshUntil) {
+		m.failLocked("stale", errors.New("membership freshness expired"))
+	}
+	if m.fallback {
+		return m.fallbackReplicas, true
+	}
+	if !m.initialized {
 		return 0, false
 	}
 	return m.count, m.count > 0

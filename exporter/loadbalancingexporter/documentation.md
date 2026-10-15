@@ -308,6 +308,7 @@ Number of times the resolver has triggered new resolutions.
 | success | Whether an outcome was successful | Any Bool | - |
 | resolver | Resolver used | Str: ``aws``, ``dns``, ``k8s``, ``static`` | - |
 | scope | Optional resolver scope for load balancer peer discovery | Str: ``load_balancer_membership`` | - |
+| reason | Low-cardinality endpoint health or backend outcome reason | Any Str | - |
 
 ### otelcol_loadbalancer_num_selected_backends
 

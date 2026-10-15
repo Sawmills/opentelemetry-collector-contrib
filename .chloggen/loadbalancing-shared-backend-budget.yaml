@@ -4,5 +4,6 @@ note: Bound central queue recovery and healthy ramp by the discovered LB peer sh
 issues: []
 subtext: |
   The optional central_queue.load_balancer_service discovers collector-scoped peers through Kubernetes EndpointSlices.
-  Unknown or stale membership retains queued batches. Converged shares retain the minimum-one progress allowance.
+  Initial unknown or empty membership retains queued batches. Discovery failures restore configured replica behavior and count a bounded failure reason.
+  Fresh converged shares retain the minimum-one progress allowance.
 change_logs: [user]
