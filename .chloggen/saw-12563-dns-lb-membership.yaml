@@ -1,7 +1,7 @@
 change_type: enhancement
 component: exporter/loadbalancing
 note: Discover central queue load-balancer peers through DNS without Kubernetes API permissions.
-issues: []
+issues: [155]
 subtext: |
   The optional central_queue.load_balancer_dns uses a separate membership-only headless Service that publishes unready addresses.
   Unknown DNS membership restores the configured per-LB policy without holding sends; valid answers renew local freshness.
