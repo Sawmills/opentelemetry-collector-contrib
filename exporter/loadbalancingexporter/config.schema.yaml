@@ -40,6 +40,9 @@ $defs:
         minimum: 1
         default: 30
         description: Number of parallel workers draining central queue request windows per signal exporter.
+      load_balancer_service:
+        type: string
+        description: Kubernetes Service identifying this collector's LB peers. Fresh EndpointSlice membership replaces the static replica count; unknown membership retains batches.
       lane_count:
         type: integer
         minimum: 0

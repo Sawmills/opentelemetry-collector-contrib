@@ -285,6 +285,7 @@ type CentralQueueConfig struct {
 	LaneHysteresisFactor         int                     `mapstructure:"lane_hysteresis_factor"`
 	NumConsumers                 int                     `mapstructure:"num_consumers"`
 	ActiveLoadBalancerReplicas   int                     `mapstructure:"active_load_balancer_replicas"`
+	LoadBalancerService          string                  `mapstructure:"load_balancer_service"`
 	// ForceScheduleAge bounds how long a fallback candidate (a routing-key
 	// lane whose accumulated window is under target_compressed_bytes) may wait
 	// before being promoted ahead of fresh target_reached candidates. This

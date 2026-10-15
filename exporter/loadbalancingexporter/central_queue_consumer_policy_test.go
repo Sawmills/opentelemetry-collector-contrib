@@ -83,7 +83,7 @@ func TestCentralQueueConsumerPolicyKeepsOneConsumerWhenBackendShareIsFractional(
 	require.Equal(t, centralQueueConsumerLimitReasonBackendCapacity, decision.limitReason)
 }
 
-func TestCentralQueueConsumerPolicyRampsAboveStaticActiveLBUpperBoundWhenHealthy(t *testing.T) {
+func TestCentralQueueConsumerPolicyCapsHealthyRampAtSharedBackendBudget(t *testing.T) {
 	policy := centralQueueConsumerPolicy{
 		maxConsumers:                 30,
 		minConsumers:                 1,
@@ -102,11 +102,11 @@ func TestCentralQueueConsumerPolicyRampsAboveStaticActiveLBUpperBoundWhenHealthy
 
 	require.Equal(t, 36, decision.queueDemandConsumers)
 	require.Equal(t, 1, decision.backendSafeConsumersPerLB)
-	require.Equal(t, 4, decision.effectiveConsumers)
-	require.NotEqual(t, centralQueueConsumerLimitReasonBackendCapacity, decision.limitReason)
+	require.Equal(t, 1, decision.effectiveConsumers)
+	require.Equal(t, centralQueueConsumerLimitReasonBackendCapacity, decision.limitReason)
 }
 
-func TestCentralQueueConsumerPolicyBackendPressureReducesRampedUpperBound(t *testing.T) {
+func TestCentralQueueConsumerPolicyBackendPressureCannotExceedSharedBudget(t *testing.T) {
 	policy := centralQueueConsumerPolicy{
 		maxConsumers:                 30,
 		minConsumers:                 1,
@@ -125,10 +125,10 @@ func TestCentralQueueConsumerPolicyBackendPressureReducesRampedUpperBound(t *tes
 
 	require.Equal(t, centralQueueConsumerPressureReducing, decision.pressureState)
 	require.Equal(t, centralQueueConsumerLimitReasonBackendPressure, decision.limitReason)
-	require.Equal(t, 2, decision.effectiveConsumers)
+	require.Equal(t, 1, decision.effectiveConsumers)
 }
 
-func TestCentralQueueConsumerPolicyRecoversGraduallyAfterRampedUpperBoundPressure(t *testing.T) {
+func TestCentralQueueConsumerPolicyRecoveryCannotExceedConvergedShare(t *testing.T) {
 	policy := centralQueueConsumerPolicy{
 		maxConsumers:                 30,
 		minConsumers:                 1,
@@ -147,9 +147,9 @@ func TestCentralQueueConsumerPolicyRecoversGraduallyAfterRampedUpperBoundPressur
 		backendPressure:      false,
 	})
 
-	require.Equal(t, centralQueueConsumerPressureRecovering, decision.pressureState)
-	require.Equal(t, centralQueueConsumerLimitReasonRecovery, decision.limitReason)
-	require.Equal(t, 3, decision.effectiveConsumers)
+	require.Equal(t, centralQueueConsumerPressureStable, decision.pressureState)
+	require.Equal(t, centralQueueConsumerLimitReasonBackendCapacity, decision.limitReason)
+	require.Equal(t, 1, decision.effectiveConsumers)
 }
 
 func TestCentralQueueConsumerPolicyDoesNotRoundUpNonZeroBackendShare(t *testing.T) {

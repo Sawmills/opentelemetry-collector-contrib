@@ -38,7 +38,7 @@ func TestTryAcquireCentralQueueConsumerAllowsProgressWhenBackendShareIsFractiona
 	require.Equal(t, centralQueueConsumerLimitReasonBackendCapacity, controller.last.limitReason)
 }
 
-func TestTryAcquireCentralQueueConsumerRampsOnlyAfterSuccessfulHealthyAcquire(t *testing.T) {
+func TestTryAcquireCentralQueueConsumerKeepsSharedCeilingAcrossHealthyAcquires(t *testing.T) {
 	var active atomic.Int64
 	controller := newCentralQueueConsumerController(30, 256<<10, 10)
 	lb := centralQueueConsumerTestLoadBalancerWithRoutableBackendCount(4)
@@ -55,17 +55,17 @@ func TestTryAcquireCentralQueueConsumerRampsOnlyAfterSuccessfulHealthyAcquire(t 
 	acquired = tryAcquireCentralQueueConsumer(t.Context(), &active, controller, nil, lb, 9<<20)
 	require.True(t, acquired)
 	require.EqualValues(t, 1, active.Load())
-	require.Equal(t, 4, controller.last.effectiveConsumers)
+	require.Equal(t, 1, controller.last.effectiveConsumers)
 
 	releaseCentralQueueConsumer(t.Context(), &active, nil)
 	active.Store(7)
 
 	acquired = tryAcquireCentralQueueConsumer(t.Context(), &active, controller, nil, lb, 9<<20)
 	require.False(t, acquired)
-	require.Equal(t, 4, controller.last.effectiveConsumers)
+	require.Equal(t, 1, controller.last.effectiveConsumers)
 }
 
-func TestCentralQueueEffectiveConsumersForLanesUsesRampedConsumers(t *testing.T) {
+func TestCentralQueueEffectiveConsumersForLanesUsesSharedCeiling(t *testing.T) {
 	var active atomic.Int64
 	controller := newCentralQueueConsumerController(30, 256<<10, 10)
 
@@ -76,11 +76,11 @@ func TestCentralQueueEffectiveConsumersForLanesUsesRampedConsumers(t *testing.T)
 
 	decision, acquired, _ = controller.tryAcquire(&active, 9<<20, 4, false)
 	require.True(t, acquired)
-	require.Equal(t, 4, decision.effectiveConsumers)
+	require.Equal(t, 1, decision.effectiveConsumers)
 
 	consumers, known := centralQueueEffectiveConsumersForLanes(controller, 30, 4)
 	require.True(t, known)
-	require.Equal(t, 4, consumers)
+	require.Equal(t, 1, consumers)
 }
 
 func TestTryIncrementCentralQueueActiveConsumersDoesNotOversubscribeConcurrentAcquires(t *testing.T) {

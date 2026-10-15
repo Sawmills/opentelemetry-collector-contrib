@@ -34,11 +34,12 @@ var _ exporter.Metrics = (*metricExporterImp)(nil)
 const metricBatcherEnqueueBackoff = 2 * time.Millisecond
 
 type metricExporterImp struct {
-	loadBalancer *loadBalancer
-	batcher      *metricBatcher
-	centralQueue *centralQueue
-	centralCodec *queuePayloadCodec
-	routingKey   routingKey
+	loadBalancer           *loadBalancer
+	batcher                *metricBatcher
+	centralQueue           *centralQueue
+	centralQueueMembership *centralQueueMembership
+	centralCodec           *queuePayloadCodec
+	routingKey             routingKey
 
 	logger                       *zap.Logger
 	started                      atomic.Bool
@@ -89,6 +90,10 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 	}
 	if cfg.(*Config).CentralQueue.Enabled {
 		centralCfg := cfg.(*Config).CentralQueue
+		metricExporter.centralQueueMembership, err = centralQueueMembershipFromConfig(centralCfg, params.Logger)
+		if err != nil {
+			return nil, err
+		}
 		centralTelemetry, telemetryErr := newCentralQueueTelemetry(params.TelemetrySettings, signalKindMetrics)
 		if telemetryErr != nil {
 			return nil, telemetryErr
@@ -174,9 +179,12 @@ func (e *metricExporterImp) startCentralQueueConsumers(ctx context.Context) {
 	if e.centralQueueBackendLimiter == nil {
 		e.centralQueueBackendLimiter = newCentralQueueBackendLimiter()
 	}
+	e.centralQueueMembership.bind(ctx, e.centralQueueConsumers, e.centralQueue.settings.telemetry, e.telemetry)
 	e.centralQueue.settings.telemetry.observeBackendInflightAge(e.centralQueueBackendLimiter.oldestInflightAges)
 	e.centralQueue.settings.telemetry.recordConfiguredConsumers(ctx, int64(consumers))
-	e.centralQueue.settings.telemetry.recordActiveLoadBalancerReplicas(ctx, int64(configuredCentralQueueActiveLBReplicas(e.centralQueueActiveLBReplicas)))
+	if e.centralQueueMembership == nil {
+		e.centralQueue.settings.telemetry.recordActiveLoadBalancerReplicas(ctx, int64(configuredCentralQueueActiveLBReplicas(e.centralQueueActiveLBReplicas)))
+	}
 	e.centralQueue.settings.telemetry.recordActiveConsumers(ctx, e.centralActiveConsumers.Load())
 	e.centralQueue.settings.telemetry.recordConfiguredLanes(ctx, int64(e.centralQueueLaneCount))
 	e.centralQueue.settings.telemetry.recordEffectiveLanes(ctx, int64(e.effectiveCentralQueueLaneCount(time.Now())))
@@ -206,6 +214,9 @@ func (e *metricExporterImp) Shutdown(ctx context.Context) error {
 		err = errors.Join(err, e.centralCodec.Close())
 	}
 	err = errors.Join(err, e.loadBalancer.Shutdown(ctx))
+	if e.centralQueueMembership != nil {
+		e.centralQueueMembership.shutdown()
+	}
 	return err
 }
 
