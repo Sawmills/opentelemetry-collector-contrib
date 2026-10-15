@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ import (
 )
 
 type centralQueueMembership struct {
+	dns                *centralQueueDNSMembership
 	informer           cache.SharedInformer
 	service, namespace string
 	logger             *zap.Logger
@@ -48,7 +50,13 @@ type centralQueueMembership struct {
 }
 
 func centralQueueMembershipFromConfig(cfg CentralQueueConfig, logger *zap.Logger) (*centralQueueMembership, error) {
-	if !cfg.Enabled || cfg.LoadBalancerService == "" {
+	if !cfg.Enabled {
+		return nil, nil
+	}
+	if cfg.LoadBalancerDNS != nil {
+		return &centralQueueMembership{dns: &centralQueueDNSMembership{config: cfg.LoadBalancerDNS.withDefaults(), resolver: net.DefaultResolver, now: time.Now}, logger: logger}, nil
+	}
+	if cfg.LoadBalancerService == "" {
 		return nil, nil
 	}
 	cl, err := newInClusterClient()
@@ -272,7 +280,11 @@ func (m *centralQueueMembership) start(ctx context.Context) {
 	m.done = make(chan struct{})
 	go func() {
 		defer close(m.done)
-		m.informer.Run(ctx.Done())
+		if m.dns != nil {
+			m.runDNS(ctx)
+		} else {
+			m.informer.Run(ctx.Done())
+		}
 		m.mu.Lock()
 		m.stopped = true
 		m.mu.Unlock()
@@ -284,6 +296,17 @@ func (m *centralQueueMembership) snapshot() (int, bool) {
 	defer m.mu.Unlock()
 	if m.stopped || m.cancel == nil {
 		return 0, false
+	}
+	if m.dns != nil {
+		if m.initialized && !m.dns.now().Before(m.freshUntil) {
+			m.initialized = false
+			m.count = 0
+			m.recordDNSResolution(false, "stale")
+		}
+		if !m.initialized {
+			return 0, false
+		}
+		return m.count, m.count > 0
 	}
 	if !m.fallback && !time.Now().Before(m.freshUntil) {
 		m.failLocked("stale", errors.New("membership freshness expired"))
