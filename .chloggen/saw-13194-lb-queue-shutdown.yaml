@@ -1,0 +1,9 @@
+change_type: bug_fix
+component: exporter/loadbalancing
+note: Drain central queues to a bounded deadline and count deadline-forced shutdown discards.
+issues: [154]
+subtext: |
+  Logs and metrics use central_queue.shutdown_timeout (default five minutes), bounded by the caller's earlier deadline.
+  The shutdown_dropped_items metric and warnings count discarded records or datapoints, including failed in-flight work.
+  Kubernetes termination grace must include the preStop drain, exporter shutdown and cleanup budgets.
+change_logs: [user]

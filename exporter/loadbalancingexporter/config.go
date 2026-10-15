@@ -267,6 +267,7 @@ const (
 	defaultCentralQueueMaxBatchDelay             = 250 * time.Millisecond
 	defaultCentralQueueNumConsumers              = 30
 	defaultCentralQueueActiveLBReplicas          = 1
+	defaultCentralQueueShutdownTimeout           = 5 * time.Minute
 )
 
 type CentralQueueConfig struct {
@@ -277,15 +278,18 @@ type CentralQueueConfig struct {
 	MaxInflightUncompressedBytes int64                   `mapstructure:"max_inflight_uncompressed_bytes"`
 	TargetCompressedBytes        int64                   `mapstructure:"target_compressed_bytes"`
 	MaxBatchDelay                time.Duration           `mapstructure:"max_batch_delay"`
-	LaneCount                    int                     `mapstructure:"lane_count"`
-	MinLanes                     int                     `mapstructure:"min_lanes"`
-	MaxLanes                     int                     `mapstructure:"max_lanes"`
-	BackendLaneMultiplier        int                     `mapstructure:"backend_lane_multiplier"`
-	TargetLaneFillDuration       time.Duration           `mapstructure:"target_lane_fill_duration"`
-	LaneHysteresisFactor         int                     `mapstructure:"lane_hysteresis_factor"`
-	NumConsumers                 int                     `mapstructure:"num_consumers"`
-	ActiveLoadBalancerReplicas   int                     `mapstructure:"active_load_balancer_replicas"`
-	LoadBalancerService          string                  `mapstructure:"load_balancer_service"`
+	// ShutdownTimeout bounds graceful drain. Zero uses five minutes; a caller's
+	// earlier deadline still wins. Kubernetes grace must cover the whole drain.
+	ShutdownTimeout            time.Duration `mapstructure:"shutdown_timeout"`
+	LaneCount                  int           `mapstructure:"lane_count"`
+	MinLanes                   int           `mapstructure:"min_lanes"`
+	MaxLanes                   int           `mapstructure:"max_lanes"`
+	BackendLaneMultiplier      int           `mapstructure:"backend_lane_multiplier"`
+	TargetLaneFillDuration     time.Duration `mapstructure:"target_lane_fill_duration"`
+	LaneHysteresisFactor       int           `mapstructure:"lane_hysteresis_factor"`
+	NumConsumers               int           `mapstructure:"num_consumers"`
+	ActiveLoadBalancerReplicas int           `mapstructure:"active_load_balancer_replicas"`
+	LoadBalancerService        string        `mapstructure:"load_balancer_service"`
 	// ForceScheduleAge bounds how long a fallback candidate (a routing-key
 	// lane whose accumulated window is under target_compressed_bytes) may wait
 	// before being promoted ahead of fresh target_reached candidates. This
@@ -409,6 +413,9 @@ func (c ZstdPayloadCodecConfig) Validate() error {
 func (c CentralQueueConfig) Validate() error {
 	if !c.Enabled {
 		return nil
+	}
+	if c.ShutdownTimeout < 0 {
+		return errors.New("central_queue.shutdown_timeout must be greater than or equal to 0")
 	}
 	if c.MaxCompressedBytes <= 0 {
 		return errors.New("central_queue.max_compressed_bytes must be greater than 0 when central_queue.enabled=true")

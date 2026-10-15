@@ -14,6 +14,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 const centralQueueLeasePollInterval = 10 * time.Millisecond
@@ -61,6 +63,7 @@ type centralQueueSettings struct {
 	maxUncompressedBatchBytes    int
 	targetCompressedBytes        int64
 	maxBatchDelay                time.Duration
+	shutdownTimeout              time.Duration
 	maxReadyWindows              int
 	// forceScheduleAge bounds how long a fallback candidate may wait before it
 	// is promoted ahead of fresh target candidates. Zero means "derive from
@@ -68,6 +71,7 @@ type centralQueueSettings struct {
 	// value disables anti-starvation (legacy strict target-first scheduling).
 	forceScheduleAge time.Duration
 	telemetry        *centralQueueTelemetry
+	logger           *zap.Logger
 }
 
 type centralQueue struct {
@@ -80,6 +84,7 @@ type centralQueue struct {
 	readySequence     int64
 	itemCount         int
 	stopped           bool
+	discardOnStop     bool
 	draining          bool
 	ready             []centralQueueWindow
 	cachedWindowItems [][]centralQueueItem
@@ -1021,6 +1026,14 @@ func (q *centralQueue) pruneBucketLocked(bucket *centralQueueBucket) {
 }
 
 func (l *centralQueueLease) done() {
+	l.finish(false)
+}
+
+func (l *centralQueueLease) discardOnShutdown() {
+	l.finish(true)
+}
+
+func (l *centralQueueLease) finish(discarded bool) {
 	l.once.Do(func() {
 		l.queue.mu.Lock()
 		l.queue.currentInflightBytes -= int64(l.window.uncompressedBytes)
@@ -1030,6 +1043,9 @@ func (l *centralQueueLease) done() {
 		l.queue.mu.Unlock()
 		l.queue.notifyLeaseWaiters()
 		l.queue.settings.telemetry.record(context.Background(), snapshot)
+		if discarded {
+			l.queue.recordShutdownDiscard(int64(l.window.count))
+		}
 	})
 }
 
@@ -1043,12 +1059,16 @@ func (l *centralQueueLease) releaseConsumer() {
 func (l *centralQueueLease) requeue(now time.Time) error {
 	var err error
 	l.once.Do(func() {
+		var discarded int64
 		l.queue.settings.telemetry.recordRetry(context.Background())
 
 		l.queue.mu.Lock()
 		l.queue.currentInflightBytes -= int64(l.window.uncompressedBytes)
 		if l.queue.stopped {
 			l.queue.currentCompressedBytes -= int64(l.window.compressedBytes)
+			if l.queue.discardOnStop {
+				discarded = int64(l.window.count)
+			}
 			err = errCentralQueueStopped
 		} else {
 			// Leased windows currently come from one bucket. Refresh a prior
@@ -1078,6 +1098,7 @@ func (l *centralQueueLease) requeue(now time.Time) error {
 		l.queue.mu.Unlock()
 		l.queue.notifyLeaseWaiters()
 		l.queue.settings.telemetry.record(context.Background(), snapshot)
+		l.queue.recordShutdownDiscard(discarded)
 	})
 	return err
 }
@@ -1085,10 +1106,14 @@ func (l *centralQueueLease) requeue(now time.Time) error {
 func (l *centralQueueLease) deferReady(now time.Time) error {
 	var err error
 	l.once.Do(func() {
+		var discarded int64
 		l.queue.mu.Lock()
 		l.queue.currentInflightBytes -= int64(l.window.uncompressedBytes)
 		if l.queue.stopped {
 			l.queue.currentCompressedBytes -= int64(l.window.compressedBytes)
+			if l.queue.discardOnStop {
+				discarded = int64(l.window.count)
+			}
 			err = errCentralQueueStopped
 		} else {
 			// Leased windows currently come from one bucket. Refresh a prior
@@ -1117,6 +1142,7 @@ func (l *centralQueueLease) deferReady(now time.Time) error {
 		l.queue.mu.Unlock()
 		l.queue.notifyLeaseWaiters()
 		l.queue.settings.telemetry.record(context.Background(), snapshot)
+		l.queue.recordShutdownDiscard(discarded)
 	})
 	return err
 }

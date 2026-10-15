@@ -104,9 +104,11 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 			maxUncompressedBatchBytes:    centralCfg.MaxUncompressedBatchBytes,
 			targetCompressedBytes:        centralCfg.TargetCompressedBytes,
 			maxBatchDelay:                centralCfg.MaxBatchDelay,
+			shutdownTimeout:              centralCfg.ShutdownTimeout,
 			maxReadyWindows:              centralQueueReadyWindowLimit(centralCfg.NumConsumers),
 			forceScheduleAge:             centralCfg.ForceScheduleAge,
 			telemetry:                    centralTelemetry,
+			logger:                       params.Logger,
 		})
 		metricExporter.centralCodec = newQueuePayloadCodec(centralCfg.PayloadCompression, cfg.(*Config).PayloadCodec.Zstd)
 	}
@@ -203,15 +205,28 @@ func (e *metricExporterImp) Shutdown(ctx context.Context) error {
 		err = e.batcher.Shutdown(ctx)
 	}
 	if e.centralQueue != nil {
-		e.centralQueue.stop()
+		drainCtx, drainCancel := context.WithTimeout(ctx, e.centralQueue.shutdownTimeout())
+		err = errors.Join(err, e.centralQueue.drain(drainCtx))
+		drainCancel()
+		discarded := e.centralQueue.stopAndDiscard()
 		if e.centralCancel != nil {
 			e.centralCancel()
 		}
+		e.centralQueue.recordShutdownDiscard(discarded)
 		waitCtx, cancel := context.WithTimeout(ctx, time.Second)
 		waitErr := waitForInflight(waitCtx, &e.centralWG)
 		cancel()
 		err = errors.Join(err, waitErr)
-		err = errors.Join(err, e.centralCodec.Close())
+		if waitErr == nil {
+			err = errors.Join(err, e.centralCodec.Close())
+		} else {
+			go func() {
+				e.centralWG.Wait()
+				if closeErr := e.centralCodec.Close(); closeErr != nil {
+					e.logger.Warn("failed to close central queue codec", zap.Error(closeErr))
+				}
+			}()
+		}
 	}
 	err = errors.Join(err, e.loadBalancer.Shutdown(ctx))
 	if e.centralQueueMembership != nil {
@@ -328,7 +343,7 @@ func (e *metricExporterImp) runCentralQueue(ctx context.Context) {
 			continue
 		}
 		if ctx.Err() != nil {
-			lease.done()
+			lease.discardOnShutdown()
 			lease.releaseConsumer()
 			return
 		}
