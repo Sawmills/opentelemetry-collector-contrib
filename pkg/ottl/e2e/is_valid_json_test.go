@@ -53,13 +53,42 @@ func TestIsValidJSONGuardPreservesExtraClosingBracketWithoutExecutionError(t *te
 	require.Equal(t, body, record.Body().Str())
 }
 
+func TestTryParseJSONPreservesMalformedBodyWithoutExecutionError(t *testing.T) {
+	body := `{not json}`
+	record, err := executeObjectTryParseJSON(t.Context(), body)
+	require.NoError(t, err)
+	require.Equal(t, body, record.Body().Str())
+}
+
+func TestTryParseJSONPreservesValidParsedFields(t *testing.T) {
+	record, err := executeObjectTryParseJSON(t.Context(), `{"message":"synthetic","nested":{"enabled":true}}`)
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"message": "synthetic", "nested": map[string]any{"enabled": true}}, record.Body().AsRaw())
+}
+
+func TestTryParseJSONObjectStatementPreservesRejectedAndNonObjectBodies(t *testing.T) {
+	for _, body := range []string{`{"message":"synthetic"}}`, `{"message":"synthetic"}]`, `{"number":1e10000}`, `{"message":`, `plain text`, `null`, `[1,2]`} {
+		record, err := executeObjectTryParseJSON(t.Context(), body)
+		require.NoError(t, err)
+		require.Equal(t, body, record.Body().Str())
+	}
+}
+
 func executeGuardedJSON(ctx context.Context, body string) (plog.LogRecord, error) {
+	return executeJSONStatement(ctx, body, `set(body, ParseJSON(body)) where IsValidJSON(body) and IsMatch(body, "^\\{")`)
+}
+
+func executeObjectTryParseJSON(ctx context.Context, body string) (plog.LogRecord, error) {
+	return executeJSONStatement(ctx, body, `set(body, TryParseJSON(body)) where IsMatch(body, "^\\{")`)
+}
+
+func executeJSONStatement(ctx context.Context, body, statement string) (plog.LogRecord, error) {
 	settings := componenttest.NewNopTelemetrySettings()
 	parser, err := ottllog.NewParser(ottlfuncs.StandardFuncs[*ottllog.TransformContext](), settings)
 	if err != nil {
 		return plog.LogRecord{}, err
 	}
-	statements, err := parser.ParseStatements([]string{`set(body, ParseJSON(body)) where IsValidJSON(body) and IsMatch(body, "^\\{")`})
+	statements, err := parser.ParseStatements([]string{statement})
 	if err != nil {
 		return plog.LogRecord{}, err
 	}
