@@ -553,6 +553,7 @@ Available Converters:
 - [ToUpperCase](#touppercase)
 - [TraceID](#traceid)
 - [TruncateTime](#truncatetime)
+- [TryParseJSON](#tryparsejson)
 - [Unix](#unix)
 - [UnixMicro](#unixmicro)
 - [UnixMilli](#unixmilli)
@@ -1447,6 +1448,7 @@ objects and arrays only, so retain an object or array condition when using
 this predicate to guard `ParseJSON`.
 
 Validation decodes the input. A subsequent `ParseJSON` call decodes it again.
+Use `TryParseJSON` to parse once when invalid input should leave a field unchanged.
 
 Example:
 
@@ -2606,6 +2608,25 @@ While some common paths can return a `time.Time` object, you will most like need
 Examples:
 
 - `TruncateTime(span.start_time, Duration("1s"))`
+
+### TryParseJSON
+
+`TryParseJSON(target)`
+
+`TryParseJSON` parses an object or array once and returns the same
+`pcommon.Map` or `pcommon.Slice` as `ParseJSON`. It uses the same decoder and
+value conversion. Invalid JSON, scalar JSON, non-string input, and getter
+failures return `nil` without an execution error. Factory argument mismatches
+remain configuration errors.
+
+The `set` function skips a `nil` value. This statement therefore preserves a
+malformed body and parses a valid object without a second decode:
+
+```ottl
+set(log.body, TryParseJSON(log.body)) where IsString(log.body) and IsMatch(log.body, "^\\{")
+```
+
+Use `ParseJSON` when invalid input or getter failures must produce an error.
 
 ### Unix
 
