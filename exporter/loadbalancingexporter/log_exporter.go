@@ -6,12 +6,14 @@ package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configmiddleware"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/exporter"
@@ -34,6 +36,10 @@ type logExporterImp struct {
 	centralQueue           *centralQueue
 	centralQueueMembership *centralQueueMembership
 	centralCodec           *queuePayloadCodec
+	centralStorageID       *component.ID
+	centralExporterID      component.ID
+	centralStorage         *centralQueueStorage
+	centralCompression     QueuePayloadCompression
 
 	logger                       *zap.Logger
 	started                      atomic.Bool
@@ -67,7 +73,15 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 		oCfg := buildExporterConfig(cfg.(*Config), endpoint)
 		oParams := buildExporterSettings(exporterFactory.Type(), params, endpoint)
 
-		return exporterFactory.CreateLogs(ctx, oParams, &oCfg)
+		if cfg.(*Config).CentralQueue.StorageID == nil {
+			return exporterFactory.CreateLogs(ctx, oParams, &oCfg)
+		}
+		oCfg.ClientConfig.Middlewares = append(append([]configmiddleware.Config(nil), oCfg.ClientConfig.Middlewares...), configmiddleware.Config{ID: centralQueueAckMiddlewareID})
+		child, createErr := exporterFactory.CreateLogs(ctx, oParams, &oCfg)
+		if createErr != nil {
+			return nil, createErr
+		}
+		return centralQueueAckExporter{Logs: child}, nil
 	}
 
 	lb, err := newLoadBalancerForSignal(params.Logger, cfg, cfFunc, telemetry, backendRequestSignalLogs)
@@ -76,6 +90,9 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 	}
 
 	logExporter := &logExporterImp{
+		centralStorageID:             cfg.(*Config).CentralQueue.StorageID,
+		centralExporterID:            params.ID,
+		centralCompression:           cfg.(*Config).CentralQueue.PayloadCompression,
 		loadBalancer:                 lb,
 		telemetry:                    telemetry,
 		logger:                       params.Logger,
@@ -145,7 +162,38 @@ func (*logExporterImp) Capabilities() consumer.Capabilities {
 }
 
 func (e *logExporterImp) Start(ctx context.Context, host component.Host) error {
+	if e.centralStorageID != nil {
+		var err error
+		e.centralStorage, err = openCentralQueueStorage(ctx, host, *e.centralStorageID, e.centralExporterID, e.centralQueue.settings.telemetry, e.logger)
+		if err != nil {
+			return err
+		}
+		items, loadErr := e.centralStorage.load(ctx, e.centralCompression, e.centralQueue.settings.maxCompressedBytes)
+		if loadErr == nil {
+			limit := centralQueueEffectiveUncompressedItemLimit(e.centralQueue.settings)
+			for i := range items {
+				if items[i].uncompressedBytes > limit {
+					loadErr = e.centralStorage.pause("replay", "capacity", errors.New("retained durable payload exceeds configured decode capacity"))
+					break
+				}
+				if _, decodeErr := decodeCentralQueueLogsItem(items[i], e.centralCodec); decodeErr != nil {
+					loadErr = e.centralStorage.pause("replay", "decode", fmt.Errorf("invalid durable central queue payload: %w", decodeErr))
+					break
+				}
+			}
+		}
+		if loadErr == nil {
+			loadErr = e.centralQueue.enqueueAll(items)
+		}
+		if loadErr != nil {
+			return errors.Join(loadErr, e.centralStorage.client.Close(ctx), e.centralCodec.Close())
+		}
+		e.centralQueue.storage = e.centralStorage
+	}
 	if err := e.loadBalancer.Start(ctx, host); err != nil {
+		if e.centralStorage != nil {
+			_ = e.centralStorage.client.Close(ctx)
+		}
 		return err
 	}
 	e.started.Store(true)
@@ -205,15 +253,27 @@ func (e *logExporterImp) Shutdown(ctx context.Context) error {
 		// a consumer can still use it.
 		waitCtx, cancel := context.WithTimeout(ctx, time.Second)
 		waitErr := waitForInflight(waitCtx, &e.centralWG)
+		if waitErr == nil {
+			waitErr = waitForInflight(waitCtx, &e.centralQueue.admissions)
+		}
 		cancel()
 		err = errors.Join(err, waitErr)
 		if waitErr == nil {
 			err = errors.Join(err, e.centralCodec.Close())
+			if e.centralStorage != nil {
+				err = errors.Join(err, e.centralStorage.client.Close(context.WithoutCancel(ctx)))
+			}
 		} else {
 			go func() {
 				e.centralWG.Wait()
+				e.centralQueue.admissions.Wait()
 				if closeErr := e.centralCodec.Close(); closeErr != nil {
 					e.logger.Warn("failed to close central queue codec", zap.Error(closeErr))
+				}
+				if e.centralStorage != nil {
+					if closeErr := e.centralStorage.client.Close(context.Background()); closeErr != nil {
+						e.logger.Warn("failed to close central queue storage", zap.Error(closeErr))
+					}
 				}
 			}()
 		}
@@ -300,6 +360,16 @@ func (e *logExporterImp) observeCentralQueueLaneAssignment(lanes int) {
 func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 	defer e.centralWG.Done()
 	for {
+		if e.centralStorage != nil {
+			select {
+			case <-e.centralStorage.failedWrites:
+				// An uncertain commit requires reopening the store. Retain
+				// the queue and stop resending to an already-accepting backend.
+				<-ctx.Done()
+				return
+			default:
+			}
+		}
 		lease, err := e.centralQueue.leaseWithAcquire(ctx, func(queueCompressedBytes int64, _ centralQueueWindow) (func(), bool) {
 			if !tryAcquireCentralQueueConsumer(ctx, &e.centralActiveConsumers, e.centralQueueConsumers, e.centralQueue, e.loadBalancer, queueCompressedBytes) {
 				return nil, false
@@ -324,6 +394,19 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 			continue
 		}
 
+		if e.centralStorage != nil {
+			select {
+			case <-e.centralStorage.failedWrites:
+				// Leasing may have blocked while another worker lost its
+				// acknowledgement commit. Return ownership before parking.
+				_ = lease.requeue(time.Now())
+				lease.releaseConsumer()
+				<-ctx.Done()
+				return
+			default:
+			}
+		}
+
 		acquiredBackend, backendAvailable := tryAcquireCentralQueueBackendForWindow(e.loadBalancer, e.centralQueueBackendLimiter, lease.window)
 		if !backendAvailable {
 			lease.releaseConsumer()
@@ -332,7 +415,21 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 			}
 			continue
 		}
-		err = e.consumeCentralQueueLogWindowWithBackend(ctx, lease.window, acquiredBackend)
+		attemptCtx := ctx
+		var acknowledgement centralQueueLogAck
+		if e.centralStorage != nil {
+			attemptCtx = context.WithValue(ctx, centralQueueAckContextKey{}, &acknowledgement)
+		}
+		err = e.consumeCentralQueueLogWindowWithBackend(attemptCtx, lease.window, acquiredBackend)
+		if e.centralStorage != nil && consumererror.IsPermanent(err) {
+			err = e.centralStorage.acknowledge(ctx, lease.window.items, int64(lease.window.count), "permanent_error")
+		} else if err == nil && e.centralStorage != nil {
+			if !acknowledgement.observed {
+				err = e.centralStorage.pause("acknowledge", "response", errors.New("durable central queue OTLP acknowledgement was not observed"))
+			} else {
+				err = e.centralStorage.acknowledge(ctx, lease.window.items, acknowledgement.rejected, "partial_success")
+			}
+		}
 		if err == nil {
 			lease.done()
 			lease.releaseConsumer()
@@ -343,7 +440,7 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 			lease.releaseConsumer()
 			return
 		}
-		if consumererror.IsPermanent(err) {
+		if consumererror.IsPermanent(err) && e.centralStorage == nil {
 			e.logger.Warn("dropping central log queue item after permanent export error", zap.Error(err))
 			lease.done()
 			lease.releaseConsumer()
@@ -402,6 +499,10 @@ func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context
 		item := window.items[i]
 		itemLogs, err := decodeCentralQueueLogsItem(item, e.centralCodec)
 		if err != nil {
+			if e.centralStorage != nil {
+				backendLease.release()
+				return e.centralStorage.pause("dispatch", "decode", fmt.Errorf("invalid durable central queue payload: %w", err))
+			}
 			corruptPayloads++
 			droppedItems += item.count
 			if firstDecodeErr == nil {

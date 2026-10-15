@@ -185,10 +185,29 @@ Refer to [config.yaml](./testdata/config.yaml) for detailed examples on using th
   * `min_lanes`, `max_lanes`, `backend_lane_multiplier`, `target_lane_fill_duration`, and `lane_hysteresis_factor` tune dynamic lane selection. Defaults are `1`, `256`, `2`, derived from `max_batch_delay`, and `2`.
   * Queued payloads stay compressed until dispatch. Central queue capacity is enforced on compressed bytes; request windows are decoded only after a ready lane window is leased.
   * The scheduler keeps a bounded set of ready request windows, limited by `num_consumers`. Ready windows reserve uncompressed in-flight budget before a worker leases them, so parallel consumers do not shrink request windows beyond `target_compressed_bytes` unless a bounded flush reason applies.
-  * On graceful logs or metrics shutdown, the central queue rejects new intake and flushes partial batches. It retries accepted work until empty or `central_queue.shutdown_timeout` (zero or omitted means five minutes), bounded by the caller's earlier deadline. Shutdown returns an error at the deadline. Kubernetes termination grace must cover preStop, this budget, and cleanup. The queue remains in memory; abrupt process or node loss still requires replay or durable storage.
+  * On graceful logs or metrics shutdown, the central queue rejects new intake and flushes partial batches. It retries accepted work until empty or `central_queue.shutdown_timeout` (zero or omitted means five minutes), bounded by the caller's earlier deadline. Shutdown returns an error at the deadline. Kubernetes termination grace must cover preStop, this budget, and cleanup. Without `storage`, the queue remains in memory; abrupt process or node loss still requires source replay.
   * `otelcol_loadbalancer_central_queue_shutdown_dropped_items{signal,reason="forced"}` counts records/datapoints discarded when shutdown forces delivery to stop. Pending and failed in-flight records count once; successful in-flight sends do not count. Each discard emits a warning with the count. `forced` describes deadline-forced discard, not the Kubernetes deletion cause. SIGTERM cannot distinguish scale-in from eviction. A killed process or an absent final scrape cannot report a reliable final count; missing metrics do not establish zero loss.
   * Queue wakeup and delivery cancellation precede synchronous shutdown warnings. A blocked log sink can still delay shutdown return, but cannot hold the queue lock or defer delivery cancellation.
+  * `storage: file_storage/queue` opts the logs central queue into durable admission. It requires `enabled: true`; metrics and traces reject this option. Configure that existing extension with `fsync: true`, `recreate: false`, and a retained volume. Keep the exporter ID, storage extension ID, directory and compression unchanged across restart. Intake succeeds only after the entire request and its pending index commit in one transaction. Pending and in-flight compressed payloads both count against `max_compressed_bytes`.
+  * Durable replay reads entries without deleting or renumbering them. Missing metadata, incompatible compression/format, corruption, lock contention or a backlog above the configured capacity fails startup. A failed mutation refuses further writes and pauses delivery until the store reopens. There is no memory-only fallback. The file lock excludes a second local writer; it does not replace volume fencing or an ordinal recovery owner.
+  * Durable entries remain owned until downstream OTLP success or a committed terminal rejection. An OTLP partial-success count or permanent rejection is persisted and logged before its entries are reclaimed. Those rejections are known loss, not delivery. A crash between downstream acceptance and local acknowledgement can replay duplicates. OTLP success can acknowledge volatile downstream buffering; this option alone does not establish end-to-end durability.
+  * At the shutdown deadline, durable entries remain on disk as deferred recovery work and do not increment `shutdown_dropped_items`. A still-desired StatefulSet ordinal must reopen its original claim. A scaled-in ordinal requires an owned restore-and-drain procedure. Never discard its claim or switch to a binary that ignores the store while entries remain. Drain the durable owner before disabling this option. Volume destruction is outside the restart guarantee.
+  * `otelcol_loadbalancer_central_queue_durable_pending_items` and `_durable_pending_bytes` report retained records and compressed payload bytes, including in-flight work. The bytes exclude storage metadata and filesystem headroom. `_durable_oldest_enqueued_time` is the oldest admission's Unix time, or zero when empty. `_durable_deferred_items` reports work retained after this owner stops. `_durable_terminal_rejected_items` is the persisted cumulative rejection count for this store. `_storage_failures{signal,operation,reason}` counts each failed storage attempt once; cached refusal after an uncertain commit adds no attempt. These names share the `otelcol_loadbalancer_central_queue` prefix.
   * Central queue mode is incompatible with `sending_queue.enabled=true`, `protocol.otlp.sending_queue`, `log_batcher.enabled=true`, and `metric_batcher.enabled=true`. Child OTLP exporter queues are disabled while central queue mode is active.
+
+Durable logs require an enabled storage extension. For example:
+
+```yaml
+extensions:
+  file_storage/queue:
+    directory: /data/lb-queue
+    fsync: true
+    recreate: false
+service:
+  extensions: [file_storage/queue]
+```
+
+Set `exporters.loadbalancing.central_queue.storage: file_storage/queue` in the same configuration. This snippet omits the existing receiver, exporter and pipeline settings.
 
 Simple example
 

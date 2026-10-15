@@ -13,6 +13,10 @@ $defs:
   central_queue_config:
     type: object
     properties:
+      storage:
+        x-pointer: true
+        type: string
+        description: Optional file_storage extension ID for durable logs admission. Requires central_queue.enabled and fsync-enabled retained storage.
       enabled:
         type: boolean
       max_compressed_bytes:

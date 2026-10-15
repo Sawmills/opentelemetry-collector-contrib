@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/servicediscovery/types"
 	"github.com/klauspost/compress/zstd"
+	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/confmap"
@@ -272,6 +273,7 @@ const (
 
 type CentralQueueConfig struct {
 	Enabled                      bool                    `mapstructure:"enabled"`
+	StorageID                    *component.ID           `mapstructure:"storage"`
 	MaxCompressedBytes           int64                   `mapstructure:"max_compressed_bytes"`
 	PayloadCompression           QueuePayloadCompression `mapstructure:"payload_compression"`
 	MaxUncompressedBatchBytes    int                     `mapstructure:"max_uncompressed_batch_bytes"`
@@ -411,6 +413,9 @@ func (c ZstdPayloadCodecConfig) Validate() error {
 }
 
 func (c CentralQueueConfig) Validate() error {
+	if c.StorageID != nil && !c.Enabled {
+		return errors.New("central_queue.storage requires central_queue.enabled=true")
+	}
 	if !c.Enabled {
 		return nil
 	}

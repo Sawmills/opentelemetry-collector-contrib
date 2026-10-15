@@ -21,6 +21,7 @@ var (
 )
 
 type centralQueueItem struct {
+	durableID           uint64
 	signal              signalKind
 	routingKey          []byte
 	routingKeyID        string
