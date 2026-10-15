@@ -35,6 +35,24 @@ func TestIsValidJSONGuardPreservesValidParsedFields(t *testing.T) {
 	require.Equal(t, want, record.Body().AsRaw())
 }
 
+func TestIsValidJSONGuardPreservesExtraClosingBraceWithoutExecutionError(t *testing.T) {
+	body := `{"message":"synthetic"}}`
+
+	record, err := executeGuardedJSON(t.Context(), body)
+
+	require.NoError(t, err)
+	require.Equal(t, body, record.Body().Str())
+}
+
+func TestIsValidJSONGuardPreservesExtraClosingBracketWithoutExecutionError(t *testing.T) {
+	body := `{"message":"synthetic"}]`
+
+	record, err := executeGuardedJSON(t.Context(), body)
+
+	require.NoError(t, err)
+	require.Equal(t, body, record.Body().Str())
+}
+
 func executeGuardedJSON(ctx context.Context, body string) (plog.LogRecord, error) {
 	settings := componenttest.NewNopTelemetrySettings()
 	parser, err := ottllog.NewParser(ottlfuncs.StandardFuncs[*ottllog.TransformContext](), settings)

@@ -1438,13 +1438,15 @@ Examples:
 `IsValidJSON(value)`
 
 The `IsValidJSON` converter returns `true` when a string contains valid JSON,
-using the same JSON library as `ParseJSON`. It returns `false` for invalid JSON
-or a non-string value. Errors while retrieving the value are returned to the
-caller.
+using the same complete-input decoder as `ParseJSON`. It returns `false` for
+invalid JSON or a non-string value. Errors while retrieving the value are
+returned to the caller.
 
 Valid JSON includes objects, arrays, and scalar values. `ParseJSON` accepts
 objects and arrays only, so retain an object or array condition when using
 this predicate to guard `ParseJSON`.
+
+Validation decodes the input. A subsequent `ParseJSON` call decodes it again.
 
 Example:
 

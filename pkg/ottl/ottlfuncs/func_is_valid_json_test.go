@@ -9,18 +9,15 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/collector/component/componenttest"
-	"go.opentelemetry.io/collector/pdata/plog"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl"
-	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/contexts/ottllog"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/pkg/ottl/ottlfuncs"
 )
 
 func TestIsValidJSONAcceptsValidObject(t *testing.T) {
 	body := `{"message":"synthetic","nested":{"values":[true,null,42]}}`
 
-	valid, err := validJSONBody(t.Context(), body)
+	valid, err := validJSONValue(t.Context(), body)
 
 	require.NoError(t, err)
 	require.True(t, valid)
@@ -29,7 +26,7 @@ func TestIsValidJSONAcceptsValidObject(t *testing.T) {
 func TestIsValidJSONRejectsNumberOutsideDecoderRange(t *testing.T) {
 	body := `{"number":1e10000}`
 
-	valid, err := validJSONBody(t.Context(), body)
+	valid, err := validJSONValue(t.Context(), body)
 
 	require.NoError(t, err)
 	require.False(t, valid)
@@ -38,7 +35,7 @@ func TestIsValidJSONRejectsNumberOutsideDecoderRange(t *testing.T) {
 func TestIsValidJSONRejectsMalformedObject(t *testing.T) {
 	body := `{not json}`
 
-	valid, err := validJSONBody(t.Context(), body)
+	valid, err := validJSONValue(t.Context(), body)
 
 	require.NoError(t, err)
 	require.False(t, valid)
@@ -47,7 +44,7 @@ func TestIsValidJSONRejectsMalformedObject(t *testing.T) {
 func TestIsValidJSONRejectsTruncatedObject(t *testing.T) {
 	body := `{"message":`
 
-	valid, err := validJSONBody(t.Context(), body)
+	valid, err := validJSONValue(t.Context(), body)
 
 	require.NoError(t, err)
 	require.False(t, valid)
@@ -56,7 +53,25 @@ func TestIsValidJSONRejectsTruncatedObject(t *testing.T) {
 func TestIsValidJSONRejectsTrailingInput(t *testing.T) {
 	body := `{"message":"synthetic"} trailing`
 
-	valid, err := validJSONBody(t.Context(), body)
+	valid, err := validJSONValue(t.Context(), body)
+
+	require.NoError(t, err)
+	require.False(t, valid)
+}
+
+func TestIsValidJSONRejectsExtraClosingBrace(t *testing.T) {
+	body := `{"message":"synthetic"}}`
+
+	valid, err := validJSONValue(t.Context(), body)
+
+	require.NoError(t, err)
+	require.False(t, valid)
+}
+
+func TestIsValidJSONRejectsExtraClosingBracket(t *testing.T) {
+	body := `{"message":"synthetic"}]`
+
+	valid, err := validJSONValue(t.Context(), body)
 
 	require.NoError(t, err)
 	require.False(t, valid)
@@ -65,7 +80,7 @@ func TestIsValidJSONRejectsTrailingInput(t *testing.T) {
 func TestIsValidJSONRejectsEmptyString(t *testing.T) {
 	body := ""
 
-	valid, err := validJSONBody(t.Context(), body)
+	valid, err := validJSONValue(t.Context(), body)
 
 	require.NoError(t, err)
 	require.False(t, valid)
@@ -74,7 +89,7 @@ func TestIsValidJSONRejectsEmptyString(t *testing.T) {
 func TestIsValidJSONRejectsMapValue(t *testing.T) {
 	body := map[string]any{"message": "synthetic"}
 
-	valid, err := validJSONBody(t.Context(), body)
+	valid, err := validJSONValue(t.Context(), body)
 
 	require.NoError(t, err)
 	require.False(t, valid)
@@ -83,14 +98,14 @@ func TestIsValidJSONRejectsMapValue(t *testing.T) {
 func TestIsValidJSONRejectsIntegerValue(t *testing.T) {
 	body := int64(42)
 
-	valid, err := validJSONBody(t.Context(), body)
+	valid, err := validJSONValue(t.Context(), body)
 
 	require.NoError(t, err)
 	require.False(t, valid)
 }
 
 func TestIsValidJSONRejectsNilValue(t *testing.T) {
-	valid, err := validJSONBody(t.Context(), nil)
+	valid, err := validJSONValue(t.Context(), nil)
 
 	require.NoError(t, err)
 	require.False(t, valid)
@@ -99,7 +114,7 @@ func TestIsValidJSONRejectsNilValue(t *testing.T) {
 func TestIsValidJSONAcceptsArray(t *testing.T) {
 	body := `["synthetic",42,true,null]`
 
-	valid, err := validJSONBody(t.Context(), body)
+	valid, err := validJSONValue(t.Context(), body)
 
 	require.NoError(t, err)
 	require.True(t, valid)
@@ -108,7 +123,7 @@ func TestIsValidJSONAcceptsArray(t *testing.T) {
 func TestIsValidJSONAcceptsScalarJSON(t *testing.T) {
 	body := `null`
 
-	valid, err := validJSONBody(t.Context(), body)
+	valid, err := validJSONValue(t.Context(), body)
 
 	require.NoError(t, err)
 	require.True(t, valid)
@@ -143,27 +158,13 @@ func evaluateJSONFactory(ctx context.Context, getter ottl.StringGetter[any]) (an
 	return function(ctx, nil)
 }
 
-func validJSONBody(ctx context.Context, body any) (bool, error) {
-	parser, err := ottllog.NewParser(
-		ottlfuncs.StandardFuncs[*ottllog.TransformContext](),
-		componenttest.NewNopTelemetrySettings(),
-		ottllog.EnablePathContextNames(),
-	)
+func validJSONValue(ctx context.Context, value any) (bool, error) {
+	getter := ottl.StandardStringGetter[any]{Getter: func(context.Context, any) (any, error) {
+		return value, nil
+	}}
+	result, err := evaluateJSONFactory(ctx, &getter)
 	if err != nil {
 		return false, err
 	}
-	condition, err := parser.ParseCondition(`IsValidJSON(log.body)`)
-	if err != nil {
-		return false, err
-	}
-	logs := plog.NewLogs()
-	resourceLogs := logs.ResourceLogs().AppendEmpty()
-	scopeLogs := resourceLogs.ScopeLogs().AppendEmpty()
-	record := scopeLogs.LogRecords().AppendEmpty()
-	if err := record.Body().FromRaw(body); err != nil {
-		return false, err
-	}
-	transformContext := ottllog.NewTransformContextPtr(resourceLogs, scopeLogs, record)
-	defer transformContext.Close()
-	return condition.Eval(ctx, transformContext)
+	return result.(bool), nil
 }

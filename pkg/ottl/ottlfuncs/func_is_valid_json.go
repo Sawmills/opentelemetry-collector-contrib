@@ -38,6 +38,8 @@ func isValidJSON[K any](target ottl.StringGetter[K]) ottl.ExprFunc[K] {
 		if err != nil {
 			return nil, err
 		}
-		return json.Valid([]byte(value)), nil
+		// Match ParseJSON's complete-input check; json.Valid accepts trailing delimiters.
+		var decoded any
+		return json.Unmarshal([]byte(value), &decoded) == nil, nil
 	}
 }
