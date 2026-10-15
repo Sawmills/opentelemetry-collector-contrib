@@ -12,15 +12,16 @@ import (
 type centralQueueConsumerLimitReason string
 
 const (
-	centralQueueConsumerLimitReasonQueueEmpty      centralQueueConsumerLimitReason = "queue_empty"
-	centralQueueConsumerLimitReasonQueueDemand     centralQueueConsumerLimitReason = "queue_demand"
-	centralQueueConsumerLimitReasonBackendCapacity centralQueueConsumerLimitReason = "backend_capacity"
-	centralQueueConsumerLimitReasonConfiguredMax   centralQueueConsumerLimitReason = "configured_max"
-	centralQueueConsumerLimitReasonBackendPressure centralQueueConsumerLimitReason = "backend_pressure"
-	centralQueueConsumerLimitReasonRecovery        centralQueueConsumerLimitReason = "recovery"
-	centralQueueConsumerLimitReasonHealthyRamp     centralQueueConsumerLimitReason = "healthy_ramp"
-	defaultCentralQueueMinConsumers                                                = 1
-	defaultCentralQueueMaxInflightSendsPerBackend                                  = 1
+	centralQueueConsumerLimitReasonQueueEmpty        centralQueueConsumerLimitReason = "queue_empty"
+	centralQueueConsumerLimitReasonQueueDemand       centralQueueConsumerLimitReason = "queue_demand"
+	centralQueueConsumerLimitReasonBackendCapacity   centralQueueConsumerLimitReason = "backend_capacity"
+	centralQueueConsumerLimitReasonConfiguredMax     centralQueueConsumerLimitReason = "configured_max"
+	centralQueueConsumerLimitReasonBackendPressure   centralQueueConsumerLimitReason = "backend_pressure"
+	centralQueueConsumerLimitReasonRecovery          centralQueueConsumerLimitReason = "recovery"
+	centralQueueConsumerLimitReasonHealthyRamp       centralQueueConsumerLimitReason = "healthy_ramp"
+	centralQueueConsumerLimitReasonMembershipUnknown centralQueueConsumerLimitReason = "membership_unknown"
+	defaultCentralQueueMinConsumers                                                  = 1
+	defaultCentralQueueMaxInflightSendsPerBackend                                    = 1
 )
 
 var centralQueueConsumerLimitReasons = []centralQueueConsumerLimitReason{
@@ -31,6 +32,7 @@ var centralQueueConsumerLimitReasons = []centralQueueConsumerLimitReason{
 	centralQueueConsumerLimitReasonBackendPressure,
 	centralQueueConsumerLimitReasonRecovery,
 	centralQueueConsumerLimitReasonHealthyRamp,
+	centralQueueConsumerLimitReasonMembershipUnknown,
 }
 
 type centralQueueConsumerPressureState string
@@ -118,8 +120,7 @@ func (p centralQueueConsumerPolicy) compute(inputs centralQueueConsumerInputs) c
 		}
 	}
 
-	backendMax := p.maxBackendConsumers(inputs.readyBackends)
-	target := min(maxConsumers, queueDemand, backendMax)
+	target := min(maxConsumers, queueDemand, backendSafe)
 	effective := min(target, backendSafe)
 	reason := centralQueueConsumerLimitReasonConfiguredMax
 	switch effective {
@@ -208,21 +209,6 @@ func (p centralQueueConsumerPolicy) backendSafeConsumersPerLB(readyBackends int)
 	return int(backendSafe)
 }
 
-func (p centralQueueConsumerPolicy) maxBackendConsumers(readyBackends int) int {
-	if readyBackends <= 0 {
-		return 0
-	}
-	inflightPerBackend := p.maxInflightSendsPerBackend
-	if inflightPerBackend <= 0 {
-		inflightPerBackend = defaultCentralQueueMaxInflightSendsPerBackend
-	}
-	maxBackendConsumers := int64(readyBackends) * int64(inflightPerBackend)
-	if maxBackendConsumers > int64(math.MaxInt) {
-		return math.MaxInt
-	}
-	return int(maxBackendConsumers)
-}
-
 func ceilDivInt64ToInt(numerator, denominator int64) int {
 	if numerator <= 0 || denominator <= 0 {
 		return 0
@@ -238,9 +224,31 @@ func ceilDivInt64ToInt(numerator, denominator int64) int {
 }
 
 type centralQueueConsumerController struct {
-	mu     sync.Mutex
-	policy centralQueueConsumerPolicy
-	last   centralQueueConsumerResult
+	mu               sync.Mutex
+	policy           centralQueueConsumerPolicy
+	last             centralQueueConsumerResult
+	membershipSource func() (int, bool)
+}
+
+func (c *centralQueueConsumerController) setMembershipSource(source func() (int, bool)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if source == nil {
+		source = func() (int, bool) { return 0, false }
+	}
+	c.membershipSource = source
+}
+
+func (c *centralQueueConsumerController) currentPolicyLocked() (centralQueueConsumerPolicy, bool) {
+	policy := c.policy
+	if c.membershipSource != nil {
+		replicas, known := c.membershipSource()
+		if !known || replicas <= 0 {
+			return policy, false
+		}
+		policy.activeLoadBalancerReplicas = replicas
+	}
+	return policy, true
 }
 
 func newCentralQueueConsumerController(maxConsumers int, targetCompressedBytes int64, activeLoadBalancerReplicas int) *centralQueueConsumerController {
@@ -282,7 +290,18 @@ func (c *centralQueueConsumerController) tryAcquire(
 }
 
 func (c *centralQueueConsumerController) computeLocked(inputs centralQueueConsumerInputs) centralQueueConsumerResult {
-	policy := c.policy
+	policy, known := c.currentPolicyLocked()
+	if !known {
+		state := c.last.pressureState
+		if state == "" {
+			state = centralQueueConsumerPressureStable
+		}
+		return centralQueueConsumerResult{
+			limitReason:            centralQueueConsumerLimitReasonMembershipUnknown,
+			pressureState:          state,
+			pressureReductionLimit: c.last.pressureReductionLimit,
+		}
+	}
 	if c.last.effectiveConsumers > 0 {
 		policy.previousEffectiveConsumers = c.last.effectiveConsumers
 		policy.previousEffectiveConsumersOK = true
@@ -322,16 +341,20 @@ func centralQueueConsumerRampedLimitReason(effective, backendSafe, queueDemand i
 	}
 }
 
-func (c *centralQueueConsumerController) lastEffectiveConsumers() (int, bool) {
+func (c *centralQueueConsumerController) lastEffectiveConsumers(readyBackends int) (int, bool) {
 	if c == nil {
 		return 0, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	policy, known := c.currentPolicyLocked()
+	if !known {
+		return 0, true
+	}
 	if c.last.limitReason == "" {
 		return 0, false
 	}
-	return c.last.effectiveConsumers, true
+	return min(c.last.effectiveConsumers, policy.backendSafeConsumersPerLB(readyBackends)), true
 }
 
 func (c *centralQueueConsumerController) backendSafeConsumersForLanes(readyBackends int) (int, bool) {
@@ -340,11 +363,15 @@ func (c *centralQueueConsumerController) backendSafeConsumersForLanes(readyBacke
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	backendSafe := c.policy.backendSafeConsumersPerLB(readyBackends)
+	policy, known := c.currentPolicyLocked()
+	if !known {
+		return 0, true
+	}
+	backendSafe := policy.backendSafeConsumersPerLB(readyBackends)
 	if backendSafe <= 0 {
 		return 0, true
 	}
-	return min(configuredCentralQueueConsumers(c.policy.maxConsumers), backendSafe), true
+	return min(configuredCentralQueueConsumers(policy.maxConsumers), backendSafe), true
 }
 
 func configuredCentralQueueConsumers(consumers int) int {
@@ -372,7 +399,7 @@ func centralQueueEffectiveConsumersForLanes(controller *centralQueueConsumerCont
 	if readyBackends <= 0 {
 		return 0, false
 	}
-	if effectiveConsumers, ok := controller.lastEffectiveConsumers(); ok {
+	if effectiveConsumers, ok := controller.lastEffectiveConsumers(readyBackends); ok {
 		return min(effectiveConsumers, readyBackends), true
 	}
 	if effectiveConsumers, ok := controller.backendSafeConsumersForLanes(readyBackends); ok {

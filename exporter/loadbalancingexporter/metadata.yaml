@@ -49,6 +49,10 @@ attributes:
       - success
       - failure
       - skipped
+  scope:
+    description: Optional resolver scope for load balancer peer discovery
+    type: string
+    enum: [load_balancer_membership]
   signal:
     description: Telemetry signal
     type: string
@@ -254,7 +258,7 @@ telemetry:
       gauge:
         value_type: int
     loadbalancer_num_resolutions:
-      attributes: [success, resolver]
+      attributes: [success, resolver, scope]
       enabled: true
       stability: development
       description: Number of times the resolver has triggered new resolutions.

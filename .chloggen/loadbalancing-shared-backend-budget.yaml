@@ -1,0 +1,8 @@
+change_type: bug_fix
+component: exporter/loadbalancing
+note: Bound central queue recovery and healthy ramp by the discovered LB peer share of backend capacity.
+issues: []
+subtext: |
+  The optional central_queue.load_balancer_service discovers collector-scoped peers through Kubernetes EndpointSlices.
+  Unknown or stale membership retains queued batches. Converged shares retain the minimum-one progress allowance.
+change_logs: [user]

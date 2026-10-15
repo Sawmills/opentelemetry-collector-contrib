@@ -80,8 +80,30 @@ func newK8sResolver(clt kubernetes.Interface,
 	returnNames bool,
 	tb *metadata.TelemetryBuilder,
 ) (*k8sResolver, error) {
+	name, namespace, epsListWatcher, err := newK8sServiceListWatcher(clt, logger, service, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if timeout == 0 {
+		timeout = defaultListWatchTimeout
+	}
+	epsStore := &sync.Map{}
+	h := &handler{
+		endpoints: epsStore, logger: logger, telemetry: tb, returnNames: returnNames,
+	}
+	r := &k8sResolver{
+		logger: logger, svcName: name, svcNs: namespace, port: ports,
+		once: &sync.Once{}, endpointsStore: epsStore, epsListWatcher: epsListWatcher,
+		handler: h, stopCh: make(chan struct{}), lwTimeout: timeout,
+		telemetry: tb, returnNames: returnNames,
+	}
+	h.callback = r.resolve
+	return r, nil
+}
+
+func newK8sServiceListWatcher(clt kubernetes.Interface, logger *zap.Logger, service string, timeout time.Duration) (string, string, *cache.ListWatch, error) {
 	if service == "" {
-		return nil, errNoSvc
+		return "", "", nil, errNoSvc
 	}
 
 	if timeout == 0 {
@@ -90,7 +112,7 @@ func newK8sResolver(clt kubernetes.Interface,
 
 	parts := strings.Split(service, ".")
 	if len(parts) == 0 || parts[0] == "" {
-		return nil, errNoSvc
+		return "", "", nil, errNoSvc
 	}
 
 	name, namespace := parts[0], "default"
@@ -98,7 +120,7 @@ func newK8sResolver(clt kubernetes.Interface,
 	case len(parts) > 1 && parts[1] != "":
 		namespace = parts[1]
 	case len(parts) > 2:
-		return nil, fmt.Errorf("%w: namespace segment missing in %q", errInvalidSvcFQDN, service)
+		return "", "", nil, fmt.Errorf("%w: namespace segment missing in %q", errInvalidSvcFQDN, service)
 	default:
 		logger.Info("the namespace for the Kubernetes service wasn't provided, trying to determine the current namespace", zap.String("name", name))
 		if ns, err := getInClusterNamespace(); err == nil {
@@ -111,51 +133,28 @@ func newK8sResolver(clt kubernetes.Interface,
 
 	if len(parts) > 2 {
 		if parts[2] != "svc" {
-			return nil, fmt.Errorf("%w: expected third DNS label to be 'svc' in %q", errInvalidSvcFQDN, service)
+			return "", "", nil, fmt.Errorf("%w: expected third DNS label to be 'svc' in %q", errInvalidSvcFQDN, service)
 		}
 		if len(parts) == 3 {
-			return nil, fmt.Errorf("%w: missing cluster domain in %q", errInvalidSvcFQDN, service)
+			return "", "", nil, fmt.Errorf("%w: missing cluster domain in %q", errInvalidSvcFQDN, service)
 		}
 	}
 
 	epsSelector := fmt.Sprintf("kubernetes.io/service-name=%s", name)
 	epsListWatcher := &cache.ListWatch{
-		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
+		ListWithContextFunc: func(ctx context.Context, options metav1.ListOptions) (runtime.Object, error) {
 			options.LabelSelector = epsSelector
 			options.TimeoutSeconds = ptr.To[int64](int64(timeout.Seconds()))
-			return clt.DiscoveryV1().EndpointSlices(namespace).List(context.Background(), options)
+			return clt.DiscoveryV1().EndpointSlices(namespace).List(ctx, options)
 		},
-		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
+		WatchFuncWithContext: func(ctx context.Context, options metav1.ListOptions) (watch.Interface, error) {
 			options.LabelSelector = epsSelector
 			options.TimeoutSeconds = ptr.To[int64](int64(timeout.Seconds()))
-			return clt.DiscoveryV1().EndpointSlices(namespace).Watch(context.Background(), options)
+			return clt.DiscoveryV1().EndpointSlices(namespace).Watch(ctx, options)
 		},
 	}
 
-	epsStore := &sync.Map{}
-	h := &handler{
-		endpoints:   epsStore,
-		logger:      logger,
-		telemetry:   tb,
-		returnNames: returnNames,
-	}
-	r := &k8sResolver{
-		logger:         logger,
-		svcName:        name,
-		svcNs:          namespace,
-		port:           ports,
-		once:           &sync.Once{},
-		endpointsStore: epsStore,
-		epsListWatcher: epsListWatcher,
-		handler:        h,
-		stopCh:         make(chan struct{}),
-		lwTimeout:      timeout,
-		telemetry:      tb,
-		returnNames:    returnNames,
-	}
-	h.callback = r.resolve
-
-	return r, nil
+	return name, namespace, epsListWatcher, nil
 }
 
 func (r *k8sResolver) start(_ context.Context) error {
