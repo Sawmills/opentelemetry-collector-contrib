@@ -208,10 +208,11 @@ func (e *metricExporterImp) Shutdown(ctx context.Context) error {
 		drainCtx, drainCancel := context.WithTimeout(ctx, e.centralQueue.shutdownTimeout())
 		err = errors.Join(err, e.centralQueue.drain(drainCtx))
 		drainCancel()
-		e.centralQueue.stopAndDiscard()
+		discarded := e.centralQueue.stopAndDiscard()
 		if e.centralCancel != nil {
 			e.centralCancel()
 		}
+		e.centralQueue.recordShutdownDiscard(discarded)
 		waitCtx, cancel := context.WithTimeout(ctx, time.Second)
 		waitErr := waitForInflight(waitCtx, &e.centralWG)
 		cancel()

@@ -53,7 +53,7 @@ func (q *centralQueue) drain(ctx context.Context) error {
 // stopAndDiscard seals the queue and discards only unleased work. Consumers
 // retain their leases: success is still delivery, while cancellation or a
 // stopped requeue counts that lease exactly once through its terminal call.
-func (q *centralQueue) stopAndDiscard() {
+func (q *centralQueue) stopAndDiscard() int64 {
 	q.mu.Lock()
 	q.stopped = true
 	q.discardOnStop = true
@@ -79,9 +79,9 @@ func (q *centralQueue) stopAndDiscard() {
 	clear(q.enqueuedAtHeapEntries)
 	snapshot := q.snapshotLocked()
 	q.mu.Unlock()
-	q.recordShutdownDiscard(records)
 	q.settings.telemetry.record(context.Background(), snapshot)
 	q.stop()
+	return records
 }
 
 func (q *centralQueue) recordShutdownDiscard(records int64) {

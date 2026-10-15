@@ -20,8 +20,63 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+type shutdownWarningWriter func([]byte) (int, error)
+
+func (w shutdownWarningWriter) Write(p []byte) (int, error) { return w(p) }
+
+func TestLogsShutdownCancelsDeliveryBeforeWarningOutput(t *testing.T) {
+	ts, tb := getTelemetryAssets(t)
+	warningStarted := make(chan struct{})
+	releaseWarning := make(chan struct{})
+	var warningOnce sync.Once
+	release := sync.OnceFunc(func() { close(releaseWarning) })
+	defer release()
+	writer := shutdownWarningWriter(func(p []byte) (int, error) {
+		warningOnce.Do(func() { close(warningStarted) })
+		<-releaseWarning
+		return len(p), nil
+	})
+	ts.Logger = zap.New(zapcore.NewCore(zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()), zapcore.AddSync(writer), zap.WarnLevel))
+	cfg := twoEndpointLogConfig()
+	cfg.CentralQueue = CentralQueueConfig{Enabled: true, PayloadCompression: QueuePayloadCompressionZstd, MaxCompressedBytes: 1 << 20, MaxUncompressedBatchBytes: 1024, MaxInflightUncompressedBytes: 1024, TargetCompressedBytes: 1, NumConsumers: 1, LaneCount: 1}
+	entered := make(chan struct{}, 1)
+	cancelled := make(chan struct{}, 1)
+	p, _ := newTestLogsExporter(t, ts, tb, cfg, func(context.Context, string) (component.Component, error) {
+		return newMockLogsExporter(func(ctx context.Context, _ plog.Logs) error {
+			entered <- struct{}{}
+			<-ctx.Done()
+			cancelled <- struct{}{}
+			return ctx.Err()
+		}), nil
+	})
+	require.NoError(t, p.Start(t.Context(), componenttest.NewNopHost()))
+	require.NoError(t, p.ConsumeLogs(t.Context(), compressibleLogs(20, 64)))
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("slow backend was not reached")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	shutdown := make(chan error, 1)
+	go func() { shutdown <- p.Shutdown(ctx) }()
+	select {
+	case <-warningStarted:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not warn about pending records")
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Error("blocked warning output delayed backend cancellation past the drain deadline")
+	}
+	release()
+	require.ErrorIs(t, <-shutdown, context.DeadlineExceeded)
+}
 
 func TestLogsShutdownDrainsAcceptedCentralQueueRecords(t *testing.T) {
 	for _, retry := range []bool{false, true} {

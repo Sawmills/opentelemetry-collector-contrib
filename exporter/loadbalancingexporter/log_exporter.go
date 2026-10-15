@@ -195,10 +195,12 @@ func (e *logExporterImp) Shutdown(ctx context.Context) error {
 		drainCtx, drainCancel := context.WithTimeout(ctx, e.centralQueue.shutdownTimeout())
 		err = errors.Join(err, e.centralQueue.drain(drainCtx))
 		drainCancel()
-		e.centralQueue.stopAndDiscard()
+		discarded := e.centralQueue.stopAndDiscard()
 		if e.centralCancel != nil {
 			e.centralCancel()
 		}
+		// Wake the queue and cancel delivery before potentially slow warning I/O.
+		e.centralQueue.recordShutdownDiscard(discarded)
 		// Bound cleanup by the caller deadline. Never close the codec while
 		// a consumer can still use it.
 		waitCtx, cancel := context.WithTimeout(ctx, time.Second)

@@ -1038,14 +1038,14 @@ func (l *centralQueueLease) finish(discarded bool) {
 		l.queue.mu.Lock()
 		l.queue.currentInflightBytes -= int64(l.window.uncompressedBytes)
 		l.queue.currentCompressedBytes -= int64(l.window.compressedBytes)
-		if discarded {
-			l.queue.recordShutdownDiscard(int64(l.window.count))
-		}
 		l.queue.releaseWindowItemsLocked(l)
 		snapshot := l.queue.snapshotLocked()
 		l.queue.mu.Unlock()
 		l.queue.notifyLeaseWaiters()
 		l.queue.settings.telemetry.record(context.Background(), snapshot)
+		if discarded {
+			l.queue.recordShutdownDiscard(int64(l.window.count))
+		}
 	})
 }
 
@@ -1059,6 +1059,7 @@ func (l *centralQueueLease) releaseConsumer() {
 func (l *centralQueueLease) requeue(now time.Time) error {
 	var err error
 	l.once.Do(func() {
+		var discarded int64
 		l.queue.settings.telemetry.recordRetry(context.Background())
 
 		l.queue.mu.Lock()
@@ -1066,7 +1067,7 @@ func (l *centralQueueLease) requeue(now time.Time) error {
 		if l.queue.stopped {
 			l.queue.currentCompressedBytes -= int64(l.window.compressedBytes)
 			if l.queue.discardOnStop {
-				l.queue.recordShutdownDiscard(int64(l.window.count))
+				discarded = int64(l.window.count)
 			}
 			err = errCentralQueueStopped
 		} else {
@@ -1097,6 +1098,7 @@ func (l *centralQueueLease) requeue(now time.Time) error {
 		l.queue.mu.Unlock()
 		l.queue.notifyLeaseWaiters()
 		l.queue.settings.telemetry.record(context.Background(), snapshot)
+		l.queue.recordShutdownDiscard(discarded)
 	})
 	return err
 }
@@ -1104,12 +1106,13 @@ func (l *centralQueueLease) requeue(now time.Time) error {
 func (l *centralQueueLease) deferReady(now time.Time) error {
 	var err error
 	l.once.Do(func() {
+		var discarded int64
 		l.queue.mu.Lock()
 		l.queue.currentInflightBytes -= int64(l.window.uncompressedBytes)
 		if l.queue.stopped {
 			l.queue.currentCompressedBytes -= int64(l.window.compressedBytes)
 			if l.queue.discardOnStop {
-				l.queue.recordShutdownDiscard(int64(l.window.count))
+				discarded = int64(l.window.count)
 			}
 			err = errCentralQueueStopped
 		} else {
@@ -1139,6 +1142,7 @@ func (l *centralQueueLease) deferReady(now time.Time) error {
 		l.queue.mu.Unlock()
 		l.queue.notifyLeaseWaiters()
 		l.queue.settings.telemetry.record(context.Background(), snapshot)
+		l.queue.recordShutdownDiscard(discarded)
 	})
 	return err
 }
