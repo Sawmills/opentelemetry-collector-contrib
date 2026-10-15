@@ -72,6 +72,7 @@ func converters[K any]() []ottl.Factory[K] {
 		NewIsMapFactory[K](),
 		NewIsMatchFactory[K](),
 		NewIsStringFactory[K](),
+		NewIsValidJSONFactory[K](),
 		NewLenFactory[K](),
 		NewLogFactory[K](),
 		NewIsValidLuhnFactory[K](),

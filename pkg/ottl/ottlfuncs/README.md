@@ -509,6 +509,7 @@ Available Converters:
 - [IsMatch](#ismatch)
 - [IsList](#islist)
 - [IsString](#isstring)
+- [IsValidJSON](#isvalidjson)
 - [Keys](#keys)
 - [Len](#len)
 - [Log](#log)
@@ -1431,6 +1432,25 @@ Examples:
 - `IsString(log.body)`
 
 - `IsString(resource.attributes["maybe a string"])`
+
+### IsValidJSON
+
+`IsValidJSON(value)`
+
+The `IsValidJSON` converter returns `true` when a string contains valid JSON,
+using the same JSON library as `ParseJSON`. It returns `false` for invalid JSON
+or a non-string value. Errors while retrieving the value are returned to the
+caller.
+
+Valid JSON includes objects, arrays, and scalar values. `ParseJSON` accepts
+objects and arrays only, so retain an object or array condition when using
+this predicate to guard `ParseJSON`.
+
+Example:
+
+```ottl
+set(log.body, ParseJSON(log.body)) where IsValidJSON(log.body) and IsMatch(log.body, "^\\{")
+```
 
 ### Keys
 
