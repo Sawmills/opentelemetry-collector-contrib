@@ -9,12 +9,18 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/collector/pdata/pmetric"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestLogsShutdownDrainsAcceptedCentralQueueRecords(t *testing.T) {
@@ -87,6 +93,133 @@ func TestLogsShutdownHonorsDeadlineWithUnavailableBackend(t *testing.T) {
 	cleanup, cancelCleanup := context.WithTimeout(context.WithoutCancel(t.Context()), time.Second)
 	defer cancelCleanup()
 	require.NoError(t, waitForInflight(cleanup, &p.centralWG))
+}
+
+func TestLogsShutdownCountsEveryUnsentRecordAtDeadline(t *testing.T) {
+	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
+	core, warnings := observer.New(zap.WarnLevel)
+	ts.Logger = zap.New(core)
+	cfg := twoEndpointLogConfig()
+	cfg.CentralQueue = CentralQueueConfig{Enabled: true, PayloadCompression: QueuePayloadCompressionZstd, MaxCompressedBytes: 1 << 20, MaxUncompressedBatchBytes: 1024, MaxInflightUncompressedBytes: 1024, TargetCompressedBytes: 1, NumConsumers: 1, LaneCount: 1}
+	entered := make(chan struct{}, 1)
+	exited := make(chan struct{}, 1)
+	p, _ := newTestLogsExporter(t, ts, tb, cfg, func(context.Context, string) (component.Component, error) {
+		return newMockLogsExporter(func(ctx context.Context, _ plog.Logs) error {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-ctx.Done()
+			exited <- struct{}{}
+			return ctx.Err()
+		}), nil
+	})
+	require.NoError(t, p.Start(t.Context(), componenttest.NewNopHost()))
+	require.NoError(t, p.ConsumeLogs(t.Context(), compressibleLogs(20, 64)))
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("slow backend was not reached")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, p.Shutdown(ctx), context.DeadlineExceeded)
+	select {
+	case <-exited:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not cancel the slow backend")
+	}
+	// Includes both pending payloads and the cancelled in-flight payload.
+	require.Eventually(t, func() bool {
+		m, err := telemetry.GetMetric("otelcol_loadbalancer_central_queue_shutdown_dropped_items")
+		if err != nil {
+			return false
+		}
+		sum, ok := m.Data.(metricdata.Sum[int64])
+		return ok && len(sum.DataPoints) == 1 && sum.DataPoints[0].Value == 20
+	}, time.Second, time.Millisecond, "accepted records discarded at shutdown must be counted")
+	requireCentralQueueIntSum(t, telemetry, "otelcol_loadbalancer_central_queue_shutdown_dropped_items", "{items}", attribute.NewSet(attribute.String("signal", "logs"), attribute.String("reason", "forced")), 20)
+	require.Eventually(t, func() bool {
+		var warned int64
+		for _, entry := range warnings.FilterMessage("central queue records discarded at shutdown deadline").All() {
+			warned += entry.ContextMap()["dropped_items"].(int64)
+		}
+		return warned == 20
+	}, time.Second, time.Millisecond, "every discarded record must also be warned")
+	for _, entry := range warnings.FilterMessage("central queue records discarded at shutdown deadline").All() {
+		require.Equal(t, "forced", entry.ContextMap()["reason"])
+	}
+}
+
+func TestLogsShutdownDrainsBeyondThirtySeconds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ts, tb := getTelemetryAssets(t)
+		cfg := twoEndpointLogConfig()
+		cfg.CentralQueue = CentralQueueConfig{Enabled: true, PayloadCompression: QueuePayloadCompressionZstd, MaxCompressedBytes: 1 << 20, MaxUncompressedBatchBytes: 1 << 20, MaxInflightUncompressedBytes: 1 << 20, TargetCompressedBytes: 1 << 20, MaxBatchDelay: time.Hour, NumConsumers: 1, LaneCount: 1}
+		var delivered atomic.Int64
+		p, _ := newTestLogsExporter(t, ts, tb, cfg, func(context.Context, string) (component.Component, error) {
+			return newMockLogsExporter(func(ctx context.Context, logs plog.Logs) error {
+				select {
+				case <-time.After(31 * time.Second):
+					delivered.Add(int64(logs.LogRecordCount()))
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}), nil
+		})
+		require.NoError(t, p.Start(t.Context(), componenttest.NewNopHost()))
+		require.NoError(t, p.ConsumeLogs(t.Context(), compressibleLogs(20, 32)))
+		ctx, cancel := context.WithTimeout(t.Context(), 40*time.Second)
+		defer cancel()
+		require.NoError(t, p.Shutdown(ctx), "drain must use the longer bounded shutdown budget")
+		require.Equal(t, int64(20), delivered.Load())
+	})
+}
+
+func TestMetricsShutdownDrainsAcceptedDatapoints(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ts, tb := getTelemetryAssets(t)
+		cfg := serviceBasedRoutingConfig()
+		cfg.CentralQueue = CentralQueueConfig{Enabled: true, PayloadCompression: QueuePayloadCompressionZstd, MaxCompressedBytes: 1 << 20, MaxUncompressedBatchBytes: 1 << 20, MaxInflightUncompressedBytes: 1 << 20, TargetCompressedBytes: 1 << 20, MaxBatchDelay: time.Hour, NumConsumers: 1, LaneCount: 1}
+		var delivered atomic.Int64
+		p, _ := newTestMetricsExporter(t, ts, tb, cfg, func(context.Context, string) (component.Component, error) {
+			return newMockMetricsExporter(func(ctx context.Context, md pmetric.Metrics) error {
+				select {
+				case <-time.After(time.Second):
+					delivered.Add(int64(md.DataPointCount()))
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}), nil
+		})
+		require.NoError(t, p.Start(t.Context(), componenttest.NewNopHost()))
+		require.NoError(t, p.ConsumeMetrics(t.Context(), metricsWithServiceDataPoints("same", "same", "same")))
+		require.NoError(t, p.Shutdown(t.Context()))
+		require.Equal(t, int64(3), delivered.Load(), "accepted datapoints must drain before shutdown")
+	})
+}
+
+func TestMetricsShutdownCountsUnsentDatapointsAtConfiguredDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ts, tb, telemetry := getTelemetryAssetsWithReader(t)
+		cfg := serviceBasedRoutingConfig()
+		cfg.CentralQueue = CentralQueueConfig{Enabled: true, PayloadCompression: QueuePayloadCompressionZstd, MaxCompressedBytes: 1 << 20, MaxUncompressedBatchBytes: 1 << 20, MaxInflightUncompressedBytes: 1 << 20, TargetCompressedBytes: 1 << 20, MaxBatchDelay: time.Hour, ShutdownTimeout: 50 * time.Millisecond, NumConsumers: 1, LaneCount: 1}
+		p, _ := newTestMetricsExporter(t, ts, tb, cfg, func(context.Context, string) (component.Component, error) {
+			return newMockMetricsExporter(func(ctx context.Context, _ pmetric.Metrics) error {
+				<-ctx.Done()
+				return ctx.Err()
+			}), nil
+		})
+		require.NoError(t, p.Start(t.Context(), componenttest.NewNopHost()))
+		require.NoError(t, p.ConsumeMetrics(t.Context(), metricsWithServiceDataPoints("same", "same", "same")))
+		require.ErrorIs(t, p.Shutdown(t.Context()), context.DeadlineExceeded)
+		requireCentralQueueIntSum(t, telemetry, "otelcol_loadbalancer_central_queue_shutdown_dropped_items", "{items}", attribute.NewSet(attribute.String("signal", "metrics"), attribute.String("reason", "forced")), 3)
+		// Repeated shutdown cannot count the same ownership twice.
+		require.NoError(t, p.Shutdown(t.Context()))
+		requireCentralQueueIntSum(t, telemetry, "otelcol_loadbalancer_central_queue_shutdown_dropped_items", "{items}", attribute.NewSet(attribute.String("signal", "metrics"), attribute.String("reason", "forced")), 3)
+	})
 }
 
 func TestLogsShutdownWaitsForInflightDeliveryAndRejectsNewIntake(t *testing.T) {

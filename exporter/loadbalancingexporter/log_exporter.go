@@ -106,9 +106,11 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 			maxUncompressedBatchBytes:    centralCfg.MaxUncompressedBatchBytes,
 			targetCompressedBytes:        centralCfg.TargetCompressedBytes,
 			maxBatchDelay:                centralCfg.MaxBatchDelay,
+			shutdownTimeout:              centralCfg.ShutdownTimeout,
 			maxReadyWindows:              centralQueueReadyWindowLimit(centralCfg.NumConsumers),
 			forceScheduleAge:             centralCfg.ForceScheduleAge,
 			telemetry:                    centralTelemetry,
+			logger:                       params.Logger,
 		})
 		logExporter.centralCodec = newQueuePayloadCodec(centralCfg.PayloadCompression, cfg.(*Config).PayloadCodec.Zstd)
 	}
@@ -190,10 +192,10 @@ func (e *logExporterImp) Shutdown(ctx context.Context) error {
 		err = e.batcher.Shutdown(ctx)
 	}
 	if e.centralQueue != nil {
-		drainCtx, drainCancel := context.WithTimeout(ctx, 30*time.Second)
+		drainCtx, drainCancel := context.WithTimeout(ctx, e.centralQueue.shutdownTimeout())
 		err = errors.Join(err, e.centralQueue.drain(drainCtx))
 		drainCancel()
-		e.centralQueue.stop()
+		e.centralQueue.stopAndDiscard()
 		if e.centralCancel != nil {
 			e.centralCancel()
 		}
@@ -335,7 +337,7 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 			continue
 		}
 		if ctx.Err() != nil {
-			lease.done()
+			lease.discardOnShutdown()
 			lease.releaseConsumer()
 			return
 		}

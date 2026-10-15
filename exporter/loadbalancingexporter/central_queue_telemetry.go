@@ -27,6 +27,7 @@ type centralQueueTelemetry struct {
 	routingKeyFailures    metric.Int64Counter
 	retries               metric.Int64Counter
 	decodeFailures        metric.Int64Counter
+	shutdownDroppedItems  metric.Int64Counter
 	inflightUncompressed  metric.Int64Gauge
 	inflightCapacity      metric.Int64Gauge
 	configuredConsumers   metric.Int64Gauge
@@ -163,6 +164,12 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 		"otelcol_loadbalancer_central_queue_rejected_compressed_bytes",
 		metric.WithDescription("Compressed bytes rejected by the central load-balancing queue."),
 		metric.WithUnit("By"),
+	)
+	errs = errors.Join(errs, err)
+	t.shutdownDroppedItems, err = meter.Int64Counter(
+		"otelcol_loadbalancer_central_queue_shutdown_dropped_items",
+		metric.WithDescription("Records or datapoints discarded when shutdown forces the central queue to stop. Abrupt process loss cannot be counted."),
+		metric.WithUnit("{items}"),
 	)
 	errs = errors.Join(errs, err)
 	t.routingKeyFailures, err = meter.Int64Counter(
@@ -476,6 +483,13 @@ func (t *centralQueueTelemetry) recordDecodeFailure(ctx context.Context, dropped
 		return
 	}
 	t.decodeFailures.Add(ctx, droppedItems, t.signalAttrs)
+}
+
+func (t *centralQueueTelemetry) recordShutdownDropped(ctx context.Context, items int64) {
+	if t == nil || items <= 0 {
+		return
+	}
+	t.shutdownDroppedItems.Add(ctx, items, t.signalAttrs, metric.WithAttributes(attribute.String("reason", "forced")))
 }
 
 func (t *centralQueueTelemetry) recordConfiguredConsumers(ctx context.Context, consumers int64) {

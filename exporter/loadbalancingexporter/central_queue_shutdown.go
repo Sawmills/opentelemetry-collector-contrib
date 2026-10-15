@@ -6,7 +6,16 @@ package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry
 import (
 	"context"
 	"time"
+
+	"go.uber.org/zap"
 )
+
+func (q *centralQueue) shutdownTimeout() time.Duration {
+	if q.settings.shutdownTimeout > 0 {
+		return q.settings.shutdownTimeout
+	}
+	return defaultCentralQueueShutdownTimeout
+}
 
 // drain seals admission and flushes partially filled batches while consumers
 // continue delivery and transient-error retries. In-flight bytes remain charged
@@ -38,5 +47,50 @@ func (q *centralQueue) drain(ctx context.Context) error {
 			// Recheck completion under the queue lock before reporting a timeout.
 		case <-ticker.C:
 		}
+	}
+}
+
+// stopAndDiscard seals the queue and discards only unleased work. Consumers
+// retain their leases: success is still delivery, while cancellation or a
+// stopped requeue counts that lease exactly once through its terminal call.
+func (q *centralQueue) stopAndDiscard() {
+	q.mu.Lock()
+	q.stopped = true
+	q.discardOnStop = true
+	var records int64
+	for _, bucket := range q.buckets {
+		for _, item := range bucket.items {
+			records += int64(item.count)
+			q.currentCompressedBytes -= int64(item.compressedBytes)
+		}
+	}
+	for _, window := range q.ready {
+		records += int64(window.count)
+		q.currentCompressedBytes -= int64(window.compressedBytes)
+		q.currentInflightBytes -= int64(window.uncompressedBytes)
+	}
+	q.buckets = nil
+	clear(q.bucketsByKey)
+	q.readyBuckets = nil
+	q.ready = nil
+	q.itemCount = 0
+	q.oldestEnqueuedAt = nil
+	clear(q.enqueuedAtCounts)
+	clear(q.enqueuedAtHeapEntries)
+	snapshot := q.snapshotLocked()
+	q.mu.Unlock()
+	q.recordShutdownDiscard(records)
+	q.settings.telemetry.record(context.Background(), snapshot)
+	q.stop()
+}
+
+func (q *centralQueue) recordShutdownDiscard(records int64) {
+	if records <= 0 {
+		return
+	}
+	q.settings.telemetry.recordShutdownDropped(context.Background(), records)
+	if q.settings.logger != nil {
+		q.settings.logger.Warn("central queue records discarded at shutdown deadline",
+			zap.Int64("dropped_items", records), zap.String("reason", "forced"))
 	}
 }
