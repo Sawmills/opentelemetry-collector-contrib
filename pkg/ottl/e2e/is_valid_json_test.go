@@ -74,6 +74,20 @@ func TestTryParseJSONObjectStatementPreservesRejectedAndNonObjectBodies(t *testi
 	}
 }
 
+func TestTryParseJSONParsesValidContainersWithoutShapeGuard(t *testing.T) {
+	for _, sample := range []struct {
+		body string
+		want any
+	}{
+		{" \n{\"message\":\"synthetic\"}", map[string]any{"message": "synthetic"}},
+		{` ["synthetic",{"enabled":true}]`, []any{"synthetic", map[string]any{"enabled": true}}},
+	} {
+		record, err := executeJSONStatement(t.Context(), sample.body, `set(body, TryParseJSON(body))`)
+		require.NoError(t, err)
+		require.Equal(t, sample.want, record.Body().AsRaw())
+	}
+}
+
 func executeGuardedJSON(ctx context.Context, body string) (plog.LogRecord, error) {
 	return executeJSONStatement(ctx, body, `set(body, ParseJSON(body)) where IsValidJSON(body) and IsMatch(body, "^\\{")`)
 }

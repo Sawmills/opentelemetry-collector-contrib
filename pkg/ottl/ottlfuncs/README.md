@@ -2619,11 +2619,11 @@ value conversion. Invalid JSON, scalar JSON, non-string input, and getter
 failures return `nil` without an execution error. Factory argument mismatches
 remain configuration errors.
 
-The `set` function skips a `nil` value. This statement therefore preserves a
-malformed body and parses a valid object without a second decode:
+The `set` function skips a `nil` value. This statement preserves invalid input
+and parses valid objects or arrays, including leading whitespace, once:
 
 ```ottl
-set(log.body, TryParseJSON(log.body)) where IsString(log.body) and IsMatch(log.body, "^\\{")
+set(log.body, TryParseJSON(log.body))
 ```
 
 Use `ParseJSON` when invalid input or getter failures must produce an error.
