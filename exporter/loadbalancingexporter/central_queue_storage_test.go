@@ -312,7 +312,13 @@ func TestDurableCentralQueueProcess(t *testing.T) {
 	if os.Getenv("SAW13194_LB_MODE") == "corrupt-codec" || os.Getenv("SAW13194_LB_MODE") == "reduced-uncompressed" {
 		storageExtension = corruptCodecStorage{Extension: ext.(storage.Extension)}
 	}
-	startErr := exp.Start(t.Context(), durableTestHost{map[component.ID]component.Component{component.MustNewIDWithName("file_storage", "queue"): storageExtension}})
+	var host component.Host = durableTestHost{map[component.ID]component.Component{component.MustNewIDWithName("file_storage", "queue"): storageExtension}}
+	if os.Getenv("SAW13194_LB_MODE") == "corrupt-manifest" {
+		// The real Collector cannot consume asynchronous fatal events until
+		// startup returns. A startup error must return without reporting one.
+		host = durableStatusHost{Host: host, events: make(chan *componentstatus.Event)}
+	}
+	startErr := exp.Start(t.Context(), host)
 	if os.Getenv("SAW13194_LB_MODE") == "corrupt-codec" {
 		require.ErrorContains(t, startErr, "durable central queue payload")
 		require.NoError(t, ext.Shutdown(t.Context()))
@@ -468,11 +474,11 @@ func TestDurableCentralQueueRejectsAndCountsFailedStorageAdmission(t *testing.T)
 	require.ErrorContains(t, exp.ConsumeLogs(t.Context(), input), "injected storage write failure")
 	require.Error(t, exp.ConsumeLogs(t.Context(), input), "an uncertain write must block subsequent mutations until reopen")
 	require.Equal(t, int64(1), attempts.Load())
-	require.Eventually(t, func() bool { return len(events) == 1 }, time.Second, 10*time.Millisecond, "a paused owner must request a Collector restart")
+	require.Eventually(t, func() bool { return len(events) == 1 }, time.Second, 10*time.Millisecond, "a paused owner must report permanent component failure")
 	event := <-events
-	require.Equal(t, componentstatus.StatusFatalError, event.Status())
+	require.Equal(t, componentstatus.StatusPermanentError, event.Status())
 	require.ErrorContains(t, event.Err(), "injected storage write failure")
-	require.Empty(t, events, "cached refusal must not report another fatal status")
+	require.Empty(t, events, "cached refusal must not report another permanent status")
 	var data metricdata.ResourceMetrics
 	require.NoError(t, reader.Collect(t.Context(), &data))
 	var failures int64

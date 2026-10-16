@@ -355,9 +355,11 @@ func (s *centralQueueStorage) recordPending() {
 
 func (s *centralQueueStorage) failure(operation, reason string, err error) {
 	s.telemetry.recordStorageFailure(context.Background(), operation, reason)
-	// A paused owner cannot recover in place. The Collector's existing fatal
-	// status path shuts down the process so its supervisor can reopen the store.
-	componentstatus.ReportStatus(s.host, componentstatus.NewFatalErrorEvent(err))
+	// The service owns startup status. Runtime pauses require an owned reopen;
+	// permanent status avoids the pinned Collector's blocking fatal-error path.
+	if operation != "replay" {
+		componentstatus.ReportStatus(s.host, componentstatus.NewPermanentErrorEvent(err))
+	}
 	s.logger.Error("durable central queue storage operation failed", zap.String("operation", operation), zap.String("reason", reason), zap.Error(err))
 }
 
