@@ -27,6 +27,7 @@ const (
 
 type centralStoreManifest struct {
 	Version                  int
+	Signal                   signalKind
 	Compression              QueuePayloadCompression
 	Head, Tail, NextID       uint64
 	Payloads, Records, Bytes int64
@@ -34,7 +35,7 @@ type centralStoreManifest struct {
 }
 type centralStoreNode struct {
 	Previous, Next uint64
-	enqueuedAt     int64 // In-memory metadata; payload owns the persisted timestamp.
+	enqueuedAt     *centralStoreEnqueuedAt // In-memory metadata; payload owns the persisted timestamp.
 }
 type centralStoredItem struct {
 	Signal                   signalKind
@@ -43,7 +44,9 @@ type centralStoredItem struct {
 	EnqueuedAt               int64
 }
 type centralQueueStorage struct {
+	pendingTimes centralStoreAgeHeap
 	client       storage.Client
+	signal       signalKind
 	mu           sync.Mutex
 	manifest     centralStoreManifest
 	nodes        map[uint64]centralStoreNode
@@ -53,7 +56,7 @@ type centralQueueStorage struct {
 	logger       *zap.Logger
 }
 
-func openCentralQueueStorage(ctx context.Context, host component.Host, storageID, exporterID component.ID, telemetry *centralQueueTelemetry, logger *zap.Logger) (_ *centralQueueStorage, resultErr error) {
+func openCentralQueueStorage(ctx context.Context, host component.Host, storageID, exporterID component.ID, signal signalKind, telemetry *centralQueueTelemetry, logger *zap.Logger) (_ *centralQueueStorage, resultErr error) {
 	defer func() {
 		if resultErr != nil {
 			telemetry.recordStorageFailure(ctx, "open", "extension")
@@ -67,11 +70,11 @@ func openCentralQueueStorage(ctx context.Context, host component.Host, storageID
 	if !ok {
 		return nil, fmt.Errorf("central queue storage extension %s is unavailable", storageID)
 	}
-	client, err := extension.GetClient(ctx, component.KindExporter, exporterID, "central_queue_logs")
+	client, err := extension.GetClient(ctx, component.KindExporter, exporterID, "central_queue_"+string(signal))
 	if err != nil {
 		return nil, fmt.Errorf("open central queue storage %s: %w", storageID, err)
 	}
-	return &centralQueueStorage{client: client, failedWrites: make(chan struct{}), nodes: make(map[uint64]centralStoreNode), telemetry: telemetry, logger: logger}, nil
+	return &centralQueueStorage{client: client, signal: signal, failedWrites: make(chan struct{}), nodes: make(map[uint64]centralStoreNode), telemetry: telemetry, logger: logger}, nil
 }
 func centralStoreNodeKey(id uint64) string    { return "index/" + strconv.FormatUint(id, 10) }
 func centralStorePayloadKey(id uint64) string { return "item/" + strconv.FormatUint(id, 10) }
@@ -93,7 +96,7 @@ func encodeCentralStoredItem(item centralQueueItem) ([]byte, error) {
 	return result, nil
 }
 
-func decodeCentralStoredItem(id uint64, data []byte) (centralQueueItem, error) {
+func decodeCentralStoredItem(id uint64, data []byte, signal signalKind) (centralQueueItem, error) {
 	if len(data) < 4 || binary.BigEndian.Uint32(data) != crc32.ChecksumIEEE(data[4:]) {
 		return centralQueueItem{}, errors.New("durable central queue payload checksum mismatch")
 	}
@@ -101,7 +104,7 @@ func decodeCentralStoredItem(id uint64, data []byte) (centralQueueItem, error) {
 	if err := json.Unmarshal(data[4:], &item); err != nil {
 		return centralQueueItem{}, err
 	}
-	if item.Signal != signalKindLogs || len(item.Payload) == 0 || item.Count <= 0 || item.UncompressedBytes <= 0 || item.EnqueuedAt <= 0 {
+	if item.Signal != signal || len(item.Payload) == 0 || item.Count <= 0 || item.UncompressedBytes <= 0 || item.EnqueuedAt <= 0 {
 		return centralQueueItem{}, errors.New("invalid durable central queue payload")
 	}
 	return centralQueueItem{durableID: id, signal: item.Signal, routingKey: item.RoutingKey, routingKeyID: string(item.RoutingKey), payload: item.Payload, compressedBytes: len(item.Payload), uncompressedBytes: item.UncompressedBytes, count: item.Count, enqueuedAtUnixNano: item.EnqueuedAt}, nil
@@ -134,7 +137,7 @@ func (s *centralQueueStorage) load(ctx context.Context, compression QueuePayload
 	}
 	if data == nil {
 		reason = "write"
-		s.manifest = centralStoreManifest{Version: 1, Compression: compression, NextID: 1}
+		s.manifest = centralStoreManifest{Version: 1, Signal: s.signal, Compression: compression, NextID: 1}
 		encoded, _ := json.Marshal(s.manifest)
 		if err = s.client.Batch(ctx, storage.SetOperation(centralStoreManifestKey, encoded), storage.SetOperation(centralStoreFormatKey, []byte("central_queue/1"))); err != nil {
 			return nil, fmt.Errorf("initialize durable central queue: %w", err)
@@ -146,7 +149,7 @@ func (s *centralQueueStorage) load(ctx context.Context, compression QueuePayload
 		return nil, fmt.Errorf("decode durable central queue manifest: %w", err)
 	}
 	m := s.manifest
-	if m.Version != 1 || m.Compression != compression || m.NextID == 0 || m.Payloads < 0 || m.Records < 0 || m.Bytes < 0 || m.RejectedRecords < 0 || (m.Head == 0) != (m.Tail == 0) {
+	if m.Version != 1 || m.Signal != s.signal || m.Compression != compression || m.NextID == 0 || m.Payloads < 0 || m.Records < 0 || m.Bytes < 0 || m.RejectedRecords < 0 || (m.Head == 0) != (m.Tail == 0) {
 		return nil, errors.New("incompatible or invalid durable central queue manifest")
 	}
 	if m.Bytes > maxBytes {
@@ -171,12 +174,13 @@ func (s *centralQueueStorage) load(ctx context.Context, compression QueuePayload
 		if node.Previous != previous {
 			return nil, errors.New("broken durable central queue index link")
 		}
-		item, decodeErr := decodeCentralStoredItem(id, payload.Value)
+		item, decodeErr := decodeCentralStoredItem(id, payload.Value, s.signal)
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
-		node.enqueuedAt = item.enqueuedAtUnixNano
+		node.enqueuedAt = &centralStoreEnqueuedAt{unixNano: item.enqueuedAtUnixNano, index: -1}
 		s.nodes[id] = node
+		s.pendingTimes.track(node.enqueuedAt)
 		items = append(items, item)
 		bytes += int64(item.compressedBytes)
 		if bytes > maxBytes {
@@ -212,7 +216,7 @@ func (s *centralQueueStorage) append(ctx context.Context, items []centralQueueIt
 		id := m.NextID
 		m.NextID++
 		items[i].durableID = id
-		node := centralStoreNode{Previous: m.Tail, enqueuedAt: items[i].enqueuedAtUnixNano}
+		node := centralStoreNode{Previous: m.Tail, enqueuedAt: &centralStoreEnqueuedAt{unixNano: items[i].enqueuedAtUnixNano, index: -1}}
 		if m.Tail != 0 {
 			previous, ok := nodes[m.Tail]
 			if !ok {
@@ -249,6 +253,9 @@ func (s *centralQueueStorage) append(ctx context.Context, items []centralQueueIt
 	}
 	s.manifest = m
 	maps.Copy(s.nodes, nodes)
+	for _, node := range nodes {
+		s.pendingTimes.track(node.enqueuedAt)
+	}
 	s.recordPending()
 	return nil
 }
@@ -323,6 +330,7 @@ func (s *centralQueueStorage) acknowledge(ctx context.Context, items []centralQu
 	}
 	s.manifest = m
 	for id := range removed {
+		s.pendingTimes.remove(s.nodes[id].enqueuedAt)
 		delete(s.nodes, id)
 	}
 	for id, node := range changed {
@@ -338,10 +346,7 @@ func (s *centralQueueStorage) acknowledge(ctx context.Context, items []centralQu
 }
 
 func (s *centralQueueStorage) recordPending() {
-	var oldest int64
-	if s.manifest.Head != 0 {
-		oldest = s.nodes[s.manifest.Head].enqueuedAt / 1e9
-	}
+	oldest := s.pendingTimes.oldestUnixSeconds()
 	s.telemetry.recordDurable(s.manifest.Records, s.manifest.Bytes, oldest)
 	s.telemetry.recordDurableRejected(s.manifest.RejectedRecords)
 }

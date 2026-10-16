@@ -72,6 +72,7 @@ type durableTestHost struct {
 func (h durableTestHost) GetExtensions() map[component.ID]component.Component { return h.extensions }
 
 type durableTestDestination struct {
+	seen map[int64]struct{}
 	plogotlp.UnimplementedGRPCServer
 	permanent atomic.Bool
 	partial   atomic.Int64
@@ -83,6 +84,23 @@ type durableTestDestination struct {
 
 func (d *durableTestDestination) Export(_ context.Context, req plogotlp.ExportRequest) (plogotlp.ExportResponse, error) {
 	d.attempts.Add(1)
+	var ids []int64
+	for _, rl := range req.Logs().ResourceLogs().All() {
+		for _, sl := range rl.ScopeLogs().All() {
+			for _, record := range sl.LogRecords().All() {
+				id, _ := record.Attributes().Get("test.id")
+				ids = append(ids, id.Int())
+			}
+		}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.seen == nil {
+		d.seen = make(map[int64]struct{})
+	}
+	for _, id := range ids {
+		d.seen[id] = struct{}{}
+	}
 	if d.blocked.Load() {
 		return plogotlp.NewExportResponse(), status.Error(codes.Unavailable, "backend unavailable")
 	}
@@ -95,16 +113,7 @@ func (d *durableTestDestination) Export(_ context.Context, req plogotlp.ExportRe
 		response.PartialSuccess().SetErrorMessage("test terminal rejection")
 		return response, nil
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	for _, rl := range req.Logs().ResourceLogs().All() {
-		for _, sl := range rl.ScopeLogs().All() {
-			for _, lr := range sl.LogRecords().All() {
-				id, _ := lr.Attributes().Get("test.id")
-				d.ids = append(d.ids, id.Int())
-			}
-		}
-	}
+	d.ids = append(d.ids, ids...)
 	return plogotlp.NewExportResponse(), nil
 }
 
@@ -577,6 +586,16 @@ func durableMetricValue(t *testing.T, reader *sdkmetric.ManualReader, name strin
 }
 
 func newDurableTestExporter(t *testing.T, dir, endpoint string, shutdownTimeout ...time.Duration) (exporter.Logs, component.Component, *sdkmetric.ManualReader) {
+	exp, store, reader := newDurableSignalTestExporter(t, dir, []string{endpoint}, "logs", shutdownTimeout...)
+	return exp.(exporter.Logs), store, reader
+}
+
+func newDurableTestMetricsExporter(t *testing.T, dir, endpoint string) (exporter.Metrics, component.Component, *sdkmetric.ManualReader) {
+	exp, store, reader := newDurableSignalTestExporter(t, dir, []string{endpoint}, "metrics")
+	return exp.(exporter.Metrics), store, reader
+}
+
+func newDurableSignalTestExporter(t *testing.T, dir string, endpoints []string, signal string, shutdownTimeout ...time.Duration) (component.Component, component.Component, *sdkmetric.ManualReader) {
 	timeout := 20 * time.Millisecond
 	if len(shutdownTimeout) > 0 {
 		timeout = shutdownTimeout[0]
@@ -590,12 +609,16 @@ func newDurableTestExporter(t *testing.T, dir, endpoint string, shutdownTimeout 
 	ext, err := storageFactory.Create(t.Context(), extensiontest.NewNopSettings(storageFactory.Type()), storageConfig)
 	require.NoError(t, err)
 	require.NoError(t, ext.Start(t.Context(), componenttest.NewNopHost()))
+	lanes, consumers := 1, 1
+	if len(endpoints) > 1 {
+		lanes, consumers = 16, 2
+	}
 	factory := loadbalancingexporter.NewFactory()
 	cfg := factory.CreateDefaultConfig()
 	require.NoError(t, confmap.NewFromStringMap(map[string]any{
 		"protocol":      map[string]any{"otlp": map[string]any{"tls": map[string]any{"insecure": true}}},
-		"resolver":      map[string]any{"static": map[string]any{"hostnames": []string{endpoint}}},
-		"central_queue": map[string]any{"enabled": true, "storage": "file_storage/queue", "shutdown_timeout": timeout.String(), "max_compressed_bytes": 1 << 20, "max_uncompressed_batch_bytes": 1 << 20, "max_inflight_uncompressed_bytes": 4 << 20, "target_compressed_bytes": 512, "max_batch_delay": "10ms", "num_consumers": 1, "lane_count": 1},
+		"resolver":      map[string]any{"static": map[string]any{"hostnames": endpoints}},
+		"central_queue": map[string]any{"enabled": true, "storage": "file_storage/queue", "shutdown_timeout": timeout.String(), "max_compressed_bytes": 1 << 20, "max_uncompressed_batch_bytes": 1 << 20, "max_inflight_uncompressed_bytes": 4 << 20, "target_compressed_bytes": 512, "max_batch_delay": "10ms", "num_consumers": consumers, "lane_count": lanes},
 	}).Unmarshal(cfg))
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
@@ -603,7 +626,15 @@ func newDurableTestExporter(t *testing.T, dir, endpoint string, shutdownTimeout 
 	settings := exportertest.NewNopSettings(factory.Type())
 	settings.ID = component.NewIDWithName(factory.Type(), "ordinal-0")
 	settings.MeterProvider = provider
-	exp, err := factory.CreateLogs(t.Context(), settings, cfg)
+	var exp component.Component
+	switch signal {
+	case "logs":
+		exp, err = factory.CreateLogs(t.Context(), settings, cfg)
+	case "metrics":
+		exp, err = factory.CreateMetrics(t.Context(), settings, cfg)
+	default:
+		t.Fatalf("unsupported test signal %q", signal)
+	}
 	require.NoError(t, err)
 	require.NoError(t, exp.Start(t.Context(), durableTestHost{map[component.ID]component.Component{component.MustNewIDWithName("file_storage", "queue"): ext}}))
 	return exp, ext, reader

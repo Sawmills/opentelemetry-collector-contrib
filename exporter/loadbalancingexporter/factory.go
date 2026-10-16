@@ -163,7 +163,7 @@ func buildExporterResilienceOptions(
 func createTracesExporter(ctx context.Context, params exporter.Settings, cfg component.Config) (exporter.Traces, error) {
 	c := cfg.(*Config)
 	if c.CentralQueue.StorageID != nil {
-		return nil, errors.New("durable central queue storage currently supports logs only")
+		return nil, errors.New("durable central queue storage supports logs and metrics only")
 	}
 	exp, err := newTracesExporter(params, cfg)
 	if err != nil {
@@ -213,9 +213,6 @@ func createLogsExporter(ctx context.Context, params exporter.Settings, cfg compo
 
 func createMetricsExporter(ctx context.Context, params exporter.Settings, cfg component.Config) (exporter.Metrics, error) {
 	c := cfg.(*Config)
-	if c.CentralQueue.StorageID != nil {
-		return nil, errors.New("durable central queue storage currently supports logs only")
-	}
 	exporter, err := newMetricsExporter(params, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("cannot configure loadbalancing metrics exporter: %w", err)

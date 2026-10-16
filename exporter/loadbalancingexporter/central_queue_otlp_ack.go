@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
+	"go.opentelemetry.io/collector/pdata/pmetric/pmetricotlp"
 	"google.golang.org/grpc"
 )
 
@@ -18,7 +19,7 @@ var centralQueueAckMiddlewareID = component.MustNewIDWithName("loadbalancing_ack
 
 type (
 	centralQueueAckContextKey struct{}
-	centralQueueLogAck        struct {
+	centralQueueOTLPAck       struct {
 		observed bool
 		rejected int64
 	}
@@ -27,16 +28,16 @@ type (
 // The standard OTLP exporter logs partial rejection and returns nil. Observe
 // the actual wire response through its public middleware seam so that durable
 // deletion includes a persisted terminal disposition for those records.
-type centralQueueAckMiddleware struct{}
+type centralQueueAckMiddleware struct{ signal signalKind }
 
 func (centralQueueAckMiddleware) Start(context.Context, component.Host) error { return nil }
 func (centralQueueAckMiddleware) Shutdown(context.Context) error              { return nil }
-func (centralQueueAckMiddleware) GetGRPCClientOptions(context.Context) ([]grpc.DialOption, error) {
+func (m centralQueueAckMiddleware) GetGRPCClientOptions(context.Context) ([]grpc.DialOption, error) {
 	return []grpc.DialOption{grpc.WithChainUnaryInterceptor(func(ctx context.Context, method string, req, reply any, conn *grpc.ClientConn, invoke grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		if err := invoke(ctx, method, req, reply, conn, opts...); err != nil {
 			return err
 		}
-		acknowledgement, ok := ctx.Value(centralQueueAckContextKey{}).(*centralQueueLogAck)
+		acknowledgement, ok := ctx.Value(centralQueueAckContextKey{}).(*centralQueueOTLPAck)
 		if !ok {
 			return errors.New("durable central queue response has no acknowledgement owner")
 		}
@@ -51,12 +52,23 @@ func (centralQueueAckMiddleware) GetGRPCClientOptions(context.Context) ([]grpc.D
 		}
 		data := make([]byte, wire.SizeProto())
 		wire.MarshalProto(data)
-		response := plogotlp.NewExportResponse()
-		if err := response.UnmarshalProto(data); err != nil {
-			return err
+		switch m.signal {
+		case signalKindLogs:
+			response := plogotlp.NewExportResponse()
+			if err := response.UnmarshalProto(data); err != nil {
+				return err
+			}
+			acknowledgement.rejected = response.PartialSuccess().RejectedLogRecords()
+		case signalKindMetrics:
+			response := pmetricotlp.NewExportResponse()
+			if err := response.UnmarshalProto(data); err != nil {
+				return err
+			}
+			acknowledgement.rejected = response.PartialSuccess().RejectedDataPoints()
+		default:
+			return errors.New("unsupported durable central queue acknowledgement signal")
 		}
 		acknowledgement.observed = true
-		acknowledgement.rejected = response.PartialSuccess().RejectedLogRecords()
 		return nil
 	})}, nil
 }
@@ -70,16 +82,34 @@ func (h centralQueueAckHost) GetExtensions() map[component.ID]component.Componen
 	return h.extensions
 }
 
-type centralQueueAckExporter struct{ exporter.Logs }
+type centralQueueAckLogsExporter struct{ exporter.Logs }
 
-func (e centralQueueAckExporter) Start(ctx context.Context, host component.Host) error {
+func (e centralQueueAckLogsExporter) Start(ctx context.Context, host component.Host) error {
+	wrapped, err := centralQueueAckHostForSignal(host, signalKindLogs)
+	if err != nil {
+		return err
+	}
+	return e.Logs.Start(ctx, wrapped)
+}
+
+type centralQueueAckMetricsExporter struct{ exporter.Metrics }
+
+func (e centralQueueAckMetricsExporter) Start(ctx context.Context, host component.Host) error {
+	wrapped, err := centralQueueAckHostForSignal(host, signalKindMetrics)
+	if err != nil {
+		return err
+	}
+	return e.Metrics.Start(ctx, wrapped)
+}
+
+func centralQueueAckHostForSignal(host component.Host, signal signalKind) (component.Host, error) {
 	extensions := maps.Clone(host.GetExtensions())
 	if extensions == nil {
 		extensions = make(map[component.ID]component.Component)
 	}
 	if _, exists := extensions[centralQueueAckMiddlewareID]; exists {
-		return errors.New("reserved durable central queue middleware identity is already used")
+		return nil, errors.New("reserved durable central queue middleware identity is already used")
 	}
-	extensions[centralQueueAckMiddlewareID] = centralQueueAckMiddleware{}
-	return e.Logs.Start(ctx, centralQueueAckHost{Host: host, extensions: extensions})
+	extensions[centralQueueAckMiddlewareID] = centralQueueAckMiddleware{signal: signal}
+	return centralQueueAckHost{Host: host, extensions: extensions}, nil
 }

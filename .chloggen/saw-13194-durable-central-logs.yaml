@@ -1,9 +1,9 @@
 change_type: enhancement
 component: exporter/loadbalancing
-note: Add opt-in durable central logs queue storage using file_storage.
+note: Add opt-in durable central queues for logs and metrics using file_storage.
 issues: [154]
 subtext: |
   Admission commits the complete request before success; restart replays retained entries without delete-and-reinsert.
   Delivery is at least once. Partial or permanent destination rejection is recorded before reclaiming entries.
-  Requires fsync-enabled file_storage on a retained volume with the same exporter identity. Metrics and traces reject this option.
+  Requires fsync-enabled file_storage on a retained volume with the same exporter identity. Signals use separate stores; traces reject this option.
 change_logs: [user]

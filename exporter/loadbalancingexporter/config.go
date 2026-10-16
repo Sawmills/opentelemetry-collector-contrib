@@ -272,7 +272,8 @@ const (
 )
 
 type CentralQueueConfig struct {
-	Enabled                      bool                    `mapstructure:"enabled"`
+	Enabled bool `mapstructure:"enabled"`
+	// StorageID enables durable logs and metrics admission using file_storage.
 	StorageID                    *component.ID           `mapstructure:"storage"`
 	MaxCompressedBytes           int64                   `mapstructure:"max_compressed_bytes"`
 	PayloadCompression           QueuePayloadCompression `mapstructure:"payload_compression"`

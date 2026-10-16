@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/config/configmiddleware"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/exporter"
@@ -39,6 +40,10 @@ type metricExporterImp struct {
 	centralQueue           *centralQueue
 	centralQueueMembership *centralQueueMembership
 	centralCodec           *queuePayloadCodec
+	centralStorageID       *component.ID
+	centralExporterID      component.ID
+	centralStorage         *centralQueueStorage
+	centralCompression     QueuePayloadCompression
 	routingKey             routingKey
 
 	logger                       *zap.Logger
@@ -68,7 +73,15 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 		oCfg := buildExporterConfig(cfg.(*Config), endpoint)
 		oParams := buildExporterSettings(exporterFactory.Type(), params, endpoint)
 
-		return exporterFactory.CreateMetrics(ctx, oParams, &oCfg)
+		if cfg.(*Config).CentralQueue.StorageID == nil {
+			return exporterFactory.CreateMetrics(ctx, oParams, &oCfg)
+		}
+		oCfg.ClientConfig.Middlewares = append(append([]configmiddleware.Config(nil), oCfg.ClientConfig.Middlewares...), configmiddleware.Config{ID: centralQueueAckMiddlewareID})
+		child, createErr := exporterFactory.CreateMetrics(ctx, oParams, &oCfg)
+		if createErr != nil {
+			return nil, createErr
+		}
+		return centralQueueAckMetricsExporter{Metrics: child}, nil
 	}
 
 	lb, err := newLoadBalancerForSignal(params.Logger, cfg, cfFunc, telemetry, backendRequestSignalMetrics)
@@ -77,6 +90,9 @@ func newMetricsExporter(params exporter.Settings, cfg component.Config) (*metric
 	}
 
 	metricExporter := metricExporterImp{
+		centralStorageID:             cfg.(*Config).CentralQueue.StorageID,
+		centralExporterID:            params.ID,
+		centralCompression:           cfg.(*Config).CentralQueue.PayloadCompression,
 		loadBalancer:                 lb,
 		routingKey:                   svcRouting,
 		telemetry:                    telemetry,
@@ -158,7 +174,38 @@ func (*metricExporterImp) Capabilities() consumer.Capabilities {
 }
 
 func (e *metricExporterImp) Start(ctx context.Context, host component.Host) error {
+	if e.centralStorageID != nil {
+		var err error
+		e.centralStorage, err = openCentralQueueStorage(ctx, host, *e.centralStorageID, e.centralExporterID, signalKindMetrics, e.centralQueue.settings.telemetry, e.logger)
+		if err != nil {
+			return err
+		}
+		items, loadErr := e.centralStorage.load(ctx, e.centralCompression, e.centralQueue.settings.maxCompressedBytes)
+		if loadErr == nil {
+			limit := centralQueueEffectiveUncompressedItemLimit(e.centralQueue.settings)
+			for i := range items {
+				if items[i].uncompressedBytes > limit {
+					loadErr = e.centralStorage.pause("replay", "capacity", errors.New("retained durable payload exceeds configured decode capacity"))
+					break
+				}
+				if _, decodeErr := decodeCentralQueueMetricsItem(items[i], e.centralCodec); decodeErr != nil {
+					loadErr = e.centralStorage.pause("replay", "decode", fmt.Errorf("invalid durable central queue payload: %w", decodeErr))
+					break
+				}
+			}
+		}
+		if loadErr == nil {
+			loadErr = e.centralQueue.enqueueAll(items)
+		}
+		if loadErr != nil {
+			return errors.Join(loadErr, e.centralStorage.client.Close(ctx), e.centralCodec.Close())
+		}
+		e.centralQueue.storage = e.centralStorage
+	}
 	if err := e.loadBalancer.Start(ctx, host); err != nil {
+		if e.centralStorage != nil {
+			_ = e.centralStorage.client.Close(ctx)
+		}
 		return err
 	}
 	e.started.Store(true)
@@ -212,18 +259,33 @@ func (e *metricExporterImp) Shutdown(ctx context.Context) error {
 		if e.centralCancel != nil {
 			e.centralCancel()
 		}
+		// Wake the queue and cancel delivery before potentially slow warning I/O.
 		e.centralQueue.recordShutdownDiscard(discarded)
+		// Bound cleanup by the caller deadline. Never close the codec while
+		// a consumer can still use it.
 		waitCtx, cancel := context.WithTimeout(ctx, time.Second)
 		waitErr := waitForInflight(waitCtx, &e.centralWG)
+		if waitErr == nil {
+			waitErr = waitForInflight(waitCtx, &e.centralQueue.admissions)
+		}
 		cancel()
 		err = errors.Join(err, waitErr)
 		if waitErr == nil {
 			err = errors.Join(err, e.centralCodec.Close())
+			if e.centralStorage != nil {
+				err = errors.Join(err, e.centralStorage.client.Close(context.WithoutCancel(ctx)))
+			}
 		} else {
 			go func() {
 				e.centralWG.Wait()
+				e.centralQueue.admissions.Wait()
 				if closeErr := e.centralCodec.Close(); closeErr != nil {
 					e.logger.Warn("failed to close central queue codec", zap.Error(closeErr))
+				}
+				if e.centralStorage != nil {
+					if closeErr := e.centralStorage.client.Close(context.Background()); closeErr != nil {
+						e.logger.Warn("failed to close central queue storage", zap.Error(closeErr))
+					}
 				}
 			}()
 		}
@@ -304,6 +366,16 @@ func (e *metricExporterImp) observeCentralQueueLaneBytes(compressedBytes int, no
 func (e *metricExporterImp) runCentralQueue(ctx context.Context) {
 	defer e.centralWG.Done()
 	for {
+		if e.centralStorage != nil {
+			select {
+			case <-e.centralStorage.failedWrites:
+				// An uncertain commit requires reopening the store. Retain
+				// the queue and stop resending to an already-accepting backend.
+				<-ctx.Done()
+				return
+			default:
+			}
+		}
 		lease, err := e.centralQueue.leaseWithAcquire(ctx, func(queueCompressedBytes int64, _ centralQueueWindow) (func(), bool) {
 			if !tryAcquireCentralQueueConsumer(ctx, &e.centralActiveConsumers, e.centralQueueConsumers, e.centralQueue, e.loadBalancer, queueCompressedBytes) {
 				return nil, false
@@ -328,6 +400,19 @@ func (e *metricExporterImp) runCentralQueue(ctx context.Context) {
 			continue
 		}
 
+		if e.centralStorage != nil {
+			select {
+			case <-e.centralStorage.failedWrites:
+				// Leasing may have blocked while another worker lost its
+				// acknowledgement commit. Return ownership before parking.
+				_ = lease.requeue(time.Now())
+				lease.releaseConsumer()
+				<-ctx.Done()
+				return
+			default:
+			}
+		}
+
 		acquiredBackend, backendAvailable := tryAcquireCentralQueueBackendForWindow(e.loadBalancer, e.centralQueueBackendLimiter, lease.window)
 		if !backendAvailable {
 			lease.releaseConsumer()
@@ -336,7 +421,21 @@ func (e *metricExporterImp) runCentralQueue(ctx context.Context) {
 			}
 			continue
 		}
-		err = e.consumeCentralQueueMetricWindowWithBackend(ctx, lease.window, acquiredBackend)
+		attemptCtx := ctx
+		var acknowledgement centralQueueOTLPAck
+		if e.centralStorage != nil {
+			attemptCtx = context.WithValue(ctx, centralQueueAckContextKey{}, &acknowledgement)
+		}
+		err = e.consumeCentralQueueMetricWindowWithBackend(attemptCtx, lease.window, acquiredBackend)
+		if e.centralStorage != nil && consumererror.IsPermanent(err) {
+			err = e.centralStorage.acknowledge(ctx, lease.window.items, int64(lease.window.count), "permanent_error")
+		} else if err == nil && e.centralStorage != nil {
+			if !acknowledgement.observed {
+				err = e.centralStorage.pause("acknowledge", "response", errors.New("durable central queue OTLP acknowledgement was not observed"))
+			} else {
+				err = e.centralStorage.acknowledge(ctx, lease.window.items, acknowledgement.rejected, "partial_success")
+			}
+		}
 		if err == nil {
 			lease.done()
 			lease.releaseConsumer()
@@ -347,7 +446,7 @@ func (e *metricExporterImp) runCentralQueue(ctx context.Context) {
 			lease.releaseConsumer()
 			return
 		}
-		if consumererror.IsPermanent(err) {
+		if consumererror.IsPermanent(err) && e.centralStorage == nil {
 			e.logger.Warn("dropping central metric queue item after permanent export error", zap.Error(err))
 			lease.done()
 			lease.releaseConsumer()
@@ -406,6 +505,10 @@ func (e *metricExporterImp) consumeCentralQueueMetricWindowAttempt(ctx context.C
 		item := window.items[i]
 		itemMetrics, err := decodeCentralQueueMetricsItem(item, e.centralCodec)
 		if err != nil {
+			if e.centralStorage != nil {
+				backendLease.release()
+				return e.centralStorage.pause("dispatch", "decode", fmt.Errorf("invalid durable central queue payload: %w", err))
+			}
 			corruptPayloads++
 			droppedItems += item.count
 			if firstDecodeErr == nil {

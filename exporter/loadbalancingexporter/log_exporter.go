@@ -81,7 +81,7 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 		if createErr != nil {
 			return nil, createErr
 		}
-		return centralQueueAckExporter{Logs: child}, nil
+		return centralQueueAckLogsExporter{Logs: child}, nil
 	}
 
 	lb, err := newLoadBalancerForSignal(params.Logger, cfg, cfFunc, telemetry, backendRequestSignalLogs)
@@ -164,7 +164,7 @@ func (*logExporterImp) Capabilities() consumer.Capabilities {
 func (e *logExporterImp) Start(ctx context.Context, host component.Host) error {
 	if e.centralStorageID != nil {
 		var err error
-		e.centralStorage, err = openCentralQueueStorage(ctx, host, *e.centralStorageID, e.centralExporterID, e.centralQueue.settings.telemetry, e.logger)
+		e.centralStorage, err = openCentralQueueStorage(ctx, host, *e.centralStorageID, e.centralExporterID, signalKindLogs, e.centralQueue.settings.telemetry, e.logger)
 		if err != nil {
 			return err
 		}
@@ -416,7 +416,7 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 			continue
 		}
 		attemptCtx := ctx
-		var acknowledgement centralQueueLogAck
+		var acknowledgement centralQueueOTLPAck
 		if e.centralStorage != nil {
 			attemptCtx = context.WithValue(ctx, centralQueueAckContextKey{}, &acknowledgement)
 		}
