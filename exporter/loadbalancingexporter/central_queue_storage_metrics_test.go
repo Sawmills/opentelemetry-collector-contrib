@@ -84,6 +84,10 @@ func TestDurableCentralQueueRetainsMetricsAtShutdownDeadline(t *testing.T) {
 	runDurableMetricRecovery(t, "graceful")
 }
 
+func TestDurableCentralQueueMetricsReplaySkipsEmptyResources(t *testing.T) {
+	runDurableMetricRecovery(t, "empty-resources")
+}
+
 func runDurableMetricRecovery(t *testing.T, scenario string) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -103,6 +107,8 @@ func runDurableMetricRecovery(t *testing.T, scenario string) {
 	seedMode := "seed"
 	if scenario == "graceful" {
 		seedMode = "seed-graceful"
+	} else if scenario == "empty-resources" {
+		seedMode = "seed-empty-resources"
 	}
 	seed := child(seedMode)
 	require.NoError(t, seed.Start())
@@ -194,7 +200,7 @@ func TestDurableCentralQueueMetricsProcess(t *testing.T) {
 		require.NoError(t, ext.Shutdown(t.Context()))
 		return
 	}
-	if os.Getenv("SAW13194_METRIC_MODE") == "seed" || os.Getenv("SAW13194_METRIC_MODE") == "seed-graceful" {
+	if os.Getenv("SAW13194_METRIC_MODE") == "seed" || os.Getenv("SAW13194_METRIC_MODE") == "seed-graceful" || os.Getenv("SAW13194_METRIC_MODE") == "seed-empty-resources" {
 		metrics := pmetric.NewMetrics()
 		resource := metrics.ResourceMetrics().AppendEmpty()
 		resource.Resource().Attributes().PutStr("service.name", "durable-test")
@@ -205,6 +211,18 @@ func TestDurableCentralQueueMetricsProcess(t *testing.T) {
 			point := points.AppendEmpty()
 			point.Attributes().PutInt("test.id", int64(i))
 			point.SetIntValue(int64(i))
+		}
+		if os.Getenv("SAW13194_METRIC_MODE") == "seed-empty-resources" {
+			empty := pmetric.NewMetrics()
+			empty.ResourceMetrics().AppendEmpty().Resource().Attributes().PutStr("service.name", "empty-only")
+			require.NoError(t, exp.ConsumeMetrics(t.Context(), empty))
+			resource := metrics.ResourceMetrics().AppendEmpty()
+			resource.Resource().Attributes().PutStr("service.name", "empty-resource")
+			resource = metrics.ResourceMetrics().AppendEmpty()
+			resource.Resource().Attributes().PutStr("service.name", "empty-gauge")
+			metric := resource.ScopeMetrics().AppendEmpty().Metrics().AppendEmpty()
+			metric.SetName("empty.gauge")
+			metric.SetEmptyGauge()
 		}
 		require.NoError(t, exp.ConsumeMetrics(t.Context(), metrics))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "accepted"), []byte("8"), 0o600))

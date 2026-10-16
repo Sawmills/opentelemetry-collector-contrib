@@ -67,6 +67,7 @@ func TestDurableCentralQueueRetainsLocalAcknowledgementFailure(t *testing.T) {
 			}, time.Second, 10*time.Millisecond)
 			require.Equal(t, int64(2), durableMetricValue(t, reader, "otelcol_loadbalancer_central_queue_durable_pending_items"))
 			require.Zero(t, durableMetricValue(t, reader, "otelcol_loadbalancer_central_queue_durable_terminal_rejected_items"))
+			require.Zero(t, durableMetricValue(t, reader, "otelcol_loadbalancer_backend_failed"), "a local response error must not count as a failed destination attempt")
 			attempts := func() int64 {
 				if signal == "logs" {
 					return logsDestination.attempts.Load()

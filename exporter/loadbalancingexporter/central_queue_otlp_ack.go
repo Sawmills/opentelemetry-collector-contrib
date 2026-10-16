@@ -46,11 +46,12 @@ func (m centralQueueAckMiddleware) GetGRPCClientOptions(context.Context) ([]grpc
 		if err := invoke(ctx, method, req, reply, conn, opts...); err != nil {
 			return err
 		}
-		// Preserve local response errors separately: the OTLP exporter can wrap
-		// them as permanent errors, which do not establish terminal rejection.
+		// The RPC succeeded. Give local response errors to the durable owner,
+		// which pauses delivery before reclaiming anything. Returning them to
+		// the child would falsely count a failed request to an accepting backend.
 		localFailure := func(err error) error {
 			acknowledgement.localErr = err
-			return err
+			return nil
 		}
 		// pdata deliberately hides the generated wire type. Its public proto
 		// methods let us decode through the supported plogotlp response API.
