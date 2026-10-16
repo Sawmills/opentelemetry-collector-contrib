@@ -17,60 +17,69 @@ import (
 )
 
 type centralQueueTelemetry struct {
-	signal                signalKind
-	signalAttrs           metric.MeasurementOption
-	compressedBytes       metric.Int64Gauge
-	compressedCapacity    metric.Int64Gauge
-	saturation            metric.Float64Gauge
-	items                 metric.Int64Gauge
-	rejectedBytes         metric.Int64Counter
-	routingKeyFailures    metric.Int64Counter
-	retries               metric.Int64Counter
-	decodeFailures        metric.Int64Counter
-	shutdownDroppedItems  metric.Int64Counter
-	inflightUncompressed  metric.Int64Gauge
-	inflightCapacity      metric.Int64Gauge
-	configuredConsumers   metric.Int64Gauge
-	activeLBReplicas      metric.Int64Gauge
-	effectiveConsumers    metric.Int64Gauge
-	activeConsumers       metric.Int64Gauge
-	queueDemandConsumers  metric.Int64Gauge
-	backendSafeConsumers  metric.Int64Gauge
-	consumerLimitReason   metric.Int64ObservableGauge
-	consumerPressure      metric.Int64ObservableGauge
-	consumerDecisionReg   metric.Registration
-	consumerDecisionMu    sync.RWMutex
-	consumerDecision      centralQueueConsumerResult
-	consumerDecisionSet   bool
-	lanes                 metric.Int64Gauge
-	effectiveLanes        metric.Int64Gauge
-	windowCompressed      metric.Int64Histogram
-	laneFillSeconds       metric.Float64Histogram
-	windowFlush           metric.Int64Counter
-	windowUncompressed    metric.Int64Histogram
-	windowItems           metric.Int64Histogram
-	windowPayloads        metric.Int64Histogram
-	windowUnderfilled     metric.Int64Counter
-	oldestItemAge         metric.Int64ObservableGauge
-	oldestItemAgeReg      metric.Registration
-	oldestItemAgeMu       sync.RWMutex
-	oldestItemAgeMillis   func() int64
-	backendInflightAge    metric.Int64ObservableGauge
-	backendInflightAgeReg metric.Registration
-	backendInflightAgeMu  sync.RWMutex
-	backendInflightAges   func(time.Time) map[string]int64
-	readyWindows          metric.Int64ObservableGauge
-	readyWindowLimit      metric.Int64ObservableGauge
-	readyLanes            metric.Int64ObservableGauge
-	readyUncompressed     metric.Int64ObservableGauge
-	schedulerState        metric.Int64ObservableGauge
-	schedulerStateReg     metric.Registration
-	schedulerStateMu      sync.RWMutex
-	schedulerSnapshot     func() centralQueueSchedulerSnapshot
-	flushReasonAttrs      map[centralQueueFlushReason]metric.MeasurementOption
-	schedulerStateAttrs   map[centralQueueSchedulerState]metric.MeasurementOption
-	consumerReasonAttrs   map[centralQueueConsumerLimitReason]metric.MeasurementOption
-	consumerPressureAttrs map[centralQueueConsumerPressureState]metric.MeasurementOption
+	signal                                      signalKind
+	signalAttrs                                 metric.MeasurementOption
+	compressedBytes                             metric.Int64Gauge
+	compressedCapacity                          metric.Int64Gauge
+	saturation                                  metric.Float64Gauge
+	items                                       metric.Int64Gauge
+	rejectedBytes                               metric.Int64Counter
+	routingKeyFailures                          metric.Int64Counter
+	retries                                     metric.Int64Counter
+	decodeFailures                              metric.Int64Counter
+	shutdownDroppedItems                        metric.Int64Counter
+	storageFailures                             metric.Int64Counter
+	durablePendingItems                         metric.Int64Gauge
+	durablePendingBytes                         metric.Int64Gauge
+	durableOldestEnqueuedTime                   metric.Int64Gauge
+	durableTerminalRejectedItems                metric.Int64Gauge
+	durableDeferredItems                        metric.Int64Gauge
+	durableMu                                   sync.Mutex
+	durableRecords, durableBytes, durableOldest int64
+	durableDeferred                             bool
+	inflightUncompressed                        metric.Int64Gauge
+	inflightCapacity                            metric.Int64Gauge
+	configuredConsumers                         metric.Int64Gauge
+	activeLBReplicas                            metric.Int64Gauge
+	effectiveConsumers                          metric.Int64Gauge
+	activeConsumers                             metric.Int64Gauge
+	queueDemandConsumers                        metric.Int64Gauge
+	backendSafeConsumers                        metric.Int64Gauge
+	consumerLimitReason                         metric.Int64ObservableGauge
+	consumerPressure                            metric.Int64ObservableGauge
+	consumerDecisionReg                         metric.Registration
+	consumerDecisionMu                          sync.RWMutex
+	consumerDecision                            centralQueueConsumerResult
+	consumerDecisionSet                         bool
+	lanes                                       metric.Int64Gauge
+	effectiveLanes                              metric.Int64Gauge
+	windowCompressed                            metric.Int64Histogram
+	laneFillSeconds                             metric.Float64Histogram
+	windowFlush                                 metric.Int64Counter
+	windowUncompressed                          metric.Int64Histogram
+	windowItems                                 metric.Int64Histogram
+	windowPayloads                              metric.Int64Histogram
+	windowUnderfilled                           metric.Int64Counter
+	oldestItemAge                               metric.Int64ObservableGauge
+	oldestItemAgeReg                            metric.Registration
+	oldestItemAgeMu                             sync.RWMutex
+	oldestItemAgeMillis                         func() int64
+	backendInflightAge                          metric.Int64ObservableGauge
+	backendInflightAgeReg                       metric.Registration
+	backendInflightAgeMu                        sync.RWMutex
+	backendInflightAges                         func(time.Time) map[string]int64
+	readyWindows                                metric.Int64ObservableGauge
+	readyWindowLimit                            metric.Int64ObservableGauge
+	readyLanes                                  metric.Int64ObservableGauge
+	readyUncompressed                           metric.Int64ObservableGauge
+	schedulerState                              metric.Int64ObservableGauge
+	schedulerStateReg                           metric.Registration
+	schedulerStateMu                            sync.RWMutex
+	schedulerSnapshot                           func() centralQueueSchedulerSnapshot
+	flushReasonAttrs                            map[centralQueueFlushReason]metric.MeasurementOption
+	schedulerStateAttrs                         map[centralQueueSchedulerState]metric.MeasurementOption
+	consumerReasonAttrs                         map[centralQueueConsumerLimitReason]metric.MeasurementOption
+	consumerPressureAttrs                       map[centralQueueConsumerPressureState]metric.MeasurementOption
 }
 
 type centralQueueSnapshot struct {
@@ -172,6 +181,25 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 		metric.WithUnit("{items}"),
 	)
 	errs = errors.Join(errs, err)
+	t.storageFailures, err = meter.Int64Counter(
+		"otelcol_loadbalancer_central_queue_storage_failures",
+		metric.WithDescription("Failed durable central queue storage operations. Cached refusal after an uncertain write is not another storage attempt."),
+		metric.WithUnit("{failures}"),
+	)
+	errs = errors.Join(errs, err)
+	for _, spec := range []struct {
+		name, description, unit string
+		instrument              *metric.Int64Gauge
+	}{
+		{"durable_terminal_rejected_items", "Cumulative destination-rejected records with a committed terminal disposition in this durable store.", "{items}", &t.durableTerminalRejectedItems},
+		{"durable_pending_items", "Durably owned records, including pending and in-flight work. Retained after the scheduler stops.", "{items}", &t.durablePendingItems},
+		{"durable_pending_bytes", "Compressed payload bytes durably owned until acknowledgement commits. Excludes storage metadata.", "By", &t.durablePendingBytes},
+		{"durable_oldest_enqueued_time", "Unix time of the oldest retained admission, or zero when empty. Age is time minus this value.", "s", &t.durableOldestEnqueuedTime},
+		{"durable_deferred_items", "Durable records deferred for recovery after this owner stops.", "{items}", &t.durableDeferredItems},
+	} {
+		*spec.instrument, err = meter.Int64Gauge("otelcol_loadbalancer_central_queue_"+spec.name, metric.WithDescription(spec.description), metric.WithUnit(spec.unit))
+		errs = errors.Join(errs, err)
+	}
 	t.routingKeyFailures, err = meter.Int64Counter(
 		"otelcol_loadbalancer_central_queue_routing_key_failures",
 		metric.WithDescription("Central load-balancing queue routing-key search failures that rejected intake before enqueue."),
@@ -492,6 +520,13 @@ func (t *centralQueueTelemetry) recordShutdownDropped(ctx context.Context, items
 	t.shutdownDroppedItems.Add(ctx, items, t.signalAttrs, metric.WithAttributes(attribute.String("reason", "forced")))
 }
 
+func (t *centralQueueTelemetry) recordStorageFailure(ctx context.Context, operation, reason string) {
+	if t == nil {
+		return
+	}
+	t.storageFailures.Add(ctx, 1, t.signalAttrs, metric.WithAttributes(attribute.String("operation", operation), attribute.String("reason", reason)))
+}
+
 func (t *centralQueueTelemetry) recordConfiguredConsumers(ctx context.Context, consumers int64) {
 	if t == nil {
 		return
@@ -649,5 +684,43 @@ func (t *centralQueueTelemetry) stopObservingSchedulerState() {
 	t.schedulerStateMu.Unlock()
 	if registration != nil {
 		_ = registration.Unregister()
+	}
+}
+
+func (t *centralQueueTelemetry) recordDurable(records, bytes, oldest int64) {
+	if t == nil {
+		return
+	}
+	t.durableMu.Lock()
+	defer t.durableMu.Unlock()
+	t.durableRecords, t.durableBytes, t.durableOldest = records, bytes, oldest
+	t.recordDurableLocked()
+}
+
+func (t *centralQueueTelemetry) deferDurableRecovery() {
+	if t == nil {
+		return
+	}
+	t.durableMu.Lock()
+	defer t.durableMu.Unlock()
+	t.durableDeferred = true
+	t.recordDurableLocked()
+}
+
+func (t *centralQueueTelemetry) recordDurableLocked() {
+	ctx := context.Background()
+	t.durablePendingItems.Record(ctx, t.durableRecords, t.signalAttrs)
+	t.durablePendingBytes.Record(ctx, t.durableBytes, t.signalAttrs)
+	t.durableOldestEnqueuedTime.Record(ctx, t.durableOldest, t.signalAttrs)
+	var deferred int64
+	if t.durableDeferred {
+		deferred = t.durableRecords
+	}
+	t.durableDeferredItems.Record(ctx, deferred, t.signalAttrs)
+}
+
+func (t *centralQueueTelemetry) recordDurableRejected(rejected int64) {
+	if t != nil {
+		t.durableTerminalRejectedItems.Record(context.Background(), rejected, t.signalAttrs)
 	}
 }

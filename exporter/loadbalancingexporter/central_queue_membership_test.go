@@ -331,7 +331,7 @@ func TestCentralQueueMembershipWiresBothSignals(t *testing.T) {
 				e.centralQueueMembership = m
 				require.NoError(t, e.Start(t.Context(), componenttest.NewNopHost()))
 				t.Cleanup(func() {
-					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), time.Second)
 					defer cancel()
 					require.NoError(t, e.Shutdown(ctx))
 				})
@@ -342,7 +342,7 @@ func TestCentralQueueMembershipWiresBothSignals(t *testing.T) {
 				e.centralQueueMembership = m
 				require.NoError(t, e.Start(t.Context(), componenttest.NewNopHost()))
 				t.Cleanup(func() {
-					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+					ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), time.Second)
 					defer cancel()
 					require.NoError(t, e.Shutdown(ctx))
 				})

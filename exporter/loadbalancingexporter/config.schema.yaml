@@ -46,6 +46,10 @@ $defs:
               load_balancer_service:
                 minLength: 1
     properties:
+      storage:
+        x-pointer: true
+        type: string
+        description: Optional file_storage extension ID for durable logs and metrics admission. Requires central_queue.enabled and fsync-enabled retained storage.
       enabled:
         type: boolean
       max_compressed_bytes:

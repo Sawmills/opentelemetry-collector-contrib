@@ -75,7 +75,10 @@ type centralQueueSettings struct {
 }
 
 type centralQueue struct {
-	settings centralQueueSettings
+	settings    centralQueueSettings
+	storage     *centralQueueStorage
+	admissionMu sync.Mutex
+	admissions  sync.WaitGroup
 
 	mu                sync.Mutex
 	buckets           []*centralQueueBucket
@@ -170,6 +173,10 @@ func (q *centralQueue) enqueueAllAt(items []centralQueueItem, now time.Time) err
 	if len(items) == 0 {
 		return nil
 	}
+	if q.storage != nil {
+		q.admissionMu.Lock()
+		defer q.admissionMu.Unlock()
+	}
 	// This admission is all-or-nothing, so any rejection drops the whole request.
 	// Sum the request first, then validate, so rejected-byte telemetry always
 	// reflects the complete rejected request, not just the offending item.
@@ -208,6 +215,31 @@ func (q *centralQueue) enqueueAllAt(items []centralQueueItem, now time.Time) err
 		q.settings.telemetry.recordRejected(context.Background(), totalCompressed)
 		return errCentralQueueFull
 	}
+	if q.storage != nil {
+		for i := range items {
+			if items[i].enqueuedAtUnixNano == 0 {
+				items[i].enqueuedAtUnixNano = now.UnixNano()
+			}
+		}
+		// Charge the complete admission before releasing the scheduler lock.
+		// The storage transaction runs outside that lock; consumers can drain.
+		q.currentCompressedBytes += totalCompressed
+		q.admissions.Add(1)
+		defer q.admissions.Done()
+		q.mu.Unlock()
+		err := q.storage.append(context.Background(), items)
+		q.mu.Lock()
+		if err != nil || q.stopped {
+			q.currentCompressedBytes -= totalCompressed
+			q.mu.Unlock()
+			if err != nil {
+				q.settings.telemetry.recordRejected(context.Background(), totalCompressed)
+			}
+			// A committed admission remains owned by the store even if the
+			// shutdown deadline passed before publication to the scheduler.
+			return err
+		}
+	}
 	for i := range items {
 		item := items[i]
 		if item.enqueuedAtUnixNano == 0 {
@@ -220,7 +252,9 @@ func (q *centralQueue) enqueueAllAt(items []centralQueueItem, now time.Time) err
 		bucket.append(item)
 		q.itemCount++
 		q.updateReadyBucketLocked(bucket, now.UnixNano())
-		q.currentCompressedBytes += int64(item.compressedBytes)
+		if q.storage == nil {
+			q.currentCompressedBytes += int64(item.compressedBytes)
+		}
 		q.trackOldestEnqueuedAtLocked(item)
 	}
 	snapshot := q.snapshotLockedAt(now)
@@ -1043,7 +1077,7 @@ func (l *centralQueueLease) finish(discarded bool) {
 		l.queue.mu.Unlock()
 		l.queue.notifyLeaseWaiters()
 		l.queue.settings.telemetry.record(context.Background(), snapshot)
-		if discarded {
+		if discarded && l.queue.storage == nil {
 			l.queue.recordShutdownDiscard(int64(l.window.count))
 		}
 	})

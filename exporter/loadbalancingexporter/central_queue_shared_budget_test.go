@@ -88,8 +88,8 @@ func TestCentralQueueConsumerControllerRetainsBatchesUntilMembershipIsKnown(t *t
 
 	replicas = 12
 	for _, peer := range fleet.peers {
-		limit, known := centralQueueEffectiveConsumersForLanes(peer.controller, 30, 18)
-		require.True(t, known)
+		limit, budgetKnown := centralQueueEffectiveConsumersForLanes(peer.controller, 30, 18)
+		require.True(t, budgetKnown)
 		require.Equal(t, 1, limit, "lane planning uses the fresh share rather than a cached healthy limit")
 	}
 	scaled := fleet.drainWave(t, false)
@@ -99,8 +99,8 @@ func TestCentralQueueConsumerControllerRetainsBatchesUntilMembershipIsKnown(t *t
 
 	known = false
 	for _, peer := range fleet.peers {
-		limit, known := centralQueueEffectiveConsumersForLanes(peer.controller, 30, 18)
-		require.True(t, known)
+		limit, budgetKnown := centralQueueEffectiveConsumersForLanes(peer.controller, 30, 18)
+		require.True(t, budgetKnown)
 		require.Zero(t, limit, "unknown membership gives a holding budget, not a backend-count fallback")
 	}
 	stale := fleet.drainWave(t, false)

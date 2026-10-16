@@ -33,6 +33,11 @@ func (q *centralQueue) drain(ctx context.Context) error {
 	ticker := time.NewTicker(centralQueueLeasePollInterval)
 	defer ticker.Stop()
 	for {
+		if q.storage != nil {
+			if err := q.storage.failureError(); err != nil {
+				return err
+			}
+		}
 		q.mu.Lock()
 		empty := q.itemCount == 0 && len(q.ready) == 0 && q.currentCompressedBytes == 0 && q.currentInflightBytes == 0
 		q.mu.Unlock()
@@ -56,10 +61,11 @@ func (q *centralQueue) drain(ctx context.Context) error {
 func (q *centralQueue) stopAndDiscard() int64 {
 	q.mu.Lock()
 	q.stopped = true
-	q.discardOnStop = true
+	q.discardOnStop = q.storage == nil
 	var records int64
 	for _, bucket := range q.buckets {
-		for _, item := range bucket.items {
+		for i := range bucket.items {
+			item := &bucket.items[i]
 			records += int64(item.count)
 			q.currentCompressedBytes -= int64(item.compressedBytes)
 		}
@@ -81,6 +87,10 @@ func (q *centralQueue) stopAndDiscard() int64 {
 	q.mu.Unlock()
 	q.settings.telemetry.record(context.Background(), snapshot)
 	q.stop()
+	if q.storage != nil {
+		q.settings.telemetry.deferDurableRecovery()
+		return 0
+	}
 	return records
 }
 
