@@ -335,9 +335,9 @@ func (e *metricExporterImp) consumeMetricsCentralQueue(batches map[string]pmetri
 	// which a retrying client re-delivers as duplicates.
 	items := make([]centralQueueItem, 0, len(batches))
 	for routingKey, md := range batches {
-		// Empty routing batches carry no delivery obligation. Persisting them
-		// would create zero-count entries that cannot be replayed.
-		if md.DataPointCount() == 0 {
+		// Durable entries must be replayable. Keep the existing memory-only
+		// behavior for empty routing batches when storage is not selected.
+		if e.centralStorageID != nil && md.DataPointCount() == 0 {
 			continue
 		}
 		queueRoutingKey := centralQueueLaneRoutingKey(signalKindMetrics, []byte(routingKey), laneCount)
