@@ -316,7 +316,6 @@ func TestSyncBulkIndexerFailedDocumentsByExporter(t *testing.T) {
 			require.Equal(t, dp.Attributes, quietDataPoint.Attributes)
 		})
 	}
-
 }
 
 func TestSyncBulkIndexerFailedDocumentsKeepExporterSeriesIsolated(t *testing.T) {

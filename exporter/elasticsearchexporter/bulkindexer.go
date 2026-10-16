@@ -415,10 +415,7 @@ func flushBulkIndexer(
 		// Count only documents without a confirmed success when response
 		// decoding fails after a partial response. A request-level failure
 		// with no confirmed successes still counts the whole batch once.
-		failedDocs = int64(itemsCount) - stat.Indexed
-		if failedDocs < 0 {
-			failedDocs = 0
-		}
+		failedDocs = max(int64(itemsCount)-stat.Indexed, 0)
 	}
 	tb.ElasticsearchDocsFailed.Add(ctx, failedDocs, metric.WithAttributeSet(attribute.NewSet(attribute.String("exporter", exporterID))))
 
