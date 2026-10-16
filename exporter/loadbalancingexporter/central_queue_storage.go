@@ -144,6 +144,7 @@ func (s *centralQueueStorage) load(ctx context.Context, compression QueuePayload
 		if err = s.client.Batch(ctx, storage.SetOperation(centralStoreManifestKey, encoded), storage.SetOperation(centralStoreFormatKey, []byte("central_queue/1"))); err != nil {
 			return nil, fmt.Errorf("initialize durable central queue: %w", err)
 		}
+		s.recordPending()
 		return nil, nil
 	}
 	reason = "format"
