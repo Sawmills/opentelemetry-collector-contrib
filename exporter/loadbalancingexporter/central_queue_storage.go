@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/component/componentstatus"
 	"go.opentelemetry.io/collector/extension/xextension/storage"
 	"go.uber.org/zap"
 )
@@ -46,6 +47,7 @@ type centralStoredItem struct {
 type centralQueueStorage struct {
 	pendingTimes centralStoreAgeHeap
 	client       storage.Client
+	host         component.Host
 	signal       signalKind
 	mu           sync.Mutex
 	manifest     centralStoreManifest
@@ -74,7 +76,7 @@ func openCentralQueueStorage(ctx context.Context, host component.Host, storageID
 	if err != nil {
 		return nil, fmt.Errorf("open central queue storage %s: %w", storageID, err)
 	}
-	return &centralQueueStorage{client: client, signal: signal, failedWrites: make(chan struct{}), nodes: make(map[uint64]centralStoreNode), telemetry: telemetry, logger: logger}, nil
+	return &centralQueueStorage{client: client, host: host, signal: signal, failedWrites: make(chan struct{}), nodes: make(map[uint64]centralStoreNode), telemetry: telemetry, logger: logger}, nil
 }
 func centralStoreNodeKey(id uint64) string    { return "index/" + strconv.FormatUint(id, 10) }
 func centralStorePayloadKey(id uint64) string { return "item/" + strconv.FormatUint(id, 10) }
@@ -353,6 +355,9 @@ func (s *centralQueueStorage) recordPending() {
 
 func (s *centralQueueStorage) failure(operation, reason string, err error) {
 	s.telemetry.recordStorageFailure(context.Background(), operation, reason)
+	// A paused owner cannot recover in place. The Collector's existing fatal
+	// status path shuts down the process so its supervisor can reopen the store.
+	componentstatus.ReportStatus(s.host, componentstatus.NewFatalErrorEvent(err))
 	s.logger.Error("durable central queue storage operation failed", zap.String("operation", operation), zap.String("reason", reason), zap.Error(err))
 }
 

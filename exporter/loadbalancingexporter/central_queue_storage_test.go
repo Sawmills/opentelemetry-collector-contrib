@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/component/componentstatus"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/config/configmiddleware"
 	"go.opentelemetry.io/collector/confmap"
@@ -72,6 +73,13 @@ type durableTestHost struct {
 }
 
 func (h durableTestHost) GetExtensions() map[component.ID]component.Component { return h.extensions }
+
+type durableStatusHost struct {
+	component.Host
+	events chan *componentstatus.Event
+}
+
+func (h durableStatusHost) Report(event *componentstatus.Event) { h.events <- event }
 
 type durableTestDestination struct {
 	seen map[int64]struct{}
@@ -446,7 +454,8 @@ func TestDurableCentralQueueRejectsAndCountsFailedStorageAdmission(t *testing.T)
 	settings.MeterProvider = provider
 	exp, err := factory.CreateLogs(t.Context(), settings, cfg)
 	require.NoError(t, err)
-	host := durableTestHost{map[component.ID]component.Component{component.MustNewIDWithName("file_storage", "queue"): failingWriteStorage{Extension: ext.(storage.Extension), armed: armed, attempts: attempts}}}
+	events := make(chan *componentstatus.Event, 10)
+	host := durableStatusHost{Host: durableTestHost{map[component.ID]component.Component{component.MustNewIDWithName("file_storage", "queue"): failingWriteStorage{Extension: ext.(storage.Extension), armed: armed, attempts: attempts}}}, events: events}
 	require.NoError(t, exp.Start(t.Context(), host))
 	t.Cleanup(func() {
 		require.ErrorContains(t, exp.Shutdown(context.WithoutCancel(t.Context())), "injected storage write failure")
@@ -459,6 +468,11 @@ func TestDurableCentralQueueRejectsAndCountsFailedStorageAdmission(t *testing.T)
 	require.ErrorContains(t, exp.ConsumeLogs(t.Context(), input), "injected storage write failure")
 	require.Error(t, exp.ConsumeLogs(t.Context(), input), "an uncertain write must block subsequent mutations until reopen")
 	require.Equal(t, int64(1), attempts.Load())
+	require.Eventually(t, func() bool { return len(events) == 1 }, time.Second, 10*time.Millisecond, "a paused owner must request a Collector restart")
+	event := <-events
+	require.Equal(t, componentstatus.StatusFatalError, event.Status())
+	require.ErrorContains(t, event.Err(), "injected storage write failure")
+	require.Empty(t, events, "cached refusal must not report another fatal status")
 	var data metricdata.ResourceMetrics
 	require.NoError(t, reader.Collect(t.Context(), &data))
 	var failures int64

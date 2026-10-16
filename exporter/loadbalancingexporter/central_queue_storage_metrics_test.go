@@ -105,9 +105,10 @@ func runDurableMetricRecovery(t *testing.T, scenario string) {
 		return cmd
 	}
 	seedMode := "seed"
-	if scenario == "graceful" {
+	switch scenario {
+	case "graceful":
 		seedMode = "seed-graceful"
-	} else if scenario == "empty-resources" {
+	case "empty-resources":
 		seedMode = "seed-empty-resources"
 	}
 	seed := child(seedMode)

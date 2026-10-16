@@ -16,6 +16,7 @@ require (
 	github.com/open-telemetry/opentelemetry-collector-contrib/pkg/pdatatest v0.149.0
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/collector/component v1.55.1-0.20260402195938-76ede073ee8e
+	go.opentelemetry.io/collector/component/componentstatus v0.149.1-0.20260402195938-76ede073ee8e
 	go.opentelemetry.io/collector/component/componenttest v0.149.1-0.20260402195938-76ede073ee8e
 	go.opentelemetry.io/collector/config/configmiddleware v1.55.1-0.20260402195938-76ede073ee8e
 	go.opentelemetry.io/collector/config/configoptional v1.55.1-0.20260402195938-76ede073ee8e
@@ -41,6 +42,7 @@ require (
 	go.uber.org/multierr v1.11.0
 	go.uber.org/zap v1.27.1
 	google.golang.org/grpc v1.83.2
+	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.35.2
 	k8s.io/apimachinery v0.35.2
@@ -120,7 +122,6 @@ require (
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/collector v0.149.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/client v1.55.1-0.20260402195938-76ede073ee8e // indirect
-	go.opentelemetry.io/collector/component/componentstatus v0.149.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/config/configauth v1.55.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/config/configcompression v1.55.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/config/configgrpc v0.149.1-0.20260402195938-76ede073ee8e // indirect
@@ -191,7 +192,6 @@ require (
 	gonum.org/v1/gonum v0.17.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
