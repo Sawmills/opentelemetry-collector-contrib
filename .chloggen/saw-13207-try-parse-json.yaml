@@ -1,0 +1,5 @@
+change_type: enhancement
+component: pkg/ottl
+note: Add TryParseJSON to parse objects and arrays once, returning nil on runtime failure.
+issues: [157]
+change_logs: [user, api]

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -283,16 +284,17 @@ type CentralQueueConfig struct {
 	MaxBatchDelay                time.Duration           `mapstructure:"max_batch_delay"`
 	// ShutdownTimeout bounds graceful drain. Zero uses five minutes; a caller's
 	// earlier deadline still wins. Kubernetes grace must cover the whole drain.
-	ShutdownTimeout            time.Duration `mapstructure:"shutdown_timeout"`
-	LaneCount                  int           `mapstructure:"lane_count"`
-	MinLanes                   int           `mapstructure:"min_lanes"`
-	MaxLanes                   int           `mapstructure:"max_lanes"`
-	BackendLaneMultiplier      int           `mapstructure:"backend_lane_multiplier"`
-	TargetLaneFillDuration     time.Duration `mapstructure:"target_lane_fill_duration"`
-	LaneHysteresisFactor       int           `mapstructure:"lane_hysteresis_factor"`
-	NumConsumers               int           `mapstructure:"num_consumers"`
-	ActiveLoadBalancerReplicas int           `mapstructure:"active_load_balancer_replicas"`
-	LoadBalancerService        string        `mapstructure:"load_balancer_service"`
+	ShutdownTimeout            time.Duration        `mapstructure:"shutdown_timeout"`
+	LaneCount                  int                  `mapstructure:"lane_count"`
+	MinLanes                   int                  `mapstructure:"min_lanes"`
+	MaxLanes                   int                  `mapstructure:"max_lanes"`
+	BackendLaneMultiplier      int                  `mapstructure:"backend_lane_multiplier"`
+	TargetLaneFillDuration     time.Duration        `mapstructure:"target_lane_fill_duration"`
+	LaneHysteresisFactor       int                  `mapstructure:"lane_hysteresis_factor"`
+	NumConsumers               int                  `mapstructure:"num_consumers"`
+	ActiveLoadBalancerReplicas int                  `mapstructure:"active_load_balancer_replicas"`
+	LoadBalancerService        string               `mapstructure:"load_balancer_service"`
+	LoadBalancerDNS            *DNSMembershipConfig `mapstructure:"load_balancer_dns"`
 	// ForceScheduleAge bounds how long a fallback candidate (a routing-key
 	// lane whose accumulated window is under target_compressed_bytes) may wait
 	// before being promoted ahead of fresh target_reached candidates. This
@@ -302,6 +304,54 @@ type CentralQueueConfig struct {
 	// Zero (default) means "derive as max_batch_delay × 5". A negative value
 	// disables anti-starvation (legacy strict target-first scheduling).
 	ForceScheduleAge time.Duration `mapstructure:"force_schedule_age"`
+}
+
+type DNSMembershipConfig struct {
+	Hostname string        `mapstructure:"hostname"`
+	SelfIP   string        `mapstructure:"self_ip"`
+	Interval time.Duration `mapstructure:"interval"`
+	Timeout  time.Duration `mapstructure:"timeout"`
+	MaxAge   time.Duration `mapstructure:"max_age"`
+}
+
+func (c DNSMembershipConfig) withDefaults() DNSMembershipConfig {
+	if c.Interval == 0 {
+		c.Interval = defaultResInterval
+	}
+	if c.Timeout == 0 {
+		c.Timeout = defaultResTimeout
+	}
+	if c.MaxAge == 0 {
+		c.MaxAge = 15 * time.Second
+	}
+	return c
+}
+
+func (c DNSMembershipConfig) validate() error {
+	if strings.TrimSpace(c.Hostname) == "" {
+		return errors.New("central_queue.load_balancer_dns.hostname is required")
+	}
+	if c.Hostname != strings.TrimSpace(c.Hostname) {
+		return errors.New("central_queue.load_balancer_dns.hostname must not contain surrounding whitespace")
+	}
+	self, err := netip.ParseAddr(c.SelfIP)
+	if err != nil || self.IsUnspecified() {
+		return errors.New("central_queue.load_balancer_dns.self_ip must be a workload IP address")
+	}
+	if c.Interval < 0 {
+		return errors.New("central_queue.load_balancer_dns.interval must not be negative")
+	}
+	if c.Timeout < 0 {
+		return errors.New("central_queue.load_balancer_dns.timeout must not be negative")
+	}
+	if c.MaxAge < 0 {
+		return errors.New("central_queue.load_balancer_dns.max_age must not be negative")
+	}
+	c = c.withDefaults()
+	if c.MaxAge < c.Interval || c.MaxAge-c.Interval < c.Timeout {
+		return errors.New("central_queue.load_balancer_dns.max_age must cover the lookup interval and timeout")
+	}
+	return nil
 }
 
 func (c CentralQueueConfig) effectiveLaneCount() int {
@@ -419,6 +469,14 @@ func (c CentralQueueConfig) Validate() error {
 	}
 	if !c.Enabled {
 		return nil
+	}
+	if c.LoadBalancerDNS != nil && c.LoadBalancerService != "" {
+		return errors.New("central_queue.load_balancer_dns and load_balancer_service are mutually exclusive")
+	}
+	if c.LoadBalancerDNS != nil {
+		if err := c.LoadBalancerDNS.validate(); err != nil {
+			return err
+		}
 	}
 	if c.ShutdownTimeout < 0 {
 		return errors.New("central_queue.shutdown_timeout must be greater than or equal to 0")
