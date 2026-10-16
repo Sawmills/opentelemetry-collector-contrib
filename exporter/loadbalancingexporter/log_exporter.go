@@ -421,9 +421,12 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 			attemptCtx = context.WithValue(ctx, centralQueueAckContextKey{}, &acknowledgement)
 		}
 		err = e.consumeCentralQueueLogWindowWithBackend(attemptCtx, lease.window, acquiredBackend)
-		if e.centralStorage != nil && consumererror.IsPermanent(err) {
+		switch {
+		case e.centralStorage != nil && acknowledgement.localErr != nil:
+			err = e.centralStorage.pause("acknowledge", "response", acknowledgement.localErr)
+		case e.centralStorage != nil && consumererror.IsPermanent(err):
 			err = e.centralStorage.acknowledge(ctx, lease.window.items, int64(lease.window.count), "permanent_error")
-		} else if err == nil && e.centralStorage != nil {
+		case err == nil && e.centralStorage != nil:
 			if !acknowledgement.observed {
 				err = e.centralStorage.pause("acknowledge", "response", errors.New("durable central queue OTLP acknowledgement was not observed"))
 			} else {

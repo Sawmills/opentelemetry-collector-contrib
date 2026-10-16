@@ -13,6 +13,8 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
 	"go.opentelemetry.io/collector/pdata/pmetric/pmetricotlp"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var centralQueueAckMiddlewareID = component.MustNewIDWithName("loadbalancing_ack", "internal")
@@ -22,6 +24,7 @@ type (
 	centralQueueOTLPAck       struct {
 		observed bool
 		rejected int64
+		localErr error
 	}
 )
 
@@ -34,12 +37,20 @@ func (centralQueueAckMiddleware) Start(context.Context, component.Host) error { 
 func (centralQueueAckMiddleware) Shutdown(context.Context) error              { return nil }
 func (m centralQueueAckMiddleware) GetGRPCClientOptions(context.Context) ([]grpc.DialOption, error) {
 	return []grpc.DialOption{grpc.WithChainUnaryInterceptor(func(ctx context.Context, method string, req, reply any, conn *grpc.ClientConn, invoke grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		acknowledgement, ok := ctx.Value(centralQueueAckContextKey{}).(*centralQueueOTLPAck)
+		if !ok {
+			// Refuse the RPC before it can accept work without an owner. This
+			// local error must never be interpreted as a destination rejection.
+			return status.Error(codes.Unavailable, "durable central queue response has no acknowledgement owner")
+		}
 		if err := invoke(ctx, method, req, reply, conn, opts...); err != nil {
 			return err
 		}
-		acknowledgement, ok := ctx.Value(centralQueueAckContextKey{}).(*centralQueueOTLPAck)
-		if !ok {
-			return errors.New("durable central queue response has no acknowledgement owner")
+		// Preserve local response errors separately: the OTLP exporter can wrap
+		// them as permanent errors, which do not establish terminal rejection.
+		localFailure := func(err error) error {
+			acknowledgement.localErr = err
+			return err
 		}
 		// pdata deliberately hides the generated wire type. Its public proto
 		// methods let us decode through the supported plogotlp response API.
@@ -48,7 +59,7 @@ func (m centralQueueAckMiddleware) GetGRPCClientOptions(context.Context) ([]grpc
 			MarshalProto([]byte) int
 		})
 		if !ok {
-			return errors.New("unsupported durable central queue OTLP response")
+			return localFailure(errors.New("unsupported durable central queue OTLP response"))
 		}
 		data := make([]byte, wire.SizeProto())
 		wire.MarshalProto(data)
@@ -56,17 +67,17 @@ func (m centralQueueAckMiddleware) GetGRPCClientOptions(context.Context) ([]grpc
 		case signalKindLogs:
 			response := plogotlp.NewExportResponse()
 			if err := response.UnmarshalProto(data); err != nil {
-				return err
+				return localFailure(err)
 			}
 			acknowledgement.rejected = response.PartialSuccess().RejectedLogRecords()
 		case signalKindMetrics:
 			response := pmetricotlp.NewExportResponse()
 			if err := response.UnmarshalProto(data); err != nil {
-				return err
+				return localFailure(err)
 			}
 			acknowledgement.rejected = response.PartialSuccess().RejectedDataPoints()
 		default:
-			return errors.New("unsupported durable central queue acknowledgement signal")
+			return localFailure(errors.New("unsupported durable central queue acknowledgement signal"))
 		}
 		acknowledgement.observed = true
 		return nil

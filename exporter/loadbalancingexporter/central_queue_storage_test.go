@@ -6,6 +6,7 @@ package loadbalancingexporter_test
 import (
 	"context"
 	"errors"
+	"maps"
 	mathrand "math/rand/v2"
 	"net"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/config/configmiddleware"
 	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exportertest"
@@ -596,6 +598,10 @@ func newDurableTestMetricsExporter(t *testing.T, dir, endpoint string) (exporter
 }
 
 func newDurableSignalTestExporter(t *testing.T, dir string, endpoints []string, signal string, shutdownTimeout ...time.Duration) (component.Component, component.Component, *sdkmetric.ManualReader) {
+	return newDurableSignalTestExporterWithMiddlewares(t, dir, endpoints, signal, nil, shutdownTimeout...)
+}
+
+func newDurableSignalTestExporterWithMiddlewares(t *testing.T, dir string, endpoints []string, signal string, middlewares map[component.ID]component.Component, shutdownTimeout ...time.Duration) (component.Component, component.Component, *sdkmetric.ManualReader) {
 	timeout := 20 * time.Millisecond
 	if len(shutdownTimeout) > 0 {
 		timeout = shutdownTimeout[0]
@@ -620,6 +626,9 @@ func newDurableSignalTestExporter(t *testing.T, dir string, endpoints []string, 
 		"resolver":      map[string]any{"static": map[string]any{"hostnames": endpoints}},
 		"central_queue": map[string]any{"enabled": true, "storage": "file_storage/queue", "shutdown_timeout": timeout.String(), "max_compressed_bytes": 1 << 20, "max_uncompressed_batch_bytes": 1 << 20, "max_inflight_uncompressed_bytes": 4 << 20, "target_compressed_bytes": 512, "max_batch_delay": "10ms", "num_consumers": consumers, "lane_count": lanes},
 	}).Unmarshal(cfg))
+	for id := range middlewares {
+		cfg.(*loadbalancingexporter.Config).Protocol.OTLP.ClientConfig.Middlewares = append(cfg.(*loadbalancingexporter.Config).Protocol.OTLP.ClientConfig.Middlewares, configmiddleware.Config{ID: id})
+	}
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.WithoutCancel(t.Context()))) })
@@ -636,7 +645,9 @@ func newDurableSignalTestExporter(t *testing.T, dir string, endpoints []string, 
 		t.Fatalf("unsupported test signal %q", signal)
 	}
 	require.NoError(t, err)
-	require.NoError(t, exp.Start(t.Context(), durableTestHost{map[component.ID]component.Component{component.MustNewIDWithName("file_storage", "queue"): ext}}))
+	extensions := map[component.ID]component.Component{component.MustNewIDWithName("file_storage", "queue"): ext}
+	maps.Copy(extensions, middlewares)
+	require.NoError(t, exp.Start(t.Context(), durableTestHost{extensions}))
 	return exp, ext, reader
 }
 
