@@ -54,11 +54,15 @@ func describeLogFields(ec encodingContext, record plog.LogRecord) logFieldShape 
 	}
 	var shape logFieldShape
 	for source, attrs := range []pcommon.Map{ec.resource.Attributes(), ec.scope.Attributes(), record.Attributes()} {
+		if attrs.Len() > 128 {
+			return 0 // Uninspected contributors may change any field's provenance.
+		}
 		if attrs.Len() == 0 {
 			continue
 		}
-		for i, field := range rejectionFields {
-			if value, exists := attrs.Get(field.path); exists {
+		for key, value := range attrs.All() {
+			for i, field := range rejectionFields {
+				if key == field.path {
 				var kind uint8
 				switch value.Type() {
 				case pcommon.ValueTypeMap:
@@ -79,6 +83,9 @@ func describeLogFields(ec encodingContext, record plog.LogRecord) logFieldShape 
 					kind = 8
 				}
 				shape = shape.with(i, kind, uint8(source+1))
+				} else if len(key) > len(field.path) && strings.HasPrefix(key, field.path) && key[len(field.path)] == '.' {
+					shape = shape.with(i, 9, uint8(source+1))
+				}
 			}
 		}
 	}
@@ -88,6 +95,19 @@ func describeLogFields(ec encodingContext, record plog.LogRecord) logFieldShape 
 		if _, exists := record.Attributes().Get(alias); exists {
 			shape = shape.with(4, 9, 5)
 			break
+		}
+	}
+	if record.Body().Type() == pcommon.ValueTypeMap {
+		if record.Body().Map().Len() > 128 {
+			return 0
+		}
+		// Preprocessing can copy a body alias into log attributes. Its original
+		// location is no longer distinguishable at this seam.
+		for _, alias := range [...]string{"exception.message", "exception.type", "exception.stacktrace"} {
+			if _, exists := record.Body().Map().Get(alias); exists {
+				shape = shape.with(4, 9, 4)
+				break
+			}
 		}
 	}
 	shape = shape.with(1, 9, 6) // ECS generates @timestamp.
