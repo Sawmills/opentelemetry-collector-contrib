@@ -202,30 +202,46 @@ func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) err
 // request belongs to the caller and must remain unchanged on partial rejection.
 func (s *centralQueueLogSplitter) partitionOversizedRecords(ld plog.Logs) (plog.Logs, plog.Logs, []int) {
 	accepted, rejected := plog.NewLogs(), plog.NewLogs()
-	ld.CopyTo(accepted)
 	limit := centralQueueEffectiveLogRecordLimit(s.exporter.centralQueue.settings)
 	var sizes []int
-	accepted.ResourceLogs().RemoveIf(func(rl plog.ResourceLogs) bool {
-		rl.ScopeLogs().RemoveIf(func(sl plog.ScopeLogs) bool {
+	for i := 0; i < ld.ResourceLogs().Len(); i++ {
+		rl := ld.ResourceLogs().At(i)
+		var acceptedRL plog.ResourceLogs
+		resourceCreated := false
+		for j := 0; j < rl.ScopeLogs().Len(); j++ {
+			sl := rl.ScopeLogs().At(j)
+			var acceptedSL plog.ScopeLogs
+			scopeCreated := false
 			metadata := plog.NewLogs()
 			targetRL := findOrCreateResourceLogs(metadata, rl)
 			targetSL := findOrCreateScopeLogs(targetRL, sl)
 			scopeMetadataSize := s.marshaler.ScopeLogsSize(targetSL)
 			resourceMetadataSize := s.marshaler.ResourceLogsSize(targetRL) - logProtoDeltaSize(scopeMetadataSize)
-			sl.LogRecords().RemoveIf(func(record plog.LogRecord) bool {
+			for k := 0; k < sl.LogRecords().Len(); k++ {
+				record := sl.LogRecords().At(k)
 				scopeSize := scopeMetadataSize + logProtoDeltaSize(s.marshaler.LogRecordSize(record))
 				size := logProtoDeltaSize(resourceMetadataSize + logProtoDeltaSize(scopeSize))
 				if size <= limit {
-					return false
+					if !resourceCreated {
+						acceptedRL = accepted.ResourceLogs().AppendEmpty()
+						rl.Resource().CopyTo(acceptedRL.Resource())
+						acceptedRL.SetSchemaUrl(rl.SchemaUrl())
+						resourceCreated = true
+					}
+					if !scopeCreated {
+						acceptedSL = acceptedRL.ScopeLogs().AppendEmpty()
+						sl.Scope().CopyTo(acceptedSL.Scope())
+						acceptedSL.SetSchemaUrl(sl.SchemaUrl())
+						scopeCreated = true
+					}
+					record.CopyTo(acceptedSL.LogRecords().AppendEmpty())
+					continue
 				}
 				insertLogRecord(rejected, rl, sl, record)
 				sizes = append(sizes, size)
-				return true
-			})
-			return sl.LogRecords().Len() == 0
-		})
-		return rl.ScopeLogs().Len() == 0
-	})
+			}
+		}
+	}
 	return accepted, rejected, sizes
 }
 

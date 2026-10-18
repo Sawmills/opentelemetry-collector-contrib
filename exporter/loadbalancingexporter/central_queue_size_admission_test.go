@@ -5,6 +5,7 @@ package loadbalancingexporter
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/exporter/exportertest"
 	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.uber.org/zap"
@@ -73,6 +75,68 @@ func TestConsumeLogsCentralQueueHonorsRecordCapBelowBatchCap(t *testing.T) {
 
 	require.True(t, consumererror.IsPermanent(err))
 	require.Zero(t, exporter.centralQueue.len())
+}
+
+func TestConsumeLogsCentralQueuePartialRejectionAvoidsDuplicatePayloadCopies(t *testing.T) {
+	const requests = 32
+	logs := sharedScopeLogsWithoutTraceIDs("small", "")
+	values := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(1).Body().SetEmptySlice()
+	values.EnsureCapacity(8192)
+	for range 8192 {
+		values.AppendEmpty().SetStr("synthetic")
+	}
+	exporter := newPreflightTestExporter(t, 256)
+	exporter.centralQueue.settings.maxUncompressedLogRecordBytes = 2048
+	// Initialize compression before measuring allocation at the public seam.
+	require.True(t, consumererror.IsPermanent(exporter.ConsumeLogs(t.Context(), logs)))
+	allocationPerRequest := func(operation func()) uint64 {
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		for range requests {
+			operation()
+		}
+		runtime.ReadMemStats(&after)
+		return (after.TotalAlloc - before.TotalAlloc) / requests
+	}
+	copyBytes := allocationPerRequest(func() {
+		copy := plog.NewLogs()
+		logs.CopyTo(copy)
+		require.Equal(t, 2, copy.LogRecordCount())
+	})
+	allocated := allocationPerRequest(func() {
+		require.True(t, consumererror.IsPermanent(exporter.ConsumeLogs(t.Context(), logs)))
+	})
+	t.Logf("one pdata copy %d bytes; partial rejection %d bytes per request", copyBytes, allocated)
+	// Allow one owned partial-error copy and bounded pipeline overhead, but
+	// not a second full value-tree copy in the temporary accepted request.
+	require.Less(t, allocated, copyBytes*3/2+(64<<10))
+	require.Equal(t, 2, logs.LogRecordCount())
+	require.Equal(t, 8192, values.Len())
+}
+
+func TestConsumeLogsCentralQueuePartialRejectionPreservesScopeRouting(t *testing.T) {
+	logs := sharedScopeLogsWithoutTraceIDs("small-before", strings.Repeat("x", 4096))
+	logs.ResourceLogs().At(0).CopyTo(logs.ResourceLogs().AppendEmpty())
+	exporter := newPreflightTestExporter(t, 256)
+	exporter.centralQueue.settings.maxUncompressedLogRecordBytes = 2048
+	exporter.ignoreTraceID = false
+	exporter.centralQueueLaneCount = 0
+	var sequence byte
+	exporter.randomTraceID = func() pcommon.TraceID {
+		sequence++
+		return pcommon.TraceID{sequence}
+	}
+
+	err := exporter.ConsumeLogs(t.Context(), logs)
+
+	require.True(t, consumererror.IsPermanent(err))
+	// Equal metadata does not combine distinct input scopes into one fallback route.
+	require.Len(t, exporter.centralQueue.queuedItems(), 2)
+	for _, item := range exporter.centralQueue.queuedItems() {
+		require.Equal(t, 1, item.count)
+	}
+	require.Equal(t, 4, logs.LogRecordCount())
 }
 
 func TestConsumeLogsCentralQueueAdmitsRecordWithOversizedMetadata(t *testing.T) {
