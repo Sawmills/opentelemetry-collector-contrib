@@ -54,13 +54,25 @@ func TestCentralQueueNoUsableLaneRejectsAtomically(t *testing.T) {
 	for _, striping := range []bool{false, true} {
 		t.Run(fmt.Sprintf("striping=%t", striping), func(t *testing.T) {
 			exporter, reader := newLaneFailureTestExporter(t)
+			logs, observed := observer.New(zap.WarnLevel)
+			exporter.logger = zap.New(logs)
+			exporter.loadBalancer.logger = zap.New(logs)
 			exporter.recordStripingEnabled = striping
+			exporter.observeCentralQueueLaneAssignment(2)
 			for i := range exporter.loadBalancer.ring.items {
 				exporter.loadBalancer.ring.items[i].endpoint = "unlisted"
 			}
 			require.ErrorIs(t, exporter.ConsumeLogs(t.Context(), sharedResourceScopeLog("cannot route")), errCentralQueueBalancedLaneRoutingKeySearch)
 			require.Zero(t, exporter.centralQueue.len())
 			requireCentralQueueIntSum(t, reader, "otelcol_loadbalancer_central_queue_routing_key_failures", "{failures}", attribute.NewSet(attribute.String("signal", "logs")), 1)
+			requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_effective_lanes", "{lanes}", attribute.NewSet(attribute.String("signal", "logs")), 0)
+			requireCentralQueueIntSum(t, reader, "otelcol_loadbalancer_central_queue_routing_key_skips", "{skips}", attribute.NewSet(attribute.String("signal", "logs")), 2)
+			require.ErrorIs(t, exporter.ConsumeLogs(t.Context(), sharedResourceScopeLog("still cannot route")), errCentralQueueBalancedLaneRoutingKeySearch)
+			require.Zero(t, exporter.centralQueue.len())
+			requireCentralQueueIntSum(t, reader, "otelcol_loadbalancer_central_queue_routing_key_failures", "{failures}", attribute.NewSet(attribute.String("signal", "logs")), 2)
+			requireCentralQueueIntSum(t, reader, "otelcol_loadbalancer_central_queue_routing_key_skips", "{skips}", attribute.NewSet(attribute.String("signal", "logs")), 4)
+			require.Len(t, observed.All(), 1)
+			require.Equal(t, int64(2), observed.All()[0].ContextMap()["failed_lanes"])
 		})
 	}
 }

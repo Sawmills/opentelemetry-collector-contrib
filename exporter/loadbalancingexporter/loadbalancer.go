@@ -401,7 +401,7 @@ func buildCentralQueueLogRoutingSnapshot(ring *hashRing) (*centralQueueLogRoutin
 	}
 	if len(snapshot.routingKeyErrors) == len(snapshot.routingKeys) {
 		// Only a ring with no usable lane is a snapshot-wide failure.
-		return nil, snapshot.routingKeyErrors[0]
+		return snapshot, snapshot.routingKeyErrors[0]
 	}
 	return snapshot, nil
 }
