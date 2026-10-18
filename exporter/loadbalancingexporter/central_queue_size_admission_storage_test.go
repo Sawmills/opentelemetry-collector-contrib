@@ -38,7 +38,7 @@ func TestDurableCentralQueueReplaysOversizedSingletonWithinRecordLimit(t *testin
 	require.NoError(t, store.Shutdown(t.Context()))
 	destination.blocked.Store(false)
 
-	reopened, reopenedStore, _ := newDurableSignalTestExporterWithQueueConfig(t, dir, []string{listener.Addr().String()}, "logs", nil, queue)
+	reopened, reopenedStore, _ := newDurableSignalTestExporterWithQueueConfig(t, dir, []string{listener.Addr().String()}, "logs", nil, queue, 2*time.Second)
 
 	t.Cleanup(func() {
 		_ = reopened.Shutdown(context.WithoutCancel(t.Context()))
