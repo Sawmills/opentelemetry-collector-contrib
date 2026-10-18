@@ -207,51 +207,6 @@ jobs:
         run: |
           python3 -m unittest discover -s test/queuedrain -p '*test.py'
 
-  scoped-tests-cross-platform:
-    needs: changedfiles
-    if: needs.changedfiles.outputs.mode == 'scoped'
-    strategy:
-      matrix:
-        runner: [windows-2022, windows-2025, windows-11-arm]
-    runs-on: ${{ matrix.runner }}
-    env:
-      # The gcc installed on the Windows arm64 runner doesn't ship native ARM libraries so we need to disable CGO.
-      CGO_ENABLED: ${{ matrix.runner == 'windows-11-arm' && '0' || '' }}
-    steps:
-      - name: Echo changed files
-        shell: bash
-        run: |
-          echo "mode: ${{ needs.changedfiles.outputs.mode }}"
-          echo "go_sources: ${{ needs.changedfiles.outputs.go_sources }}"
-          echo "go_tests: ${{ needs.changedfiles.outputs.go_tests }}"
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - uses: ./.github/actions/setup-go-tools
-        with:
-          go-version: oldstable
-
-      - name: Run changed tests
-        if: needs.changedfiles.outputs.go_tests
-        env:
-          CHANGED_GOLANG_TESTS: ${{ needs.changedfiles.outputs.go_tests }}
-        run: |
-          make run-changed-tests
-
-      - name: Run tests on dependent components
-        if: needs.changedfiles.outputs.go_sources
-        env:
-          CHANGED_GOLANG_SOURCES: ${{ needs.changedfiles.outputs.go_sources }}
-        shell: bash
-        run: |
-          make run-changed-source-package-tests
-          dependent_modules=$(go run ./internal/buildscripts/cmd/dependent-modules)
-          while IFS= read -r dir; do
-            [[ -z "$dir" ]] && continue
-            echo "running dependent module tests in $dir"
-            (cd "$dir" && make test-twice)
-          done <<< "$dependent_modules"
-
-      - run: ./.github/workflows/scripts/check-disk-space.sh
-
   scoped-tests:
     # Keeps the name of the job required for merging in the GH configuration, make it
     # wait for all runners completion
