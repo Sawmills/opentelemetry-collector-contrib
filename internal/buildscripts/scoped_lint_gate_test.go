@@ -88,7 +88,6 @@ exit "$TEST_EXIT_CODE"
 }
 
 func TestScopedLintConfigClassification(t *testing.T) {
-	script := scopedWorkflowStepScript(t, "Get changes")
 	for _, tc := range []struct {
 		name, files, mode string
 	}{
@@ -104,25 +103,56 @@ func TestScopedLintConfigClassification(t *testing.T) {
 		{"config_and_unknown", ".golangci.yml\nDockerfile", "full_fallback"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			bin := t.TempDir()
-			stub := "#!/bin/sh\ncase \"$*\" in\n*merge-base*) echo base;;\n*--diff-filter=ACDMRTUXB*) printf '%s\\n' \"$TEST_FILES\";;\nesac\n"
-			// #nosec G306 -- Private temporary command stubs must be executable.
-			if err := os.WriteFile(filepath.Join(bin, "git"), []byte(stub), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			outputPath := filepath.Join(bin, "output")
-			// #nosec G204 -- Run the checked-in classifier against a local Git stub.
-			cmd := exec.Command("bash", "-c", script)
-			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
-				"PR_HEAD=test-head", "PR_BASE=main", "TEST_FILES="+tc.files, "GITHUB_OUTPUT="+outputPath)
-			if output, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("classifier failed: %v\n%s", err, output)
-			}
-			output, err := os.ReadFile(outputPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			assertContains(t, string(output), "mode="+tc.mode+"\n")
+			assertContains(t, runScopedChanges(t, tc.files, ""), "mode="+tc.mode+"\n")
 		})
 	}
+}
+
+func TestScopedInstructionStubClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name, files, deleted, mode string
+	}{
+		{"root_deletion_with_go", "CLAUDE.md\nexporter/example/main.go", "CLAUDE.md", "scoped"},
+		{"root_deletion_with_lint_config", ".golangci.yml\nCLAUDE.md", "CLAUDE.md", "scoped"},
+		{"root_nondeletion_with_go", "CLAUDE.md\nexporter/example/main.go", "", "full_fallback"},
+		{"nested_deletion_with_go", "exporter/CLAUDE.md\nexporter/example/main.go", "exporter/CLAUDE.md", "full_fallback"},
+		{"root_and_readme_deletions_with_go", "CLAUDE.md\nREADME.md\nexporter/example/main.go", "CLAUDE.md\nREADME.md", "scoped"},
+		{"root_and_go_deletions", "CLAUDE.md\nexporter/example/old.go", "CLAUDE.md\nexporter/example/old.go", "full_fallback"},
+		{"root_deletion_and_other_file", "CLAUDE.md\nDockerfile\nexporter/example/main.go", "CLAUDE.md", "full_fallback"},
+		{"docs_only_root_deletion", "CLAUDE.md", "CLAUDE.md", "docs_only"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertContains(t, runScopedChanges(t, tc.files, tc.deleted), "mode="+tc.mode+"\n")
+		})
+	}
+}
+
+func runScopedChanges(t *testing.T, files, deleted string) string {
+	t.Helper()
+	bin := t.TempDir()
+	stub := `#!/bin/sh
+case "$*" in
+*merge-base*) echo base;;
+*--diff-filter=ACDMRTUXB*) printf '%s\n' "$TEST_FILES";;
+*" -- CLAUDE.md") printf '%s\n' "$TEST_DELETED_FILES" | awk '$0 == "CLAUDE.md" { print }';;
+*--diff-filter=D*) printf '%s\n' "$TEST_DELETED_FILES";;
+esac
+`
+	// #nosec G306 -- Private temporary command stubs must be executable.
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(stub), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outputPath := filepath.Join(bin, "output")
+	// #nosec G204 -- Run the checked-in classifier against a local Git stub.
+	cmd := exec.Command("bash", "-c", scopedWorkflowStepScript(t, "Get changes"))
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"PR_HEAD=test-head", "PR_BASE=main", "TEST_FILES="+files, "TEST_DELETED_FILES="+deleted, "GITHUB_OUTPUT="+outputPath)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("classifier failed: %v\n%s", err, output)
+	}
+	output, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(output)
 }
