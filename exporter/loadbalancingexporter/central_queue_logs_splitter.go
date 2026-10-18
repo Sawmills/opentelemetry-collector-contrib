@@ -7,9 +7,11 @@ import (
 	"context"
 	"time"
 
+	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.uber.org/multierr"
+	"go.uber.org/zap"
 )
 
 const centralQueueLogSplitHeadroom = 4096
@@ -99,9 +101,33 @@ func centralQueueEffectiveUncompressedItemLimit(settings centralQueueSettings) i
 	return limit
 }
 
+func centralQueueEffectiveLogRecordLimit(settings centralQueueSettings) int {
+	limit := settings.maxUncompressedLogRecordBytes
+	if limit <= 0 {
+		return centralQueueEffectiveUncompressedItemLimit(settings)
+	}
+	if settings.maxInflightUncompressedBytes > 0 && (limit <= 0 || settings.maxInflightUncompressedBytes < int64(limit)) {
+		limit = int(settings.maxInflightUncompressedBytes)
+	}
+	return limit
+}
+
+func centralQueueEffectiveLogsBatchLimit(settings centralQueueSettings) int {
+	limit := centralQueueEffectiveUncompressedItemLimit(settings)
+	if settings.maxUncompressedLogRecordBytes > 0 && (limit <= 0 || settings.maxUncompressedLogRecordBytes < limit) {
+		limit = settings.maxUncompressedLogRecordBytes
+	}
+	return limit
+}
+
 func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) error {
+	rejected := plog.NewLogs()
+	var rejectedSizes []int
 	if err := s.rejectUnsplittableRecords(ctx, ld); err != nil {
-		return err
+		if s.exporter.centralQueue.settings.maxUncompressedLogRecordBytes <= 0 || err != errCentralQueueItemTooLarge {
+			return err
+		}
+		ld, rejected, rejectedSizes = s.partitionOversizedRecords(ld)
 	}
 
 	var errs error
@@ -146,6 +172,14 @@ func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) err
 	if err := s.exporter.centralQueue.enqueueAll(s.pending); err != nil {
 		return err
 	}
+	for _, item := range s.pending {
+		if item.uncompressedBytes > s.hardLimit {
+			s.exporter.centralQueue.settings.telemetry.recordLogRecordSize(ctx, item.uncompressedBytes, false)
+		}
+	}
+	for _, size := range rejectedSizes {
+		s.exporter.centralQueue.settings.telemetry.recordLogRecordSize(ctx, size, true)
+	}
 	if s.routingSnapshot != nil && len(s.pending) > 0 {
 		s.exporter.observeCentralQueueLaneAssignment(s.laneCount)
 	} else {
@@ -153,7 +187,46 @@ func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) err
 			s.exporter.observeCentralQueueLaneBytes(s.pending[i].compressedBytes, s.now)
 		}
 	}
+	if len(rejectedSizes) > 0 {
+		if s.exporter.logger != nil {
+			s.exporter.logger.Warn("central queue refused oversized log records",
+				zap.Int("rejected_log_records", len(rejectedSizes)),
+				zap.Int("max_uncompressed_log_record_bytes", centralQueueEffectiveLogRecordLimit(s.exporter.centralQueue.settings)))
+		}
+		return consumererror.NewPermanent(consumererror.NewLogs(errCentralQueueLogRecordTooLarge, rejected))
+	}
 	return nil
+}
+
+// Copy only when at least one record exceeds the record limit. The original
+// request belongs to the caller and must remain unchanged on partial rejection.
+func (s *centralQueueLogSplitter) partitionOversizedRecords(ld plog.Logs) (plog.Logs, plog.Logs, []int) {
+	accepted, rejected := plog.NewLogs(), plog.NewLogs()
+	ld.CopyTo(accepted)
+	limit := centralQueueEffectiveLogRecordLimit(s.exporter.centralQueue.settings)
+	var sizes []int
+	accepted.ResourceLogs().RemoveIf(func(rl plog.ResourceLogs) bool {
+		rl.ScopeLogs().RemoveIf(func(sl plog.ScopeLogs) bool {
+			metadata := plog.NewLogs()
+			targetRL := findOrCreateResourceLogs(metadata, rl)
+			targetSL := findOrCreateScopeLogs(targetRL, sl)
+			scopeMetadataSize := s.marshaler.ScopeLogsSize(targetSL)
+			resourceMetadataSize := s.marshaler.ResourceLogsSize(targetRL) - logProtoDeltaSize(scopeMetadataSize)
+			sl.LogRecords().RemoveIf(func(record plog.LogRecord) bool {
+				scopeSize := scopeMetadataSize + logProtoDeltaSize(s.marshaler.LogRecordSize(record))
+				size := logProtoDeltaSize(resourceMetadataSize + logProtoDeltaSize(scopeSize))
+				if size <= limit {
+					return false
+				}
+				insertLogRecord(rejected, rl, sl, record)
+				sizes = append(sizes, size)
+				return true
+			})
+			return sl.LogRecords().Len() == 0
+		})
+		return rl.ScopeLogs().Len() == 0
+	})
+	return accepted, rejected, sizes
 }
 
 func (s *centralQueueLogSplitter) balancedLaneRoutingKey(balancingKey pcommon.TraceID) ([]byte, error) {
@@ -180,7 +253,11 @@ func (s *centralQueueLogSplitter) balancedLaneRoutingKeyForLane(lane uint32) ([]
 }
 
 func (s *centralQueueLogSplitter) rejectUnsplittableRecords(ctx context.Context, ld plog.Logs) error {
-	if s.hardLimit <= 0 {
+	limit := s.hardLimit
+	if s.exporter.centralQueue.settings.maxUncompressedLogRecordBytes > 0 {
+		limit = centralQueueEffectiveLogRecordLimit(s.exporter.centralQueue.settings)
+	}
+	if limit <= 0 {
 		return nil
 	}
 
@@ -199,8 +276,11 @@ func (s *centralQueueLogSplitter) rejectUnsplittableRecords(ctx context.Context,
 			for k := 0; k < sl.LogRecords().Len(); k++ {
 				record := sl.LogRecords().At(k)
 				scopeSize := scopeMetadataSize + logProtoDeltaSize(s.marshaler.LogRecordSize(record))
-				if logProtoDeltaSize(resourceMetadataSize+logProtoDeltaSize(scopeSize)) <= s.hardLimit {
+				if logProtoDeltaSize(resourceMetadataSize+logProtoDeltaSize(scopeSize)) <= limit {
 					continue
+				}
+				if s.exporter.centralQueue.settings.maxUncompressedLogRecordBytes > 0 {
+					return errCentralQueueItemTooLarge
 				}
 				record.CopyTo(targetSL.LogRecords().AppendEmpty())
 				payload, err := s.marshaler.MarshalLogs(single)
@@ -282,6 +362,9 @@ func (s *centralQueueLogSplitter) flushLane(lane *centralQueueLogLaneBuilder) er
 }
 
 func (s *centralQueueLogSplitter) itemExceedsLimit(item centralQueueItem) bool {
+	if item.signal == signalKindLogs && item.count == 1 && s.exporter.centralQueue.settings.maxUncompressedLogRecordBytes > 0 {
+		return item.uncompressedBytes > centralQueueEffectiveLogRecordLimit(s.exporter.centralQueue.settings)
+	}
 	return s.hardLimit > 0 && item.uncompressedBytes > s.hardLimit
 }
 

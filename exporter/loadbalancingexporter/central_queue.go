@@ -58,13 +58,14 @@ func centralQueueReadyWindowLimit(consumers int) int {
 }
 
 type centralQueueSettings struct {
-	maxCompressedBytes           int64
-	maxInflightUncompressedBytes int64
-	maxUncompressedBatchBytes    int
-	targetCompressedBytes        int64
-	maxBatchDelay                time.Duration
-	shutdownTimeout              time.Duration
-	maxReadyWindows              int
+	maxCompressedBytes            int64
+	maxInflightUncompressedBytes  int64
+	maxUncompressedBatchBytes     int
+	maxUncompressedLogRecordBytes int
+	targetCompressedBytes         int64
+	maxBatchDelay                 time.Duration
+	shutdownTimeout               time.Duration
+	maxReadyWindows               int
 	// forceScheduleAge bounds how long a fallback candidate may wait before it
 	// is promoted ahead of fresh target candidates. Zero means "derive from
 	// maxBatchDelay × centralQueueDefaultForceScheduleAgeMultiplier". A negative
@@ -189,7 +190,7 @@ func (q *centralQueue) enqueueAllAt(items []centralQueueItem, now time.Time) err
 	// Validate per-item hard limits (same as enqueueAt) before taking the lock.
 	for i := range items {
 		it := items[i]
-		if q.settings.maxUncompressedBatchBytes > 0 && it.uncompressedBytes > q.settings.maxUncompressedBatchBytes {
+		if q.itemExceedsUncompressedLimit(it) {
 			q.settings.telemetry.recordRejected(context.Background(), totalCompressed)
 			return errCentralQueueItemTooLarge
 		}
@@ -268,7 +269,7 @@ func (q *centralQueue) enqueueAllAt(items []centralQueueItem, now time.Time) err
 }
 
 func (q *centralQueue) enqueueAt(item centralQueueItem, now time.Time) error {
-	if q.settings.maxUncompressedBatchBytes > 0 && item.uncompressedBytes > q.settings.maxUncompressedBatchBytes {
+	if q.itemExceedsUncompressedLimit(item) {
 		q.settings.telemetry.recordRejected(context.Background(), int64(item.compressedBytes))
 		return errCentralQueueItemTooLarge
 	}
@@ -988,8 +989,22 @@ func (q *centralQueue) releaseWindowItemsLocked(lease *centralQueueLease) {
 }
 
 func (q *centralQueue) windowWouldExceedLimit(window centralQueueWindow, item *centralQueueItem) bool {
-	return q.settings.maxUncompressedBatchBytes > 0 &&
-		window.uncompressedBytes+item.uncompressedBytes > q.settings.maxUncompressedBatchBytes
+	limit := q.settings.maxUncompressedBatchBytes
+	if item.signal == signalKindLogs {
+		limit = centralQueueEffectiveLogsBatchLimit(q.settings)
+	}
+	return limit > 0 && window.uncompressedBytes+item.uncompressedBytes > limit
+}
+
+func (q *centralQueue) itemExceedsUncompressedLimit(item centralQueueItem) bool {
+	limit := q.settings.maxUncompressedBatchBytes
+	if item.signal == signalKindLogs {
+		limit = centralQueueEffectiveLogsBatchLimit(q.settings)
+		if item.count == 1 && q.settings.maxUncompressedLogRecordBytes > 0 {
+			limit = centralQueueEffectiveLogRecordLimit(q.settings)
+		}
+	}
+	return limit > 0 && item.uncompressedBytes > limit
 }
 
 func (q *centralQueue) windowInflightBlockedLocked(window centralQueueWindow) bool {

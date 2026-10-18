@@ -239,6 +239,11 @@ func TestCentralQueueValidation(t *testing.T) {
 		expectedErr string
 	}{
 		{
+			name:        "negative log record limit",
+			mutate:      func(c *CentralQueueConfig) { c.MaxUncompressedLogRecordBytes = -1 },
+			expectedErr: "central_queue.max_uncompressed_log_record_bytes",
+		},
+		{
 			name:        "missing compressed budget",
 			mutate:      func(c *CentralQueueConfig) { c.MaxCompressedBytes = 0 },
 			expectedErr: "central_queue.max_compressed_bytes",

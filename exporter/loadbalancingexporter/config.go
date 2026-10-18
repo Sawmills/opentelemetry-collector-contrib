@@ -275,13 +275,17 @@ const (
 type CentralQueueConfig struct {
 	Enabled bool `mapstructure:"enabled"`
 	// StorageID enables durable logs and metrics admission using file_storage.
-	StorageID                    *component.ID           `mapstructure:"storage"`
-	MaxCompressedBytes           int64                   `mapstructure:"max_compressed_bytes"`
-	PayloadCompression           QueuePayloadCompression `mapstructure:"payload_compression"`
-	MaxUncompressedBatchBytes    int                     `mapstructure:"max_uncompressed_batch_bytes"`
-	MaxInflightUncompressedBytes int64                   `mapstructure:"max_inflight_uncompressed_bytes"`
-	TargetCompressedBytes        int64                   `mapstructure:"target_compressed_bytes"`
-	MaxBatchDelay                time.Duration           `mapstructure:"max_batch_delay"`
+	StorageID                 *component.ID           `mapstructure:"storage"`
+	MaxCompressedBytes        int64                   `mapstructure:"max_compressed_bytes"`
+	PayloadCompression        QueuePayloadCompression `mapstructure:"payload_compression"`
+	MaxUncompressedBatchBytes int                     `mapstructure:"max_uncompressed_batch_bytes"`
+	// MaxUncompressedLogRecordBytes permits a singleton log record above the
+	// batch cap, bounded by the worker transport and shared inflight budget.
+	// Zero preserves the batch cap for every log record.
+	MaxUncompressedLogRecordBytes int           `mapstructure:"max_uncompressed_log_record_bytes"`
+	MaxInflightUncompressedBytes  int64         `mapstructure:"max_inflight_uncompressed_bytes"`
+	TargetCompressedBytes         int64         `mapstructure:"target_compressed_bytes"`
+	MaxBatchDelay                 time.Duration `mapstructure:"max_batch_delay"`
 	// ShutdownTimeout bounds graceful drain. Zero uses five minutes; a caller's
 	// earlier deadline still wins. Kubernetes grace must cover the whole drain.
 	ShutdownTimeout            time.Duration        `mapstructure:"shutdown_timeout"`
@@ -494,6 +498,9 @@ func (c CentralQueueConfig) Validate() error {
 	}
 	if c.MaxUncompressedBatchBytes <= 0 {
 		return errors.New("central_queue.max_uncompressed_batch_bytes must be greater than 0 when central_queue.enabled=true")
+	}
+	if c.MaxUncompressedLogRecordBytes < 0 {
+		return errors.New("central_queue.max_uncompressed_log_record_bytes must be greater than or equal to 0")
 	}
 	if c.MaxInflightUncompressedBytes <= 0 {
 		return errors.New("central_queue.max_inflight_uncompressed_bytes must be greater than 0 when central_queue.enabled=true")
