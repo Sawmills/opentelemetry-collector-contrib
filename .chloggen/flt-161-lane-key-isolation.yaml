@@ -4,7 +4,7 @@ component: exporter/loadbalancing
 
 note: Keep a central queue routing-key search failure local to its lane.
 
-issues: []
+issues: [161]
 
 subtext: |
   No-affinity random routing and record striping skip unusable lane keys.
