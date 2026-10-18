@@ -23,29 +23,110 @@ const (
 )
 
 var rejectionFields = [...]struct{ path, class string }{
-	{"timestamp", "timestamp"},
-	{"@timestamp", "at_timestamp"},
-	{"duration", "duration"},
-	{"level", "level"},
-	{"error", "error"},
-	{"message", "message"},
-	{"errorsData", "errors_data"},
-	{"change", "change"},
+	rejectionFieldTimestamp:   {"timestamp", "timestamp"},
+	rejectionFieldAtTimestamp: {"@timestamp", "at_timestamp"},
+	rejectionFieldDuration:    {"duration", "duration"},
+	rejectionFieldLevel:       {"level", "level"},
+	rejectionFieldError:       {"error", "error"},
+	rejectionFieldMessage:     {"message", "message"},
+	rejectionFieldErrorsData:  {"errorsData", "errors_data"},
+	rejectionFieldChange:      {"change", "change"},
 }
 
-var (
-	rejectionTypes   = [...]string{"unknown", "map", "slice", "string", "int", "double", "bool", "bytes", "empty", "derived"}
-	rejectionSources = [...]string{"unknown", "resource", "scope", "log", "body", "log_alias", "generated", "mixed"}
+type rejectionField uint8
+
+const (
+	rejectionFieldTimestamp rejectionField = iota
+	rejectionFieldAtTimestamp
+	rejectionFieldDuration
+	rejectionFieldLevel
+	rejectionFieldError
+	rejectionFieldMessage
+	rejectionFieldErrorsData
+	rejectionFieldChange
+	rejectionFieldUnknown
 )
+
+type rejectionKind uint8
+
+const (
+	rejectionKindUnknown rejectionKind = iota
+	rejectionKindMap
+	rejectionKindSlice
+	rejectionKindString
+	rejectionKindInt
+	rejectionKindDouble
+	rejectionKindBool
+	rejectionKindBytes
+	rejectionKindEmpty
+	rejectionKindDerived
+)
+
+type rejectionSource uint8
+
+const (
+	rejectionSourceUnknown rejectionSource = iota
+	rejectionSourceResource
+	rejectionSourceScope
+	rejectionSourceLog
+	rejectionSourceBody
+	rejectionSourceLogAlias
+	rejectionSourceGenerated
+	rejectionSourceMixed
+)
+
+type rejectionStatus uint8
+
+const (
+	rejectionStatusOther rejectionStatus = iota
+	rejectionStatus400
+	rejectionStatus409
+	rejectionStatus429
+	rejectionStatusOther4xx
+	rejectionStatus5xx
+)
+
+type rejectionExpected uint8
+
+const (
+	rejectionExpectedUnknown rejectionExpected = iota
+	rejectionExpectedText
+	rejectionExpectedDate
+	rejectionExpectedNumber
+	rejectionExpectedObject
+	rejectionExpectedBoolean
+)
+
+var rejectionTypes = [...]string{
+	rejectionKindUnknown: "unknown", rejectionKindMap: "map", rejectionKindSlice: "slice",
+	rejectionKindString: "string", rejectionKindInt: "int", rejectionKindDouble: "double",
+	rejectionKindBool: "bool", rejectionKindBytes: "bytes", rejectionKindEmpty: "empty", rejectionKindDerived: "derived",
+}
+
+var rejectionSources = [...]string{
+	rejectionSourceUnknown: "unknown", rejectionSourceResource: "resource", rejectionSourceScope: "scope",
+	rejectionSourceLog: "log", rejectionSourceBody: "body", rejectionSourceLogAlias: "log_alias",
+	rejectionSourceGenerated: "generated", rejectionSourceMixed: "mixed",
+}
+
+var rejectionStatuses = [...]string{
+	rejectionStatusOther: "other", rejectionStatus400: "400", rejectionStatus409: "409",
+	rejectionStatus429: "429", rejectionStatusOther4xx: "other_4xx", rejectionStatus5xx: "5xx",
+}
+
+var rejectionExpectedTypes = [...]string{
+	rejectionExpectedUnknown: "unknown", rejectionExpectedText: "text", rejectionExpectedDate: "date",
+	rejectionExpectedNumber: "number", rejectionExpectedObject: "object", rejectionExpectedBoolean: "boolean",
+}
 
 type logFieldShape uint64
 
-func (s logFieldShape) with(field int, kind, source uint8) logFieldShape {
+func (s logFieldShape) with(field rejectionField, kind rejectionKind, source rejectionSource) logFieldShape {
 	shift := uint(field * 8)
 	if uint8(s>>shift) != 0 {
-		kind, source = 0, 7
+		kind, source = rejectionKindUnknown, rejectionSourceMixed
 	}
-	return s&^(logFieldShape(255)<<shift) | logFieldShape(source<<4|kind)<<shift
+	return s&^(logFieldShape(255)<<shift) | logFieldShape(uint8(source)<<4|uint8(kind))<<shift
 }
 
 func describeLogFields(ec encodingContext, record plog.LogRecord) logFieldShape {
@@ -63,28 +144,28 @@ func describeLogFields(ec encodingContext, record plog.LogRecord) logFieldShape 
 		for key, value := range attrs.All() {
 			for i, field := range rejectionFields {
 				if key == field.path {
-				var kind uint8
-				switch value.Type() {
-				case pcommon.ValueTypeMap:
-					kind = 1
-				case pcommon.ValueTypeSlice:
-					kind = 2
-				case pcommon.ValueTypeStr:
-					kind = 3
-				case pcommon.ValueTypeInt:
-					kind = 4
-				case pcommon.ValueTypeDouble:
-					kind = 5
-				case pcommon.ValueTypeBool:
-					kind = 6
-				case pcommon.ValueTypeBytes:
-					kind = 7
-				case pcommon.ValueTypeEmpty:
-					kind = 8
-				}
-				shape = shape.with(i, kind, uint8(source+1))
+					var kind rejectionKind
+					switch value.Type() {
+					case pcommon.ValueTypeMap:
+						kind = rejectionKindMap
+					case pcommon.ValueTypeSlice:
+						kind = rejectionKindSlice
+					case pcommon.ValueTypeStr:
+						kind = rejectionKindString
+					case pcommon.ValueTypeInt:
+						kind = rejectionKindInt
+					case pcommon.ValueTypeDouble:
+						kind = rejectionKindDouble
+					case pcommon.ValueTypeBool:
+						kind = rejectionKindBool
+					case pcommon.ValueTypeBytes:
+						kind = rejectionKindBytes
+					case pcommon.ValueTypeEmpty:
+						kind = rejectionKindEmpty
+					}
+					shape = shape.with(rejectionField(i), kind, rejectionSource(source+1))
 				} else if len(key) > len(field.path) && strings.HasPrefix(key, field.path) && key[len(field.path)] == '.' {
-					shape = shape.with(i, 9, uint8(source+1))
+					shape = shape.with(rejectionField(i), rejectionKindDerived, rejectionSource(source+1))
 				}
 			}
 		}
@@ -93,7 +174,7 @@ func describeLogFields(ec encodingContext, record plog.LogRecord) logFieldShape 
 	// their presence; the scalar contents never enter diagnostic state.
 	for _, alias := range [...]string{"exception.message", "exception.type", "exception.stacktrace"} {
 		if _, exists := record.Attributes().Get(alias); exists {
-			shape = shape.with(4, 9, 5)
+			shape = shape.with(rejectionFieldError, rejectionKindDerived, rejectionSourceLogAlias)
 			break
 		}
 	}
@@ -105,24 +186,33 @@ func describeLogFields(ec encodingContext, record plog.LogRecord) logFieldShape 
 		// location is no longer distinguishable at this seam.
 		for _, alias := range [...]string{"exception.message", "exception.type", "exception.stacktrace"} {
 			if _, exists := record.Body().Map().Get(alias); exists {
-				shape = shape.with(4, 9, 4)
+				shape = shape.with(rejectionFieldError, rejectionKindDerived, rejectionSourceBody)
 				break
 			}
 		}
 	}
-	shape = shape.with(1, 9, 6) // ECS generates @timestamp.
+	shape = shape.with(rejectionFieldAtTimestamp, rejectionKindDerived, rejectionSourceGenerated) // ECS generates @timestamp.
 	if record.Body().Type() != pcommon.ValueTypeEmpty {
-		kind := uint8(9)
+		kind := rejectionKindDerived
 		if record.Body().Type() == pcommon.ValueTypeStr {
-			kind = 3
+			kind = rejectionKindString
 		}
-		shape = shape.with(5, kind, 4)
+		shape = shape.with(rejectionFieldMessage, kind, rejectionSourceBody)
 	}
 	return shape
 }
 
 type rejectionClass struct {
-	status, field, expected, kind, source string
+	status   rejectionStatus
+	field    rejectionField
+	expected rejectionExpected
+	kind     rejectionKind
+	source   rejectionSource
+}
+
+// The registry retains five enum nibbles, never strings from a bulk response.
+func (c rejectionClass) key() uint32 {
+	return uint32(c.status)<<16 | uint32(c.field)<<12 | uint32(c.expected)<<8 | uint32(c.kind)<<4 | uint32(c.source)
 }
 
 type rejectionDiagnostics struct {
@@ -130,7 +220,7 @@ type rejectionDiagnostics struct {
 	exporter  string
 	buffers   chan *[maxRejectionShapes]logFieldShape
 	mu        sync.Mutex
-	series    map[rejectionClass]struct{}
+	series    map[uint32]struct{}
 }
 
 func newRejectionDiagnostics(tb *metadata.TelemetryBuilder, exporter string, concurrency int) *rejectionDiagnostics {
@@ -138,7 +228,7 @@ func newRejectionDiagnostics(tb *metadata.TelemetryBuilder, exporter string, con
 	d := &rejectionDiagnostics{
 		telemetry: tb, exporter: exporter,
 		buffers: make(chan *[maxRejectionShapes]logFieldShape, concurrency),
-		series:  make(map[rejectionClass]struct{}, maxRejectionSeries),
+		series:  make(map[uint32]struct{}, maxRejectionSeries),
 	}
 	for range concurrency {
 		d.buffers <- new([maxRejectionShapes]logFieldShape)
@@ -178,7 +268,7 @@ func (b *rejectionBatch) end() {
 	b.tracked = 0
 }
 
-func (b *rejectionBatch) observe(ctx context.Context, stat docappender.BulkIndexerResponseStat, count int, flushErr error) {
+func (b *rejectionBatch) observe(stat docappender.BulkIndexerResponseStat, count int, flushErr error) {
 	defer func() { b.tracked = 0 }() // Retained retry positions are not exposed by docappender.
 	if b.owner == nil || flushErr != nil || stat.Indexed+stat.RetriedDocs+int64(len(stat.FailedDocs)) != int64(count) {
 		return
@@ -195,72 +285,80 @@ func (b *rejectionBatch) observe(ctx context.Context, stat docappender.BulkIndex
 		if b.shapes != nil && item.Position < b.tracked {
 			shape = b.shapes[item.Position]
 		}
-		b.owner.add(ctx, classifyRejectedItem(item, shape))
+		b.owner.add(classifyRejectedItem(item, shape))
 	}
 }
 
 func classifyRejectedItem(item docappender.BulkIndexerResponseItem, shape logFieldShape) rejectionClass {
-	c := rejectionClass{status: "other", field: "unknown", expected: "unknown", kind: "unknown", source: "unknown"}
+	c := rejectionClass{status: rejectionStatusOther, field: rejectionFieldUnknown}
 	switch {
 	case item.Status == 400:
-		c.status = "400"
+		c.status = rejectionStatus400
 	case item.Status == 409:
-		c.status = "409"
+		c.status = rejectionStatus409
 	case item.Status == 429:
-		c.status = "429"
+		c.status = rejectionStatus429
 	case item.Status >= 400 && item.Status < 500:
-		c.status = "other_4xx"
+		c.status = rejectionStatusOther4xx
 	case item.Status >= 500 && item.Status < 600:
-		c.status = "5xx"
+		c.status = rejectionStatus5xx
 	}
 	if item.Status != 400 || len(item.Error.Reason) > 2048 ||
 		(item.Error.Type != "mapper_parsing_exception" && item.Error.Type != "document_parsing_exception") {
 		return c
 	}
 	for field, name := range rejectionFields {
-		for _, expected := range []struct{ literal, class string }{
-			{"text", "text"},
-			{"keyword", "text"},
-			{"date", "date"},
-			{"date_nanos", "date"},
-			{"float", "number"},
-			{"double", "number"},
-			{"long", "number"},
-			{"integer", "number"},
-			{"object", "object"},
-			{"nested", "object"},
-			{"boolean", "boolean"},
+		for _, expected := range []struct {
+			literal string
+			class   rejectionExpected
+		}{
+			{"text", rejectionExpectedText},
+			{"keyword", rejectionExpectedText},
+			{"date", rejectionExpectedDate},
+			{"date_nanos", rejectionExpectedDate},
+			{"float", rejectionExpectedNumber},
+			{"double", rejectionExpectedNumber},
+			{"long", rejectionExpectedNumber},
+			{"integer", rejectionExpectedNumber},
+			{"object", rejectionExpectedObject},
+			{"nested", rejectionExpectedObject},
+			{"boolean", rejectionExpectedBoolean},
 		} {
 			prefix := "failed to parse field [" + name.path + "] of type [" + expected.literal + "]"
 			if !strings.HasPrefix(item.Error.Reason, prefix) {
 				continue
 			}
 			suffix := item.Error.Reason[len(prefix):]
-			if suffix != "" && !strings.HasPrefix(suffix, " in document") && !strings.HasPrefix(suffix, ". ") {
+			if suffix != "" && !strings.HasPrefix(suffix, " in document with id '") && !strings.HasPrefix(suffix, ". Preview of field's value: '") {
 				return c
 			}
-			c.field, c.expected = name.class, expected.class
+			c.field, c.expected = rejectionField(field), expected.class
 			tag := uint8(shape >> uint(field*8))
-			c.kind, c.source = rejectionTypes[tag&15], rejectionSources[tag>>4]
+			c.kind, c.source = rejectionKind(tag&15), rejectionSource(tag>>4)
 			return c
 		}
 	}
 	return c
 }
 
-func (d *rejectionDiagnostics) add(ctx context.Context, c rejectionClass) {
+func (d *rejectionDiagnostics) add(c rejectionClass) {
 	d.mu.Lock()
-	if _, exists := d.series[c]; !exists {
+	if _, exists := d.series[c.key()]; !exists {
 		if len(d.series) < maxRejectionSeries {
-			d.series[c] = struct{}{}
+			d.series[c.key()] = struct{}{}
 		} else {
-			c.field, c.expected, c.kind, c.source = "unknown", "unknown", "unknown", "unknown"
+			c.field, c.expected, c.kind, c.source = rejectionFieldUnknown, rejectionExpectedUnknown, rejectionKindUnknown, rejectionSourceUnknown
 		}
 	}
 	d.mu.Unlock()
-	d.telemetry.ElasticsearchDocsFailedByField.Add(ctx, 1, metric.WithAttributeSet(attribute.NewSet(
-		attribute.String("exporter", d.exporter), attribute.String("item_status_class", c.status),
-		attribute.String("field_class", c.field), attribute.String("expected_type", c.expected),
-		attribute.String("value_type", c.kind), attribute.String("source", c.source),
+	fieldName := "unknown"
+	if c.field < rejectionFieldUnknown {
+		fieldName = rejectionFields[c.field].class
+	}
+	// This diagnostic stream must not carry request trace/span IDs via exemplars.
+	d.telemetry.ElasticsearchDocsFailedByField.Add(context.Background(), 1, metric.WithAttributeSet(attribute.NewSet(
+		attribute.String("exporter", d.exporter), attribute.String("item_status_class", rejectionStatuses[c.status]),
+		attribute.String("field_class", fieldName), attribute.String("expected_type", rejectionExpectedTypes[c.expected]),
+		attribute.String("value_type", rejectionTypes[c.kind]), attribute.String("source", rejectionSources[c.source]),
 	)))
 }

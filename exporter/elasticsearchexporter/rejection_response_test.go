@@ -6,26 +6,29 @@ package elasticsearchexporter
 import (
 	"compress/gzip"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
- "fmt"
- "strings"
- "time"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/client"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/config/configoptional"
+	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
- "go.opentelemetry.io/collector/exporter"
- "errors"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
- "go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/exemplar"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
- "go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metadata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metadatatest"
@@ -33,14 +36,15 @@ import (
 
 type rejectionHTTPResponse struct {
 	status int
-	body string
+	body   string
 }
 
 type rejectionFixtureResult struct {
-	points []metricdata.DataPoint[int64]
-	requests []string
-	err error
-	failed int64
+	points            []metricdata.DataPoint[int64]
+	requests          []string
+	err               error
+	failed            int64
+	existingExemplars int
 }
 
 // This fixture crosses the factory/ConsumeLogs seam and observes real OTel
@@ -53,26 +57,42 @@ func runRejectionResponseFixture(t *testing.T, logs plog.Logs, responses []rejec
 		var reader io.Reader = r.Body
 		if r.Header.Get("Content-Encoding") == "gzip" {
 			gz, err := gzip.NewReader(r.Body)
-			if err != nil { t.Error(err); w.WriteHeader(500); return }
+			if err != nil {
+				t.Error(err)
+				w.WriteHeader(500)
+				return
+			}
 			defer gz.Close()
 			reader = gz
 		}
 		data, err := io.ReadAll(reader)
-		if err != nil { t.Error(err); w.WriteHeader(500); return }
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(500)
+			return
+		}
 		mu.Lock()
 		position := len(requests)
 		requests = append(requests, string(data))
 		mu.Unlock()
-		if position >= len(responses) { t.Error("unexpected extra bulk request"); w.WriteHeader(500); return }
+		if position >= len(responses) {
+			t.Error("unexpected extra bulk request")
+			w.WriteHeader(500)
+			return
+		}
 		response := responses[position]
 		w.Header().Set("Content-Type", "application/json")
 		status := response.status
-		if status == 0 { status = 200 }
+		if status == 0 {
+			status = 200
+		}
 		w.WriteHeader(status)
 		_, err = io.WriteString(w, response.body)
-		if err != nil { t.Error(err) }
+		if err != nil {
+			t.Error(err)
+		}
 	})
-	telemetry := componenttest.NewTelemetry()
+	telemetry := componenttest.NewTelemetry(componenttest.WithMetricOptions(sdkmetric.WithExemplarFilter(exemplar.TraceBasedFilter)))
 	settings := metadatatest.NewSettings(telemetry)
 	settings.ID = component.NewIDWithName(metadata.Type, "fixture")
 	factory := NewFactory()
@@ -81,16 +101,25 @@ func runRejectionResponseFixture(t *testing.T, logs plog.Logs, responses []rejec
 	config.LogsIndex = "logs-fixture"
 	config.QueueBatchConfig = configoptional.None[exporterhelper.QueueBatchConfig]()
 	config.Retry.Enabled = false
-	if configure != nil { configure(config) }
+	if configure != nil {
+		configure(config)
+	}
 	exp, err := factory.CreateLogs(t.Context(), settings, config)
 	require.NoError(t, err)
 	require.NoError(t, exp.Start(t.Context(), componenttest.NewNopHost()))
 	t.Cleanup(func() { require.NoError(t, exp.Shutdown(context.WithoutCancel(t.Context()))) })
 	ctx := client.NewContext(t.Context(), client.Info{Metadata: client.NewMetadata(map[string][]string{"X-Elastic-Mapping-Mode": {"ecs"}})})
-	if !exp.Capabilities().MutatesData { logs.MarkReadOnly() }
+	if !exp.Capabilities().MutatesData {
+		logs.MarkReadOnly()
+	}
+	ctx = trace.ContextWithSpanContext(ctx, trace.NewSpanContext(trace.SpanContextConfig{TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2}, TraceFlags: trace.FlagsSampled}))
 	var consumeErr error
- if len(calls) == 0 { consumeErr = exp.ConsumeLogs(ctx, logs) } else { consumeErr = calls[0](exp, ctx, logs) }
- result := rejectionFixtureResult{err: consumeErr}
+	if len(calls) == 0 {
+		consumeErr = exp.ConsumeLogs(ctx, logs)
+	} else {
+		consumeErr = calls[0](exp, ctx, logs)
+	}
+	result := rejectionFixtureResult{err: consumeErr}
 	mu.Lock()
 	result.requests = append([]string(nil), requests...)
 	mu.Unlock()
@@ -99,12 +128,17 @@ func runRejectionResponseFixture(t *testing.T, logs plog.Logs, responses []rejec
 		sum, ok := collected.Data.(metricdata.Sum[int64])
 		require.True(t, ok)
 		result.points = sum.DataPoints
-	} else { require.ErrorContains(t, err, "not found") }
+	} else {
+		require.ErrorContains(t, err, "not found")
+	}
 	collected, err := telemetry.GetMetric("otelcol.elasticsearch.docs.failed")
 	require.NoError(t, err)
 	sum, ok := collected.Data.(metricdata.Sum[int64])
 	require.True(t, ok)
-	for _, point := range sum.DataPoints { result.failed += point.Value }
+	for _, point := range sum.DataPoints {
+		result.failed += point.Value
+		result.existingExemplars += len(point.Exemplars)
+	}
 	return result
 }
 
@@ -120,7 +154,7 @@ func assertRejectionTuple(t *testing.T, point metricdata.DataPoint[int64], statu
 	t.Helper()
 	require.Equal(t, count, point.Value)
 	require.Equal(t, 6, point.Attributes.Len())
-	for key, want := range map[string]string{"exporter":"elasticsearch/fixture", "item_status_class":status, "field_class":field, "expected_type":expected, "value_type":kind, "source":source} {
+	for key, want := range map[string]string{"exporter": "elasticsearch/fixture", "item_status_class": status, "field_class": field, "expected_type": expected, "value_type": kind, "source": source} {
 		actual, found := point.Attributes.Value(attribute.Key(key))
 		require.True(t, found)
 		require.Equal(t, want, actual.AsString())
@@ -129,27 +163,32 @@ func assertRejectionTuple(t *testing.T, point metricdata.DataPoint[int64], statu
 
 func TestRejectionResponsePrivacyAndCoverage(t *testing.T) {
 	for _, test := range []struct {
-		name, response string
-		status int
-		strip bool
+		name, response                                            string
+		status                                                    int
+		strip                                                     bool
 		wantStatus, wantField, wantExpected, wantKind, wantSource string
 	}{
-		{name:"known_header", response:`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`, wantStatus:"400", wantField:"error", wantExpected:"text", wantKind:"map", wantSource:"log"},
-		{name:"unrecognized_prefix", response:`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"synthetic-secret failed to parse field [error] of type [text]"}}}]}`, wantStatus:"400"},
-		{name:"nested_path", response:`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error.private] of type [text]"}}}]}`, wantStatus:"400"},
-		{name:"malformed_suffix", response:`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]not-a-header"}}}]}`, wantStatus:"400"},
-		{name:"unknown_type", response:`{"items":[{"create":{"status":400,"error":{"type":"private-error-type","reason":"failed to parse field [error] of type [text]"}}}]}`, wantStatus:"400"},
-		{name:"stripped_reason", strip:true, response:`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`, wantStatus:"400"},
-		{name:"conflict", response:`{"items":[{"create":{"status":409,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`, wantStatus:"409"},
-		{name:"opensearch_header", response:`{"items":[{"create":{"status":400,"error":{"type":"document_parsing_exception","reason":"failed to parse field [error] of type [text] in document with id 'SYNTHETIC-ID'. Preview of field's value: 'SYNTHETIC-SECRET'"}}}]}`, wantStatus:"400", wantField:"error", wantExpected:"text", wantKind:"map", wantSource:"log"},
+		{name: "known_header", response: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`, wantStatus: "400", wantField: "error", wantExpected: "text", wantKind: "map", wantSource: "log"},
+		{name: "unrecognized_prefix", response: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"synthetic-secret failed to parse field [error] of type [text]"}}}]}`, wantStatus: "400"},
+		{name: "nested_path", response: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error.private] of type [text]"}}}]}`, wantStatus: "400"},
+		{name: "malformed_suffix", response: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]not-a-header"}}}]}`, wantStatus: "400"},
+		{name: "documentary_suffix", response: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text] in documentary garbage"}}}]}`, wantStatus: "400"},
+		{name: "arbitrary_period_suffix", response: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]. unsupported format"}}}]}`, wantStatus: "400"},
+		{name: "supported_period_preview", response: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]. Preview of field's value: 'SYNTHETIC-SECRET'"}}}]}`, wantStatus: "400", wantField: "error", wantExpected: "text", wantKind: "map", wantSource: "log"},
+		{name: "unknown_type", response: `{"items":[{"create":{"status":400,"error":{"type":"private-error-type","reason":"failed to parse field [error] of type [text]"}}}]}`, wantStatus: "400"},
+		{name: "stripped_reason", strip: true, response: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`, wantStatus: "400"},
+		{name: "conflict", response: `{"items":[{"create":{"status":409,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`, wantStatus: "409"},
+		{name: "opensearch_header", response: `{"items":[{"create":{"status":400,"error":{"type":"document_parsing_exception","reason":"failed to parse field [error] of type [text] in document with id 'SYNTHETIC-ID'. Preview of field's value: 'SYNTHETIC-SECRET'"}}}]}`, wantStatus: "400", wantField: "error", wantExpected: "text", wantKind: "map", wantSource: "log"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			result := runRejectionResponseFixture(t, oneRejectionLog(), []rejectionHTTPResponse{{body:test.response}}, func(config *Config) { config.PreserveErrorReason = !test.strip })
+			result := runRejectionResponseFixture(t, oneRejectionLog(), []rejectionHTTPResponse{{body: test.response}}, func(config *Config) { config.PreserveErrorReason = !test.strip })
 			require.NoError(t, result.err)
 			require.Equal(t, int64(1), result.failed)
 			require.Len(t, result.points, 1)
 			field, expected, kind, source := test.wantField, test.wantExpected, test.wantKind, test.wantSource
-			if field == "" { field, expected, kind, source = "unknown", "unknown", "unknown", "unknown" }
+			if field == "" {
+				field, expected, kind, source = "unknown", "unknown", "unknown", "unknown"
+			}
 			assertRejectionTuple(t, result.points[0], test.wantStatus, field, expected, kind, source, 1)
 		})
 	}
@@ -157,22 +196,28 @@ func TestRejectionResponsePrivacyAndCoverage(t *testing.T) {
 
 func TestRejectionResponseDoesNotFabricateUnconfirmedItems(t *testing.T) {
 	for _, test := range []struct {
-		name, response string
+		name, response  string
 		status, records int
-		wantError bool
-		wantFailed int64
+		wantError       bool
+		wantFailed      int64
 	}{
-		{name:"accepted", response:`{"items":[{"create":{"status":201}}]}`, records:1},
-		{name:"request_failure", response:`{"error":"synthetic unavailable"}`, status:503, records:1, wantError:true, wantFailed:1},
-		{name:"truncated_after_success", response:`{"items":[{"create":{"status":201}},`, records:2, wantError:true, wantFailed:1},
-		{name:"truncated_after_rejection", response:`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}},`, records:2, wantError:true, wantFailed:2},
-		{name:"too_few_items", response:`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`, records:2, wantFailed:1},
+		{name: "accepted", response: `{"items":[{"create":{"status":201}}]}`, records: 1},
+		{name: "request_failure", response: `{"error":"synthetic unavailable"}`, status: 503, records: 1, wantError: true, wantFailed: 1},
+		{name: "truncated_after_success", response: `{"items":[{"create":{"status":201}},`, records: 2, wantError: true, wantFailed: 1},
+		{name: "truncated_after_rejection", response: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}},`, records: 2, wantError: true, wantFailed: 2},
+		{name: "too_few_items", response: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`, records: 2, wantFailed: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			logs := oneRejectionLog()
-			if test.records == 2 { logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().AppendEmpty().Body().SetStr("synthetic second") }
-			result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{status:test.status, body:test.response}}, nil)
-			if test.wantError { require.Error(t, result.err) } else { require.NoError(t, result.err) }
+			if test.records == 2 {
+				logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().AppendEmpty().Body().SetStr("synthetic second")
+			}
+			result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{status: test.status, body: test.response}}, nil)
+			if test.wantError {
+				require.Error(t, result.err)
+			} else {
+				require.NoError(t, result.err)
+			}
 			require.Empty(t, result.points)
 			require.Equal(t, test.wantFailed, result.failed)
 		})
@@ -183,7 +228,7 @@ func TestRejectionResponseBodyAliasProvenanceIsAmbiguous(t *testing.T) {
 	logs := plog.NewLogs()
 	record := logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
 	record.Body().SetEmptyMap().PutStr("exception.message", "synthetic")
-	result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{body:`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`}}, nil)
+	result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{body: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`}}, nil)
 	require.NoError(t, result.err)
 	require.Len(t, result.points, 1)
 	// Sawmills preprocessing can copy a body alias into attributes. The later
@@ -198,18 +243,18 @@ func TestRejectionResponseRetriesHaveUnknownProvenance(t *testing.T) {
 	const initial = `{"items":[{"create":{"status":201}},{"create":{"status":429,"error":{"type":"es_rejected_execution_exception","reason":"synthetic retry"}}}]}`
 	for _, test := range []struct {
 		name, final, status, field, expected string
-		wantCount int64
+		wantCount                            int64
 	}{
-		{name:"retry_succeeds", final:`{"items":[{"create":{"status":201}}]}`},
-		{name:"retry_terminal_mapping_failure", final:`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`, status:"400", field:"error", expected:"text", wantCount:1},
-		{name:"retry_exhausted", final:`{"items":[{"create":{"status":429,"error":{"type":"es_rejected_execution_exception","reason":"synthetic retry"}}}]}`, status:"429", field:"unknown", expected:"unknown", wantCount:1},
+		{name: "retry_succeeds", final: `{"items":[{"create":{"status":201}}]}`},
+		{name: "retry_terminal_mapping_failure", final: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`, status: "400", field: "error", expected: "text", wantCount: 1},
+		{name: "retry_exhausted", final: `{"items":[{"create":{"status":429,"error":{"type":"es_rejected_execution_exception","reason":"synthetic retry"}}}]}`, status: "429", field: "unknown", expected: "unknown", wantCount: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			logs := oneRejectionLog()
 			scope := logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
 			scope.Scope().Attributes().PutEmptyMap("error").PutStr("code", "retained")
 			scope.LogRecords().AppendEmpty().Body().SetStr("synthetic retained")
-			result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{body:initial}, {body:test.final}}, func(config *Config) {
+			result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{body: initial}, {body: test.final}}, func(config *Config) {
 				config.Retry.Enabled = true
 				config.Retry.MaxRetries = 1
 				config.Retry.InitialInterval = time.Millisecond
@@ -217,7 +262,9 @@ func TestRejectionResponseRetriesHaveUnknownProvenance(t *testing.T) {
 			})
 			require.NoError(t, result.err)
 			require.Equal(t, test.wantCount, result.failed)
-			if test.wantCount == 0 { require.Empty(t, result.points) } else {
+			if test.wantCount == 0 {
+				require.Empty(t, result.points)
+			} else {
 				require.Len(t, result.points, 1)
 				assertRejectionTuple(t, result.points[0], test.status, test.field, test.expected, "unknown", "unknown", 1)
 			}
@@ -229,10 +276,10 @@ func TestRejectionResponseRetriesHaveUnknownProvenance(t *testing.T) {
 }
 
 func TestRejectionResponseWholeRequestRetryDoesNotMultiplyItems(t *testing.T) {
-	result := runRejectionResponseFixture(t, oneRejectionLog(), []rejectionHTTPResponse{{status:503, body:`{"error":"synthetic retry"}`}, {body:`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`}}, func(config *Config) {
+	result := runRejectionResponseFixture(t, oneRejectionLog(), []rejectionHTTPResponse{{status: 503, body: `{"error":"synthetic retry"}`}, {body: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`}}, func(config *Config) {
 		config.Retry.Enabled = true
 		config.Retry.MaxRetries = 1
- config.Retry.RetryOnStatus = []int{503}
+		config.Retry.RetryOnStatus = []int{503}
 		config.Retry.InitialInterval = time.Millisecond
 		config.Retry.MaxInterval = time.Millisecond
 	})
@@ -246,9 +293,11 @@ func TestRejectionResponseWholeRequestRetryDoesNotMultiplyItems(t *testing.T) {
 func TestRejectionResponseSummaryCapRetainsFailureCount(t *testing.T) {
 	logs := oneRejectionLog()
 	records := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
-	for range 8192 { records.At(0).CopyTo(records.AppendEmpty()) }
+	for range 8192 {
+		records.At(0).CopyTo(records.AppendEmpty())
+	}
 	response := `{"items":[` + strings.Repeat(`{"create":{"status":201}},`, 8192) + `{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`
-	result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{body:response}}, nil)
+	result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{body: response}}, nil)
 	require.NoError(t, result.err)
 	require.Equal(t, int64(1), result.failed)
 	require.Len(t, result.points, 1)
@@ -268,61 +317,76 @@ func TestRejectionResponseSeriesCapRetainsFailureCount(t *testing.T) {
 				lr.Body().SetStr("synthetic")
 				attrs := []pcommon.Map{rl.Resource().Attributes(), sl.Scope().Attributes(), lr.Attributes()}[source]
 				switch kind {
-				case 0: attrs.PutEmptyMap(field).PutStr("code", "synthetic")
-				case 1: attrs.PutEmptySlice(field).AppendEmpty().SetStr("synthetic")
-				case 2: attrs.PutStr(field, "synthetic")
-				case 3: attrs.PutInt(field, 42)
-				case 4: attrs.PutDouble(field, 0.125)
-				case 5: attrs.PutBool(field, true)
-				case 6: attrs.PutEmptyBytes(field).FromRaw([]byte{1, 2})
-				case 7: attrs.PutEmpty(field)
+				case 0:
+					attrs.PutEmptyMap(field).PutStr("code", "synthetic")
+				case 1:
+					attrs.PutEmptySlice(field).AppendEmpty().SetStr("synthetic")
+				case 2:
+					attrs.PutStr(field, "synthetic")
+				case 3:
+					attrs.PutInt(field, 42)
+				case 4:
+					attrs.PutDouble(field, 0.125)
+				case 5:
+					attrs.PutBool(field, true)
+				case 6:
+					attrs.PutEmptyBytes(field).FromRaw([]byte{1, 2})
+				case 7:
+					attrs.PutEmpty(field)
 				}
 				items = append(items, fmt.Sprintf(`{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [%s] of type [text]"}}}`, field))
 			}
 		}
 	}
-	for _, status := range []int{409,429,418,500,302} {
-  logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty().Body().SetStr("synthetic")
-  items=append(items,fmt.Sprintf(`{"create":{"status":%d,"error":{"type":"synthetic","reason":"synthetic"}}}`,status))
- }
- extra:=oneRejectionLog()
- extra.ResourceLogs().At(0).ScopeLogs().At(0).Scope().Attributes().PutStr("elastic.mapping.mode","none")
- extra.MarkReadOnly()
- result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{body:`{"items":[`+strings.Join(items, ",")+`]}`},{body:`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`}}, nil,func(exp exporter.Logs,ctx context.Context,logs plog.Logs)error{return errors.Join(exp.ConsumeLogs(ctx,logs),exp.ConsumeLogs(ctx,extra))})
+	for _, status := range []int{409, 429, 418, 500, 302} {
+		logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty().Body().SetStr("synthetic")
+		items = append(items, fmt.Sprintf(`{"create":{"status":%d,"error":{"type":"synthetic","reason":"synthetic"}}}`, status))
+	}
+	extra := oneRejectionLog()
+	extra.ResourceLogs().At(0).ScopeLogs().At(0).Scope().Attributes().PutStr("elastic.mapping.mode", "none")
+	extra.MarkReadOnly()
+	result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{body: `{"items":[` + strings.Join(items, ",") + `]}`}, {body: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`}}, nil, func(exp exporter.Logs, ctx context.Context, logs plog.Logs) error {
+		return errors.Join(exp.ConsumeLogs(ctx, logs), exp.ConsumeLogs(ctx, extra))
+	})
 	require.NoError(t, result.err)
 	require.Equal(t, int64(126), result.failed)
 	require.Len(t, result.points, 70, "64 specific tuples plus six status-preserving UNKNOWN buckets, shared across modes")
 	var total, unknown int64
- wantUnknown:=map[string]int64{"400":57,"409":1,"429":1,"other_4xx":1,"5xx":1,"other":1}
+	wantUnknown := map[string]int64{"400": 57, "409": 1, "429": 1, "other_4xx": 1, "5xx": 1, "other": 1}
 	for _, point := range result.points {
 		total += point.Value
 		field, _ := point.Attributes.Value("field_class")
 		if field.AsString() == "unknown" {
 			unknown += point.Value
-			status,_:=point.Attributes.Value("item_status_class")
-   want,exists:=wantUnknown[status.AsString()];require.True(t,exists)
-   assertRejectionTuple(t, point, status.AsString(), "unknown", "unknown", "unknown", "unknown", want)
-   delete(wantUnknown,status.AsString())
+			status, _ := point.Attributes.Value("item_status_class")
+			want, exists := wantUnknown[status.AsString()]
+			require.True(t, exists)
+			assertRejectionTuple(t, point, status.AsString(), "unknown", "unknown", "unknown", "unknown", want)
+			delete(wantUnknown, status.AsString())
 		}
 	}
 	require.Equal(t, int64(126), total)
 	require.Equal(t, int64(62), unknown)
- require.Empty(t,wantUnknown)
+	require.Empty(t, wantUnknown)
 }
 
 func TestRejectionResponseBodyConversionIsDerived(t *testing.T) {
-	for _, test := range []struct { name string; body func(pcommon.Value); wantKind string }{
-		{name:"map", body:func(v pcommon.Value){v.SetEmptyMap().PutStr("synthetic-key", "SYNTHETIC-SECRET")}, wantKind:"derived"},
-		{name:"slice", body:func(v pcommon.Value){v.SetEmptySlice().AppendEmpty().SetStr("SYNTHETIC-SECRET")}, wantKind:"derived"},
-		{name:"integer", body:func(v pcommon.Value){v.SetInt(42)}, wantKind:"derived"},
-		{name:"bytes", body:func(v pcommon.Value){v.SetEmptyBytes().FromRaw([]byte{1,2})}, wantKind:"derived"},
-		{name:"text", body:func(v pcommon.Value){v.SetStr("SYNTHETIC-SECRET")}, wantKind:"string"},
+	for _, test := range []struct {
+		name     string
+		body     func(pcommon.Value)
+		wantKind string
+	}{
+		{name: "map", body: func(v pcommon.Value) { v.SetEmptyMap().PutStr("synthetic-key", "SYNTHETIC-SECRET") }, wantKind: "derived"},
+		{name: "slice", body: func(v pcommon.Value) { v.SetEmptySlice().AppendEmpty().SetStr("SYNTHETIC-SECRET") }, wantKind: "derived"},
+		{name: "integer", body: func(v pcommon.Value) { v.SetInt(42) }, wantKind: "derived"},
+		{name: "bytes", body: func(v pcommon.Value) { v.SetEmptyBytes().FromRaw([]byte{1, 2}) }, wantKind: "derived"},
+		{name: "text", body: func(v pcommon.Value) { v.SetStr("SYNTHETIC-SECRET") }, wantKind: "string"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			logs := plog.NewLogs()
 			record := logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
 			test.body(record.Body())
-			result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{body:`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [message] of type [text]"}}}]}`}}, nil)
+			result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{body: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [message] of type [text]"}}}]}`}}, nil)
 			require.NoError(t, result.err)
 			require.Len(t, result.points, 1)
 			assertRejectionTuple(t, result.points[0], "400", "message", "text", test.wantKind, "body", 1)
@@ -332,53 +396,77 @@ func TestRejectionResponseBodyConversionIsDerived(t *testing.T) {
 
 func TestRejectionResponseAutomaticFlushAndSessionReuse(t *testing.T) {
 	const response = `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`
-	for _, test := range []struct { name string; automatic bool }{{name:"automatic", automatic:true},{name:"successive_sessions"}} {
+	for _, test := range []struct {
+		name      string
+		automatic bool
+	}{{name: "automatic", automatic: true}, {name: "successive_sessions"}} {
 		t.Run(test.name, func(t *testing.T) {
 			logs := oneRejectionLog()
 			if test.automatic {
 				records := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
 				records.At(0).CopyTo(records.AppendEmpty())
 			}
-			result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{body:response},{body:response}},func(config *Config){if test.automatic {queue:=exporterhelper.NewDefaultQueueConfig();queue.NumConsumers=1;queue.WaitForResult=true;queue.Batch=configoptional.Some(exporterhelper.BatchConfig{Sizer:exporterhelper.RequestSizerTypeBytes,MinSize:1,MaxSize:100,FlushTimeout:time.Millisecond});config.QueueBatchConfig=configoptional.Some(queue)}},func(exp exporter.Logs,ctx context.Context,logs plog.Logs)error{
-				err:=exp.ConsumeLogs(ctx,logs)
-				if !test.automatic {err=errors.Join(err,exp.ConsumeLogs(ctx,logs))}
+			result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{body: response}, {body: response}}, func(config *Config) {
+				if test.automatic {
+					queue := exporterhelper.NewDefaultQueueConfig()
+					queue.NumConsumers = 1
+					queue.WaitForResult = true
+					queue.Batch = configoptional.Some(exporterhelper.BatchConfig{Sizer: exporterhelper.RequestSizerTypeBytes, MinSize: 1, MaxSize: 100, FlushTimeout: time.Millisecond})
+					config.QueueBatchConfig = configoptional.Some(queue)
+				}
+			}, func(exp exporter.Logs, ctx context.Context, logs plog.Logs) error {
+				err := exp.ConsumeLogs(ctx, logs)
+				if !test.automatic {
+					err = errors.Join(err, exp.ConsumeLogs(ctx, logs))
+				}
 				return err
 			})
-			require.NoError(t,result.err)
-			require.Equal(t,int64(2),result.failed)
-			require.Len(t,result.points,1)
-			assertRejectionTuple(t,result.points[0],"400","error","text","map","log",2)
-			require.Equal(t,result.requests[0],result.requests[1])
+			require.NoError(t, result.err)
+			require.Equal(t, int64(2), result.failed)
+			require.Len(t, result.points, 1)
+			assertRejectionTuple(t, result.points[0], "400", "error", "text", "map", "log", 2)
+			require.Equal(t, result.requests[0], result.requests[1])
 		})
 	}
 }
 
 func TestRejectionResponseConcurrentSessionsStayIsolated(t *testing.T) {
-	const count=24
-	responses:=make([]rejectionHTTPResponse,count)
-	for i:=range responses {responses[i].body=`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`}
-	result:=runRejectionResponseFixture(t,oneRejectionLog(),responses,nil,func(exp exporter.Logs,ctx context.Context,logs plog.Logs)error{
+	const count = 24
+	responses := make([]rejectionHTTPResponse, count)
+	for i := range responses {
+		responses[i].body = `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`
+	}
+	result := runRejectionResponseFixture(t, oneRejectionLog(), responses, nil, func(exp exporter.Logs, ctx context.Context, logs plog.Logs) error {
 		var wg sync.WaitGroup
-		errorsCh:=make(chan error,count)
-		start:=make(chan struct{})
-		for range count {wg.Add(1); go func(){defer wg.Done(); <-start; errorsCh<-exp.ConsumeLogs(ctx,logs)}()}
-		close(start);wg.Wait();close(errorsCh)
+		errorsCh := make(chan error, count)
+		start := make(chan struct{})
+		for range count {
+			wg.Add(1)
+			go func() { defer wg.Done(); <-start; errorsCh <- exp.ConsumeLogs(ctx, logs) }()
+		}
+		close(start)
+		wg.Wait()
+		close(errorsCh)
 		var result error
-		for err:=range errorsCh {result=errors.Join(result,err)}
+		for err := range errorsCh {
+			result = errors.Join(result, err)
+		}
 		return result
 	})
-	require.NoError(t,result.err)
-	require.Equal(t,int64(count),result.failed)
-	require.LessOrEqual(t,len(result.points),2)
+	require.NoError(t, result.err)
+	require.Equal(t, int64(count), result.failed)
+	require.LessOrEqual(t, len(result.points), 2)
 	var total int64
-	for _,point:=range result.points {
-		total+=point.Value
-		source,_:=point.Attributes.Value("source")
-		if source.AsString()=="unknown" {assertRejectionTuple(t,point,"400","error","text","unknown","unknown",point.Value)} else {
-			assertRejectionTuple(t,point,"400","error","text","map","log",point.Value)
+	for _, point := range result.points {
+		total += point.Value
+		source, _ := point.Attributes.Value("source")
+		if source.AsString() == "unknown" {
+			assertRejectionTuple(t, point, "400", "error", "text", "unknown", "unknown", point.Value)
+		} else {
+			assertRejectionTuple(t, point, "400", "error", "text", "map", "log", point.Value)
 		}
 	}
-	require.Equal(t,int64(count),total)
+	require.Equal(t, int64(count), total)
 }
 
 func TestRejectionResponseDuplicateAttributeKindsAreAmbiguous(t *testing.T) {
@@ -386,45 +474,69 @@ func TestRejectionResponseDuplicateAttributeKindsAreAmbiguous(t *testing.T) {
 	logs, err := decoder.UnmarshalLogs([]byte(`{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"synthetic"},"attributes":[{"key":"error","value":{"stringValue":"first"}},{"key":"error","value":{"kvlistValue":{"values":[{"key":"code","value":{"stringValue":"second"}}]}}}]}]}]}]}`))
 	require.NoError(t, err)
 	require.Equal(t, 2, logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Attributes().Len(), "fixture retains both OTLP attributes")
-	result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{body:`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`}}, nil)
+	result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{body: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`}}, nil)
 	require.NoError(t, result.err)
 	require.Len(t, result.points, 1)
 	assertRejectionTuple(t, result.points[0], "400", "error", "text", "unknown", "mixed", 1)
 }
 
 func TestRejectionResponseUnknownEvidence(t *testing.T) {
-	for _, test:=range []struct{name, reason, mode, wantField,wantExpected string}{
-		{name:"missing_reason",wantField:"unknown",wantExpected:"unknown"},
-		{name:"oversized_reason",reason:"failed to parse field [error] of type [text] in document "+strings.Repeat("SYNTHETIC-SECRET",160),wantField:"unknown",wantExpected:"unknown"},
-		{name:"unmodeled_mapping",mode:"none",reason:"failed to parse field [error] of type [text]",wantField:"error",wantExpected:"text"},
-	}{
-		t.Run(test.name,func(t *testing.T){
-			logs:=oneRejectionLog()
-			if test.mode!="" {logs.ResourceLogs().At(0).ScopeLogs().At(0).Scope().Attributes().PutStr("elastic.mapping.mode",test.mode)}
-			response:=fmt.Sprintf(`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":%q}}}]}`,test.reason)
-			result:=runRejectionResponseFixture(t,logs,[]rejectionHTTPResponse{{body:response}},nil)
-			require.NoError(t,result.err);require.Len(t,result.points,1)
-			assertRejectionTuple(t,result.points[0],"400",test.wantField,test.wantExpected,"unknown","unknown",1)
+	for _, test := range []struct{ name, reason, mode, wantField, wantExpected string }{
+		{name: "missing_reason", wantField: "unknown", wantExpected: "unknown"},
+		{name: "oversized_reason", reason: "failed to parse field [error] of type [text] in document " + strings.Repeat("SYNTHETIC-SECRET", 160), wantField: "unknown", wantExpected: "unknown"},
+		{name: "unmodeled_mapping", mode: "none", reason: "failed to parse field [error] of type [text]", wantField: "error", wantExpected: "text"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logs := oneRejectionLog()
+			if test.mode != "" {
+				logs.ResourceLogs().At(0).ScopeLogs().At(0).Scope().Attributes().PutStr("elastic.mapping.mode", test.mode)
+			}
+			response := fmt.Sprintf(`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":%q}}}]}`, test.reason)
+			result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{body: response}}, nil)
+			require.NoError(t, result.err)
+			require.Len(t, result.points, 1)
+			assertRejectionTuple(t, result.points[0], "400", test.wantField, test.wantExpected, "unknown", "unknown", 1)
 		})
 	}
 }
 
 func TestRejectionResponseMixedTerminalAndRetryPositions(t *testing.T) {
-	logs:=oneRejectionLog()
-	scope:=logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
-	scope.Scope().Attributes().PutEmptyMap("error").PutStr("code","retained")
+	logs := oneRejectionLog()
+	scope := logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
+	scope.Scope().Attributes().PutEmptyMap("error").PutStr("code", "retained")
 	scope.LogRecords().AppendEmpty().Body().SetStr("synthetic retained")
-	result:=runRejectionResponseFixture(t,logs,[]rejectionHTTPResponse{
-		{body:`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}},{"create":{"status":429,"error":{"type":"es_rejected_execution_exception","reason":"synthetic retry"}}}]}`},
-		{body:`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`},
-	},func(config *Config){config.Retry.Enabled=true;config.Retry.MaxRetries=1;config.Retry.InitialInterval=time.Millisecond;config.Retry.MaxInterval=time.Millisecond})
-	require.NoError(t,result.err);require.Equal(t,int64(2),result.failed);require.Len(t,result.points,2)
-	var known,unknown int64
-	for _,point:=range result.points {
-		source,_:=point.Attributes.Value("source")
-		if source.AsString()=="log" {known+=point.Value;assertRejectionTuple(t,point,"400","error","text","map","log",1)} else {
-			unknown+=point.Value;assertRejectionTuple(t,point,"400","error","text","unknown","unknown",1)
+	result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{
+		{body: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}},{"create":{"status":429,"error":{"type":"es_rejected_execution_exception","reason":"synthetic retry"}}}]}`},
+		{body: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`},
+	}, func(config *Config) {
+		config.Retry.Enabled = true
+		config.Retry.MaxRetries = 1
+		config.Retry.InitialInterval = time.Millisecond
+		config.Retry.MaxInterval = time.Millisecond
+	})
+	require.NoError(t, result.err)
+	require.Equal(t, int64(2), result.failed)
+	require.Len(t, result.points, 2)
+	var known, unknown int64
+	for _, point := range result.points {
+		source, _ := point.Attributes.Value("source")
+		if source.AsString() == "log" {
+			known += point.Value
+			assertRejectionTuple(t, point, "400", "error", "text", "map", "log", 1)
+		} else {
+			unknown += point.Value
+			assertRejectionTuple(t, point, "400", "error", "text", "unknown", "unknown", 1)
 		}
 	}
-	require.Equal(t,int64(1),known);require.Equal(t,int64(1),unknown)
+	require.Equal(t, int64(1), known)
+	require.Equal(t, int64(1), unknown)
+}
+
+func TestRejectionResponseDoesNotEmitRequestIdentifiers(t *testing.T) {
+	result := runRejectionResponseFixture(t, oneRejectionLog(), []rejectionHTTPResponse{{body: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`}}, nil)
+	require.NoError(t, result.err)
+	require.Len(t, result.points, 1)
+	assertRejectionTuple(t, result.points[0], "400", "error", "text", "map", "log", 1)
+	require.Greater(t, result.existingExemplars, 0, "control: sampled request context reaches existing counter exemplars")
+	require.Empty(t, result.points[0].Exemplars, "diagnostics must not emit request trace/span IDs through exemplars")
 }

@@ -969,30 +969,32 @@ func newBenchBulkIndexerConfig(tb testing.TB, compressionLevel int) docappender.
 
 func TestRejectionDiagnosticsFailedAddIsNotAnItemFailure(t *testing.T) {
 	var requests atomic.Int64
-	server:=newESTestServerBulkHandlerFunc(t,func(w http.ResponseWriter,r *http.Request){
+	server := newESTestServerBulkHandlerFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		_,err:=io.WriteString(w,`{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`)
-		require.NoError(t,err)
+		_, err := io.WriteString(w, `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`)
+		require.NoError(t, err)
 	})
-	telemetry:=componenttest.NewTelemetry()
-	settings:=metadatatest.NewSettings(telemetry)
-	tb,err:=metadata.NewTelemetryBuilder(settings.TelemetrySettings)
-	require.NoError(t,err)
+	telemetry := componenttest.NewTelemetry()
+	settings := metadatatest.NewSettings(telemetry)
+	tb, err := metadata.NewTelemetryBuilder(settings.TelemetrySettings)
+	require.NoError(t, err)
 	t.Cleanup(tb.Shutdown)
-	cfg:=NewFactory().CreateDefaultConfig().(*Config)
-	cfg.Endpoints=[]string{server.URL}
-	cfg.Retry.Enabled=false
-	esClient,err:=newElasticsearchClient(t.Context(),cfg,componenttest.NewNopHost(),settings.TelemetrySettings,"")
-	require.NoError(t,err)
-	indexer:=newBulkIndexer(esClient,cfg,true,tb,zap.NewNop(),nil,"elasticsearch/fixture",newRejectionDiagnostics(tb,"elasticsearch/fixture",1))
-	session:=indexer.StartSession(t.Context())
+	cfg := NewFactory().CreateDefaultConfig().(*Config)
+	cfg.Endpoints = []string{server.URL}
+	cfg.Retry.Enabled = false
+	esClient, err := newElasticsearchClient(t.Context(), cfg, componenttest.NewNopHost(), settings.TelemetrySettings, "")
+	require.NoError(t, err)
+	indexer := newBulkIndexer(esClient, cfg, true, tb, zap.NewNop(), nil, "elasticsearch/fixture", newRejectionDiagnostics(tb, "elasticsearch/fixture", 1))
+	session := indexer.StartSession(t.Context())
 	defer session.End()
-	require.ErrorContains(t,session.Add(t.Context(),"logs-fixture","","",strings.NewReader(`{"error":"synthetic"}`),nil,"invalid-action",0),"not a valid action")
-	require.NoError(t,session.Add(t.Context(),"logs-fixture","","",strings.NewReader(`{"error":"synthetic"}`),nil,docappender.ActionCreate,0))
-	require.NoError(t,session.Flush(t.Context()))
-	require.Equal(t,int64(1),requests.Load())
-	collected,err:=telemetry.GetMetric("otelcol.elasticsearch.docs.failed_by_field")
-	require.NoError(t,err)
-	sum,ok:=collected.Data.(metricdata.Sum[int64]);require.True(t,ok);require.Len(t,sum.DataPoints,1)
-	assertRejectionTuple(t,sum.DataPoints[0],"400","error","text","unknown","unknown",1)
+	require.ErrorContains(t, session.Add(t.Context(), "logs-fixture", "", "", strings.NewReader(`{"error":"synthetic"}`), nil, "invalid-action", 0), "not a valid action")
+	require.NoError(t, session.Add(t.Context(), "logs-fixture", "", "", strings.NewReader(`{"error":"synthetic"}`), nil, docappender.ActionCreate, 0))
+	require.NoError(t, session.Flush(t.Context()))
+	require.Equal(t, int64(1), requests.Load())
+	collected, err := telemetry.GetMetric("otelcol.elasticsearch.docs.failed_by_field")
+	require.NoError(t, err)
+	sum, ok := collected.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	require.Len(t, sum.DataPoints, 1)
+	assertRejectionTuple(t, sum.DataPoints[0], "400", "error", "text", "unknown", "unknown", 1)
 }

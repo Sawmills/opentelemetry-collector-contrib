@@ -6,10 +6,10 @@ package elasticsearchexporter
 import (
 	"compress/gzip"
 	"context"
- "fmt"
- "strings"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -37,26 +37,26 @@ func TestRejectedItemClassificationRecognizesECSExceptionAlias(t *testing.T) {
 }
 
 func TestRejectedItemClassificationRefusesDottedCollision(t *testing.T) {
- testRejectedErrorAttribution(t, "dotted", "unknown", "mixed", `{"code":"rejected","message":"dotted"}`)
+	testRejectedErrorAttribution(t, "dotted", "unknown", "mixed", `{"code":"rejected","message":"dotted"}`)
 }
 
 func TestRejectedItemClassificationResourceSource(t *testing.T) {
- testRejectedErrorAttribution(t, "resource", "map", "resource", `{"code":"rejected"}`)
+	testRejectedErrorAttribution(t, "resource", "map", "resource", `{"code":"rejected"}`)
 }
 
 func TestRejectedItemClassificationLogSource(t *testing.T) {
- testRejectedErrorAttribution(t, "log", "map", "log", `{"code":"rejected"}`)
+	testRejectedErrorAttribution(t, "log", "map", "log", `{"code":"rejected"}`)
 }
 
 func TestRejectedItemClassificationRefusesAliasCollision(t *testing.T) {
- testRejectedErrorAttribution(t, "alias_collision", "unknown", "mixed", `{"code":"rejected","message":"rejected"}`)
+	testRejectedErrorAttribution(t, "alias_collision", "unknown", "mixed", `{"code":"rejected","message":"rejected"}`)
 }
 
 func TestRejectedItemClassificationBoundsAttributeInspection(t *testing.T) {
- testRejectedErrorAttribution(t, "bound", "unknown", "unknown", `{"code":"rejected"}`)
+	testRejectedErrorAttribution(t, "bound", "unknown", "unknown", `{"code":"rejected"}`)
 }
 
-func testRejectedErrorAttribution(t *testing.T, variant string, wantKind, wantSource, wantError string) {
+func testRejectedErrorAttribution(t *testing.T, variant, wantKind, wantSource, wantError string) {
 	t.Helper()
 	var requests atomic.Int64
 	var mu sync.Mutex
@@ -115,26 +115,26 @@ func testRejectedErrorAttribution(t *testing.T, variant string, wantKind, wantSo
 	rejected := rejectedScope.LogRecords().AppendEmpty()
 	rejected.Body().SetStr("rejected synthetic")
 	if variant == "alias" || variant == "alias_collision" {
-  if variant == "alias_collision" {
-   rejectedScope.Scope().Attributes().PutEmptyMap("error").PutStr("code", "rejected")
-  }
+		if variant == "alias_collision" {
+			rejectedScope.Scope().Attributes().PutEmptyMap("error").PutStr("code", "rejected")
+		}
 		rejected.Attributes().PutStr("exception.message", "rejected")
 	} else if variant == "resource" {
-  logs.ResourceLogs().At(1).Resource().Attributes().PutEmptyMap("error").PutStr("code", "rejected")
- } else if variant == "log" {
-  rejected.Attributes().PutEmptyMap("error").PutStr("code", "rejected")
- } else {
-  rejectedScope.Scope().Attributes().PutEmptyMap("error").PutStr("code", "rejected")
-  if variant == "dotted" {
-   rejected.Attributes().PutStr("error.message", "dotted")
-  }
+		logs.ResourceLogs().At(1).Resource().Attributes().PutEmptyMap("error").PutStr("code", "rejected")
+	} else if variant == "log" {
+		rejected.Attributes().PutEmptyMap("error").PutStr("code", "rejected")
+	} else {
+		rejectedScope.Scope().Attributes().PutEmptyMap("error").PutStr("code", "rejected")
+		if variant == "dotted" {
+			rejected.Attributes().PutStr("error.message", "dotted")
+		}
 	}
 	if variant == "bound" {
-  for i := range 128 {
-   rejectedScope.Scope().Attributes().PutStr(fmt.Sprintf("pad_%03d", i), "synthetic")
-  }
- }
- logs.MarkReadOnly()
+		for i := range 128 {
+			rejectedScope.Scope().Attributes().PutStr(fmt.Sprintf("pad_%03d", i), "synthetic")
+		}
+	}
+	logs.MarkReadOnly()
 	ctx := client.NewContext(t.Context(), client.Info{
 		Metadata: client.NewMetadata(map[string][]string{"X-Elastic-Mapping-Mode": {"ecs"}}),
 	})
@@ -145,12 +145,12 @@ func testRejectedErrorAttribution(t *testing.T, variant string, wantKind, wantSo
 	actual := submitted
 	mu.Unlock()
 	var padding strings.Builder
- if variant == "bound" {
-  for i := range 128 {
-   fmt.Fprintf(&padding, ",\"pad_%03d\":\"synthetic\"", i)
-  }
- }
- want := "{\"create\":{\"_index\":\"logs-fixture\",\"require_data_stream\":true}}\n" +
+	if variant == "bound" {
+		for i := range 128 {
+			fmt.Fprintf(&padding, ",\"pad_%03d\":\"synthetic\"", i)
+		}
+	}
+	want := "{\"create\":{\"_index\":\"logs-fixture\",\"require_data_stream\":true}}\n" +
 		"{\"@timestamp\":\"1970-01-01T00:00:00.000000000Z\",\"error\":{\"code\":\"accepted\"},\"message\":\"accepted synthetic\"}\n" +
 		"{\"create\":{\"_index\":\"logs-fixture\",\"require_data_stream\":true}}\n" +
 		"{\"@timestamp\":\"1970-01-01T00:00:00.000000000Z\",\"error\":" + wantError + ",\"message\":\"rejected synthetic\"" + padding.String() + "}\n"

@@ -347,7 +347,7 @@ func flushBulkIndexer(
 	startTime := time.Now()
 	stat, err := bi.Flush(ctxWithAttempts)
 	latency := time.Since(startTime).Seconds()
-	diagnostics.observe(ctx, stat, itemsCount, err)
+	diagnostics.observe(stat, itemsCount, err)
 	defaultMetaAttrs := getAttributesFromMetadataKeys(ctx, tMetaKeys)
 	defaultAttrsSet := attribute.NewSet(defaultMetaAttrs...)
 	if flushed := bi.BytesFlushed(); flushed > 0 {
