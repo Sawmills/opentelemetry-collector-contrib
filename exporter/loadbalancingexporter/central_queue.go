@@ -500,7 +500,9 @@ func (q *centralQueue) agedOversizedWindowLocked(now time.Time) (centralQueueWin
 		if len(candidate.indexes) == 0 {
 			continue
 		}
-		if !found || centralQueueWindowCandidateLess(candidate, selected) {
+		if !found || candidate.window.oldestEnqueuedAt < selected.window.oldestEnqueuedAt ||
+			(candidate.window.oldestEnqueuedAt == selected.window.oldestEnqueuedAt &&
+				bytes.Compare(candidate.window.routingKey, selected.window.routingKey) < 0) {
 			selected, found = candidate, true
 		}
 	}

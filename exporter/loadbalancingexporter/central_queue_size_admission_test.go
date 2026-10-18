@@ -190,11 +190,20 @@ func sizeAdmissionCounts(metric metricdata.Metrics) map[string]int64 {
 }
 
 func TestConsumeLogsCentralQueueReservesBudgetForAgedOversizedSingleton(t *testing.T) {
-	testAgedOversizedSingletonProgress(t, nil)
+	testAgedOversizedSingletonProgress(t, nil, 0)
 }
 
 func TestConsumeLogsCentralQueueReservesBudgetWithAdaptiveConsumers(t *testing.T) {
-	testAgedOversizedSingletonProgress(t, func(int64, centralQueueWindow) (func(), bool) { return nil, true })
+	testAgedOversizedSingletonProgress(t, func(int64, centralQueueWindow) (func(), bool) { return nil, true }, 0)
+}
+
+func TestConsumeLogsCentralQueueReservesBudgetWithBatchDelay(t *testing.T) {
+	t.Run("normal", func(t *testing.T) {
+		testAgedOversizedSingletonProgress(t, nil, 100*time.Millisecond)
+	})
+	t.Run("adaptive", func(t *testing.T) {
+		testAgedOversizedSingletonProgress(t, func(int64, centralQueueWindow) (func(), bool) { return nil, true }, 100*time.Millisecond)
+	})
 }
 
 func TestConsumeLogsCentralQueueDoesNotReserveAheadOfOlderSmallWindow(t *testing.T) {
@@ -214,17 +223,25 @@ func TestConsumeLogsCentralQueueDoesNotReserveAheadOfOlderSmallWindow(t *testing
 	primer.done()
 }
 
-func testAgedOversizedSingletonProgress(t *testing.T, acquire centralQueueLeaseAcquireFunc) {
+func testAgedOversizedSingletonProgress(t *testing.T, acquire centralQueueLeaseAcquireFunc, batchDelay time.Duration) {
 	t.Helper()
 	exporter := newSizeAdmissionReservationExporter(t)
+	exporter.centralQueue.settings.maxBatchDelay = batchDelay
 	consumeSizeAdmissionRecord(t, exporter, 1, 1024)
-	primer, err := exporter.centralQueue.tryLeaseWithAcquire(time.Now(), acquire)
+	primer, err := exporter.centralQueue.tryLeaseWithAcquire(time.Now().Add(batchDelay), acquire)
 	require.NoError(t, err)
 	require.NotNil(t, primer)
 	consumeSizeAdmissionRecord(t, exporter, 2, 1024)
 	aged := time.Now().Add(2 * time.Second)
 	for id := byte(3); id < 6; id++ {
 		consumeSizeAdmissionRecord(t, exporter, id, 64)
+		if batchDelay > 0 {
+			// Reaching the batch cap makes fresh traffic immediately ready,
+			// while the compressible singleton waits for its batch delay.
+			consumeSizeAdmissionRecord(t, exporter, id, 64)
+		}
+		// New arrivals behind the singleton must not reset its age priority.
+		consumeSizeAdmissionRecord(t, exporter, 2, 64)
 		lease, leaseErr := exporter.centralQueue.tryLeaseWithAcquire(aged, acquire)
 		require.Nil(t, lease, "new small traffic must wait for the older oversized singleton")
 		require.ErrorIs(t, leaseErr, errCentralQueueInflightFull)
