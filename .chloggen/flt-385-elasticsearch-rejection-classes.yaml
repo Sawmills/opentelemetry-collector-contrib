@@ -7,5 +7,6 @@ subtext: |
   Adds otelcol.elasticsearch.docs.failed_by_field without changing documents,
   retries or the configured error-reason policy. Ambiguous attribution stays
   unknown, including retained document retries. Diagnostics contain no document
-  values or request identifiers and use at most 70 series per exporter instance.
+  values or request identifiers and use at most 70 series per signal exporter
+  instance. Reusing one component ID across signals multiplies this bound.
 change_logs: [user]

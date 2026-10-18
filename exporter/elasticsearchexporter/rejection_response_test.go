@@ -199,6 +199,27 @@ func TestRejectionResponsePrivacyAndCoverage(t *testing.T) {
 	}
 }
 
+func TestRejectionResponseEmptyKeyMapHasUnknownProvenance(t *testing.T) {
+	for _, source := range []string{"resource", "scope", "log"} {
+		t.Run(source, func(t *testing.T) {
+			logs := oneRejectionLog()
+			rl := logs.ResourceLogs().At(0)
+			sl := rl.ScopeLogs().At(0)
+			attrs := sl.LogRecords().At(0).Attributes()
+			if source == "resource" {
+				attrs = rl.Resource().Attributes()
+			} else if source == "scope" {
+				attrs = sl.Scope().Attributes()
+			}
+			attrs.PutEmptyMap("").PutEmptyMap("").PutStr("error", "synthetic flattened contributor")
+			result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{body: `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`}}, nil)
+			require.NoError(t, result.err)
+			require.Len(t, result.points, 1)
+			assertRejectionTuple(t, result.points[0], "400", "error", "text", "unknown", "unknown", 1)
+		})
+	}
+}
+
 func TestRejectionResponseDoesNotFabricateUnconfirmedItems(t *testing.T) {
 	for _, test := range []struct {
 		name, response  string

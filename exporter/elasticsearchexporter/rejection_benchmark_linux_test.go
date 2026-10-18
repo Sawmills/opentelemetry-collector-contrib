@@ -5,6 +5,7 @@ package elasticsearchexporter
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,14 @@ import (
 // including accepted-item encoding, delivery and existing telemetry. The same
 // source runs on the baseline and candidate. CPU time excludes compilation.
 func BenchmarkRejectionDiagnosticsAccepted(b *testing.B) {
+	benchmarkRejectionDiagnosticsAccepted(b, false)
+}
+
+func BenchmarkRejectionDiagnosticsAcceptedEnriched(b *testing.B) {
+	benchmarkRejectionDiagnosticsAccepted(b, true)
+}
+
+func benchmarkRejectionDiagnosticsAccepted(b *testing.B, enriched bool) {
 	const batchSize = 1000
 	response := `{"errors":false,"items":[` + strings.Repeat(`{"create":{"status":201}},`, batchSize-1) + `{"create":{"status":201}}]}`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -56,6 +65,15 @@ func BenchmarkRejectionDiagnosticsAccepted(b *testing.B) {
 	rl.Resource().Attributes().PutStr("service.name", "synthetic-benchmark")
 	sl := rl.ScopeLogs().AppendEmpty()
 	sl.Scope().SetName("benchmark")
+	if enriched {
+		// Represent Kubernetes-enriched records without using customer data.
+		for i := range 48 {
+			rl.Resource().Attributes().PutStr(fmt.Sprintf("synthetic.resource.%02d", i), "synthetic-resource-value")
+		}
+		for i := range 8 {
+			sl.Scope().Attributes().PutStr(fmt.Sprintf("synthetic.scope.%02d", i), "synthetic-scope-value")
+		}
+	}
 	for range batchSize {
 		record := sl.LogRecords().AppendEmpty()
 		record.Body().SetStr(strings.Repeat("synthetic accepted ", 32))
@@ -64,6 +82,11 @@ func BenchmarkRejectionDiagnosticsAccepted(b *testing.B) {
 		record.Attributes().PutEmptyMap("error").PutStr("code", "none")
 		record.Attributes().PutInt("sequence", 42)
 		record.Attributes().PutBool("enabled", true)
+		if enriched {
+			for i := range 16 {
+				record.Attributes().PutStr(fmt.Sprintf("synthetic.log.%02d", i), "synthetic-log-value")
+			}
+		}
 	}
 	logs.MarkReadOnly()
 	ctx := client.NewContext(b.Context(), client.Info{Metadata: client.NewMetadata(map[string][]string{"X-Elastic-Mapping-Mode": {"ecs"}})})
