@@ -278,7 +278,12 @@ func TestCentralQueueBalancedLaneRoutingKeySearchFallbackIsBoundedAndReported(t 
 	ring := &hashRing{items: items, endpoints: []string{"other", "target"}}
 	lb := &loadBalancer{ring: ring}
 
-	_, err := lb.centralQueueLogRoutingSnapshotWithError()
+	snapshot, err := lb.centralQueueLogRoutingSnapshotWithError()
+	require.NoError(t, err)
+	require.Len(t, snapshot.routingKeyErrors, 1)
+	require.ErrorIs(t, snapshot.routingKeyErrors[1], errCentralQueueBalancedLaneRoutingKeySearch)
+
+	_, err = centralQueueBalancedLaneRoutingKeyForLoadBalancerLaneWithError(lb, signalKindLogs, 1)
 	require.ErrorIs(t, err, errCentralQueueBalancedLaneRoutingKeySearch)
 }
 

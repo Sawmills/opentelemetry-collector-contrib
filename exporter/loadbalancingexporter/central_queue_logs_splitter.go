@@ -71,7 +71,7 @@ func newCentralQueueLogSplitter(exporter *logExporterImp, limit int, now time.Ti
 			return nil, err
 		}
 		if routingSnapshot != nil {
-			laneCount = len(routingSnapshot.routingKeys)
+			laneCount = len(routingSnapshot.usableLanes)
 		}
 	}
 	splitter := &centralQueueLogSplitter{
@@ -129,6 +129,10 @@ func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) err
 			return err
 		}
 		ld, rejected, rejectedSizes = s.partitionOversizedRecords(ld)
+	}
+	if snapshot := s.routingSnapshot; snapshot != nil && len(snapshot.routingKeyErrors) > 0 && ld.LogRecordCount() > 0 {
+		// Count each excluded lane once per routing request, not per record.
+		s.exporter.centralQueue.settings.telemetry.recordRoutingKeySkips(ctx, int64(len(snapshot.routingKeyErrors)))
 	}
 
 	var errs error
@@ -257,7 +261,7 @@ func (s *centralQueueLogSplitter) balancedLaneRoutingKey(balancingKey pcommon.Tr
 
 func (s *centralQueueLogSplitter) balancedLaneRoutingKeyForLane(lane uint32) ([]byte, error) {
 	if s.routingSnapshot != nil {
-		return s.routingSnapshot.routingKeys[lane], nil
+		return s.routingSnapshot.routingKeys[s.routingSnapshot.usableLanes[lane]], nil
 	}
 	if key, ok := s.laneRoutingKeys[lane]; ok {
 		return key, nil
