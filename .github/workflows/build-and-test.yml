@@ -417,7 +417,7 @@ jobs:
       - run: ./.github/workflows/scripts/check-disk-space.sh
 
   cross-compile:
-    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner-xlarge' || 'ubuntu-24.04' }}
     needs: [setup-environment]
     strategy:
       fail-fast: false
