@@ -8,7 +8,7 @@ permissions: read-all
 
 jobs:
   changedfiles:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-latest' }}
     env:
       PR_HEAD: ${{ github.event.pull_request.head.sha }}
       PR_BASE: ${{ github.event.pull_request.base.ref }}
@@ -196,7 +196,7 @@ jobs:
   queuedrain-harness:
     needs: changedfiles
     if: needs.changedfiles.outputs.mode == 'queuedrain_harness'
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Validate queuedrain shell harness
@@ -256,7 +256,7 @@ jobs:
     # Keeps the name of the job required for merging in the GH configuration, make it
     # wait for all runners completion
     if: ${{ always() }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [changedfiles, scoped-tests-ubuntu, queuedrain-harness]
     steps:
       - name: Print result
