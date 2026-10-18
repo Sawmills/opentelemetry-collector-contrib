@@ -141,7 +141,7 @@ type documentEncoder interface {
 }
 
 type encodingContext struct {
-	mappingMode       MappingMode
+	logFields         logFieldDescriber
 	resource          pcommon.Resource
 	resourceSchemaURL string
 	scope             pcommon.InstrumentationScope

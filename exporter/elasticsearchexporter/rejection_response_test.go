@@ -220,6 +220,54 @@ func TestRejectionResponseEmptyKeyMapHasUnknownProvenance(t *testing.T) {
 	}
 }
 
+func TestRejectionResponseSharedShapesStayIsolated(t *testing.T) {
+	logs := plog.NewLogs()
+	rl := logs.ResourceLogs().AppendEmpty()
+	rl.Resource().Attributes().PutDouble("duration", 0.25)
+	first := rl.ScopeLogs().AppendEmpty()
+	first.Scope().Attributes().PutEmptyMap("error").PutStr("code", "synthetic")
+	first.LogRecords().AppendEmpty().Body().SetStr("synthetic")
+	collision := first.LogRecords().AppendEmpty()
+	collision.Body().SetStr("synthetic")
+	collision.Attributes().PutStr("error", "synthetic")
+	first.LogRecords().AppendEmpty().Body().SetStr("synthetic")
+	second := rl.ScopeLogs().AppendEmpty()
+	second.Scope().Attributes().PutStr("error", "synthetic")
+	second.LogRecords().AppendEmpty().Body().SetStr("synthetic")
+	durationCollision := second.LogRecords().AppendEmpty()
+	durationCollision.Body().SetStr("synthetic")
+	durationCollision.Attributes().PutEmptyMap("duration").PutStr("value", "synthetic")
+	rl.ScopeLogs().AppendEmpty().LogRecords().AppendEmpty().Body().SetStr("synthetic")
+	errorItem := `{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}`
+	durationItem := `{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [duration] of type [float]"}}}`
+	response := `{"items":[` + strings.Repeat(errorItem+",", 4) + durationItem + "," + durationItem + `]}`
+	result := runRejectionResponseFixture(t, logs, []rejectionHTTPResponse{{body: response}}, nil)
+	require.NoError(t, result.err)
+	require.Equal(t, int64(6), result.failed)
+	want := map[string]int64{
+		"error:map:scope":          2,
+		"error:unknown:mixed":      1,
+		"error:string:scope":       1,
+		"duration:unknown:mixed":   1,
+		"duration:double:resource": 1,
+	}
+	require.Len(t, result.points, len(want))
+	for _, point := range result.points {
+		field, _ := point.Attributes.Value(attribute.Key("field_class"))
+		kind, _ := point.Attributes.Value(attribute.Key("value_type"))
+		source, _ := point.Attributes.Value(attribute.Key("source"))
+		key := field.AsString() + ":" + kind.AsString() + ":" + source.AsString()
+		require.Contains(t, want, key)
+		expected := "text"
+		if field.AsString() == "duration" {
+			expected = "number"
+		}
+		assertRejectionTuple(t, point, "400", field.AsString(), expected, kind.AsString(), source.AsString(), want[key])
+		delete(want, key)
+	}
+	require.Empty(t, want)
+}
+
 func TestRejectionResponseDoesNotFabricateUnconfirmedItems(t *testing.T) {
 	for _, test := range []struct {
 		name, response  string

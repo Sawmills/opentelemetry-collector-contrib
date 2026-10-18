@@ -207,7 +207,7 @@ func (e *elasticsearchExporter) pushLogsData(ctx context.Context, ld plog.Logs) 
 			encoder := e.documentEncoders[int(mappingMode)]
 
 			ec := encodingContext{
-				mappingMode:       mappingMode,
+				logFields:         newLogFieldDescriber(mappingMode, resource.Attributes(), scope.Attributes()),
 				resource:          resource,
 				resourceSchemaURL: rl.SchemaUrl(),
 				scope:             scope,
@@ -268,7 +268,7 @@ func (e *elasticsearchExporter) pushLogRecord(
 	}
 
 	// not recycling after Add returns an error as we don't know if it's already recycled
-	return bulkIndexerSession.Add(ctx, index.Index, docID, pipeline, buf, nil, docappender.ActionCreate, describeLogFields(ec, record))
+	return bulkIndexerSession.Add(ctx, index.Index, docID, pipeline, buf, nil, docappender.ActionCreate, ec.logFields.describe(record))
 }
 
 type dataPointsGroup struct {

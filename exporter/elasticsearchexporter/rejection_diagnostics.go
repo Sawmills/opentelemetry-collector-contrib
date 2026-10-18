@@ -129,49 +129,70 @@ func (s logFieldShape) with(field rejectionField, kind rejectionKind, source rej
 	return s&^(logFieldShape(255)<<shift) | logFieldShape(uint8(source)<<4|uint8(kind))<<shift
 }
 
-func describeLogFields(ec encodingContext, record plog.LogRecord) logFieldShape {
-	if ec.mappingMode != MappingECS {
+// Shared maps are stable after preprocessing. Retain only their bounded enum
+// summary, rather than walking them again for every record in the scope.
+type logFieldDescriber struct {
+	shared logFieldShape
+	known  bool
+}
+
+func newLogFieldDescriber(mode MappingMode, resource, scope pcommon.Map) logFieldDescriber {
+	if mode != MappingECS {
+		return logFieldDescriber{}
+	}
+	shape, known := describeAttributeFields(resource, rejectionSourceResource, 0)
+	if !known {
+		return logFieldDescriber{}
+	}
+	shape, known = describeAttributeFields(scope, rejectionSourceScope, shape)
+	return logFieldDescriber{shared: shape, known: known}
+}
+
+func describeAttributeFields(attrs pcommon.Map, source rejectionSource, shape logFieldShape) (logFieldShape, bool) {
+	if attrs.Len() > 128 {
+		return 0, false // Uninspected contributors may change any field's provenance.
+	}
+	for key, value := range attrs.All() {
+		if key == "" && value.Type() == pcommon.ValueTypeMap {
+			return 0, false // Empty-key maps flatten uninspected children into the root.
+		}
+		for i, field := range rejectionFields {
+			if key == field.path {
+				var kind rejectionKind
+				switch value.Type() {
+				case pcommon.ValueTypeMap:
+					kind = rejectionKindMap
+				case pcommon.ValueTypeSlice:
+					kind = rejectionKindSlice
+				case pcommon.ValueTypeStr:
+					kind = rejectionKindString
+				case pcommon.ValueTypeInt:
+					kind = rejectionKindInt
+				case pcommon.ValueTypeDouble:
+					kind = rejectionKindDouble
+				case pcommon.ValueTypeBool:
+					kind = rejectionKindBool
+				case pcommon.ValueTypeBytes:
+					kind = rejectionKindBytes
+				case pcommon.ValueTypeEmpty:
+					kind = rejectionKindEmpty
+				}
+				shape = shape.with(rejectionField(i), kind, source)
+			} else if len(key) > len(field.path) && strings.HasPrefix(key, field.path) && key[len(field.path)] == '.' {
+				shape = shape.with(rejectionField(i), rejectionKindDerived, source)
+			}
+		}
+	}
+	return shape, true
+}
+
+func (d logFieldDescriber) describe(record plog.LogRecord) logFieldShape {
+	if !d.known {
 		return 0
 	}
-	var shape logFieldShape
-	for source, attrs := range []pcommon.Map{ec.resource.Attributes(), ec.scope.Attributes(), record.Attributes()} {
-		if attrs.Len() > 128 {
-			return 0 // Uninspected contributors may change any field's provenance.
-		}
-		if attrs.Len() == 0 {
-			continue
-		}
-		for key, value := range attrs.All() {
-			if key == "" && value.Type() == pcommon.ValueTypeMap {
-				return 0 // Empty-key maps flatten uninspected children into the root.
-			}
-			for i, field := range rejectionFields {
-				if key == field.path {
-					var kind rejectionKind
-					switch value.Type() {
-					case pcommon.ValueTypeMap:
-						kind = rejectionKindMap
-					case pcommon.ValueTypeSlice:
-						kind = rejectionKindSlice
-					case pcommon.ValueTypeStr:
-						kind = rejectionKindString
-					case pcommon.ValueTypeInt:
-						kind = rejectionKindInt
-					case pcommon.ValueTypeDouble:
-						kind = rejectionKindDouble
-					case pcommon.ValueTypeBool:
-						kind = rejectionKindBool
-					case pcommon.ValueTypeBytes:
-						kind = rejectionKindBytes
-					case pcommon.ValueTypeEmpty:
-						kind = rejectionKindEmpty
-					}
-					shape = shape.with(rejectionField(i), kind, rejectionSource(source+1))
-				} else if len(key) > len(field.path) && strings.HasPrefix(key, field.path) && key[len(field.path)] == '.' {
-					shape = shape.with(rejectionField(i), rejectionKindDerived, rejectionSource(source+1))
-				}
-			}
-		}
+	shape, known := describeAttributeFields(record.Attributes(), rejectionSourceLog, d.shared)
+	if !known {
+		return 0
 	}
 	// ECS constructs an error object from these log-level aliases. Record only
 	// their presence; the scalar contents never enter diagnostic state.
