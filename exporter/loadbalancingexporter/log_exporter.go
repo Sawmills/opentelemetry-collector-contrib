@@ -119,16 +119,17 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 			return nil, telemetryErr
 		}
 		logExporter.centralQueue = newCentralQueue(centralQueueSettings{
-			maxCompressedBytes:           centralCfg.MaxCompressedBytes,
-			maxInflightUncompressedBytes: centralCfg.MaxInflightUncompressedBytes,
-			maxUncompressedBatchBytes:    centralCfg.MaxUncompressedBatchBytes,
-			targetCompressedBytes:        centralCfg.TargetCompressedBytes,
-			maxBatchDelay:                centralCfg.MaxBatchDelay,
-			shutdownTimeout:              centralCfg.ShutdownTimeout,
-			maxReadyWindows:              centralQueueReadyWindowLimit(centralCfg.NumConsumers),
-			forceScheduleAge:             centralCfg.ForceScheduleAge,
-			telemetry:                    centralTelemetry,
-			logger:                       params.Logger,
+			maxCompressedBytes:            centralCfg.MaxCompressedBytes,
+			maxInflightUncompressedBytes:  centralCfg.MaxInflightUncompressedBytes,
+			maxUncompressedBatchBytes:     centralCfg.MaxUncompressedBatchBytes,
+			maxUncompressedLogRecordBytes: centralCfg.MaxUncompressedLogRecordBytes,
+			targetCompressedBytes:         centralCfg.TargetCompressedBytes,
+			maxBatchDelay:                 centralCfg.MaxBatchDelay,
+			shutdownTimeout:               centralCfg.ShutdownTimeout,
+			maxReadyWindows:               centralQueueReadyWindowLimit(centralCfg.NumConsumers),
+			forceScheduleAge:              centralCfg.ForceScheduleAge,
+			telemetry:                     centralTelemetry,
+			logger:                        params.Logger,
 		})
 		logExporter.centralCodec = newQueuePayloadCodec(centralCfg.PayloadCompression, cfg.(*Config).PayloadCodec.Zstd)
 	}
@@ -171,9 +172,8 @@ func (e *logExporterImp) Start(ctx context.Context, host component.Host) error {
 		}
 		items, loadErr := e.centralStorage.load(ctx, e.centralCompression, e.centralQueue.settings.maxCompressedBytes)
 		if loadErr == nil {
-			limit := centralQueueEffectiveUncompressedItemLimit(e.centralQueue.settings)
 			for i := range items {
-				if items[i].uncompressedBytes > limit {
+				if e.centralQueue.itemExceedsUncompressedLimit(items[i]) {
 					loadErr = e.centralStorage.pause("replay", "capacity", errors.New("retained durable payload exceeds configured decode capacity"))
 					break
 				}
@@ -310,7 +310,7 @@ func (e *logExporterImp) ConsumeLogs(ctx context.Context, ld plog.Logs) error {
 }
 
 func (e *logExporterImp) consumeLogsCentralQueue(ctx context.Context, ld plog.Logs) error {
-	splitter, err := newCentralQueueLogSplitter(e, centralQueueEffectiveUncompressedItemLimit(e.centralQueue.settings), time.Now())
+	splitter, err := newCentralQueueLogSplitter(e, centralQueueEffectiveLogsBatchLimit(e.centralQueue.settings), time.Now())
 	if err != nil {
 		e.centralQueue.settings.telemetry.recordRoutingKeyFailure(ctx)
 		e.logger.Warn("failed to build central log queue routing snapshot", zap.Error(err))

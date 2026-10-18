@@ -58,13 +58,14 @@ func centralQueueReadyWindowLimit(consumers int) int {
 }
 
 type centralQueueSettings struct {
-	maxCompressedBytes           int64
-	maxInflightUncompressedBytes int64
-	maxUncompressedBatchBytes    int
-	targetCompressedBytes        int64
-	maxBatchDelay                time.Duration
-	shutdownTimeout              time.Duration
-	maxReadyWindows              int
+	maxCompressedBytes            int64
+	maxInflightUncompressedBytes  int64
+	maxUncompressedBatchBytes     int
+	maxUncompressedLogRecordBytes int
+	targetCompressedBytes         int64
+	maxBatchDelay                 time.Duration
+	shutdownTimeout               time.Duration
+	maxReadyWindows               int
 	// forceScheduleAge bounds how long a fallback candidate may wait before it
 	// is promoted ahead of fresh target candidates. Zero means "derive from
 	// maxBatchDelay × centralQueueDefaultForceScheduleAgeMultiplier". A negative
@@ -189,7 +190,7 @@ func (q *centralQueue) enqueueAllAt(items []centralQueueItem, now time.Time) err
 	// Validate per-item hard limits (same as enqueueAt) before taking the lock.
 	for i := range items {
 		it := items[i]
-		if q.settings.maxUncompressedBatchBytes > 0 && it.uncompressedBytes > q.settings.maxUncompressedBatchBytes {
+		if q.itemExceedsUncompressedLimit(it) {
 			q.settings.telemetry.recordRejected(context.Background(), totalCompressed)
 			return errCentralQueueItemTooLarge
 		}
@@ -268,7 +269,7 @@ func (q *centralQueue) enqueueAllAt(items []centralQueueItem, now time.Time) err
 }
 
 func (q *centralQueue) enqueueAt(item centralQueueItem, now time.Time) error {
-	if q.settings.maxUncompressedBatchBytes > 0 && item.uncompressedBytes > q.settings.maxUncompressedBatchBytes {
+	if q.itemExceedsUncompressedLimit(item) {
 		q.settings.telemetry.recordRejected(context.Background(), int64(item.compressedBytes))
 		return errCentralQueueItemTooLarge
 	}
@@ -427,7 +428,9 @@ func (q *centralQueue) tryLeaseWithAcquire(now time.Time, acquire centralQueueLe
 
 		state := centralQueueSchedulerStateReady
 		if len(q.ready) == 0 {
-			if acquire != nil {
+			if reservation, ok := q.agedOversizedWindowLocked(now); ok {
+				state = q.scheduleSingleReadyWindowCandidateLocked(reservation, now)
+			} else if acquire != nil {
 				state = q.prepareSingleReadyWindowLocked(now)
 			} else {
 				state = q.prepareReadyWindowsLocked(now, q.settings.maxReadyWindows)
@@ -477,6 +480,39 @@ func (q *centralQueue) tryLeaseWithAcquire(now time.Time, acquire centralQueueLe
 		lease.consumerRelease = release
 		return lease, nil
 	}
+}
+
+// An aged oversized singleton must get room to drain. Otherwise, continuously
+// leasing smaller windows can keep it inflight-blocked forever. Already-ready
+// windows still drain first; the shared inflight limit always remains in force.
+func (q *centralQueue) agedOversizedWindowLocked(now time.Time) (centralQueueWindowCandidate, bool) {
+	var selected centralQueueWindowCandidate
+	if q.settings.maxUncompressedLogRecordBytes <= q.settings.maxUncompressedBatchBytes || q.settings.forceScheduleAge <= 0 {
+		return selected, false
+	}
+	cutoff := now.Add(-q.settings.forceScheduleAge).UnixNano()
+	var found bool
+	for _, bucket := range q.readyBuckets {
+		if bucket.readyAtUnixNano > now.UnixNano() {
+			continue
+		}
+		candidate, _ := q.buildWindowCandidateFromBucketLocked(bucket, now)
+		if len(candidate.indexes) == 0 {
+			continue
+		}
+		if !found || candidate.window.oldestEnqueuedAt < selected.window.oldestEnqueuedAt ||
+			(candidate.window.oldestEnqueuedAt == selected.window.oldestEnqueuedAt &&
+				bytes.Compare(candidate.window.routingKey, selected.window.routingKey) < 0) {
+			selected, found = candidate, true
+		}
+	}
+	if !found || selected.window.count != 1 ||
+		selected.window.uncompressedBytes <= q.settings.maxUncompressedBatchBytes ||
+		selected.window.oldestEnqueuedAt <= 0 || selected.window.oldestEnqueuedAt > cutoff ||
+		selected.bucket.items[selected.indexes[0]].signal != signalKindLogs {
+		return centralQueueWindowCandidate{}, false
+	}
+	return selected, found
 }
 
 // prepareSingleReadyWindowLocked avoids collecting and sorting every candidate
@@ -988,8 +1024,22 @@ func (q *centralQueue) releaseWindowItemsLocked(lease *centralQueueLease) {
 }
 
 func (q *centralQueue) windowWouldExceedLimit(window centralQueueWindow, item *centralQueueItem) bool {
-	return q.settings.maxUncompressedBatchBytes > 0 &&
-		window.uncompressedBytes+item.uncompressedBytes > q.settings.maxUncompressedBatchBytes
+	limit := q.settings.maxUncompressedBatchBytes
+	if item.signal == signalKindLogs {
+		limit = centralQueueEffectiveLogsBatchLimit(q.settings)
+	}
+	return limit > 0 && window.uncompressedBytes+item.uncompressedBytes > limit
+}
+
+func (q *centralQueue) itemExceedsUncompressedLimit(item centralQueueItem) bool {
+	limit := q.settings.maxUncompressedBatchBytes
+	if item.signal == signalKindLogs {
+		limit = centralQueueEffectiveLogsBatchLimit(q.settings)
+		if item.count == 1 && q.settings.maxUncompressedLogRecordBytes > 0 {
+			limit = centralQueueEffectiveLogRecordLimit(q.settings)
+		}
+	}
+	return limit > 0 && item.uncompressedBytes > limit
 }
 
 func (q *centralQueue) windowInflightBlockedLocked(window centralQueueWindow) bool {
@@ -1289,6 +1339,14 @@ func (q *centralQueue) schedulerSnapshotLocked(now time.Time) centralQueueSchedu
 	default:
 		targetCandidates, fallbackCandidates, hasReady := q.collectWindowCandidatesLocked(now)
 		snapshot.readyLanes = int64(len(targetCandidates) + len(fallbackCandidates))
+		if reservation, ok := q.agedOversizedWindowLocked(now); ok {
+			if q.windowInflightBlockedLocked(reservation.window) {
+				snapshot.state = centralQueueSchedulerStateInflightBytes
+			} else {
+				snapshot.state = centralQueueSchedulerStateReady
+			}
+			return snapshot
+		}
 		if !hasReady || len(targetCandidates)+len(fallbackCandidates) == 0 {
 			snapshot.state = centralQueueSchedulerStateWaiting
 			return snapshot

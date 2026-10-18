@@ -622,6 +622,11 @@ func newDurableSignalTestExporter(t *testing.T, dir string, endpoints []string, 
 }
 
 func newDurableSignalTestExporterWithMiddlewares(t *testing.T, dir string, endpoints []string, signal string, middlewares map[component.ID]component.Component, shutdownTimeout ...time.Duration) (component.Component, component.Component, *sdkmetric.ManualReader) {
+	t.Helper()
+	return newDurableSignalTestExporterWithQueueConfig(t, dir, endpoints, signal, middlewares, nil, shutdownTimeout...)
+}
+
+func newDurableSignalTestExporterWithQueueConfig(t *testing.T, dir string, endpoints []string, signal string, middlewares map[component.ID]component.Component, queueOverrides map[string]any, shutdownTimeout ...time.Duration) (component.Component, component.Component, *sdkmetric.ManualReader) {
 	timeout := 20 * time.Millisecond
 	if len(shutdownTimeout) > 0 {
 		timeout = shutdownTimeout[0]
@@ -641,10 +646,12 @@ func newDurableSignalTestExporterWithMiddlewares(t *testing.T, dir string, endpo
 	}
 	factory := loadbalancingexporter.NewFactory()
 	cfg := factory.CreateDefaultConfig()
+	queueConfig := map[string]any{"enabled": true, "storage": "file_storage/queue", "shutdown_timeout": timeout.String(), "max_compressed_bytes": 1 << 20, "max_uncompressed_batch_bytes": 1 << 20, "max_inflight_uncompressed_bytes": 4 << 20, "target_compressed_bytes": 512, "max_batch_delay": "10ms", "num_consumers": consumers, "lane_count": lanes}
+	maps.Copy(queueConfig, queueOverrides)
 	require.NoError(t, confmap.NewFromStringMap(map[string]any{
 		"protocol":      map[string]any{"otlp": map[string]any{"tls": map[string]any{"insecure": true}}},
 		"resolver":      map[string]any{"static": map[string]any{"hostnames": endpoints}},
-		"central_queue": map[string]any{"enabled": true, "storage": "file_storage/queue", "shutdown_timeout": timeout.String(), "max_compressed_bytes": 1 << 20, "max_uncompressed_batch_bytes": 1 << 20, "max_inflight_uncompressed_bytes": 4 << 20, "target_compressed_bytes": 512, "max_batch_delay": "10ms", "num_consumers": consumers, "lane_count": lanes},
+		"central_queue": queueConfig,
 	}).Unmarshal(cfg))
 	for id := range middlewares {
 		cfg.(*loadbalancingexporter.Config).Protocol.OTLP.ClientConfig.Middlewares = append(cfg.(*loadbalancingexporter.Config).Protocol.OTLP.ClientConfig.Middlewares, configmiddleware.Config{ID: id})

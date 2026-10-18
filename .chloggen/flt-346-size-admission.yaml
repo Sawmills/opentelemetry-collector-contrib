@@ -1,0 +1,9 @@
+change_type: bug_fix
+component: exporter/loadbalancing
+note: Allow oversized singleton log records within an explicit worker transport limit without raising the multi-record batch cap.
+issues: [159]
+subtext: |
+  The opt-in max_uncompressed_log_record_bytes limit retains the shared inflight memory guard.
+  Records above that limit receive a counted, warned permanent partial error; admissible siblings commit atomically.
+  The default zero value preserves existing behavior. Refs https://linear.app/sawmills/issue/FLT-346.
+change_logs: [user]

@@ -13,11 +13,12 @@ const (
 )
 
 var (
-	errCentralQueueFull            = errors.New("central queue is full")
-	errCentralQueueInflightFull    = errors.New("central queue inflight uncompressed budget is full")
-	errCentralQueueStopped         = errors.New("central queue is stopped")
-	errCentralQueueItemTooLarge    = errors.New("central queue item exceeds max uncompressed batch bytes")
-	errCentralQueueRequestTooLarge = errors.New("central queue request exceeds max compressed bytes")
+	errCentralQueueFull              = errors.New("central queue is full")
+	errCentralQueueInflightFull      = errors.New("central queue inflight uncompressed budget is full")
+	errCentralQueueStopped           = errors.New("central queue is stopped")
+	errCentralQueueItemTooLarge      = errors.New("central queue item exceeds max uncompressed batch bytes")
+	errCentralQueueLogRecordTooLarge = errors.New("central queue log record exceeds max uncompressed log record bytes")
+	errCentralQueueRequestTooLarge   = errors.New("central queue request exceeds max compressed bytes")
 )
 
 type centralQueueItem struct {

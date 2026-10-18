@@ -24,6 +24,8 @@ type centralQueueTelemetry struct {
 	saturation                                  metric.Float64Gauge
 	items                                       metric.Int64Gauge
 	rejectedBytes                               metric.Int64Counter
+	logRecordAdmissions                         metric.Int64Counter
+	oversizedLogRecordBytes                     metric.Int64Histogram
 	routingKeyFailures                          metric.Int64Counter
 	retries                                     metric.Int64Counter
 	decodeFailures                              metric.Int64Counter
@@ -173,6 +175,19 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 		"otelcol_loadbalancer_central_queue_rejected_compressed_bytes",
 		metric.WithDescription("Compressed bytes rejected by the central load-balancing queue."),
 		metric.WithUnit("By"),
+	)
+	errs = errors.Join(errs, err)
+	t.logRecordAdmissions, err = meter.Int64Counter(
+		"otelcol_loadbalancer_central_queue_log_record_admission_total",
+		metric.WithDescription("Oversized singleton log records admitted or rejected by the central queue, by bounded outcome."),
+		metric.WithUnit("{records}"),
+	)
+	errs = errors.Join(errs, err)
+	t.oversizedLogRecordBytes, err = meter.Int64Histogram(
+		"otelcol_loadbalancer_central_queue_oversized_log_record_uncompressed_bytes",
+		metric.WithDescription("Uncompressed OTLP singleton bytes including resource and scope metadata, for records above the batch cap, by admission outcome."),
+		metric.WithUnit("By"),
+		metric.WithExplicitBucketBoundaries(1<<20, 4<<20, 16<<20, 32<<20, 64<<20, 128<<20, 148<<20, 256<<20, 512<<20),
 	)
 	errs = errors.Join(errs, err)
 	t.shutdownDroppedItems, err = meter.Int64Counter(
@@ -468,6 +483,12 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 		}, t.readyWindows, t.readyWindowLimit, t.readyLanes, t.readyUncompressed, t.schedulerState)
 		errs = errors.Join(errs, err)
 	}
+	if errs == nil && signal == signalKindLogs {
+		for _, outcome := range []string{"admitted", "rejected"} {
+			attrs := metric.WithAttributeSet(attribute.NewSet(signalAttr, attribute.String("outcome", outcome)))
+			t.logRecordAdmissions.Add(context.Background(), 0, attrs)
+		}
+	}
 	return t, errs
 }
 
@@ -490,6 +511,19 @@ func (t *centralQueueTelemetry) recordRejected(ctx context.Context, compressedBy
 		return
 	}
 	t.rejectedBytes.Add(ctx, compressedBytes, t.signalAttrs)
+}
+
+func (t *centralQueueTelemetry) recordLogRecordSize(ctx context.Context, size int, rejected bool) {
+	if t == nil {
+		return
+	}
+	outcome := "admitted"
+	if rejected {
+		outcome = "rejected"
+	}
+	attrs := metric.WithAttributeSet(attribute.NewSet(attribute.String("signal", string(t.signal)), attribute.String("outcome", outcome)))
+	t.logRecordAdmissions.Add(ctx, 1, attrs)
+	t.oversizedLogRecordBytes.Record(ctx, int64(size), attrs)
 }
 
 func (t *centralQueueTelemetry) recordRoutingKeyFailure(ctx context.Context) {
