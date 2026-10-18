@@ -100,9 +100,9 @@ func TestConsumeLogsCentralQueuePartialRejectionAvoidsDuplicatePayloadCopies(t *
 		return (after.TotalAlloc - before.TotalAlloc) / requests
 	}
 	copyBytes := allocationPerRequest(func() {
-		copy := plog.NewLogs()
-		logs.CopyTo(copy)
-		require.Equal(t, 2, copy.LogRecordCount())
+		copied := plog.NewLogs()
+		logs.CopyTo(copied)
+		require.Equal(t, 2, copied.LogRecordCount())
 	})
 	allocated := allocationPerRequest(func() {
 		require.True(t, consumererror.IsPermanent(exporter.ConsumeLogs(t.Context(), logs)))

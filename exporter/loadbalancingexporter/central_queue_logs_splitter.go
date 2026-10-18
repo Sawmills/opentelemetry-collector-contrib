@@ -5,6 +5,7 @@ package loadbalancingexporter // import "github.com/open-telemetry/opentelemetry
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"go.opentelemetry.io/collector/consumer/consumererror"
@@ -124,7 +125,7 @@ func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) err
 	rejected := plog.NewLogs()
 	var rejectedSizes []int
 	if err := s.rejectUnsplittableRecords(ctx, ld); err != nil {
-		if s.exporter.centralQueue.settings.maxUncompressedLogRecordBytes <= 0 || err != errCentralQueueItemTooLarge {
+		if s.exporter.centralQueue.settings.maxUncompressedLogRecordBytes <= 0 || !errors.Is(err, errCentralQueueItemTooLarge) {
 			return err
 		}
 		ld, rejected, rejectedSizes = s.partitionOversizedRecords(ld)
@@ -172,7 +173,8 @@ func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) err
 	if err := s.exporter.centralQueue.enqueueAll(s.pending); err != nil {
 		return err
 	}
-	for _, item := range s.pending {
+	for i := range s.pending {
+		item := &s.pending[i]
 		if item.uncompressedBytes > s.hardLimit {
 			s.exporter.centralQueue.settings.telemetry.recordLogRecordSize(ctx, item.uncompressedBytes, false)
 		}
