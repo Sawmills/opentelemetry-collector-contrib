@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/exporter/exportertest"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.uber.org/zap"
@@ -186,4 +187,74 @@ func sizeAdmissionCounts(metric metricdata.Metrics) map[string]int64 {
 		counts[outcome.AsString()] = point.Value
 	}
 	return counts
+}
+
+func TestConsumeLogsCentralQueueReservesBudgetForAgedOversizedSingleton(t *testing.T) {
+	testAgedOversizedSingletonProgress(t, nil)
+}
+
+func TestConsumeLogsCentralQueueReservesBudgetWithAdaptiveConsumers(t *testing.T) {
+	testAgedOversizedSingletonProgress(t, func(int64, centralQueueWindow) (func(), bool) { return nil, true })
+}
+
+func TestConsumeLogsCentralQueueDoesNotReserveAheadOfOlderSmallWindow(t *testing.T) {
+	exporter := newSizeAdmissionReservationExporter(t)
+	consumeSizeAdmissionRecord(t, exporter, 1, 1024)
+	primer, err := exporter.centralQueue.tryLease(time.Now())
+	require.NoError(t, err)
+	consumeSizeAdmissionRecord(t, exporter, 2, 64)
+	consumeSizeAdmissionRecord(t, exporter, 3, 1024)
+
+	olderSmall, err := exporter.centralQueue.tryLease(time.Now().Add(2 * time.Second))
+
+	require.NoError(t, err)
+	require.NotNil(t, olderSmall)
+	require.LessOrEqual(t, olderSmall.window.uncompressedBytes, 256)
+	olderSmall.done()
+	primer.done()
+}
+
+func testAgedOversizedSingletonProgress(t *testing.T, acquire centralQueueLeaseAcquireFunc) {
+	t.Helper()
+	exporter := newSizeAdmissionReservationExporter(t)
+	consumeSizeAdmissionRecord(t, exporter, 1, 1024)
+	primer, err := exporter.centralQueue.tryLeaseWithAcquire(time.Now(), acquire)
+	require.NoError(t, err)
+	require.NotNil(t, primer)
+	consumeSizeAdmissionRecord(t, exporter, 2, 1024)
+	aged := time.Now().Add(2 * time.Second)
+	for id := byte(3); id < 6; id++ {
+		consumeSizeAdmissionRecord(t, exporter, id, 64)
+		lease, leaseErr := exporter.centralQueue.tryLeaseWithAcquire(aged, acquire)
+		require.Nil(t, lease, "new small traffic must wait for the older oversized singleton")
+		require.ErrorIs(t, leaseErr, errCentralQueueInflightFull)
+	}
+	primer.done()
+	expectedKey := pcommon.TraceID{2}
+
+	large, err := exporter.centralQueue.tryLeaseWithAcquire(aged, acquire)
+
+	require.NoError(t, err)
+	require.NotNil(t, large)
+	require.Equal(t, expectedKey[:], large.window.routingKey)
+	require.Greater(t, large.window.uncompressedBytes, 256)
+	large.done()
+}
+
+func newSizeAdmissionReservationExporter(t *testing.T) *logExporterImp {
+	t.Helper()
+	exporter := newPreflightTestExporter(t, 256)
+	exporter.ignoreTraceID = false
+	exporter.centralQueueLaneCount = 0
+	exporter.centralQueue.settings.maxUncompressedLogRecordBytes = 2048
+	exporter.centralQueue.settings.maxInflightUncompressedBytes = 1800
+	exporter.centralQueue.settings.forceScheduleAge = time.Second
+	return exporter
+}
+
+func consumeSizeAdmissionRecord(t *testing.T, exporter *logExporterImp, id byte, size int) {
+	t.Helper()
+	logs := sharedScopeLogsWithoutTraceIDs(strings.Repeat("x", size))
+	logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).SetTraceID(pcommon.TraceID{id})
+	require.NoError(t, exporter.ConsumeLogs(t.Context(), logs))
 }

@@ -428,7 +428,9 @@ func (q *centralQueue) tryLeaseWithAcquire(now time.Time, acquire centralQueueLe
 
 		state := centralQueueSchedulerStateReady
 		if len(q.ready) == 0 {
-			if acquire != nil {
+			if reservation, ok := q.agedOversizedWindowLocked(now); ok {
+				state = q.scheduleSingleReadyWindowCandidateLocked(reservation, now)
+			} else if acquire != nil {
 				state = q.prepareSingleReadyWindowLocked(now)
 			} else {
 				state = q.prepareReadyWindowsLocked(now, q.settings.maxReadyWindows)
@@ -478,6 +480,37 @@ func (q *centralQueue) tryLeaseWithAcquire(now time.Time, acquire centralQueueLe
 		lease.consumerRelease = release
 		return lease, nil
 	}
+}
+
+// An aged oversized singleton must get room to drain. Otherwise, continuously
+// leasing smaller windows can keep it inflight-blocked forever. Already-ready
+// windows still drain first; the shared inflight limit always remains in force.
+func (q *centralQueue) agedOversizedWindowLocked(now time.Time) (centralQueueWindowCandidate, bool) {
+	var selected centralQueueWindowCandidate
+	if q.settings.maxUncompressedLogRecordBytes <= q.settings.maxUncompressedBatchBytes || q.settings.forceScheduleAge <= 0 {
+		return selected, false
+	}
+	cutoff := now.Add(-q.settings.forceScheduleAge).UnixNano()
+	var found bool
+	for _, bucket := range q.readyBuckets {
+		if bucket.readyAtUnixNano > now.UnixNano() {
+			continue
+		}
+		candidate, _ := q.buildWindowCandidateFromBucketLocked(bucket, now)
+		if len(candidate.indexes) == 0 {
+			continue
+		}
+		if !found || centralQueueWindowCandidateLess(candidate, selected) {
+			selected, found = candidate, true
+		}
+	}
+	if !found || selected.window.count != 1 ||
+		selected.window.uncompressedBytes <= q.settings.maxUncompressedBatchBytes ||
+		selected.window.oldestEnqueuedAt <= 0 || selected.window.oldestEnqueuedAt > cutoff ||
+		selected.bucket.items[selected.indexes[0]].signal != signalKindLogs {
+		return centralQueueWindowCandidate{}, false
+	}
+	return selected, found
 }
 
 // prepareSingleReadyWindowLocked avoids collecting and sorting every candidate
