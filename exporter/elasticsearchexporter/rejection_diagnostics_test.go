@@ -27,6 +27,15 @@ import (
 )
 
 func TestRejectedItemClassificationUsesItsOwnSource(t *testing.T) {
+	testRejectedErrorAttribution(t, false, "map", "scope", `{"code":"rejected"}`)
+}
+
+func TestRejectedItemClassificationRecognizesECSExceptionAlias(t *testing.T) {
+	testRejectedErrorAttribution(t, true, "derived", "log_alias", `{"message":"rejected"}`)
+}
+
+func testRejectedErrorAttribution(t *testing.T, alias bool, wantKind, wantSource, wantError string) {
+	t.Helper()
 	var requests atomic.Int64
 	var mu sync.Mutex
 	var submitted string
@@ -81,8 +90,13 @@ func TestRejectedItemClassificationUsesItsOwnSource(t *testing.T) {
 	accepted.Body().SetStr("accepted synthetic")
 	accepted.Attributes().PutEmptyMap("error").PutStr("code", "accepted")
 	rejectedScope := logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
-	rejectedScope.Scope().Attributes().PutEmptyMap("error").PutStr("code", "rejected")
-	rejectedScope.LogRecords().AppendEmpty().Body().SetStr("rejected synthetic")
+	rejected := rejectedScope.LogRecords().AppendEmpty()
+	rejected.Body().SetStr("rejected synthetic")
+	if alias {
+		rejected.Attributes().PutStr("exception.message", "rejected")
+	} else {
+		rejectedScope.Scope().Attributes().PutEmptyMap("error").PutStr("code", "rejected")
+	}
 	logs.MarkReadOnly()
 	ctx := client.NewContext(t.Context(), client.Info{
 		Metadata: client.NewMetadata(map[string][]string{"X-Elastic-Mapping-Mode": {"ecs"}}),
@@ -93,10 +107,10 @@ func TestRejectedItemClassificationUsesItsOwnSource(t *testing.T) {
 	mu.Lock()
 	actual := submitted
 	mu.Unlock()
-	const want = "{\"create\":{\"_index\":\"logs-fixture\",\"require_data_stream\":true}}\n" +
+	want := "{\"create\":{\"_index\":\"logs-fixture\",\"require_data_stream\":true}}\n" +
 		"{\"@timestamp\":\"1970-01-01T00:00:00.000000000Z\",\"error\":{\"code\":\"accepted\"},\"message\":\"accepted synthetic\"}\n" +
 		"{\"create\":{\"_index\":\"logs-fixture\",\"require_data_stream\":true}}\n" +
-		"{\"@timestamp\":\"1970-01-01T00:00:00.000000000Z\",\"error\":{\"code\":\"rejected\"},\"message\":\"rejected synthetic\"}\n"
+		"{\"@timestamp\":\"1970-01-01T00:00:00.000000000Z\",\"error\":" + wantError + ",\"message\":\"rejected synthetic\"}\n"
 	require.Equal(t, want, actual, "diagnostics must preserve the submitted NDJSON")
 
 	metric, err := telemetry.GetMetric("otelcol.elasticsearch.docs.failed_by_field")
@@ -111,7 +125,7 @@ func TestRejectedItemClassificationUsesItsOwnSource(t *testing.T) {
 		attribute.String("item_status_class", "400"),
 		attribute.String("field_class", "error"),
 		attribute.String("expected_type", "text"),
-		attribute.String("value_type", "map"),
-		attribute.String("source", "scope"),
+		attribute.String("value_type", wantKind),
+		attribute.String("source", wantSource),
 	}, point.Attributes.ToSlice())
 }

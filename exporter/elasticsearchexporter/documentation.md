@@ -57,6 +57,31 @@ and resets when the exporter process restarts.
 | ---- | ----------- | ------ | ------------------- |
 | exporter | The configured Elasticsearch exporter identifier. | Any Str | - |
 
+### otelcol.elasticsearch.docs.failed_by_field
+
+Count of confirmed terminal failed bulk items by bounded field attribution.
+
+Counts each confirmed terminal failed bulk item once. Accepted items,
+intermediate document retries and unconfirmed request failures are excluded.
+Unknown attribution remains explicit; source and type are unknown after
+document retries whose retained positions cannot be proven.
+
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| 1 | Sum | Int | true | Alpha |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| exporter | The configured Elasticsearch exporter identifier. | Any Str | - |
+| item_status_class | The bounded HTTP status class of a terminal failed bulk item. | Str: ``400``, ``409``, ``429``, ``other_4xx``, ``5xx``, ``other`` | - |
+| field_class | The allowlisted field class reported by a mapping failure. | Str: ``timestamp``, ``at_timestamp``, ``duration``, ``level``, ``error``, ``message``, ``errors_data``, ``change``, ``other``, ``unknown`` | - |
+| expected_type | The bounded destination mapping type class. | Str: ``text``, ``date``, ``number``, ``object``, ``boolean``, ``unknown`` | - |
+| value_type | The bounded source value type, without reading its contents. | Str: ``map``, ``slice``, ``string``, ``int``, ``double``, ``bool``, ``bytes``, ``empty``, ``derived``, ``unknown`` | - |
+| source | The positively identified source of the rejected field, or unknown. | Str: ``resource``, ``scope``, ``log``, ``body``, ``log_alias``, ``generated``, ``mixed``, ``unknown`` | - |
+
 ### otelcol.elasticsearch.docs.processed
 
 Count of documents flushed to Elasticsearch.

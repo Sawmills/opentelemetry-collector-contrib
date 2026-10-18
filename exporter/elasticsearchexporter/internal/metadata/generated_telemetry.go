@@ -29,6 +29,7 @@ type TelemetryBuilder struct {
 	ElasticsearchBulkRequestsCount        metric.Int64Counter
 	ElasticsearchBulkRequestsLatency      metric.Float64Histogram
 	ElasticsearchDocsFailed               metric.Int64Counter
+	ElasticsearchDocsFailedByField        metric.Int64Counter
 	ElasticsearchDocsProcessed            metric.Int64Counter
 	ElasticsearchDocsReceived             metric.Int64Counter
 	ElasticsearchDocsRetried              metric.Int64Counter
@@ -82,6 +83,12 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 	builder.ElasticsearchDocsFailed, err = builder.meter.Int64Counter(
 		"otelcol.elasticsearch.docs.failed",
 		metric.WithDescription("Count of documents that failed to be accepted by an Elasticsearch destination. [Alpha]"),
+		metric.WithUnit("1"),
+	)
+	errs = errors.Join(errs, err)
+	builder.ElasticsearchDocsFailedByField, err = builder.meter.Int64Counter(
+		"otelcol.elasticsearch.docs.failed_by_field",
+		metric.WithDescription("Count of confirmed terminal failed bulk items by bounded field attribution. [Alpha]"),
 		metric.WithUnit("1"),
 	)
 	errs = errors.Join(errs, err)

@@ -141,6 +141,7 @@ type documentEncoder interface {
 }
 
 type encodingContext struct {
+	mappingMode       MappingMode
 	resource          pcommon.Resource
 	resourceSchemaURL string
 	scope             pcommon.InstrumentationScope

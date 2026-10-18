@@ -54,6 +54,11 @@ func newExporter(cfg *Config, set exporter.Settings, index string) (*elasticsear
 	}
 
 	allowedMappingModes := cfg.allowedMappingModes()
+	concurrency := int(NumMappingModes)
+	if cfg.QueueBatchConfig.HasValue() {
+		concurrency *= max(1, cfg.QueueBatchConfig.Get().NumConsumers)
+	}
+	diagnostics := newRejectionDiagnostics(telemetryBuilder, set.ID.String(), concurrency)
 	exporter := &elasticsearchExporter{
 		set:                 set,
 		config:              cfg,
@@ -62,7 +67,7 @@ func newExporter(cfg *Config, set exporter.Settings, index string) (*elasticsear
 		allowedMappingModes: allowedMappingModes,
 		defaultMappingMode:  MappingOTel,
 		bufferPool:          pool.NewBufferPool(),
-		bulkIndexers:        bulkIndexers{telemetryBuilder: telemetryBuilder, exporterID: set.ID.String()},
+		bulkIndexers:        bulkIndexers{telemetryBuilder: telemetryBuilder, exporterID: set.ID.String(), diagnostics: diagnostics},
 		telemetryBuilder:    telemetryBuilder,
 	}
 	for mappingMode := range NumMappingModes {
@@ -202,6 +207,7 @@ func (e *elasticsearchExporter) pushLogsData(ctx context.Context, ld plog.Logs) 
 			encoder := e.documentEncoders[int(mappingMode)]
 
 			ec := encodingContext{
+				mappingMode:       mappingMode,
 				resource:          resource,
 				resourceSchemaURL: rl.SchemaUrl(),
 				scope:             scope,
@@ -262,7 +268,7 @@ func (e *elasticsearchExporter) pushLogRecord(
 	}
 
 	// not recycling after Add returns an error as we don't know if it's already recycled
-	return bulkIndexerSession.Add(ctx, index.Index, docID, pipeline, buf, nil, docappender.ActionCreate)
+	return bulkIndexerSession.Add(ctx, index.Index, docID, pipeline, buf, nil, docappender.ActionCreate, describeLogFields(ec, record))
 }
 
 type dataPointsGroup struct {
@@ -417,7 +423,7 @@ func (e *elasticsearchExporter) pushMetricsData(ctx context.Context, metrics pme
 				errs = append(errs, err)
 				continue
 			}
-			if err := session.Add(ctx, key.index.Index, "", "", buf, dynamicTemplates, docappender.ActionCreate); err != nil {
+			if err := session.Add(ctx, key.index.Index, "", "", buf, dynamicTemplates, docappender.ActionCreate, 0); err != nil {
 				// not recycling after Add returns an error as we don't know if it's already recycled
 				if cerr := ctx.Err(); cerr != nil {
 					return cerr
@@ -521,7 +527,7 @@ func (e *elasticsearchExporter) pushTraceRecord(
 		return fmt.Errorf("failed to encode trace record: %w", err)
 	}
 	// not recycling after Add returns an error as we don't know if it's already recycled
-	return bulkIndexerSession.Add(ctx, index.Index, docID, "", buf, nil, docappender.ActionCreate)
+	return bulkIndexerSession.Add(ctx, index.Index, docID, "", buf, nil, docappender.ActionCreate, 0)
 }
 
 func (e *elasticsearchExporter) pushSpanEvent(
@@ -548,7 +554,7 @@ func (e *elasticsearchExporter) pushSpanEvent(
 		return err
 	}
 	// not recycling after Add returns an error as we don't know if it's already recycled
-	return bulkIndexerSession.Add(ctx, index.Index, docID, "", buf, nil, docappender.ActionCreate)
+	return bulkIndexerSession.Add(ctx, index.Index, docID, "", buf, nil, docappender.ActionCreate, 0)
 }
 
 // extractDocumentIDAttribute extracts the document ID from the given attributes map.
@@ -656,20 +662,20 @@ func (*elasticsearchExporter) pushProfileRecord(
 	return encoder.encodeProfile(ec, dic, profile, func(buf *bytes.Buffer, docID, index string) error {
 		switch index {
 		case otelserializer.StackTraceIndex:
-			return stackTracesSession.Add(ctx, index, docID, "", buf, nil, docappender.ActionCreate)
+			return stackTracesSession.Add(ctx, index, docID, "", buf, nil, docappender.ActionCreate, 0)
 		case otelserializer.StackFrameIndex:
-			return stackFramesSession.Add(ctx, index, docID, "", buf, nil, docappender.ActionCreate)
+			return stackFramesSession.Add(ctx, index, docID, "", buf, nil, docappender.ActionCreate, 0)
 		case otelserializer.AllEventsIndex:
-			return eventsSession.Add(ctx, index, docID, "", buf, nil, docappender.ActionCreate)
+			return eventsSession.Add(ctx, index, docID, "", buf, nil, docappender.ActionCreate, 0)
 		case otelserializer.ExecutablesIndex:
-			return executablesSession.Add(ctx, index, docID, "", buf, nil, docappender.ActionUpdate)
+			return executablesSession.Add(ctx, index, docID, "", buf, nil, docappender.ActionUpdate, 0)
 		case otelserializer.ExecutablesSymQueueIndex,
 			otelserializer.LeafFramesSymQueueIndex,
 			otelserializer.HostsMetadataIndex:
 			// These regular indices have a low write-frequency and can share the executablesSession.
-			return executablesSession.Add(ctx, index, docID, "", buf, nil, docappender.ActionCreate)
+			return executablesSession.Add(ctx, index, docID, "", buf, nil, docappender.ActionCreate, 0)
 		default:
-			return defaultSession.Add(ctx, index, docID, "", buf, nil, docappender.ActionCreate)
+			return defaultSession.Add(ctx, index, docID, "", buf, nil, docappender.ActionCreate, 0)
 		}
 	})
 }

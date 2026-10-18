@@ -14,6 +14,10 @@ attributes:
   error.type:
     description: The type of error that occurred when processing the documents.
     type: string
+  expected_type:
+    description: The bounded destination mapping type class.
+    type: string
+    enum: [text, date, number, object, boolean, unknown]
   exporter:
     description: The configured Elasticsearch exporter identifier.
     type: string
@@ -21,13 +25,29 @@ attributes:
     description: The status of the failure store.
     type: string
     enum: [unknown, not_enabled, used, failed]
+  field_class:
+    description: The allowlisted field class reported by a mapping failure.
+    type: string
+    enum: [timestamp, at_timestamp, duration, level, error, message, errors_data, change, other, unknown]
   http.response.status_code:
     description: HTTP status code.
     type: int
+  item_status_class:
+    description: The bounded HTTP status class of a terminal failed bulk item.
+    type: string
+    enum: ["400", "409", "429", other_4xx, 5xx, other]
   outcome:
     description: The operation outcome.
     type: string
     enum: [success, failed_client, failed_server, timeout, too_many, failure_store, internal_server_error]
+  source:
+    description: The positively identified source of the rejected field, or unknown.
+    type: string
+    enum: [resource, scope, log, body, log_alias, generated, mixed, unknown]
+  value_type:
+    description: The bounded source value type, without reading its contents.
+    type: string
+    enum: [map, slice, string, int, double, bool, bytes, empty, derived, unknown]
 
 telemetry:
   metrics:
@@ -67,6 +87,21 @@ telemetry:
         value_type: int
         monotonic: true
       attributes: [exporter]
+    elasticsearch.docs.failed_by_field:
+      prefix: otelcol.
+      stability: alpha
+      enabled: true
+      description: Count of confirmed terminal failed bulk items by bounded field attribution.
+      extended_documentation: |
+        Counts each confirmed terminal failed bulk item once. Accepted items,
+        intermediate document retries and unconfirmed request failures are excluded.
+        Unknown attribution remains explicit; source and type are unknown after
+        document retries whose retained positions cannot be proven.
+      unit: "1"
+      sum:
+        value_type: int
+        monotonic: true
+      attributes: [exporter, item_status_class, field_class, expected_type, value_type, source]
     elasticsearch.docs.processed:
       prefix: otelcol.
       stability: alpha
