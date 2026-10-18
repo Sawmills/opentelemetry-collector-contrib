@@ -142,6 +142,9 @@ func describeLogFields(ec encodingContext, record plog.LogRecord) logFieldShape 
 			continue
 		}
 		for key, value := range attrs.All() {
+			if key == "" && value.Type() == pcommon.ValueTypeMap {
+				return 0 // Empty-key maps flatten uninspected children into the root.
+			}
 			for i, field := range rejectionFields {
 				if key == field.path {
 					var kind rejectionKind
