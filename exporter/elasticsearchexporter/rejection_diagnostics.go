@@ -231,15 +231,16 @@ func newRejectionDiagnostics(tb *metadata.TelemetryBuilder, exporter string, con
 		series:  make(map[uint32]struct{}, maxRejectionSeries),
 	}
 	for range concurrency {
-		d.buffers <- new([maxRejectionShapes]logFieldShape)
+		d.buffers <- nil // Reserve capacity without allocating for unused signals.
 	}
 	return d
 }
 
 type rejectionBatch struct {
-	owner   *rejectionDiagnostics
-	shapes  *[maxRejectionShapes]logFieldShape
-	tracked int
+	owner    *rejectionDiagnostics
+	shapes   *[maxRejectionShapes]logFieldShape
+	tracked  int
+	reserved bool
 }
 
 func (d *rejectionDiagnostics) begin() rejectionBatch {
@@ -247,6 +248,7 @@ func (d *rejectionDiagnostics) begin() rejectionBatch {
 	if d != nil {
 		select {
 		case b.shapes = <-d.buffers:
+			b.reserved = true
 		default:
 		}
 	}
@@ -254,6 +256,9 @@ func (d *rejectionDiagnostics) begin() rejectionBatch {
 }
 
 func (b *rejectionBatch) record(position int, shape logFieldShape) {
+	if b.reserved && b.shapes == nil && shape != 0 && position >= 0 && position < maxRejectionShapes {
+		b.shapes = new([maxRejectionShapes]logFieldShape)
+	}
 	if b.shapes != nil && position >= 0 && position < len(b.shapes) {
 		b.shapes[position] = shape
 		b.tracked = position + 1
@@ -261,9 +266,10 @@ func (b *rejectionBatch) record(position int, shape logFieldShape) {
 }
 
 func (b *rejectionBatch) end() {
-	if b.shapes != nil {
+	if b.reserved {
 		b.owner.buffers <- b.shapes
 		b.shapes = nil
+		b.reserved = false
 	}
 	b.tracked = 0
 }
@@ -307,7 +313,14 @@ func classifyRejectedItem(item docappender.BulkIndexerResponseItem, shape logFie
 		(item.Error.Type != "mapper_parsing_exception" && item.Error.Type != "document_parsing_exception") {
 		return c
 	}
+	reason := rejectionReasonHeader(item.Error.Reason)
 	for field, name := range rejectionFields {
+		if reason == "object mapping for ["+name.path+"] tried to parse field ["+name.path+"] as object, but found a concrete value" {
+			c.field, c.expected = rejectionField(field), rejectionExpectedObject
+			tag := uint8(shape >> uint(field*8))
+			c.kind, c.source = rejectionKind(tag&15), rejectionSource(tag>>4)
+			return c
+		}
 		for _, expected := range []struct {
 			literal string
 			class   rejectionExpected
@@ -325,10 +338,10 @@ func classifyRejectedItem(item docappender.BulkIndexerResponseItem, shape logFie
 			{"boolean", rejectionExpectedBoolean},
 		} {
 			prefix := "failed to parse field [" + name.path + "] of type [" + expected.literal + "]"
-			if !strings.HasPrefix(item.Error.Reason, prefix) {
+			if !strings.HasPrefix(reason, prefix) {
 				continue
 			}
-			suffix := item.Error.Reason[len(prefix):]
+			suffix := reason[len(prefix):]
 			if suffix != "" && !strings.HasPrefix(suffix, " in document with id '") && !strings.HasPrefix(suffix, ". Preview of field's value: '") {
 				return c
 			}
@@ -339,6 +352,34 @@ func classifyRejectedItem(item docappender.BulkIndexerResponseItem, shape logFie
 		}
 	}
 	return c
+}
+
+// Elasticsearch may prefix the fixed error header with an XContent location.
+// Consume only one exact [digits:digits] prefix, never search inside a suffix.
+func rejectionReasonHeader(reason string) string {
+	if len(reason) == 0 || reason[0] != '[' {
+		return reason
+	}
+	i := 1
+	for part := range 2 {
+		start := i
+		for i < len(reason) && reason[i] >= '0' && reason[i] <= '9' {
+			i++
+		}
+		if i == start {
+			return reason
+		}
+		if part == 0 {
+			if i >= len(reason) || reason[i] != ':' {
+				return reason
+			}
+			i++
+		}
+	}
+	if !strings.HasPrefix(reason[i:], "] ") {
+		return reason
+	}
+	return reason[i+2:]
 }
 
 func (d *rejectionDiagnostics) add(c rejectionClass) {
