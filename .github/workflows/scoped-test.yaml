@@ -55,6 +55,12 @@ jobs:
             exit 0
           fi
 
+          # Retiring the deprecated root stub is documentation-only, even in a Go PR.
+          deleted_instruction_stub=$(git diff --name-only --diff-filter=D "$(git merge-base "origin/${PR_BASE}" "$PR_HEAD")" "$PR_HEAD" -- CLAUDE.md)
+          if [[ "$deleted_instruction_stub" == "CLAUDE.md" ]]; then
+            changed_files=$(printf '%s\n' "$changed_files" | grep -vxF 'CLAUDE.md' || true)
+          fi
+
           non_docs_changes=$(printf '%s\n' "$changed_files" | grep -vE '^(.+\.md|docs/.+\.md|LICENSE)$' || true)
           if [[ -z "$non_docs_changes" ]]; then
             echo "mode=docs_only" >> "$GITHUB_OUTPUT"
