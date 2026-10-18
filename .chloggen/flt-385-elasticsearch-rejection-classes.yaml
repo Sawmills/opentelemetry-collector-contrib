@@ -1,0 +1,12 @@
+change_type: enhancement
+component: exporter/elasticsearch
+note: Count terminal failed bulk items by bounded field, expected type and source classes.
+issues: [164]
+subtext: |
+  Adds otelcol.elasticsearch.docs.failed_by_field without changing documents,
+  retries or the configured error-reason policy. Ambiguous attribution stays
+  unknown, including retained document retries. Diagnostics contain no document
+  values or request identifiers and use at most 70 series per signal exporter
+  instance. Reusing one component ID across signals multiplies this bound.
+  Sawmills fork PR: https://github.com/Sawmills/opentelemetry-collector-contrib/pull/164
+change_logs: [user]

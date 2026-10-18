@@ -68,6 +68,22 @@ func AssertEqualElasticsearchDocsFailed(t *testing.T, tt *componenttest.Telemetr
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }
 
+func AssertEqualElasticsearchDocsFailedByField(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol.elasticsearch.docs.failed_by_field",
+		Description: "Count of confirmed terminal failed bulk items by bounded field attribution. [Alpha]",
+		Unit:        "1",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol.elasticsearch.docs.failed_by_field")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
 func AssertEqualElasticsearchDocsProcessed(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol.elasticsearch.docs.processed",

@@ -41,7 +41,7 @@ type bulkIndexer interface {
 
 type bulkIndexerSession interface {
 	// Add adds a document to the bulk indexing session.
-	Add(ctx context.Context, index, docID, pipeline string, document io.WriterTo, dynamicTemplates map[string]string, action string) error
+	Add(ctx context.Context, index, docID, pipeline string, document io.WriterTo, dynamicTemplates map[string]string, action string, shape logFieldShape) error
 
 	// End must be called on the session object once it is no longer
 	// needed, in order to release any associated resources.
@@ -77,8 +77,11 @@ func newBulkIndexer(
 	logger *zap.Logger,
 	getErrorHintFunc func(index, errorType string) string,
 	exporterID string,
+	diagnostics *rejectionDiagnostics,
 ) bulkIndexer {
-	return newSyncBulkIndexer(client, config, requireDataStream, tb, logger, getErrorHintFunc, exporterID)
+	indexer := newSyncBulkIndexer(client, config, requireDataStream, tb, logger, getErrorHintFunc, exporterID)
+	indexer.diagnostics = diagnostics
+	return indexer
 }
 
 func bulkIndexerConfig(client elastictransport.Interface, config *Config, requireDataStream bool, logger *zap.Logger) docappender.BulkIndexerConfig {
@@ -209,6 +212,7 @@ type syncBulkIndexer struct {
 	getErrorHintFunc       func(index, errorType string) string
 	requireDataStream      bool
 	exporterID             string
+	diagnostics            *rejectionDiagnostics
 }
 
 // StartSession creates a new docappender.BulkIndexer, and wraps
@@ -228,7 +232,7 @@ func (s *syncBulkIndexer) StartSession(ctx context.Context) bulkIndexerSession {
 	docsReceivedAttr := metric.WithAttributeSet(attribute.NewSet(
 		getAttributesFromMetadataKeys(ctx, s.metadataKeys)...,
 	))
-	return &syncBulkIndexerSession{s: s, bi: bi, docsReceivedAttr: docsReceivedAttr}
+	return &syncBulkIndexerSession{s: s, bi: bi, docsReceivedAttr: docsReceivedAttr, diagnostics: s.diagnostics.begin()}
 }
 
 // Close is a no-op.
@@ -240,10 +244,11 @@ type syncBulkIndexerSession struct {
 	s                *syncBulkIndexer
 	bi               *docappender.BulkIndexer
 	docsReceivedAttr metric.MeasurementOption
+	diagnostics      rejectionBatch
 }
 
 // Add adds an item to the sync bulk indexer session.
-func (s *syncBulkIndexerSession) Add(ctx context.Context, index, docID, pipeline string, document io.WriterTo, dynamicTemplates map[string]string, action string) error {
+func (s *syncBulkIndexerSession) Add(ctx context.Context, index, docID, pipeline string, document io.WriterTo, dynamicTemplates map[string]string, action string, shape logFieldShape) error {
 	doc := docappender.BulkIndexerItem{
 		Index:             index,
 		Body:              document,
@@ -257,6 +262,7 @@ func (s *syncBulkIndexerSession) Add(ctx context.Context, index, docID, pipeline
 	if err != nil {
 		return err
 	}
+	s.diagnostics.record(s.bi.Items()-1, shape)
 	s.s.telemetryBuilder.ElasticsearchDocsReceived.Add(ctx, 1, s.docsReceivedAttr)
 	// sending_queue operates on flush sizes based on pdata model whereas bulk
 	// indexers operate on ndjson. Force a flush if the ndjson size is too large.
@@ -267,8 +273,8 @@ func (s *syncBulkIndexerSession) Add(ctx context.Context, index, docID, pipeline
 	return nil
 }
 
-// End is a no-op.
-func (*syncBulkIndexerSession) End() {
+func (s *syncBulkIndexerSession) End() {
+	s.diagnostics.end()
 	// TODO acquire docappender.BulkIndexer from pool in StartSession, release here
 }
 
@@ -286,6 +292,7 @@ func (s *syncBulkIndexerSession) Flush(ctx context.Context) error {
 			s.s.failedDocsInputSampler,
 			s.s.getErrorHintFunc,
 			s.s.exporterID,
+			&s.diagnostics,
 		); err != nil {
 			return err
 		}
@@ -323,6 +330,7 @@ func flushBulkIndexer(
 	failedDocsInputSampler *failedDocsInputSampler,
 	getErrorHintFunc func(index, errorType string) string,
 	exporterID string,
+	diagnostics *rejectionBatch,
 ) error {
 	itemsCount := bi.Items()
 	if itemsCount == 0 {
@@ -339,6 +347,7 @@ func flushBulkIndexer(
 	startTime := time.Now()
 	stat, err := bi.Flush(ctxWithAttempts)
 	latency := time.Since(startTime).Seconds()
+	diagnostics.observe(stat, itemsCount, err)
 	defaultMetaAttrs := getAttributesFromMetadataKeys(ctx, tMetaKeys)
 	defaultAttrsSet := attribute.NewSet(defaultMetaAttrs...)
 	if flushed := bi.BytesFlushed(); flushed > 0 {
@@ -585,6 +594,7 @@ type bulkIndexers struct {
 
 	telemetryBuilder *metadata.TelemetryBuilder
 	exporterID       string
+	diagnostics      *rejectionDiagnostics
 }
 
 func (b *bulkIndexers) start(
@@ -612,7 +622,7 @@ func (b *bulkIndexers) start(
 		modeSpecificErrorHintFunc := func(index, errorType string) string {
 			return getErrorHint(mode, index, errorType)
 		}
-		bi := newBulkIndexer(esClient, cfg, requireDataStream, b.telemetryBuilder, set.Logger, modeSpecificErrorHintFunc, b.exporterID)
+		bi := newBulkIndexer(esClient, cfg, requireDataStream, b.telemetryBuilder, set.Logger, modeSpecificErrorHintFunc, b.exporterID, b.diagnostics)
 		b.modes[mode] = &wgTrackingBulkIndexer{bulkIndexer: bi, wg: &b.wg}
 	}
 
@@ -620,16 +630,16 @@ func (b *bulkIndexers) start(
 		return getErrorHint(MappingNone, index, errorType)
 	}
 
-	profilingEvents := newBulkIndexer(esClient, cfg, true, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID)
+	profilingEvents := newBulkIndexer(esClient, cfg, true, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID, b.diagnostics)
 	b.profilingEvents = &wgTrackingBulkIndexer{bulkIndexer: profilingEvents, wg: &b.wg}
 
-	profilingStackTraces := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID)
+	profilingStackTraces := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID, b.diagnostics)
 	b.profilingStackTraces = &wgTrackingBulkIndexer{bulkIndexer: profilingStackTraces, wg: &b.wg}
 
-	profilingStackFrames := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID)
+	profilingStackFrames := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID, b.diagnostics)
 	b.profilingStackFrames = &wgTrackingBulkIndexer{bulkIndexer: profilingStackFrames, wg: &b.wg}
 
-	profilingExecutables := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID)
+	profilingExecutables := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID, b.diagnostics)
 	b.profilingExecutables = &wgTrackingBulkIndexer{bulkIndexer: profilingExecutables, wg: &b.wg}
 	return nil
 }
@@ -709,7 +719,7 @@ type errBulkIndexerSession struct {
 	err error
 }
 
-func (s errBulkIndexerSession) Add(context.Context, string, string, string, io.WriterTo, map[string]string, string) error {
+func (s errBulkIndexerSession) Add(context.Context, string, string, string, io.WriterTo, map[string]string, string, logFieldShape) error {
 	return fmt.Errorf("creating bulk indexer session failed, cannot add item: %w", s.err)
 }
 

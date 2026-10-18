@@ -133,7 +133,7 @@ func TestSyncBulkIndexer(t *testing.T) {
 			info := client.Info{Metadata: client.NewMetadata(map[string][]string{"x-test": {"test"}})}
 			ctx := client.NewContext(t.Context(), info)
 			session := bi.StartSession(ctx)
-			assert.NoError(t, session.Add(ctx, "foo", "", "", strings.NewReader(`{"foo": "bar"}`), nil, docappender.ActionCreate))
+			assert.NoError(t, session.Add(ctx, "foo", "", "", strings.NewReader(`{"foo": "bar"}`), nil, docappender.ActionCreate, 0))
 			assert.Equal(t, int64(0), reqCnt.Load()) // requests will not flush unless flush is called explicitly
 			assert.NoError(t, session.Flush(ctx))
 			assert.Equal(t, int64(1), reqCnt.Load())
@@ -287,7 +287,7 @@ func TestSyncBulkIndexerFailedDocumentsByExporter(t *testing.T) {
 			ctx := t.Context()
 			session := bi.StartSession(ctx)
 			for range max(tt.docs, 1) {
-				require.NoError(t, session.Add(ctx, "foo", "", "", strings.NewReader(`{"foo":"bar"}`), nil, docappender.ActionCreate))
+				require.NoError(t, session.Add(ctx, "foo", "", "", strings.NewReader(`{"foo":"bar"}`), nil, docappender.ActionCreate, 0))
 			}
 			flushErr := session.Flush(ctx)
 			if tt.wantFlushErr {
@@ -316,7 +316,6 @@ func TestSyncBulkIndexerFailedDocumentsByExporter(t *testing.T) {
 			require.Equal(t, dp.Attributes, quietDataPoint.Attributes)
 		})
 	}
-
 }
 
 func TestSyncBulkIndexerFailedDocumentsKeepExporterSeriesIsolated(t *testing.T) {
@@ -350,7 +349,7 @@ func TestSyncBulkIndexerFailedDocumentsKeepExporterSeriesIsolated(t *testing.T) 
 		require.NoError(t, err)
 		bi := newSyncBulkIndexer(newClient(test.response), &cfg, false, tb, zap.NewNop(), nil, test.exporterID)
 		session := bi.StartSession(t.Context())
-		require.NoError(t, session.Add(t.Context(), "foo", "", "", strings.NewReader(`{"foo":"bar"}`), nil, docappender.ActionCreate))
+		require.NoError(t, session.Add(t.Context(), "foo", "", "", strings.NewReader(`{"foo":"bar"}`), nil, docappender.ActionCreate, 0))
 		require.NoError(t, session.Flush(t.Context()))
 		session.End()
 	}
@@ -452,7 +451,7 @@ func TestSyncBulkIndexerRequestRetriesMetric(t *testing.T) {
 
 			// Add multiple documents to test batch retry count
 			for i := 0; i < tt.docsCount; i++ {
-				assert.NoError(t, session.Add(ctx, "foo", "", "", strings.NewReader(`{"foo": "bar"}`), nil, docappender.ActionCreate))
+				assert.NoError(t, session.Add(ctx, "foo", "", "", strings.NewReader(`{"foo": "bar"}`), nil, docappender.ActionCreate, 0))
 			}
 
 			assert.Equal(t, int64(0), reqCnt.Load()) // requests will not flush unless flush is called explicitly
@@ -515,9 +514,9 @@ func TestBulkIndexerLogsStatusCode(t *testing.T) {
 	ctx := t.Context()
 	session := bi.StartSession(ctx)
 	// Add initial document to ensure we have at least one document to process.
-	require.NoError(t, session.Add(ctx, "foo", "", "", strings.NewReader(`{"foo": "bar"}`), nil, docappender.ActionCreate))
+	require.NoError(t, session.Add(ctx, "foo", "", "", strings.NewReader(`{"foo": "bar"}`), nil, docappender.ActionCreate, 0))
 	for range statuses {
-		require.NoError(t, session.Add(ctx, "foo", "", "", strings.NewReader(`{"foo": "bar"}`), nil, docappender.ActionCreate))
+		require.NoError(t, session.Add(ctx, "foo", "", "", strings.NewReader(`{"foo": "bar"}`), nil, docappender.ActionCreate, 0))
 	}
 	require.NoError(t, session.Flush(ctx))
 	session.End()
@@ -580,7 +579,7 @@ func TestBulkIndexerLogsFailedDocsInputWithoutDebugLevel(t *testing.T) {
 
 	ctx := t.Context()
 	session := bi.StartSession(ctx)
-	require.NoError(t, session.Add(ctx, "logs-bhn-default", "", "", strings.NewReader(`{"http.response.status_code":"not-a-number"}`), nil, docappender.ActionCreate))
+	require.NoError(t, session.Add(ctx, "logs-bhn-default", "", "", strings.NewReader(`{"http.response.status_code":"not-a-number"}`), nil, docappender.ActionCreate, 0))
 	require.NoError(t, session.Flush(ctx))
 	session.End()
 	assert.NoError(t, bi.Close(ctx))
@@ -637,7 +636,7 @@ func TestBulkIndexerSamplesFailedDocsInputByIndex(t *testing.T) {
 	ctx := t.Context()
 	session := bi.StartSession(ctx)
 	for range 3 {
-		require.NoError(t, session.Add(ctx, "logs-a", "", "", strings.NewReader(`{"status":"bad"}`), nil, docappender.ActionCreate))
+		require.NoError(t, session.Add(ctx, "logs-a", "", "", strings.NewReader(`{"status":"bad"}`), nil, docappender.ActionCreate, 0))
 	}
 	require.NoError(t, session.Flush(ctx))
 	session.End()
@@ -763,7 +762,7 @@ func TestNewBulkIndexer(t *testing.T) {
 	client, err := newElasticsearchClient(t.Context(), cfg, componenttest.NewNopHost(), componenttest.NewTelemetry().NewTelemetrySettings(), "")
 	require.NoError(t, err)
 
-	bi := newBulkIndexer(client, cfg, true, nil, nil, nil, "")
+	bi := newBulkIndexer(client, cfg, true, nil, nil, nil, "", nil)
 	t.Cleanup(func() { bi.Close(t.Context()) })
 }
 
@@ -966,4 +965,36 @@ func newBenchBulkIndexerConfig(tb testing.TB, compressionLevel int) docappender.
 		Client:           client,
 		CompressionLevel: compressionLevel,
 	}
+}
+
+func TestRejectionDiagnosticsFailedAddIsNotAnItemFailure(t *testing.T) {
+	var requests atomic.Int64
+	server := newESTestServerBulkHandlerFunc(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		_, err := io.WriteString(w, `{"items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}}]}`)
+		require.NoError(t, err)
+	})
+	telemetry := componenttest.NewTelemetry()
+	settings := metadatatest.NewSettings(telemetry)
+	tb, err := metadata.NewTelemetryBuilder(settings.TelemetrySettings)
+	require.NoError(t, err)
+	t.Cleanup(tb.Shutdown)
+	cfg := NewFactory().CreateDefaultConfig().(*Config)
+	cfg.Endpoints = []string{server.URL}
+	cfg.Retry.Enabled = false
+	esClient, err := newElasticsearchClient(t.Context(), cfg, componenttest.NewNopHost(), settings.TelemetrySettings, "")
+	require.NoError(t, err)
+	indexer := newBulkIndexer(esClient, cfg, true, tb, zap.NewNop(), nil, "elasticsearch/fixture", newRejectionDiagnostics(tb, "elasticsearch/fixture", 1))
+	session := indexer.StartSession(t.Context())
+	defer session.End()
+	require.ErrorContains(t, session.Add(t.Context(), "logs-fixture", "", "", strings.NewReader(`{"error":"synthetic"}`), nil, "invalid-action", 0), "not a valid action")
+	require.NoError(t, session.Add(t.Context(), "logs-fixture", "", "", strings.NewReader(`{"error":"synthetic"}`), nil, docappender.ActionCreate, 0))
+	require.NoError(t, session.Flush(t.Context()))
+	require.Equal(t, int64(1), requests.Load())
+	collected, err := telemetry.GetMetric("otelcol.elasticsearch.docs.failed_by_field")
+	require.NoError(t, err)
+	sum, ok := collected.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	require.Len(t, sum.DataPoints, 1)
+	assertRejectionTuple(t, sum.DataPoints[0], "400", "error", "text", "unknown", "unknown", 1)
 }
