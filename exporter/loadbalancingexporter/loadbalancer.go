@@ -330,12 +330,14 @@ func (lb *loadBalancer) installRingForEndpointsLocked(endpoints []string) bool {
 }
 
 // centralQueueLogRoutingSnapshot captures the immutable assignment used for
-// one no-affinity log consume batch. The ring and all lane keys are selected
-// while the load balancer update lock is held, so a resolver update cannot
-// change the assignment halfway through splitting a batch.
+// one no-affinity log consume batch. Its keys and usable lanes come from the
+// same immutable ring, so a resolver update cannot remap a batch while splitting.
 type centralQueueLogRoutingSnapshot struct {
 	endpoints   []string
 	routingKeys [][]byte
+	usableLanes []uint32
+	// A failed key search belongs to its lane, not the entire ring snapshot.
+	routingKeyErrors map[uint32]error
 }
 
 func (lb *loadBalancer) centralQueueLogRoutingEndpointCount() (int, bool) {
@@ -368,6 +370,11 @@ func (lb *loadBalancer) centralQueueLogRoutingSnapshotWithError() (*centralQueue
 	}
 	ring.centralQueueLogSnapshotOnce.Do(func() {
 		ring.centralQueueLogSnapshot, ring.centralQueueLogSnapshotErr = buildCentralQueueLogRoutingSnapshot(ring)
+		if snapshot := ring.centralQueueLogSnapshot; snapshot != nil && len(snapshot.routingKeyErrors) > 0 && lb.logger != nil {
+			lb.logger.Warn("central queue routing has unusable lanes",
+				zap.Int("failed_lanes", len(snapshot.routingKeyErrors)),
+				zap.Int("lanes", len(snapshot.endpoints)))
+		}
 	})
 	return ring.centralQueueLogSnapshot, ring.centralQueueLogSnapshotErr
 }
@@ -383,9 +390,18 @@ func buildCentralQueueLogRoutingSnapshot(ring *hashRing) (*centralQueueLogRoutin
 	for lane := range snapshot.endpoints {
 		key := centralQueueBalancedLaneRoutingKeyForRing(ring, signalKindLogs, uint32(lane))
 		if endpointWithPort(ring.endpointFor(key)) != endpointWithPort(snapshot.endpoints[lane]) {
-			return nil, centralQueueBalancedLaneRoutingKeySearchError(signalKindLogs, uint32(lane), snapshot.endpoints[lane])
+			if snapshot.routingKeyErrors == nil {
+				snapshot.routingKeyErrors = make(map[uint32]error)
+			}
+			snapshot.routingKeyErrors[uint32(lane)] = centralQueueBalancedLaneRoutingKeySearchError(signalKindLogs, uint32(lane), snapshot.endpoints[lane])
+			continue
 		}
 		snapshot.routingKeys[lane] = slices.Clone(key)
+		snapshot.usableLanes = append(snapshot.usableLanes, uint32(lane))
+	}
+	if len(snapshot.routingKeyErrors) == len(snapshot.routingKeys) {
+		// Only a ring with no usable lane is a snapshot-wide failure.
+		return snapshot, snapshot.routingKeyErrors[0]
 	}
 	return snapshot, nil
 }

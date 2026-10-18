@@ -1,0 +1,17 @@
+change_type: bug_fix
+
+component: exporter/loadbalancing
+
+note: Keep a central queue routing-key search failure local to its lane.
+
+issues: [161]
+
+subtext: |
+  No-affinity random routing and record striping skip unusable lane keys.
+  Routing rejects only when no lane is usable; trace affinity is unchanged.
+  Queue admission remains atomic. The routing_key_skips counter counts excluded
+  lanes once per request, with a warning once per bad ring. Selection remains
+  uniform over usable lanes, and effective-lane telemetry reports that count.
+  Refs FLT-161.
+
+change_logs: [user]

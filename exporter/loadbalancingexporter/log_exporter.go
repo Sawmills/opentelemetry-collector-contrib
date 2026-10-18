@@ -319,7 +319,10 @@ func (e *logExporterImp) consumeLogsCentralQueue(ctx context.Context, ld plog.Lo
 	err = splitter.consume(ctx, ld)
 	if errors.Is(err, errCentralQueueBalancedLaneRoutingKeySearch) {
 		e.centralQueue.settings.telemetry.recordRoutingKeyFailure(ctx)
-		e.logger.Warn("failed to route central log queue batch", zap.Error(err))
+		if splitter.routingSnapshot == nil {
+			// No-affinity snapshot failures already warn once per immutable ring.
+			e.logger.Warn("failed to route central log queue batch", zap.Error(err))
+		}
 	}
 	if errors.Is(err, errCentralQueueRequestTooLarge) {
 		return consumererror.NewPermanent(err)

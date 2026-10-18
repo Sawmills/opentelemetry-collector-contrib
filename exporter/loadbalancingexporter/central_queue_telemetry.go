@@ -27,6 +27,7 @@ type centralQueueTelemetry struct {
 	logRecordAdmissions                         metric.Int64Counter
 	oversizedLogRecordBytes                     metric.Int64Histogram
 	routingKeyFailures                          metric.Int64Counter
+	routingKeySkips                             metric.Int64Counter
 	retries                                     metric.Int64Counter
 	decodeFailures                              metric.Int64Counter
 	shutdownDroppedItems                        metric.Int64Counter
@@ -219,6 +220,12 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 		"otelcol_loadbalancer_central_queue_routing_key_failures",
 		metric.WithDescription("Central load-balancing queue routing-key search failures that rejected intake before enqueue."),
 		metric.WithUnit("{failures}"),
+	)
+	errs = errors.Join(errs, err)
+	t.routingKeySkips, err = meter.Int64Counter(
+		"otelcol_loadbalancer_central_queue_routing_key_skips",
+		metric.WithDescription("Unusable lanes excluded per no-affinity routing request. Does not count rejected records."),
+		metric.WithUnit("{skips}"),
 	)
 	errs = errors.Join(errs, err)
 	t.retries, err = meter.Int64Counter(
@@ -531,6 +538,13 @@ func (t *centralQueueTelemetry) recordRoutingKeyFailure(ctx context.Context) {
 		return
 	}
 	t.routingKeyFailures.Add(ctx, 1, t.signalAttrs)
+}
+
+func (t *centralQueueTelemetry) recordRoutingKeySkips(ctx context.Context, count int64) {
+	if t == nil {
+		return
+	}
+	t.routingKeySkips.Add(ctx, count, t.signalAttrs)
 }
 
 func (t *centralQueueTelemetry) recordRetry(ctx context.Context) {

@@ -580,6 +580,19 @@ service:
 
 The following metrics are recorded by this exporter:
 
+No-affinity log routing selects uniformly from lanes with usable routing keys.
+Random routing and record striping exclude failed lanes from that selection.
+A nonempty ring with no usable lane rejects intake without committing records.
+Trace-affinity routing and atomic queue admission retain their existing behavior.
+
+`otelcol_loadbalancer_central_queue_routing_key_skips` counts each excluded lane
+once per nonempty no-affinity routing request. Its unit is `{skips}` and its only
+label is `signal`. It counts excluded lanes, not rejected or lost records.
+One warning per immutable ring reports the failed and total lane counts.
+For no-affinity log intake, `otelcol_loadbalancer_central_queue_effective_lanes`
+reports the usable lane count. The initial gauge can reflect resolver membership
+until the first intake request.
+
 * `otelcol_loadbalancer_num_resolutions` represents the total number of resolutions performed by the resolver specified in the tag `resolver`, split by their outcome (`success=true|false`). For the static resolver, this should always be `1` with the tag `success=true`.
 * `otelcol_loadbalancer_num_backends` informs how many backends are currently in use. It should always match the number of items specified in the configuration file in case the `static` resolver is used, and should eventually (seconds) catch up with the DNS changes. Note that DNS caches that might exist between the load balancer and the record authority will influence how long it takes for the load balancer to see the change.
 * `otelcol_loadbalancer_backend_count` reports the current resolved backend count for each signal. Use the `signal` label to keep log and metric exporter instances separate.

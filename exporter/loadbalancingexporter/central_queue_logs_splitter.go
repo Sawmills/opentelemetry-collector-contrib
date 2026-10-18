@@ -67,11 +67,13 @@ func newCentralQueueLogSplitter(exporter *logExporterImp, limit int, now time.Ti
 	if exporter.ignoreTraceID && exporter.loadBalancer != nil {
 		var err error
 		routingSnapshot, err = exporter.loadBalancer.centralQueueLogRoutingSnapshotWithError()
-		if err != nil {
+		if err != nil && routingSnapshot == nil {
 			return nil, err
 		}
+		// Retain a wholly unusable snapshot so consume can report its bounded
+		// skip count and zero usable lanes before rejecting the request.
 		if routingSnapshot != nil {
-			laneCount = len(routingSnapshot.routingKeys)
+			laneCount = len(routingSnapshot.usableLanes)
 		}
 	}
 	splitter := &centralQueueLogSplitter{
@@ -129,6 +131,14 @@ func (s *centralQueueLogSplitter) consume(ctx context.Context, ld plog.Logs) err
 			return err
 		}
 		ld, rejected, rejectedSizes = s.partitionOversizedRecords(ld)
+	}
+	if snapshot := s.routingSnapshot; snapshot != nil && len(snapshot.routingKeyErrors) > 0 && ld.LogRecordCount() > 0 {
+		// Count each excluded lane once per routing request, not per record.
+		s.exporter.centralQueue.settings.telemetry.recordRoutingKeySkips(ctx, int64(len(snapshot.routingKeyErrors)))
+	}
+	if snapshot := s.routingSnapshot; snapshot != nil && len(snapshot.endpoints) > 0 && len(snapshot.usableLanes) == 0 {
+		s.exporter.observeCentralQueueLaneAssignment(0)
+		return snapshot.routingKeyErrors[0]
 	}
 
 	var errs error
@@ -257,7 +267,7 @@ func (s *centralQueueLogSplitter) balancedLaneRoutingKey(balancingKey pcommon.Tr
 
 func (s *centralQueueLogSplitter) balancedLaneRoutingKeyForLane(lane uint32) ([]byte, error) {
 	if s.routingSnapshot != nil {
-		return s.routingSnapshot.routingKeys[lane], nil
+		return s.routingSnapshot.routingKeys[s.routingSnapshot.usableLanes[lane]], nil
 	}
 	if key, ok := s.laneRoutingKeys[lane]; ok {
 		return key, nil
