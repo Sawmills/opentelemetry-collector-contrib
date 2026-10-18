@@ -1339,6 +1339,14 @@ func (q *centralQueue) schedulerSnapshotLocked(now time.Time) centralQueueSchedu
 	default:
 		targetCandidates, fallbackCandidates, hasReady := q.collectWindowCandidatesLocked(now)
 		snapshot.readyLanes = int64(len(targetCandidates) + len(fallbackCandidates))
+		if reservation, ok := q.agedOversizedWindowLocked(now); ok {
+			if q.windowInflightBlockedLocked(reservation.window) {
+				snapshot.state = centralQueueSchedulerStateInflightBytes
+			} else {
+				snapshot.state = centralQueueSchedulerStateReady
+			}
+			return snapshot
+		}
 		if !hasReady || len(targetCandidates)+len(fallbackCandidates) == 0 {
 			snapshot.state = centralQueueSchedulerStateWaiting
 			return snapshot

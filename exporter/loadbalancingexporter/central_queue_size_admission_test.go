@@ -245,6 +245,10 @@ func testAgedOversizedSingletonProgress(t *testing.T, acquire centralQueueLeaseA
 		lease, leaseErr := exporter.centralQueue.tryLeaseWithAcquire(aged, acquire)
 		require.Nil(t, lease, "new small traffic must wait for the older oversized singleton")
 		require.ErrorIs(t, leaseErr, errCentralQueueInflightFull)
+		exporter.centralQueue.mu.Lock()
+		snapshot := exporter.centralQueue.schedulerSnapshotLocked(aged)
+		exporter.centralQueue.mu.Unlock()
+		require.Equal(t, centralQueueSchedulerStateInflightBytes, snapshot.state)
 	}
 	primer.done()
 	expectedKey := pcommon.TraceID{2}
