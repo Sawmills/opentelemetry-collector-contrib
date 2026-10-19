@@ -65,7 +65,7 @@ func (p *Proof) Observe(original, outgoing []byte, field string) ProofResult {
 		return Unverified
 	}
 	for _, name := range []string{"key", "value_type", "value_json"} {
-		if value := fields[name]; len(value) == 0 || value[0] != '"' {
+		if member := fields[name]; len(member) == 0 || member[0] != '"' {
 			return Unverified
 		}
 	}
