@@ -7,8 +7,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -360,10 +362,8 @@ func (cfg *Config) Validate() error {
 		if !cfg.PreserveErrorReason {
 			return errors.New("mapping repair requires telemetry::preserve_error_reason")
 		}
-		for _, status := range cfg.Retry.RetryOnStatus {
-			if status == 400 {
-				return errors.New("mapping repair does not support automatic document retries on status 400")
-			}
+		if slices.Contains(cfg.Retry.RetryOnStatus, http.StatusBadRequest) {
+			return errors.New("mapping repair does not support automatic document retries on status 400")
 		}
 	}
 	endpoints, err := cfg.endpoints()
