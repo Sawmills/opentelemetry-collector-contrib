@@ -196,7 +196,7 @@ jobs:
   queuedrain-harness:
     needs: changedfiles
     if: needs.changedfiles.outputs.mode == 'queuedrain_harness'
-    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository && 'namespace-profile-sawmills-runner' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Validate queuedrain shell harness
