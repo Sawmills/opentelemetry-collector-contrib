@@ -35,6 +35,8 @@ func TestOuterRetryBoundsPendingLogsMemory(t *testing.T) {
 		retrying.growth, retrying.held, retrying.admitted, retrying.rejected, bound)
 	require.LessOrEqual(t, control.growth, int64(bound), "non-retrying control exceeds the retained-memory allowance")
 	require.LessOrEqual(t, retrying.growth-control.growth, int64(bound), "outer retries retain pending request heap outside the queue budgets")
+	require.Zero(t, retrying.held, "central queue admission must not hold callers in outer retries")
+	require.Positive(t, retrying.rejected, "configured outer retries must not hide queue admission pressure")
 }
 
 type outerRetryMemoryResult struct {
@@ -122,14 +124,13 @@ func measureOuterRetryMemory(t *testing.T, retryEnabled bool) outerRetryMemoryRe
 	calls := startOuterRetryCalls(ctx, exp, requests, records)
 	require.Eventually(t, func() bool { return calls.started.Load() == requests }, 10*time.Second, 10*time.Millisecond)
 	require.Eventually(t, backend.retryObserved.Load, 5*time.Second, 10*time.Millisecond)
-	if retryEnabled {
-		// Inner OTLP retries are disabled: this exporter log identifies the
-		// public factory's outer retry wrapper, not the central delivery loop.
-		require.Eventually(t, func() bool { return observed.FilterMessageSnippet("Will retry").Len() > 0 }, 5*time.Second, 10*time.Millisecond)
-		require.Positive(t, calls.started.Load()-calls.completed.Load(), "the retrying scenario must hold callers during queue pressure")
-	} else {
-		require.Eventually(t, func() bool { return calls.completed.Load() == requests }, 10*time.Second, 10*time.Millisecond)
-	}
+	// Inner OTLP retries are disabled. Observe either prompt completion or the
+	// old outer retry wrapper, so the regression still samples retained callers
+	// before their retry budget expires when the correction is removed.
+	require.Eventually(t, func() bool {
+		return calls.completed.Load() == requests || observed.FilterMessageSnippet("Will retry").Len() > 0
+	}, 5*time.Second, 10*time.Millisecond)
+	outerRetryObserved := observed.FilterMessageSnippet("Will retry").Len() > 0
 	runtime.GC()
 	var pressured runtime.MemStats
 	runtime.ReadMemStats(&pressured)
@@ -137,7 +138,7 @@ func measureOuterRetryMemory(t *testing.T, retryEnabled bool) outerRetryMemoryRe
 		growth: int64(pressured.HeapAlloc) - int64(baseline.HeapAlloc),
 		held:   calls.started.Load() - calls.completed.Load(),
 	}
-	if retryEnabled {
+	if outerRetryObserved {
 		require.Positive(t, result.held, "retry measurement is incomplete: no callers remained held at the heap snapshot")
 	}
 

@@ -201,13 +201,21 @@ func createLogsExporter(ctx context.Context, params exporter.Settings, cfg compo
 		exporterhelper.WithCapabilities(exporter.Capabilities()),
 	}
 	qbs := xexporterhelper.NewLogsQueueBatchSettings()
+	options = buildExporterResilienceOptions(options, c, payloadCodec, qbs)
+	if c.CentralQueue.Enabled {
+		// The central queue retries admitted delivery. Return admission pressure
+		// to the caller without retaining decoded requests outside its budgets.
+		retry := c.BackOffConfig
+		retry.Enabled = false
+		options = append(options, exporterhelper.WithRetry(retry))
+	}
 
 	return exporterhelper.NewLogs(
 		ctx,
 		params,
 		cfg,
 		exporter.ConsumeLogs,
-		buildExporterResilienceOptions(options, c, payloadCodec, qbs)...,
+		options...,
 	)
 }
 
