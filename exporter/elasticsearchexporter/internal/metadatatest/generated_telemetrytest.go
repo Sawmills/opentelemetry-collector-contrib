@@ -212,6 +212,54 @@ func AssertEqualElasticsearchMappingRepairOriginal400(t *testing.T, tt *componen
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }
 
+func AssertEqualElasticsearchMappingRepairProofEqual(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol.elasticsearch.mapping_repair.proof.equal",
+		Description: "Count of sampled outgoing mapping repairs whose backup exactly matched the original key, type and raw JSON value. Samples are limited to the first 20 candidates across the exporter process. [Development]",
+		Unit:        "1",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol.elasticsearch.mapping_repair.proof.equal")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualElasticsearchMappingRepairProofUnequal(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol.elasticsearch.mapping_repair.proof.unequal",
+		Description: "Count of sampled outgoing mapping repairs whose backup did not match the original key, type and raw JSON value. Samples are limited to the first 20 candidates across the exporter process. [Development]",
+		Unit:        "1",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol.elasticsearch.mapping_repair.proof.unequal")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualElasticsearchMappingRepairProofUnverified(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol.elasticsearch.mapping_repair.proof.unverified",
+		Description: "Count of sampled outgoing mapping repairs whose backup could not be verified within the sample size limit or had ambiguous evidence. Samples are limited to the first 20 candidates across the exporter process. [Development]",
+		Unit:        "1",
+		Data: metricdata.Sum[int64]{
+			Temporality: metricdata.CumulativeTemporality,
+			IsMonotonic: true,
+			DataPoints:  dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol.elasticsearch.mapping_repair.proof.unverified")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
 func AssertEqualElasticsearchMappingRepairSucceeded(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol.elasticsearch.mapping_repair.succeeded",

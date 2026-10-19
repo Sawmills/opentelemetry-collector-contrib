@@ -20,6 +20,10 @@ import (
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/rejectionrepair"
 )
 
+// processRepairProof shares the fixed sample budget across all exporters and
+// batches for this process. It retains no payload or exporter identifiers.
+var processRepairProof rejectionrepair.Proof
+
 // repairRejectedItems runs after the original flush has recorded its unchanged
 // telemetry. A separate indexer makes the single repair attempt independent of
 // the original indexer's ordinary 429 retries.
@@ -33,6 +37,11 @@ func (s *syncBulkIndexer) repairRejectedItems(ctx context.Context, stat docappen
 	}
 	s.telemetryBuilder.ElasticsearchMappingRepairOriginal400.Add(ctx, original400, attrs)
 	s.telemetryBuilder.ElasticsearchMappingRepairAttempted.Add(ctx, 0, attrs)
+	// Proof counters never carry trace exemplars or request data.
+	proofCtx := context.Background()
+	s.telemetryBuilder.ElasticsearchMappingRepairProofEqual.Add(proofCtx, 0, attrs)
+	s.telemetryBuilder.ElasticsearchMappingRepairProofUnequal.Add(proofCtx, 0, attrs)
+	s.telemetryBuilder.ElasticsearchMappingRepairProofUnverified.Add(proofCtx, 0, attrs)
 	s.telemetryBuilder.ElasticsearchMappingRepairSucceeded.Add(ctx, 0, attrs)
 	s.telemetryBuilder.ElasticsearchMappingRepairUnconfirmed.Add(ctx, 0, attrs)
 	terminal := max(0, int64(count)-stat.Indexed-stat.RetriedDocs)
@@ -67,9 +76,17 @@ func (s *syncBulkIndexer) repairRejectedItems(ctx context.Context, stat docappen
 		if field == "" {
 			continue
 		}
-		item, ok := repairedBulkItem(failed.Input, field)
+		item, proof, ok := repairedBulkItem(failed.Input, field, &processRepairProof)
 		if !ok {
 			continue
+		}
+		switch proof {
+		case rejectionrepair.Equal:
+			s.telemetryBuilder.ElasticsearchMappingRepairProofEqual.Add(proofCtx, 1, attrs)
+		case rejectionrepair.Unequal:
+			s.telemetryBuilder.ElasticsearchMappingRepairProofUnequal.Add(proofCtx, 1, attrs)
+		case rejectionrepair.Unverified:
+			s.telemetryBuilder.ElasticsearchMappingRepairProofUnverified.Add(proofCtx, 1, attrs)
 		}
 		if addErr := retry.Add(item); addErr != nil {
 			return s.mappingRepairFailure("buffer_failed", count)
@@ -144,22 +161,22 @@ func mappingFailureField(item docappender.BulkIndexerResponseItem) string {
 	return ""
 }
 
-func repairedBulkItem(input, field string) (docappender.BulkIndexerItem, bool) {
+func repairedBulkItem(input, field string, proof *rejectionrepair.Proof) (docappender.BulkIndexerItem, rejectionrepair.ProofResult, bool) {
 	metaLine, document, ok := strings.Cut(input, "\n")
 	if !ok || !strings.HasSuffix(document, "\n") {
-		return docappender.BulkIndexerItem{}, false
+		return docappender.BulkIndexerItem{}, rejectionrepair.NotSampled, false
 	}
 	document = strings.TrimSuffix(document, "\n")
 	if strings.Contains(document, "\n") {
-		return docappender.BulkIndexerItem{}, false
+		return docappender.BulkIndexerItem{}, rejectionrepair.NotSampled, false
 	}
 	var envelope map[string]json.RawMessage
 	if json.Unmarshal([]byte(metaLine), &envelope) != nil || len(envelope) != 1 {
-		return docappender.BulkIndexerItem{}, false
+		return docappender.BulkIndexerItem{}, rejectionrepair.NotSampled, false
 	}
 	for action, raw := range envelope {
 		if action != docappender.ActionCreate && action != docappender.ActionIndex {
-			return docappender.BulkIndexerItem{}, false
+			return docappender.BulkIndexerItem{}, rejectionrepair.NotSampled, false
 		}
 		var meta struct {
 			Index             string            `json:"_index"`
@@ -171,16 +188,16 @@ func repairedBulkItem(input, field string) (docappender.BulkIndexerItem, bool) {
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
 		if decoder.Decode(&meta) != nil {
-			return docappender.BulkIndexerItem{}, false
+			return docappender.BulkIndexerItem{}, rejectionrepair.NotSampled, false
 		}
 		if _, err := decoder.Token(); err != io.EOF {
-			return docappender.BulkIndexerItem{}, false
+			return docappender.BulkIndexerItem{}, rejectionrepair.NotSampled, false
 		}
 		body, changed := rejectionrepair.Relocate([]byte(document), field)
 		if !changed {
-			return docappender.BulkIndexerItem{}, false
+			return docappender.BulkIndexerItem{}, rejectionrepair.NotSampled, false
 		}
-		return docappender.BulkIndexerItem{Index: meta.Index, DocumentID: meta.ID, Pipeline: meta.Pipeline, DynamicTemplates: meta.DynamicTemplates, RequireDataStream: meta.RequireDataStream, Action: action, Body: bytes.NewReader(body)}, true
+		return docappender.BulkIndexerItem{Index: meta.Index, DocumentID: meta.ID, Pipeline: meta.Pipeline, DynamicTemplates: meta.DynamicTemplates, RequireDataStream: meta.RequireDataStream, Action: action, Body: bytes.NewReader(body)}, proof.Observe([]byte(document), body, field), true
 	}
-	return docappender.BulkIndexerItem{}, false
+	return docappender.BulkIndexerItem{}, rejectionrepair.NotSampled, false
 }

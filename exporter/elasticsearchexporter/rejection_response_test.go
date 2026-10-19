@@ -50,6 +50,8 @@ type rejectionFixtureResult struct {
 	failed            int64
 	existingExemplars int
 	repairCounts      map[string]int64
+	proofCounts       map[string]int64
+	proofPoints       []metricdata.DataPoint[int64]
 	logEntries        []observer.LoggedEntry
 }
 
@@ -168,6 +170,15 @@ func runRejectionResponseFixtureWithFactory(t *testing.T, logs plog.Logs, respon
 		if collected, err := telemetry.GetMetric("otelcol.elasticsearch.mapping_repair." + name); err == nil {
 			for _, point := range collected.Data.(metricdata.Sum[int64]).DataPoints {
 				result.repairCounts[name] += point.Value
+			}
+		}
+	}
+	result.proofCounts = make(map[string]int64)
+	for _, name := range []string{"equal", "unequal", "unverified"} {
+		if collected, err := telemetry.GetMetric("otelcol.elasticsearch.mapping_repair.proof." + name); err == nil {
+			for _, point := range collected.Data.(metricdata.Sum[int64]).DataPoints {
+				result.proofCounts[name] += point.Value
+				result.proofPoints = append(result.proofPoints, point)
 			}
 		}
 	}
