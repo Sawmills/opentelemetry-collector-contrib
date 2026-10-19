@@ -53,10 +53,9 @@ func (c *mappingResponseClient) Perform(request *http.Request) (*http.Response, 
 	if response.Body == nil {
 		return nil, consumererror.NewPermanent(errors.New("bulk item response has no body"))
 	}
-	const maxResponseBytes = 16 << 20
-	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
+	body, readErr := io.ReadAll(response.Body)
 	response.Body.Close()
-	if readErr != nil || len(body) > maxResponseBytes || !c.valid(body) {
+	if readErr != nil || !c.valid(body) {
 		return nil, consumererror.NewPermanent(errors.New("bulk item response is incomplete or uncorrelated"))
 	}
 	response.Body = io.NopCloser(bytes.NewReader(body))

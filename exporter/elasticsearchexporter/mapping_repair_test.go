@@ -377,3 +377,25 @@ func (e directRepairFixtureExporter) ConsumeLogs(ctx context.Context, logs plog.
 func (directRepairFixtureExporter) Capabilities() consumer.Capabilities {
 	return consumer.Capabilities{MutatesData: true}
 }
+
+func TestMappingRepairKeepsOrdinaryRetriesAfterLargeValidResponse(t *testing.T) {
+	logs := oneRejectionLog()
+	records := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords()
+	records.AppendEmpty().Body().SetStr("ordinary-retry")
+	records.AppendEmpty().Body().SetStr("already-accepted")
+	response := `{"padding":"` + strings.Repeat("x", 17<<20) + `","items":[{"create":{"status":400,"error":{"type":"mapper_parsing_exception","reason":"failed to parse field [error] of type [text]"}}},{"create":{"status":429}},{"create":{"status":201}}]}`
+	responses := []rejectionHTTPResponse{
+		{body: response},
+		{body: `{"items":[{"create":{"status":201}}]}`},
+		{body: `{"items":[{"create":{"status":201}}]}`},
+	}
+	result := runRejectionResponseFixture(t, logs, responses, func(config *Config) {
+		enableMappingRepair(config)
+		config.Retry.Enabled = true
+	})
+	require.NoError(t, result.err, "valid response size must not discard recoverable members")
+	require.NotContains(t, result.requests[1], "ordinary-retry")
+	require.Contains(t, result.requests[2], "ordinary-retry")
+	require.NotContains(t, result.requests[1]+result.requests[2], "already-accepted")
+	require.Equal(t, map[string]int64{"original_400": 1, "attempted": 1, "succeeded": 1, "terminal_unrepaired": 0, "unconfirmed": 0}, result.repairCounts)
+}
