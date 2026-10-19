@@ -164,6 +164,7 @@ jobs:
         if: needs.changedfiles.outputs.go_tests
         env:
           CHANGED_GOLANG_TESTS: ${{ needs.changedfiles.outputs.go_tests }}
+          GOTESTSUM_FORMAT: standard-verbose
         run: |
           make run-changed-tests
 
