@@ -1,0 +1,10 @@
+change_type: bug_fix
+component: exporter/loadbalancing
+note: Return central log queue admission pressure without retaining requests in outer retries.
+issues: [168]
+subtext: |
+  With central_queue enabled for logs, outer retry_on_failure no longer retries admission errors.
+  Admitted delivery still retries inside the central queue. Upstream clients must retry rejected
+  requests; clients without retries lose those records. Metrics, traces, and non-central logs
+  keep their existing outer retry behavior.
+change_logs: [user]

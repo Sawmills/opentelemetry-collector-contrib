@@ -168,6 +168,7 @@ Refer to [config.yaml](./testdata/config.yaml) for detailed examples on using th
   * `zstd.window_size` optionally sets the zstd encoder window size. It must be a power of two between `1024` and `536870912`.
   * `zstd.lower_encoder_mem` enables zstd lower-memory encoder mode. Default: `false`.
 * The `central_queue` property enables a single load-balancer queue per exporter instance for logs and metrics. It is `disabled` by default for backward compatibility.
+  * For logs with `central_queue.enabled: true`, the outer `retry_on_failure` setting is ignored. The central queue still retries admitted delivery, but a full queue returns a retryable admission error immediately. Upstream clients must retry rejected requests; clients without retries lose those records. This avoids retaining decoded requests outside the central queue's byte budgets. Metrics, traces, and logs without the central queue keep their outer retry behavior.
   * `enabled` turns the central compressed queue on or off.
   * `max_compressed_bytes` sets the central queue capacity in compressed OTLP payload bytes and must be greater than zero when enabled.
   * `payload_compression` controls queued payload compression. Supported values: `snappy`, `zstd`. Default: `zstd`.
