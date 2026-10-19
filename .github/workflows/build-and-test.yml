@@ -63,7 +63,7 @@ jobs:
           - pkg
           - cmd-0
           - other
-    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (matrix.group == 'internal' || matrix.group == 'receiver-1' || matrix.group == 'receiver-3' || matrix.group == 'exporter-1' || (matrix.goos == 'linux' && matrix.group == 'extension')) && 'namespace-profile-sawmills-runner-xlarge' || github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name != 'pull_request' || (github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && (matrix.group == 'internal' || matrix.group == 'receiver-1' || matrix.group == 'receiver-3' || matrix.group == 'exporter-1' || (matrix.goos == 'linux' && matrix.group == 'extension')) && 'namespace-profile-sawmills-runner-xlarge' || github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name != 'pull_request' || (github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [setup-environment]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
