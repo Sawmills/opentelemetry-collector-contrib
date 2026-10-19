@@ -762,7 +762,7 @@ func TestNewBulkIndexer(t *testing.T) {
 	client, err := newElasticsearchClient(t.Context(), cfg, componenttest.NewNopHost(), componenttest.NewTelemetry().NewTelemetrySettings(), "")
 	require.NoError(t, err)
 
-	bi := newBulkIndexer(client, cfg, true, nil, nil, nil, "", nil)
+	bi := newBulkIndexer(client, cfg, true, nil, nil, nil, "", nil, nil)
 	t.Cleanup(func() { bi.Close(t.Context()) })
 }
 
@@ -984,7 +984,7 @@ func TestRejectionDiagnosticsFailedAddIsNotAnItemFailure(t *testing.T) {
 	cfg.Retry.Enabled = false
 	esClient, err := newElasticsearchClient(t.Context(), cfg, componenttest.NewNopHost(), settings.TelemetrySettings, "")
 	require.NoError(t, err)
-	indexer := newBulkIndexer(esClient, cfg, true, tb, zap.NewNop(), nil, "elasticsearch/fixture", newRejectionDiagnostics(tb, "elasticsearch/fixture", 1))
+	indexer := newBulkIndexer(esClient, cfg, true, tb, zap.NewNop(), nil, "elasticsearch/fixture", newRejectionDiagnostics(tb, "elasticsearch/fixture", 1), nil)
 	session := indexer.StartSession(t.Context())
 	defer session.End()
 	require.ErrorContains(t, session.Add(t.Context(), "logs-fixture", "", "", strings.NewReader(`{"error":"synthetic"}`), nil, "invalid-action", 0), "not a valid action")

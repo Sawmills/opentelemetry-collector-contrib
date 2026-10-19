@@ -8,6 +8,7 @@ package elasticsearchexporter // import "github.com/open-telemetry/opentelemetry
 import (
 	"compress/gzip"
 	"context"
+	"errors"
 	"maps"
 	"net/http"
 	"slices"
@@ -131,6 +132,9 @@ func createMetricsExporter(
 	cfg component.Config,
 ) (exporter.Metrics, error) {
 	cf := cfg.(*Config)
+	if cf.RepairMappingFailures {
+		return nil, errors.New("mapping repair is only supported for logs")
+	}
 	handleDeprecatedConfig(cf, set.Logger)
 	handleTelemetryConfig(cf, set.Logger)
 
@@ -160,6 +164,9 @@ func createTracesExporter(ctx context.Context,
 	cfg component.Config,
 ) (exporter.Traces, error) {
 	cf := cfg.(*Config)
+	if cf.RepairMappingFailures {
+		return nil, errors.New("mapping repair is only supported for logs")
+	}
 	handleDeprecatedConfig(cf, set.Logger)
 	handleTelemetryConfig(cf, set.Logger)
 
@@ -193,6 +200,9 @@ func createProfilesExporter(
 	cfg component.Config,
 ) (xexporter.Profiles, error) {
 	cf := cfg.(*Config)
+	if cf.RepairMappingFailures {
+		return nil, errors.New("mapping repair is only supported for logs")
+	}
 
 	handleDeprecatedConfig(cf, set.Logger)
 	handleTelemetryConfig(cf, set.Logger)

@@ -78,9 +78,11 @@ func newBulkIndexer(
 	getErrorHintFunc func(index, errorType string) string,
 	exporterID string,
 	diagnostics *rejectionDiagnostics,
+	repairClient elastictransport.Interface,
 ) bulkIndexer {
 	indexer := newSyncBulkIndexer(client, config, requireDataStream, tb, logger, getErrorHintFunc, exporterID)
 	indexer.diagnostics = diagnostics
+	indexer.repairClient = repairClient
 	return indexer
 }
 
@@ -103,7 +105,7 @@ func bulkIndexerConfig(client elastictransport.Interface, config *Config, requir
 		RetryOnDocumentStatus:   config.Retry.RetryOnStatus,
 		RequireDataStream:       requireDataStream,
 		CompressionLevel:        compressionLevel,
-		PopulateFailedDocsInput: config.LogFailedDocsInput,
+		PopulateFailedDocsInput: config.LogFailedDocsInput || config.RepairMappingFailures,
 		IncludeSourceOnError:    bulkIndexerIncludeSourceOnError(config),
 		QueryParams:             getQueryParamsFromEndpoint(config, logger),
 	}
@@ -197,6 +199,7 @@ func newSyncBulkIndexer(
 		getErrorHintFunc:       getErrorHintFunc,
 		requireDataStream:      requireDataStream,
 		exporterID:             exporterID,
+		repairMappingFailures:  config.RepairMappingFailures,
 	}
 }
 
@@ -213,12 +216,20 @@ type syncBulkIndexer struct {
 	requireDataStream      bool
 	exporterID             string
 	diagnostics            *rejectionDiagnostics
+	repairMappingFailures  bool
+	repairClient           elastictransport.Interface
 }
 
 // StartSession creates a new docappender.BulkIndexer, and wraps
 // it with a syncBulkIndexerSession.
 func (s *syncBulkIndexer) StartSession(ctx context.Context) bulkIndexerSession {
-	bi, err := docappender.NewBulkIndexer(s.config)
+	config := s.config
+	var responseValidator *mappingResponseClient
+	if s.repairMappingFailures {
+		responseValidator = &mappingResponseClient{next: config.Client}
+		config.Client = responseValidator
+	}
+	bi, err := docappender.NewBulkIndexer(config)
 	if err != nil {
 		// This should never happen in practice:
 		// NewBulkIndexer should only fail if the
@@ -232,7 +243,7 @@ func (s *syncBulkIndexer) StartSession(ctx context.Context) bulkIndexerSession {
 	docsReceivedAttr := metric.WithAttributeSet(attribute.NewSet(
 		getAttributesFromMetadataKeys(ctx, s.metadataKeys)...,
 	))
-	return &syncBulkIndexerSession{s: s, bi: bi, docsReceivedAttr: docsReceivedAttr, diagnostics: s.diagnostics.begin()}
+	return &syncBulkIndexerSession{s: s, bi: bi, docsReceivedAttr: docsReceivedAttr, diagnostics: s.diagnostics.begin(), responseValidator: responseValidator}
 }
 
 // Close is a no-op.
@@ -241,10 +252,11 @@ func (*syncBulkIndexer) Close(context.Context) error {
 }
 
 type syncBulkIndexerSession struct {
-	s                *syncBulkIndexer
-	bi               *docappender.BulkIndexer
-	docsReceivedAttr metric.MeasurementOption
-	diagnostics      rejectionBatch
+	s                 *syncBulkIndexer
+	bi                *docappender.BulkIndexer
+	docsReceivedAttr  metric.MeasurementOption
+	diagnostics       rejectionBatch
+	responseValidator *mappingResponseClient
 }
 
 // Add adds an item to the sync bulk indexer session.
@@ -281,24 +293,42 @@ func (s *syncBulkIndexerSession) End() {
 // Flush flushes documents added to the bulk indexer session.
 func (s *syncBulkIndexerSession) Flush(ctx context.Context) error {
 	var retryBackoff func(int) time.Duration
+	var repairErr error
+	logger := s.s.logger
+	if s.s.repairMappingFailures {
+		// Elasticsearch error reasons can quote the rejected document. Opt-in
+		// repair logs fixed outcome classes at its own boundary instead.
+		logger = zap.NewNop()
+	}
 	for attempts := 0; ; attempts++ {
-		if err := flushBulkIndexer(
+		itemsCount := s.bi.Items()
+		if s.responseValidator != nil {
+			s.responseValidator.count = itemsCount
+		}
+		stat, err := flushBulkIndexer(
 			ctx,
 			s.bi,
 			s.s.flushTimeout,
 			s.s.metadataKeys,
 			s.s.telemetryBuilder,
-			s.s.logger,
+			logger,
 			s.s.failedDocsInputSampler,
 			s.s.getErrorHintFunc,
 			s.s.exporterID,
 			&s.diagnostics,
-		); err != nil {
+		)
+		if s.s.repairMappingFailures && itemsCount > 0 {
+			repairErr = errors.Join(repairErr, s.s.repairRejectedItems(ctx, stat, itemsCount, err))
+		}
+		if err != nil {
+			if repairErr != nil {
+				return errors.Join(repairErr, err)
+			}
 			return err
 		}
 		if s.bi.Items() == 0 {
 			// No documents in buffer waiting for per-document retry, exit retry loop.
-			return nil
+			return repairErr
 		}
 		if retryBackoff == nil {
 			retryBackoff = createElasticsearchBackoffFunc(&s.s.retryConfig)
@@ -314,6 +344,12 @@ func (s *syncBulkIndexerSession) Flush(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			if s.s.repairMappingFailures {
+				s.s.telemetryBuilder.ElasticsearchMappingRepairUnconfirmed.Add(ctx, 1, metric.WithAttributes(attribute.String("exporter", s.s.exporterID)))
+			}
+			if repairErr != nil {
+				return errors.Join(repairErr, ctx.Err())
+			}
 			return ctx.Err()
 		case <-timer.C:
 		}
@@ -331,10 +367,10 @@ func flushBulkIndexer(
 	getErrorHintFunc func(index, errorType string) string,
 	exporterID string,
 	diagnostics *rejectionBatch,
-) error {
+) (docappender.BulkIndexerResponseStat, error) {
 	itemsCount := bi.Items()
 	if itemsCount == 0 {
-		return nil
+		return docappender.BulkIndexerResponseStat{}, nil
 	}
 	if timeout > 0 {
 		var cancel context.CancelFunc
@@ -424,10 +460,7 @@ func flushBulkIndexer(
 		// Count only documents without a confirmed success when response
 		// decoding fails after a partial response. A request-level failure
 		// with no confirmed successes still counts the whole batch once.
-		failedDocs = int64(itemsCount) - stat.Indexed
-		if failedDocs < 0 {
-			failedDocs = 0
-		}
+		failedDocs = max(int64(itemsCount)-stat.Indexed, 0)
 	}
 	tb.ElasticsearchDocsFailed.Add(ctx, failedDocs, metric.WithAttributeSet(attribute.NewSet(attribute.String("exporter", exporterID))))
 
@@ -545,7 +578,7 @@ func flushBulkIndexer(
 			metric.WithAttributeSet(defaultAttrsSet),
 		)
 	}
-	return err
+	return stat, err
 }
 
 func getAttributesFromMetadataKeys(ctx context.Context, keys []string) []attribute.KeyValue {
@@ -612,17 +645,37 @@ func (b *bulkIndexers) start(
 		runtime.GOARCH,
 	)
 
-	esClient, err := newElasticsearchClient(ctx, cfg, host, set.TelemetrySettings, userAgent)
+	clientTelemetry := set.TelemetrySettings
+	if cfg.RepairMappingFailures {
+		clientTelemetry.Logger = zap.NewNop()
+	}
+	esClient, err := newElasticsearchClient(ctx, cfg, host, clientTelemetry, userAgent)
 	if err != nil {
 		return err
 	}
+	var repairClient elastictransport.Interface
+	if cfg.RepairMappingFailures {
+		repairConfig := *cfg
+		repairConfig.Retry.Enabled = false
+		repairConfig.Discovery.OnStart = false
+		repairConfig.Discovery.Interval = 0
+		repairTelemetry := set.TelemetrySettings
+		repairTelemetry.Logger = zap.NewNop()
+		repairClient, err = newElasticsearchClient(ctx, &repairConfig, host, repairTelemetry, userAgent)
+		if err != nil {
+			return err
+		}
+		repairClient = bulkIndexerClient(repairClient, &repairConfig)
+	}
 
 	for _, mode := range allowedMappingModes {
+		modeConfig := *cfg
+		modeConfig.RepairMappingFailures = cfg.RepairMappingFailures && mode == MappingECS
 		requireDataStream := requireDataStreamForSignalMappingMode(cfg, mode)
 		modeSpecificErrorHintFunc := func(index, errorType string) string {
 			return getErrorHint(mode, index, errorType)
 		}
-		bi := newBulkIndexer(esClient, cfg, requireDataStream, b.telemetryBuilder, set.Logger, modeSpecificErrorHintFunc, b.exporterID, b.diagnostics)
+		bi := newBulkIndexer(esClient, &modeConfig, requireDataStream, b.telemetryBuilder, set.Logger, modeSpecificErrorHintFunc, b.exporterID, b.diagnostics, repairClient)
 		b.modes[mode] = &wgTrackingBulkIndexer{bulkIndexer: bi, wg: &b.wg}
 	}
 
@@ -630,16 +683,16 @@ func (b *bulkIndexers) start(
 		return getErrorHint(MappingNone, index, errorType)
 	}
 
-	profilingEvents := newBulkIndexer(esClient, cfg, true, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID, b.diagnostics)
+	profilingEvents := newBulkIndexer(esClient, cfg, true, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID, b.diagnostics, nil)
 	b.profilingEvents = &wgTrackingBulkIndexer{bulkIndexer: profilingEvents, wg: &b.wg}
 
-	profilingStackTraces := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID, b.diagnostics)
+	profilingStackTraces := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID, b.diagnostics, nil)
 	b.profilingStackTraces = &wgTrackingBulkIndexer{bulkIndexer: profilingStackTraces, wg: &b.wg}
 
-	profilingStackFrames := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID, b.diagnostics)
+	profilingStackFrames := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID, b.diagnostics, nil)
 	b.profilingStackFrames = &wgTrackingBulkIndexer{bulkIndexer: profilingStackFrames, wg: &b.wg}
 
-	profilingExecutables := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID, b.diagnostics)
+	profilingExecutables := newBulkIndexer(esClient, cfg, false, b.telemetryBuilder, set.Logger, mappingModeNoneErrorHintFunc, b.exporterID, b.diagnostics, nil)
 	b.profilingExecutables = &wgTrackingBulkIndexer{bulkIndexer: profilingExecutables, wg: &b.wg}
 	return nil
 }

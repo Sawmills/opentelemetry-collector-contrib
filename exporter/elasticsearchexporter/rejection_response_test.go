@@ -29,12 +29,15 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/exemplar"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metadata"
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/metadatatest"
 )
 
 type rejectionHTTPResponse struct {
+	before func()
 	status int
 	body   string
 }
@@ -42,17 +45,25 @@ type rejectionHTTPResponse struct {
 type rejectionFixtureResult struct {
 	points            []metricdata.DataPoint[int64]
 	requests          []string
+	requestQueries    []string
 	err               error
 	failed            int64
 	existingExemplars int
+	repairCounts      map[string]int64
+	logEntries        []observer.LoggedEntry
 }
 
 // This fixture crosses the factory/ConsumeLogs seam and observes real OTel
 // counters and real HTTP requests. It never calls the private classifier.
 func runRejectionResponseFixture(t *testing.T, logs plog.Logs, responses []rejectionHTTPResponse, configure func(*Config), calls ...func(exporter.Logs, context.Context, plog.Logs) error) rejectionFixtureResult {
+	return runRejectionResponseFixtureWithFactory(t, logs, responses, configure, nil, calls...)
+}
+
+func runRejectionResponseFixtureWithFactory(t *testing.T, logs plog.Logs, responses []rejectionHTTPResponse, configure func(*Config), makeLogs func(context.Context, exporter.Settings, *Config) (exporter.Logs, error), calls ...func(exporter.Logs, context.Context, plog.Logs) error) rejectionFixtureResult {
 	t.Helper()
 	var mu sync.Mutex
 	var requests []string
+	var requestQueries []string
 	server := newESTestServerBulkHandlerFunc(t, func(w http.ResponseWriter, r *http.Request) {
 		var reader io.Reader = r.Body
 		if r.Header.Get("Content-Encoding") == "gzip" {
@@ -74,6 +85,7 @@ func runRejectionResponseFixture(t *testing.T, logs plog.Logs, responses []rejec
 		mu.Lock()
 		position := len(requests)
 		requests = append(requests, string(data))
+		requestQueries = append(requestQueries, r.URL.RawQuery)
 		mu.Unlock()
 		if position >= len(responses) {
 			t.Error("unexpected extra bulk request")
@@ -81,6 +93,9 @@ func runRejectionResponseFixture(t *testing.T, logs plog.Logs, responses []rejec
 			return
 		}
 		response := responses[position]
+		if response.before != nil {
+			response.before()
+		}
 		w.Header().Set("Content-Type", "application/json")
 		status := response.status
 		if status == 0 {
@@ -94,6 +109,8 @@ func runRejectionResponseFixture(t *testing.T, logs plog.Logs, responses []rejec
 	})
 	telemetry := componenttest.NewTelemetry(componenttest.WithMetricOptions(sdkmetric.WithExemplarFilter(exemplar.TraceBasedFilter)))
 	settings := metadatatest.NewSettings(telemetry)
+	logCore, logObserver := observer.New(zap.DebugLevel)
+	settings.Logger = zap.New(logCore)
 	settings.ID = component.NewIDWithName(metadata.Type, "fixture")
 	factory := NewFactory()
 	config := factory.CreateDefaultConfig().(*Config)
@@ -104,7 +121,13 @@ func runRejectionResponseFixture(t *testing.T, logs plog.Logs, responses []rejec
 	if configure != nil {
 		configure(config)
 	}
-	exp, err := factory.CreateLogs(t.Context(), settings, config)
+	var exp exporter.Logs
+	var err error
+	if makeLogs == nil {
+		exp, err = factory.CreateLogs(t.Context(), settings, config)
+	} else {
+		exp, err = makeLogs(t.Context(), settings, config)
+	}
 	require.NoError(t, err)
 	require.NoError(t, exp.Start(t.Context(), componenttest.NewNopHost()))
 	t.Cleanup(func() { require.NoError(t, exp.Shutdown(context.WithoutCancel(t.Context()))) })
@@ -122,14 +145,15 @@ func runRejectionResponseFixture(t *testing.T, logs plog.Logs, responses []rejec
 	result := rejectionFixtureResult{err: consumeErr}
 	mu.Lock()
 	result.requests = append([]string(nil), requests...)
+	result.requestQueries = append([]string(nil), requestQueries...)
 	mu.Unlock()
 	require.Len(t, result.requests, len(responses))
-	if collected, err := telemetry.GetMetric("otelcol.elasticsearch.docs.failed_by_field"); err == nil {
+	if collected, metricErr := telemetry.GetMetric("otelcol.elasticsearch.docs.failed_by_field"); metricErr == nil {
 		sum, ok := collected.Data.(metricdata.Sum[int64])
 		require.True(t, ok)
 		result.points = sum.DataPoints
 	} else {
-		require.ErrorContains(t, err, "not found")
+		require.ErrorContains(t, metricErr, "not found")
 	}
 	collected, err := telemetry.GetMetric("otelcol.elasticsearch.docs.failed")
 	require.NoError(t, err)
@@ -139,6 +163,15 @@ func runRejectionResponseFixture(t *testing.T, logs plog.Logs, responses []rejec
 		result.failed += point.Value
 		result.existingExemplars += len(point.Exemplars)
 	}
+	result.repairCounts = make(map[string]int64)
+	for _, name := range []string{"original_400", "attempted", "succeeded", "terminal_unrepaired", "unconfirmed"} {
+		if collected, err := telemetry.GetMetric("otelcol.elasticsearch.mapping_repair." + name); err == nil {
+			for _, point := range collected.Data.(metricdata.Sum[int64]).DataPoints {
+				result.repairCounts[name] += point.Value
+			}
+		}
+	}
+	result.logEntries = logObserver.All()
 	return result
 }
 

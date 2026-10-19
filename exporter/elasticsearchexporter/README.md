@@ -388,6 +388,44 @@ In the exporter, the equivalent configuration is also named `include_source_on_e
   - `false`: Disables including source document on bulk index error responses.  Requires Elasticsearch 8.18+.
   - `null` (default): Does not request source documents on bulk index errors. With `telemetry.preserve_error_reason` enabled, the exporter keeps backend-provided `error.reason` while stripping the `include_source_on_error` request parameter for OpenSearch compatibility.
 
+### Mapping Rejection Repair
+
+`repair_mapping_failures` is experimental and defaults to `false`. For ECS logs,
+it permits one additional indexing attempt after Elasticsearch confirms a mapping
+item-400. Accepted items stay unchanged and are not sent again.
+
+Before removing the rejected root field, the exporter stores its full original
+JSON in `sawmills_original_<field>_json`. This flat string contains the original
+key, JSON type and exact JSON value text. Bulk action, index, document ID and
+ingest pipeline stay unchanged. The source telemetry and other export destinations
+stay unchanged.
+
+Repair refuses duplicate keys, backup-name collisions, malformed UTF-8, nested
+field paths and the generated `@timestamp` field. Unknown errors and total-field
+limit errors remain unrepaired. A second rejection receives no further repair
+attempt. The destination must accept the new string field and the absence of the
+rejected field. Enabling this option changes the indexed document representation.
+
+Payload logging must be disabled and `telemetry.preserve_error_reason` must remain
+`true`. Automatic document retries on status 400 are incompatible with this option.
+Metrics, traces and profiles reject the option. Other log mapping modes keep
+their current behavior.
+
+Existing failure counters keep their meaning, including the original failed
+attempt. Five new counters report separate results for each configured exporter:
+
+- `elasticsearch.mapping_repair.original_400`: original-pass item-400 responses.
+- `elasticsearch.mapping_repair.attempted`: items submitted for their one repair attempt.
+- `elasticsearch.mapping_repair.succeeded`: repaired items confirmed indexed.
+- `elasticsearch.mapping_repair.terminal_unrepaired`: confirmed rejected items without confirmed acceptance after repair.
+- `elasticsearch.mapping_repair.unconfirmed`: flush or pending retry outcomes with uncertain acceptance.
+
+Enabled ECS sessions report these counters at zero when no items fail. A missing
+series does not prove zero failures. Require both terminal unrepaired and
+unconfirmed counts to stay zero, with a retained-value sample check. Report raw
+rejection and repair counts separately. Disabling the option restores future
+behavior. It does not reverse documents already indexed.
+
 ### Elasticsearch node discovery
 
 The Elasticsearch Exporter will regularly check Elasticsearch for available nodes.

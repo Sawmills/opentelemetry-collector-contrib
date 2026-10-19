@@ -7,8 +7,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,6 +25,11 @@ import (
 
 // Config defines configuration for Elastic exporter.
 type Config struct {
+	// RepairMappingFailures retries a confirmed mapping rejection once after
+	// preserving the rejected field's full JSON in a flat string field.
+	// It is disabled by default and applies only to ECS logs.
+	RepairMappingFailures bool `mapstructure:"repair_mapping_failures"`
+
 	// QueueBatchConfig configures the sending queue and the batching done
 	// by the exporter. The performed batching can further be customized by
 	// configuring `metadata_keys` which will be used to partition the batches.
@@ -348,6 +355,17 @@ func (cfg *Config) Unmarshal(conf *confmap.Conf) error {
 
 // Validate validates the elasticsearch server configuration.
 func (cfg *Config) Validate() error {
+	if cfg.RepairMappingFailures {
+		if cfg.LogFailedDocsInput || cfg.LogRequestBody || cfg.LogResponseBody || (cfg.IncludeSourceOnError != nil && *cfg.IncludeSourceOnError) {
+			return errors.New("mapping repair requires payload logging disabled")
+		}
+		if !cfg.PreserveErrorReason {
+			return errors.New("mapping repair requires telemetry::preserve_error_reason")
+		}
+		if slices.Contains(cfg.Retry.RetryOnStatus, http.StatusBadRequest) {
+			return errors.New("mapping repair does not support automatic document retries on status 400")
+		}
+	}
 	endpoints, err := cfg.endpoints()
 	if err != nil {
 		return err

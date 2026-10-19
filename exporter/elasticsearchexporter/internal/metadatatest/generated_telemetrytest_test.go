@@ -29,6 +29,11 @@ func TestSetupTelemetry(t *testing.T) {
 	tb.ElasticsearchDocsRetriedHTTPRequest.Add(context.Background(), 1)
 	tb.ElasticsearchFlushedBytes.Add(context.Background(), 1)
 	tb.ElasticsearchFlushedUncompressedBytes.Add(context.Background(), 1)
+	tb.ElasticsearchMappingRepairAttempted.Add(context.Background(), 1)
+	tb.ElasticsearchMappingRepairOriginal400.Add(context.Background(), 1)
+	tb.ElasticsearchMappingRepairSucceeded.Add(context.Background(), 1)
+	tb.ElasticsearchMappingRepairTerminalUnrepaired.Add(context.Background(), 1)
+	tb.ElasticsearchMappingRepairUnconfirmed.Add(context.Background(), 1)
 	AssertEqualElasticsearchBulkRequestsCount(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
@@ -57,6 +62,21 @@ func TestSetupTelemetry(t *testing.T) {
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
 	AssertEqualElasticsearchFlushedUncompressedBytes(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualElasticsearchMappingRepairAttempted(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualElasticsearchMappingRepairOriginal400(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualElasticsearchMappingRepairSucceeded(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualElasticsearchMappingRepairTerminalUnrepaired(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualElasticsearchMappingRepairUnconfirmed(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
 
