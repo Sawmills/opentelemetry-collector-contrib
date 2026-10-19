@@ -374,6 +374,7 @@ type directRepairFixtureExporter struct{ *elasticsearchExporter }
 func (e directRepairFixtureExporter) ConsumeLogs(ctx context.Context, logs plog.Logs) error {
 	return e.pushLogsData(ctx, logs)
 }
+
 func (directRepairFixtureExporter) Capabilities() consumer.Capabilities {
 	return consumer.Capabilities{MutatesData: true}
 }

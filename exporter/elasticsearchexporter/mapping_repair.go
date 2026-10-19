@@ -1,7 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package elasticsearchexporter
+package elasticsearchexporter // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter"
 
 import (
 	"bytes"
@@ -71,7 +71,7 @@ func (s *syncBulkIndexer) repairRejectedItems(ctx context.Context, stat docappen
 		if !ok {
 			continue
 		}
-		if err := retry.Add(item); err != nil {
+		if addErr := retry.Add(item); addErr != nil {
 			return s.mappingRepairFailure("buffer_failed", count)
 		}
 	}
@@ -126,11 +126,11 @@ func mappingFailureField(item docappender.BulkIndexerResponseItem) string {
 	}
 	reason := rejectionReasonHeader(item.Error.Reason)
 	if rest, ok := strings.CutPrefix(reason, "failed to parse field ["); ok {
-		field, rest, ok := strings.Cut(rest, "] of type [")
+		field, typeAndSuffix, ok := strings.Cut(rest, "] of type [")
 		if !ok {
 			return ""
 		}
-		_, suffix, ok := strings.Cut(rest, "]")
+		_, suffix, ok := strings.Cut(typeAndSuffix, "]")
 		if ok && (suffix == "" || strings.HasPrefix(suffix, " in document with id '") || strings.HasPrefix(suffix, ". Preview of field's value: '")) {
 			return field
 		}

@@ -114,16 +114,17 @@ func testRejectedErrorAttribution(t *testing.T, variant, wantKind, wantSource, w
 	rejectedScope := logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty()
 	rejected := rejectedScope.LogRecords().AppendEmpty()
 	rejected.Body().SetStr("rejected synthetic")
-	if variant == "alias" || variant == "alias_collision" {
+	switch variant {
+	case "alias", "alias_collision":
 		if variant == "alias_collision" {
 			rejectedScope.Scope().Attributes().PutEmptyMap("error").PutStr("code", "rejected")
 		}
 		rejected.Attributes().PutStr("exception.message", "rejected")
-	} else if variant == "resource" {
+	case "resource":
 		logs.ResourceLogs().At(1).Resource().Attributes().PutEmptyMap("error").PutStr("code", "rejected")
-	} else if variant == "log" {
+	case "log":
 		rejected.Attributes().PutEmptyMap("error").PutStr("code", "rejected")
-	} else {
+	default:
 		rejectedScope.Scope().Attributes().PutEmptyMap("error").PutStr("code", "rejected")
 		if variant == "dotted" {
 			rejected.Attributes().PutStr("error.message", "dotted")

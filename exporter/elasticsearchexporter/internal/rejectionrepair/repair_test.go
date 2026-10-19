@@ -4,6 +4,7 @@
 package rejectionrepair
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 )
@@ -42,7 +43,7 @@ func TestRelocateRefusesDuplicateKeys(t *testing.T) {
 
 	got, changed := Relocate(original, "level")
 
-	if changed || string(got) != string(original) {
+	if changed || !bytes.Equal(got, original) {
 		t.Fatal("ambiguous duplicate keys must remain untouched")
 	}
 }
@@ -50,7 +51,7 @@ func TestRelocateRefusesDuplicateKeys(t *testing.T) {
 func assertUnchanged(t *testing.T, original []byte, field string) {
 	t.Helper()
 	got, changed := Relocate(original, field)
-	if changed || string(got) != string(original) {
+	if changed || !bytes.Equal(got, original) {
 		t.Fatal("unsafe relocation must return the original bytes")
 	}
 }

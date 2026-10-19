@@ -148,12 +148,12 @@ func runRejectionResponseFixtureWithFactory(t *testing.T, logs plog.Logs, respon
 	result.requestQueries = append([]string(nil), requestQueries...)
 	mu.Unlock()
 	require.Len(t, result.requests, len(responses))
-	if collected, err := telemetry.GetMetric("otelcol.elasticsearch.docs.failed_by_field"); err == nil {
+	if collected, metricErr := telemetry.GetMetric("otelcol.elasticsearch.docs.failed_by_field"); metricErr == nil {
 		sum, ok := collected.Data.(metricdata.Sum[int64])
 		require.True(t, ok)
 		result.points = sum.DataPoints
 	} else {
-		require.ErrorContains(t, err, "not found")
+		require.ErrorContains(t, metricErr, "not found")
 	}
 	collected, err := telemetry.GetMetric("otelcol.elasticsearch.docs.failed")
 	require.NoError(t, err)

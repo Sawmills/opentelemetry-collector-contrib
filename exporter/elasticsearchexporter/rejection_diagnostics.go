@@ -381,7 +381,7 @@ func classifyRejectedItem(item docappender.BulkIndexerResponseItem, shape logFie
 // Elasticsearch may prefix the fixed error header with an XContent location.
 // Consume only one exact [digits:digits] prefix, never search inside a suffix.
 func rejectionReasonHeader(reason string) string {
-	if len(reason) == 0 || reason[0] != '[' {
+	if reason == "" || reason[0] != '[' {
 		return reason
 	}
 	i := 1

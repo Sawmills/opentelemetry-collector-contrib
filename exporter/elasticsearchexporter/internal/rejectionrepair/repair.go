@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package rejectionrepair preserves a rejected field in a flat JSON-string field.
-package rejectionrepair
+package rejectionrepair // import "github.com/open-telemetry/opentelemetry-collector-contrib/exporter/elasticsearchexporter/internal/rejectionrepair"
 
 import (
 	"bytes"
@@ -88,7 +88,7 @@ func uniqueObject(document []byte) (map[string]json.RawMessage, bool) {
 }
 
 func rootField(field string) bool {
-	if len(field) == 0 || len(field) > 128 || strings.HasPrefix(field, "sawmills_original_") {
+	if field == "" || len(field) > 128 || strings.HasPrefix(field, "sawmills_original_") {
 		return false
 	}
 	for _, c := range field {
