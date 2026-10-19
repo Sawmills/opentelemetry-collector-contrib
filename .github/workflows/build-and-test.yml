@@ -70,7 +70,7 @@ jobs:
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
-          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (matrix.group == 'internal' || matrix.group == 'receiver-1' || matrix.group == 'receiver-3' || (matrix.goos == 'linux' && matrix.group == 'extension')) && 'true' || 'false' }}
+          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name != 'pull_request' || (github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && (matrix.group == 'internal' || matrix.group == 'receiver-1' || matrix.group == 'receiver-3' || matrix.group == 'exporter-1' || (matrix.goos == 'linux' && matrix.group == 'extension')) && 'true' || 'false' }}
       - name: Lint
         run: GOOS=${{ matrix.goos }} GOARCH=amd64 make -j2 golint GROUP=${{ matrix.group }}
       - run: ./.github/workflows/scripts/check-disk-space.sh
