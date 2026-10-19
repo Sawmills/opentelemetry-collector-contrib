@@ -220,6 +220,9 @@ func (e *elasticsearchExporter) pushLogsData(ctx context.Context, ld plog.Logs) 
 				}
 				if err := e.pushLogRecord(ctx, router, encoder, ec, lr, session); err != nil {
 					if cerr := ctx.Err(); cerr != nil {
+						if e.config.RepairMappingFailures && (consumererror.IsPermanent(err) || consumererror.IsPermanent(errors.Join(errs...))) {
+							return errors.Join(append(errs, err, cerr)...)
+						}
 						return cerr
 					}
 
@@ -236,6 +239,9 @@ func (e *elasticsearchExporter) pushLogsData(ctx context.Context, ld plog.Logs) 
 
 	if err := mappingModeSessions.Flush(ctx); err != nil {
 		if cerr := ctx.Err(); cerr != nil {
+			if e.config.RepairMappingFailures && (consumererror.IsPermanent(err) || consumererror.IsPermanent(errors.Join(errs...))) {
+				return errors.Join(append(errs, err, cerr)...)
+			}
 			return cerr
 		}
 		errs = append(errs, err)

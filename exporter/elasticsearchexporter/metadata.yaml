@@ -168,6 +168,56 @@ telemetry:
       sum:
         value_type: int
         monotonic: true
+    elasticsearch.mapping_repair.attempted:
+      prefix: otelcol.
+      stability: development
+      enabled: true
+      description: Count of confirmed rejected items submitted for one lossless mapping repair attempt.
+      unit: "1"
+      sum:
+        value_type: int
+        monotonic: true
+      attributes: [exporter]
+    elasticsearch.mapping_repair.original_400:
+      prefix: otelcol.
+      stability: development
+      enabled: true
+      description: Count of original-pass item 400 responses with mapping repair enabled.
+      unit: "1"
+      sum:
+        value_type: int
+        monotonic: true
+      attributes: [exporter]
+    elasticsearch.mapping_repair.succeeded:
+      prefix: otelcol.
+      stability: development
+      enabled: true
+      description: Count of repaired items positively confirmed indexed.
+      unit: "1"
+      sum:
+        value_type: int
+        monotonic: true
+      attributes: [exporter]
+    elasticsearch.mapping_repair.terminal_unrepaired:
+      prefix: otelcol.
+      stability: development
+      enabled: true
+      description: Count of confirmed rejected items without confirmed acceptance after their optional repair attempt.
+      unit: "1"
+      sum:
+        value_type: int
+        monotonic: true
+      attributes: [exporter]
+    elasticsearch.mapping_repair.unconfirmed:
+      prefix: otelcol.
+      stability: development
+      enabled: true
+      description: Count of bulk flush or pending retry outcomes whose acceptance could not be confirmed.
+      unit: "1"
+      sum:
+        value_type: int
+        monotonic: true
+      attributes: [exporter]
 
 tests:
   config:

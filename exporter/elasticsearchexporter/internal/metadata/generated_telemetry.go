@@ -22,19 +22,24 @@ func Tracer(settings component.TelemetrySettings) trace.Tracer {
 // TelemetryBuilder provides an interface for components to report telemetry
 // as defined in metadata and user config.
 type TelemetryBuilder struct {
-	meter                                 metric.Meter
-	mu                                    sync.Mutex
-	registrations                         []metric.Registration
-	ElasticsearchBulkRequestsCount        metric.Int64Counter
-	ElasticsearchBulkRequestsLatency      metric.Float64Histogram
-	ElasticsearchDocsFailed               metric.Int64Counter
-	ElasticsearchDocsFailedByField        metric.Int64Counter
-	ElasticsearchDocsProcessed            metric.Int64Counter
-	ElasticsearchDocsReceived             metric.Int64Counter
-	ElasticsearchDocsRetried              metric.Int64Counter
-	ElasticsearchDocsRetriedHTTPRequest   metric.Int64Counter
-	ElasticsearchFlushedBytes             metric.Int64Counter
-	ElasticsearchFlushedUncompressedBytes metric.Int64Counter
+	meter                                        metric.Meter
+	mu                                           sync.Mutex
+	registrations                                []metric.Registration
+	ElasticsearchBulkRequestsCount               metric.Int64Counter
+	ElasticsearchBulkRequestsLatency             metric.Float64Histogram
+	ElasticsearchDocsFailed                      metric.Int64Counter
+	ElasticsearchDocsFailedByField               metric.Int64Counter
+	ElasticsearchDocsProcessed                   metric.Int64Counter
+	ElasticsearchDocsReceived                    metric.Int64Counter
+	ElasticsearchDocsRetried                     metric.Int64Counter
+	ElasticsearchDocsRetriedHTTPRequest          metric.Int64Counter
+	ElasticsearchFlushedBytes                    metric.Int64Counter
+	ElasticsearchFlushedUncompressedBytes        metric.Int64Counter
+	ElasticsearchMappingRepairAttempted          metric.Int64Counter
+	ElasticsearchMappingRepairOriginal400        metric.Int64Counter
+	ElasticsearchMappingRepairSucceeded          metric.Int64Counter
+	ElasticsearchMappingRepairTerminalUnrepaired metric.Int64Counter
+	ElasticsearchMappingRepairUnconfirmed        metric.Int64Counter
 }
 
 // TelemetryBuilderOption applies changes to default builder.
@@ -125,6 +130,36 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 		"otelcol.elasticsearch.flushed.uncompressed_bytes",
 		metric.WithDescription("Number of uncompressed bytes flushed by the indexer. [Alpha]"),
 		metric.WithUnit("By"),
+	)
+	errs = errors.Join(errs, err)
+	builder.ElasticsearchMappingRepairAttempted, err = builder.meter.Int64Counter(
+		"otelcol.elasticsearch.mapping_repair.attempted",
+		metric.WithDescription("Count of confirmed rejected items submitted for one lossless mapping repair attempt. [Development]"),
+		metric.WithUnit("1"),
+	)
+	errs = errors.Join(errs, err)
+	builder.ElasticsearchMappingRepairOriginal400, err = builder.meter.Int64Counter(
+		"otelcol.elasticsearch.mapping_repair.original_400",
+		metric.WithDescription("Count of original-pass item 400 responses with mapping repair enabled. [Development]"),
+		metric.WithUnit("1"),
+	)
+	errs = errors.Join(errs, err)
+	builder.ElasticsearchMappingRepairSucceeded, err = builder.meter.Int64Counter(
+		"otelcol.elasticsearch.mapping_repair.succeeded",
+		metric.WithDescription("Count of repaired items positively confirmed indexed. [Development]"),
+		metric.WithUnit("1"),
+	)
+	errs = errors.Join(errs, err)
+	builder.ElasticsearchMappingRepairTerminalUnrepaired, err = builder.meter.Int64Counter(
+		"otelcol.elasticsearch.mapping_repair.terminal_unrepaired",
+		metric.WithDescription("Count of confirmed rejected items without confirmed acceptance after their optional repair attempt. [Development]"),
+		metric.WithUnit("1"),
+	)
+	errs = errors.Join(errs, err)
+	builder.ElasticsearchMappingRepairUnconfirmed, err = builder.meter.Int64Counter(
+		"otelcol.elasticsearch.mapping_repair.unconfirmed",
+		metric.WithDescription("Count of bulk flush or pending retry outcomes whose acceptance could not be confirmed. [Development]"),
+		metric.WithUnit("1"),
 	)
 	errs = errors.Join(errs, err)
 	return &builder, errs

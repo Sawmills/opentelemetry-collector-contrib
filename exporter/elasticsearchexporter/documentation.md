@@ -157,3 +157,73 @@ Number of uncompressed bytes flushed by the indexer.
 | Unit | Metric Type | Value Type | Monotonic | Stability |
 | ---- | ----------- | ---------- | --------- | --------- |
 | By | Sum | Int | true | Alpha |
+
+### otelcol.elasticsearch.mapping_repair.attempted
+
+Count of confirmed rejected items submitted for one lossless mapping repair attempt.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| 1 | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| exporter | The configured Elasticsearch exporter identifier. | Any Str | - |
+
+### otelcol.elasticsearch.mapping_repair.original_400
+
+Count of original-pass item 400 responses with mapping repair enabled.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| 1 | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| exporter | The configured Elasticsearch exporter identifier. | Any Str | - |
+
+### otelcol.elasticsearch.mapping_repair.succeeded
+
+Count of repaired items positively confirmed indexed.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| 1 | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| exporter | The configured Elasticsearch exporter identifier. | Any Str | - |
+
+### otelcol.elasticsearch.mapping_repair.terminal_unrepaired
+
+Count of confirmed rejected items without confirmed acceptance after their optional repair attempt.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| 1 | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| exporter | The configured Elasticsearch exporter identifier. | Any Str | - |
+
+### otelcol.elasticsearch.mapping_repair.unconfirmed
+
+Count of bulk flush or pending retry outcomes whose acceptance could not be confirmed.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| 1 | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| exporter | The configured Elasticsearch exporter identifier. | Any Str | - |

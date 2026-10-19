@@ -167,6 +167,9 @@ properties:
   pipeline:
     description: Pipeline configures the ingest node pipeline name that should be used to process the events. https://www.elastic.co/guide/en/elasticsearch/reference/current/ingest.html
     type: string
+  repair_mapping_failures:
+    description: Retry one confirmed mapping item-400 after preserving the rejected field in a flat JSON-string field. Disabled by default; ECS logs only.
+    type: boolean
   retry:
     $ref: retry_settings
   sending_queue:
