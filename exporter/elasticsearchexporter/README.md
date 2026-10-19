@@ -422,7 +422,7 @@ attempt. Five new counters report separate results for each configured exporter:
 
 The first 20 repairable candidates across the exporter process also record
 `elasticsearch.mapping_repair.proof.equal`, `.unequal`, or `.unverified`.
-The probe compares the original key, type and exact raw JSON value with the
+This probe compares the original key, type and exact raw JSON value with the
 backup envelope in the actual outgoing retry. It keeps only counts, without
 payloads, field names, document IDs or trace exemplars. Each selected original
 and outgoing document must fit within 1 MiB; oversized or ambiguous samples

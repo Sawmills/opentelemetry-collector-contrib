@@ -193,11 +193,12 @@ func repairedBulkItem(input, field string, proof *rejectionrepair.Proof) (docapp
 		if _, err := decoder.Token(); err != io.EOF {
 			return docappender.BulkIndexerItem{}, rejectionrepair.NotSampled, false
 		}
-		body, changed := rejectionrepair.Relocate([]byte(document), field)
+		original := []byte(document)
+		body, changed := rejectionrepair.Relocate(original, field)
 		if !changed {
 			return docappender.BulkIndexerItem{}, rejectionrepair.NotSampled, false
 		}
-		return docappender.BulkIndexerItem{Index: meta.Index, DocumentID: meta.ID, Pipeline: meta.Pipeline, DynamicTemplates: meta.DynamicTemplates, RequireDataStream: meta.RequireDataStream, Action: action, Body: bytes.NewReader(body)}, proof.Observe([]byte(document), body, field), true
+		return docappender.BulkIndexerItem{Index: meta.Index, DocumentID: meta.ID, Pipeline: meta.Pipeline, DynamicTemplates: meta.DynamicTemplates, RequireDataStream: meta.RequireDataStream, Action: action, Body: bytes.NewReader(body)}, proof.Observe(original, body, field), true
 	}
 	return docappender.BulkIndexerItem{}, rejectionrepair.NotSampled, false
 }
