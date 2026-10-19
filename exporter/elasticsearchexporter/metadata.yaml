@@ -188,6 +188,36 @@ telemetry:
         value_type: int
         monotonic: true
       attributes: [exporter]
+    elasticsearch.mapping_repair.proof.equal:
+      prefix: otelcol.
+      stability: development
+      enabled: true
+      description: Count of sampled outgoing mapping repairs whose backup exactly matched the original key, type and raw JSON value. Samples are limited to the first 20 candidates across the exporter process.
+      unit: "1"
+      sum:
+        value_type: int
+        monotonic: true
+      attributes: [exporter]
+    elasticsearch.mapping_repair.proof.unequal:
+      prefix: otelcol.
+      stability: development
+      enabled: true
+      description: Count of sampled outgoing mapping repairs whose backup did not match the original key, type and raw JSON value. Samples are limited to the first 20 candidates across the exporter process.
+      unit: "1"
+      sum:
+        value_type: int
+        monotonic: true
+      attributes: [exporter]
+    elasticsearch.mapping_repair.proof.unverified:
+      prefix: otelcol.
+      stability: development
+      enabled: true
+      description: Count of sampled outgoing mapping repairs whose backup could not be verified within the sample size limit or had ambiguous evidence. Samples are limited to the first 20 candidates across the exporter process.
+      unit: "1"
+      sum:
+        value_type: int
+        monotonic: true
+      attributes: [exporter]
     elasticsearch.mapping_repair.succeeded:
       prefix: otelcol.
       stability: development

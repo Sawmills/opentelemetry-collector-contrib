@@ -420,6 +420,21 @@ attempt. Five new counters report separate results for each configured exporter:
 - `elasticsearch.mapping_repair.terminal_unrepaired`: confirmed rejected items without confirmed acceptance after repair.
 - `elasticsearch.mapping_repair.unconfirmed`: flush or pending retry outcomes with uncertain acceptance.
 
+The first 20 repairable candidates across the exporter process also record
+`elasticsearch.mapping_repair.proof.equal`, `.unequal`, or `.unverified`.
+This probe compares the original key, type and exact raw JSON value with the
+backup envelope in the actual outgoing retry. It keeps only counts, without
+payloads, field names, document IDs or trace exemplars. Each selected original
+and outgoing document must fit within 1 MiB; oversized or ambiguous samples
+count as unverified and do not change delivery. The budget does not reset across
+batches or exporter instances. A process restart starts a new budget.
+
+Equality alone does not confirm delivery. Require positive equality samples,
+zero unequal/unverified samples, all repair attempts confirmed succeeded, and
+zero terminal unrepaired/unconfirmed outcomes. Missing or inactive proof is
+unknown. These observations do not verify the customer's ingest pipeline or
+indexed representation.
+
 Enabled ECS sessions report these counters at zero when no items fail. A missing
 series does not prove zero failures. Require both terminal unrepaired and
 unconfirmed counts to stay zero, with a retained-value sample check. Report raw

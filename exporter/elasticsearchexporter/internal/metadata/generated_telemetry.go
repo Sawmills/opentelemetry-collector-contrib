@@ -37,6 +37,9 @@ type TelemetryBuilder struct {
 	ElasticsearchFlushedUncompressedBytes        metric.Int64Counter
 	ElasticsearchMappingRepairAttempted          metric.Int64Counter
 	ElasticsearchMappingRepairOriginal400        metric.Int64Counter
+	ElasticsearchMappingRepairProofEqual         metric.Int64Counter
+	ElasticsearchMappingRepairProofUnequal       metric.Int64Counter
+	ElasticsearchMappingRepairProofUnverified    metric.Int64Counter
 	ElasticsearchMappingRepairSucceeded          metric.Int64Counter
 	ElasticsearchMappingRepairTerminalUnrepaired metric.Int64Counter
 	ElasticsearchMappingRepairUnconfirmed        metric.Int64Counter
@@ -141,6 +144,24 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 	builder.ElasticsearchMappingRepairOriginal400, err = builder.meter.Int64Counter(
 		"otelcol.elasticsearch.mapping_repair.original_400",
 		metric.WithDescription("Count of original-pass item 400 responses with mapping repair enabled. [Development]"),
+		metric.WithUnit("1"),
+	)
+	errs = errors.Join(errs, err)
+	builder.ElasticsearchMappingRepairProofEqual, err = builder.meter.Int64Counter(
+		"otelcol.elasticsearch.mapping_repair.proof.equal",
+		metric.WithDescription("Count of sampled outgoing mapping repairs whose backup exactly matched the original key, type and raw JSON value. Samples are limited to the first 20 candidates across the exporter process. [Development]"),
+		metric.WithUnit("1"),
+	)
+	errs = errors.Join(errs, err)
+	builder.ElasticsearchMappingRepairProofUnequal, err = builder.meter.Int64Counter(
+		"otelcol.elasticsearch.mapping_repair.proof.unequal",
+		metric.WithDescription("Count of sampled outgoing mapping repairs whose backup did not match the original key, type and raw JSON value. Samples are limited to the first 20 candidates across the exporter process. [Development]"),
+		metric.WithUnit("1"),
+	)
+	errs = errors.Join(errs, err)
+	builder.ElasticsearchMappingRepairProofUnverified, err = builder.meter.Int64Counter(
+		"otelcol.elasticsearch.mapping_repair.proof.unverified",
+		metric.WithDescription("Count of sampled outgoing mapping repairs whose backup could not be verified within the sample size limit or had ambiguous evidence. Samples are limited to the first 20 candidates across the exporter process. [Development]"),
 		metric.WithUnit("1"),
 	)
 	errs = errors.Join(errs, err)

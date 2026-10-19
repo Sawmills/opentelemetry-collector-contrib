@@ -186,6 +186,48 @@ Count of original-pass item 400 responses with mapping repair enabled.
 | ---- | ----------- | ------ | ------------------- |
 | exporter | The configured Elasticsearch exporter identifier. | Any Str | - |
 
+### otelcol.elasticsearch.mapping_repair.proof.equal
+
+Count of sampled outgoing mapping repairs whose backup exactly matched the original key, type and raw JSON value. Samples are limited to the first 20 candidates across the exporter process.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| 1 | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| exporter | The configured Elasticsearch exporter identifier. | Any Str | - |
+
+### otelcol.elasticsearch.mapping_repair.proof.unequal
+
+Count of sampled outgoing mapping repairs whose backup did not match the original key, type and raw JSON value. Samples are limited to the first 20 candidates across the exporter process.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| 1 | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| exporter | The configured Elasticsearch exporter identifier. | Any Str | - |
+
+### otelcol.elasticsearch.mapping_repair.proof.unverified
+
+Count of sampled outgoing mapping repairs whose backup could not be verified within the sample size limit or had ambiguous evidence. Samples are limited to the first 20 candidates across the exporter process.
+
+| Unit | Metric Type | Value Type | Monotonic | Stability |
+| ---- | ----------- | ---------- | --------- | --------- |
+| 1 | Sum | Int | true | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| exporter | The configured Elasticsearch exporter identifier. | Any Str | - |
+
 ### otelcol.elasticsearch.mapping_repair.succeeded
 
 Count of repaired items positively confirmed indexed.
