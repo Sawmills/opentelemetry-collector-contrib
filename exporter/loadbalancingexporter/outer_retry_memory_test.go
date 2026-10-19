@@ -137,6 +137,9 @@ func measureOuterRetryMemory(t *testing.T, retryEnabled bool) outerRetryMemoryRe
 		growth: int64(pressured.HeapAlloc) - int64(baseline.HeapAlloc),
 		held:   calls.started.Load() - calls.completed.Load(),
 	}
+	if retryEnabled {
+		require.Positive(t, result.held, "retry measurement is incomplete: no callers remained held at the heap snapshot")
+	}
 
 	// Always release backpressure and verify delivery before asserting memory.
 	backend.refuse.Store(false)
