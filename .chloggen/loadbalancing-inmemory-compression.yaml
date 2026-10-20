@@ -4,5 +4,7 @@ note: Honor sending_queue.compress_in_memory by encoding compressed payloads in 
 issues: [169]
 subtext: |
   The existing opt-in flag now enables exporterhelper's in-memory encoding path.
+  It requires the exporter.PersistRequestContext feature gate to preserve request metadata;
+  exporter creation fails if compression is requested with that gate disabled.
   Queue capacity, admitted delivery, and configurations with the flag off keep their existing behavior.
 change_logs: [user]
