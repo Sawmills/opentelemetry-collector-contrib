@@ -32,6 +32,9 @@ import (
 // Exercise admission, compression, real OTLP sends and retries together. Both
 // exporters receive the same synthetic requests; only their backend differs.
 func TestLogsBackpressureBoundsMemoryAndPreservesDelivery(t *testing.T) {
+	if runMemoryTestInSubprocess(t) {
+		return
+	}
 	result := runLogsBackpressureMemoryScenario(t)
 
 	require.True(t, result.retryObserved, "the same refused record must be retried")

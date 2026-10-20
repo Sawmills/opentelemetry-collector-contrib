@@ -30,6 +30,9 @@ import (
 )
 
 func TestInMemoryCompressionBoundsHeapAndPreservesDelivery(t *testing.T) {
+	if runMemoryTestInSubprocess(t) {
+		return
+	}
 	previous := runtime.GOMAXPROCS(4)
 	defer runtime.GOMAXPROCS(previous)
 	raw := measureInMemoryQueueCompression(t, false)
@@ -55,6 +58,7 @@ type queueCompressionPeer struct {
 	plogotlp.UnimplementedGRPCServer
 	hold     atomic.Bool
 	attempts atomic.Int64
+	canceled atomic.Int64
 	release  chan struct{}
 	mu       sync.Mutex
 	received map[int64]int
@@ -66,6 +70,7 @@ func (b *queueCompressionPeer) Export(ctx context.Context, req plogotlp.ExportRe
 		select {
 		case <-b.release:
 		case <-ctx.Done():
+			b.canceled.Add(1)
 			return plogotlp.NewExportResponse(), ctx.Err()
 		}
 	}
@@ -137,7 +142,11 @@ func measureInMemoryQueueCompression(t *testing.T, compress bool) queueCompressi
 	cfg.Protocol.OTLP.ClientConfig.TLS.Insecure = true
 	cfg.Protocol.OTLP.QueueConfig = configoptional.None[exporterhelper.QueueBatchConfig]()
 	cfg.Protocol.OTLP.RetryConfig.Enabled = false
-	cfg.Protocol.OTLP.TimeoutConfig.Timeout = 20 * time.Second
+	// Keep the deliberately blocked send alive through intake and the heap
+	// snapshot, including slower race/ARM runs. The scenario context still
+	// bounds the test; transport deadlines are not the behavior under test.
+	cfg.TimeoutSettings.Timeout = 70 * time.Second
+	cfg.Protocol.OTLP.TimeoutConfig.Timeout = 70 * time.Second
 	cfg.CentralQueue.Enabled = false
 	queueConfig := exporterhelper.NewDefaultQueueConfig()
 	queueConfig.NumConsumers = 1
@@ -189,6 +198,7 @@ func measureInMemoryQueueCompression(t *testing.T, compress bool) queueCompressi
 	require.Eventually(t, func() bool { return peer.attempts.Load() > 0 }, 5*time.Second, 10*time.Millisecond)
 	require.Equal(t, int64(4100), queueCompressionSize(t, reader))
 	result.retained = queueCompressionHeap() - baseline
+	require.Zero(t, peer.canceled.Load(), "fixture transport expired while backend was intentionally held")
 	recoverBackend()
 	require.Eventually(t, func() bool {
 		peer.mu.Lock()
