@@ -243,6 +243,13 @@ func measureInMemoryQueueCompression(t *testing.T, compress bool) queueCompressi
 	}
 	history = append(history, observe())
 	recoverBackend()
+	drainTimeout := 30 * time.Second
+	if memoryTestRaceEnabled {
+		// ARM race diagnostics advanced to 3,921/4,100 and 3,835/4,100
+		// identities at 30s, with work queued and no cancellations or new
+		// errors. Allow 4x for race instrumentation only; keep exact delivery.
+		drainTimeout *= 4
+	}
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		current := observe()
 		if current[0]-history[len(history)-1][0] >= 5000 || current[1] == int64(len(result.admitted)) {
@@ -251,7 +258,7 @@ func measureInMemoryQueueCompression(t *testing.T, compress bool) queueCompressi
 		assert.Equal(collect, int64(len(result.admitted)), current[1],
 			"compression=%t current(ms,received,queued,attempts,handler_canceled,error_logs)=%v history=%v handler_canceled_before=%d error_logs_before=%d",
 			compress, current, history, beforeCanceled, beforeErrors)
-	}, 30*time.Second, 10*time.Millisecond)
+	}, drainTimeout, 10*time.Millisecond)
 	t.Logf("compression=%t drain_ms=%d history(ms,received,queued,attempts,handler_canceled,error_logs)=%v", compress, time.Since(drainStarted).Milliseconds(), history)
 	peer.mu.Lock()
 	received := make(map[int64]int, len(peer.received))
