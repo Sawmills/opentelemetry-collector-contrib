@@ -136,10 +136,17 @@ func runLogsBackpressureMemoryScenario(t *testing.T) logsBackpressureMemoryResul
 			"healthy received=%d expected=%d active RPCs=%d; held retries=%d expected=1",
 			healthy.received.Load(), healthyExpected, healthy.activeRPCs.Load(), retryBarrier.held.Load())
 	}, 15*time.Second, 10*time.Millisecond)
+	heldRetry := retryBarrier.current.Load()
+	require.True(t, retryBarrier.holds(heldRetry),
+		"before snapshot: held=%d expected=1 same entry=%t expected=true live=%t expected=true",
+		retryBarrier.held.Load(), retryBarrier.current.Load() == heldRetry, heldRetry != nil && heldRetry.ctx.Err() == nil)
 
 	runtime.GC()
 	var after runtime.MemStats
 	runtime.ReadMemStats(&after)
+	require.True(t, retryBarrier.holds(heldRetry),
+		"after snapshot: held=%d expected=1 same entry=%t expected=true live=%t expected=true",
+		retryBarrier.held.Load(), retryBarrier.current.Load() == heldRetry, heldRetry != nil && heldRetry.ctx.Err() == nil)
 	runtime.KeepAlive(input)
 	runtime.KeepAlive(exporters)
 	retainedGrowth := int64(after.HeapAlloc) - int64(baseline.HeapAlloc)
@@ -316,9 +323,14 @@ func memoryTestSnapshotReady(healthy *memoryTestBackend, expected int64, retries
 }
 
 type memoryTestRPCBarrier struct {
-	held atomic.Int64
-	done chan struct{}
-	once sync.Once
+	held    atomic.Int64
+	current atomic.Pointer[memoryTestRPCEntry]
+	done    chan struct{}
+	once    sync.Once
+}
+
+type memoryTestRPCEntry struct {
+	ctx context.Context
 }
 
 func newMemoryTestRPCBarrier(t *testing.T) *memoryTestRPCBarrier {
@@ -329,12 +341,21 @@ func newMemoryTestRPCBarrier(t *testing.T) *memoryTestRPCBarrier {
 }
 
 func (b *memoryTestRPCBarrier) wait(ctx context.Context) {
+	entry := &memoryTestRPCEntry{ctx: ctx}
+	b.current.Store(entry)
 	b.held.Add(1)
-	defer b.held.Add(-1)
+	defer func() {
+		b.held.Add(-1)
+		b.current.CompareAndSwap(entry, nil)
+	}()
 	select {
 	case <-b.done:
 	case <-ctx.Done():
 	}
+}
+
+func (b *memoryTestRPCBarrier) holds(entry *memoryTestRPCEntry) bool {
+	return entry != nil && b.held.Load() == 1 && b.current.Load() == entry && entry.ctx.Err() == nil
 }
 
 func (b *memoryTestRPCBarrier) release() {

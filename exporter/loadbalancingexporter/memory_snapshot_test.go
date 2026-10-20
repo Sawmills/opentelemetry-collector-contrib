@@ -48,8 +48,10 @@ func TestMemorySnapshotWaitsForRPCPhases(t *testing.T) {
 		healthyResult <- callErr
 	}()
 	retryResults := make(chan error, 1)
+	retryCtx, cancelRetry := context.WithCancel(ctx)
+	defer cancelRetry()
 	go func() {
-		_, callErr := pressuredClient.Export(ctx, request)
+		_, callErr := pressuredClient.Export(retryCtx, request)
 		retryResults <- callErr
 	}()
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
@@ -62,6 +64,19 @@ func TestMemorySnapshotWaitsForRPCPhases(t *testing.T) {
 	require.NoError(t, <-healthyResult)
 	healthy.waitForIdleDelivery(t, 1, time.Second)
 	require.True(t, memoryTestSnapshotReady(healthy, 1, retries))
+	firstRetry := retries.current.Load()
+	require.True(t, retries.holds(firstRetry))
+	cancelRetry()
+	require.Equal(t, codes.Canceled, status.Code(<-retryResults))
+	pressured.waitForIdleDelivery(t, 0, time.Second)
+	go func() {
+		_, callErr := pressuredClient.Export(ctx, request)
+		retryResults <- callErr
+	}()
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		require.Equal(c, int64(1), retries.held.Load())
+	}, time.Second, time.Millisecond)
+	assert.False(t, retries.holds(firstRetry), "a replacement retry must invalidate the snapshot entry")
 	retries.release()
 	require.Equal(t, codes.Unavailable, status.Code(<-retryResults))
 	pressured.waitForIdleDelivery(t, 0, time.Second)
