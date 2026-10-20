@@ -5,4 +5,6 @@
 
 package loadbalancingexporter
 
+// memoryTestRaceEnabled widens only the recovery drain assertion under race.
+// Keep scenario deadlines, queue budgets and delivery checks unchanged.
 const memoryTestRaceEnabled = true
