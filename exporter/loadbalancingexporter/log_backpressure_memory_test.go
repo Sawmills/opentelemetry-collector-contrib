@@ -91,6 +91,8 @@ func runLogsBackpressureMemoryScenario(t *testing.T) logsBackpressureMemoryResul
 		cfg.Protocol.OTLP.ClientConfig.TLS.Insecure = true
 		cfg.Protocol.OTLP.QueueConfig = configoptional.None[exporterhelper.QueueBatchConfig]()
 		cfg.Protocol.OTLP.RetryConfig.Enabled = false
+		// The fixture owns the retry barrier; a send deadline must not end it.
+		cfg.Protocol.OTLP.TimeoutConfig.Timeout = 0
 		cfg.CentralQueue.Enabled = true
 		cfg.CentralQueue.MaxCompressedBytes = compressedBudget
 		cfg.CentralQueue.MaxInflightUncompressedBytes = inflightBudget
@@ -140,6 +142,8 @@ func runLogsBackpressureMemoryScenario(t *testing.T) logsBackpressureMemoryResul
 	require.True(t, retryBarrier.holds(heldRetry),
 		"before snapshot: held=%d expected=1 same entry=%t expected=true live=%t expected=true",
 		retryBarrier.held.Load(), retryBarrier.current.Load() == heldRetry, heldRetry != nil && heldRetry.ctx.Err() == nil)
+	_, hasDeadline := heldRetry.ctx.Deadline()
+	require.False(t, hasDeadline, "the held retry must not expire during the heap snapshot")
 
 	runtime.GC()
 	var after runtime.MemStats
