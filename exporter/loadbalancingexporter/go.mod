@@ -35,10 +35,10 @@ require (
 	go.opentelemetry.io/collector/extension/xextension v0.149.1-0.20260402195938-76ede073ee8e
 	go.opentelemetry.io/collector/otelcol/otelcoltest v0.149.1-0.20260402195938-76ede073ee8e
 	go.opentelemetry.io/collector/pdata v1.55.1-0.20260402195938-76ede073ee8e
-	go.opentelemetry.io/otel v1.44.0
-	go.opentelemetry.io/otel/metric v1.44.0
-	go.opentelemetry.io/otel/sdk/metric v1.44.0
-	go.opentelemetry.io/otel/trace v1.44.0
+	go.opentelemetry.io/otel v1.45.0
+	go.opentelemetry.io/otel/metric v1.45.0
+	go.opentelemetry.io/otel/sdk/metric v1.45.0
+	go.opentelemetry.io/otel/trace v1.45.0
 	go.uber.org/goleak v1.3.0
 	go.uber.org/multierr v1.11.0
 	go.uber.org/zap v1.27.1
@@ -75,7 +75,7 @@ require (
 	github.com/foxboron/go-tpm-keyfiles v0.0.0-20251226215517-609e4778396f // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
-	github.com/go-logr/logr v1.4.3 // indirect
+	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
@@ -176,7 +176,7 @@ require (
 	go.opentelemetry.io/otel/exporters/stdout/stdoutmetric v1.42.0 // indirect
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.42.0 // indirect
 	go.opentelemetry.io/otel/log v0.19.0 // indirect
-	go.opentelemetry.io/otel/sdk v1.44.0 // indirect
+	go.opentelemetry.io/otel/sdk v1.45.0 // indirect
 	go.opentelemetry.io/otel/sdk/log v0.19.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
@@ -220,4 +220,4 @@ replace github.com/open-telemetry/opentelemetry-collector-contrib/internal/exp/m
 
 replace github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage => ../../extension/storage/filestorage
 
-replace go.opentelemetry.io/collector/exporter/exporterhelper => github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.149.0-sawmills.7
+replace go.opentelemetry.io/collector/exporter/exporterhelper v0.149.1-0.20260402195938-76ede073ee8e => github.com/Sawmills/opentelemetry-collector/exporter/exporterhelper v0.149.0-sawmills.7
