@@ -284,6 +284,7 @@ func (b *memoryTestBackend) Export(ctx context.Context, request plogotlp.ExportR
 		if retried {
 			if barrier := b.retryBarrier.Load(); barrier != nil {
 				barrier.wait(ctx)
+				runtime.KeepAlive(request)
 			}
 		}
 		return plogotlp.NewExportResponse(), status.Error(codes.Unavailable, "synthetic backend pressure")
