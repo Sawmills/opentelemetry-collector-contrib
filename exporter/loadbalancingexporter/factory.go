@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	"go.opentelemetry.io/collector/exporter/exporterhelper/xexporterhelper"
 	"go.opentelemetry.io/collector/exporter/otlpexporter"
+	"go.opentelemetry.io/collector/featuregate"
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 	"go.uber.org/multierr"
@@ -25,7 +26,8 @@ import (
 )
 
 const (
-	zapEndpointKey = "endpoint"
+	zapEndpointKey              = "endpoint"
+	persistRequestContextGateID = "exporter.PersistRequestContext"
 )
 
 // NewFactory creates a factory for the exporter.
@@ -152,6 +154,9 @@ func buildExporterResilienceOptions(
 			}
 		}
 		options = append(options, xexporterhelper.WithQueueBatch(queueCfg, qbs))
+		if cfg.QueueSettings.CompressInMemory {
+			options = append(options, exporterhelper.WithQueueBatchInMemoryEncoding(true))
+		}
 	}
 	if cfg.Enabled {
 		options = append(options, exporterhelper.WithRetry(cfg.BackOffConfig))
@@ -162,6 +167,9 @@ func buildExporterResilienceOptions(
 
 func createTracesExporter(ctx context.Context, params exporter.Settings, cfg component.Config) (exporter.Traces, error) {
 	c := cfg.(*Config)
+	if err := validateInMemoryCompressionContext(c); err != nil {
+		return nil, err
+	}
 	if c.CentralQueue.StorageID != nil {
 		return nil, errors.New("durable central queue storage supports logs and metrics only")
 	}
@@ -189,6 +197,9 @@ func createTracesExporter(ctx context.Context, params exporter.Settings, cfg com
 
 func createLogsExporter(ctx context.Context, params exporter.Settings, cfg component.Config) (exporter.Logs, error) {
 	c := cfg.(*Config)
+	if err := validateInMemoryCompressionContext(c); err != nil {
+		return nil, err
+	}
 	exporter, err := newLogsExporter(params, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("cannot configure loadbalancing logs exporter: %w", err)
@@ -222,6 +233,9 @@ func createLogsExporter(ctx context.Context, params exporter.Settings, cfg compo
 
 func createMetricsExporter(ctx context.Context, params exporter.Settings, cfg component.Config) (exporter.Metrics, error) {
 	c := cfg.(*Config)
+	if err := validateInMemoryCompressionContext(c); err != nil {
+		return nil, err
+	}
 	exporter, err := newMetricsExporter(params, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("cannot configure loadbalancing metrics exporter: %w", err)
@@ -242,6 +256,25 @@ func createMetricsExporter(ctx context.Context, params exporter.Settings, cfg co
 		exporter.ConsumeMetrics,
 		buildExporterResilienceOptions(options, c, payloadCodec, qbs)...,
 	)
+}
+
+func validateInMemoryCompressionContext(cfg *Config) error {
+	if !cfg.QueueSettings.CompressInMemory {
+		return nil
+	}
+	var gate *featuregate.Gate
+	featuregate.GlobalRegistry().VisitAll(func(candidate *featuregate.Gate) {
+		if candidate.ID() == persistRequestContextGateID {
+			gate = candidate
+		}
+	})
+	if gate == nil {
+		return fmt.Errorf("cannot validate sending_queue.compress_in_memory: feature gate %s is not registered", persistRequestContextGateID)
+	}
+	if !gate.IsEnabled() {
+		return fmt.Errorf("sending_queue.compress_in_memory requires the %s feature gate to be enabled", persistRequestContextGateID)
+	}
+	return nil
 }
 
 func newQueuePayloadCodecIfEnabled(cfg *Config) *queuePayloadCodec {

@@ -378,7 +378,9 @@ exporters:
       payload_compression: zstd
 ```
 
-`sending_queue.compress_in_memory` is retained for compatibility. It requires `sending_queue` to be configured and a non-`none` `sending_queue.payload_compression` value. `sending_queue.payload_compression` remains the active queue payload codec setting.
+Set `sending_queue.compress_in_memory: true` to store encoded, compressed payloads in the in-memory queue. This option defaults to `false`. Configure an enabled `sending_queue` and set `sending_queue.payload_compression` to `snappy` or `zstd`. The `exporter.PersistRequestContext` feature gate must also be enabled. Exporterhelper .7 enables this gate by default. If that gate is disabled, exporter creation rejects `compress_in_memory: true` with an error that names the gate. This prevents loss of client metadata used by downstream authentication headers.
+
+Compression reduces retained queue memory for compressible payloads at the cost of serialization and compression CPU. Queue capacity still uses the configured sizer; this option does not set a process-memory limit. The current exporterhelper implementation decodes each queued payload while holding the queue lock and compresses incoming requests before checking available queue capacity. Measure throughput and CPU under representative load before enabling this option.
 
 Kubernetes resolver example (For a more specific example: [example/k8s-resolver](./example/k8s-resolver/README.md))
 > [!IMPORTANT]
