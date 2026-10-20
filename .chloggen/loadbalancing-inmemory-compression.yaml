@@ -1,7 +1,7 @@
 change_type: bug_fix
 component: exporter/loadbalancing
 note: Honor sending_queue.compress_in_memory by encoding compressed payloads in the in-memory queue.
-issues: [168]
+issues: [169]
 subtext: |
   The existing opt-in flag now enables exporterhelper's in-memory encoding path.
   Queue capacity, admitted delivery, and configurations with the flag off keep their existing behavior.
