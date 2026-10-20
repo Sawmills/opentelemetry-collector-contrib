@@ -6,6 +6,7 @@ package loadbalancingexporter
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"runtime"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/config/configoptional"
@@ -24,6 +26,8 @@ import (
 	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc"
 
 	"github.com/open-telemetry/opentelemetry-collector-contrib/exporter/loadbalancingexporter/internal/metadata"
@@ -66,11 +70,18 @@ type queueCompressionPeer struct {
 
 func (b *queueCompressionPeer) Export(ctx context.Context, req plogotlp.ExportRequest) (plogotlp.ExportResponse, error) {
 	b.attempts.Add(1)
+	// Normal RPC completion cancels its context after the handler returns.
+	// Count only cancellation observed while this handler is still active,
+	// including calls that start after recovery has cleared hold.
+	defer func() {
+		if ctx.Err() != nil {
+			b.canceled.Add(1)
+		}
+	}()
 	if b.hold.Load() {
 		select {
 		case <-b.release:
 		case <-ctx.Done():
-			b.canceled.Add(1)
 			return plogotlp.NewExportResponse(), ctx.Err()
 		}
 	}
@@ -122,6 +133,7 @@ func queueCompressionSize(t *testing.T, reader *sdkmetric.ManualReader) int64 {
 
 func measureInMemoryQueueCompression(t *testing.T, compress bool) queueCompressionMeasurement {
 	t.Helper()
+	started := time.Now()
 	ctx, cancel := context.WithTimeout(t.Context(), 70*time.Second)
 	defer cancel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -136,6 +148,15 @@ func measureInMemoryQueueCompression(t *testing.T, compress bool) queueCompressi
 	defer func() { require.NoError(t, provider.Shutdown(context.Background())) }()
 	settings := exportertest.NewNopSettings(metadata.Type)
 	settings.MeterProvider = provider
+	var errorLogs atomic.Int64
+	// Count errors without retaining their fields or affecting the heap sample
+	// with an in-memory log buffer. Admission rejections are included; the
+	// recovery snapshot separates them from subsequent send/decode errors.
+	core := zapcore.NewCore(zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()), zapcore.AddSync(io.Discard), zap.ErrorLevel)
+	settings.Logger = zap.New(core, zap.Hooks(func(zapcore.Entry) error {
+		errorLogs.Add(1)
+		return nil
+	}))
 	factory := NewFactory()
 	cfg := factory.CreateDefaultConfig().(*Config)
 	cfg.Resolver = ResolverSettings{Static: configoptional.Some(StaticResolver{Hostnames: []string{listener.Addr().String()}})}
@@ -179,9 +200,11 @@ func measureInMemoryQueueCompression(t *testing.T, compress bool) queueCompressi
 	peer.mu.Unlock()
 	peer.attempts.Store(0)
 	baseline := queueCompressionHeap()
+	setupElapsed := time.Since(started)
 	peer.hold.Store(true)
 	result := queueCompressionMeasurement{admitted: make(map[int64]int)}
 	completed := 0
+	admissionStarted := time.Now()
 	for id := int64(0); id < 4608; id++ {
 		err := exp.ConsumeLogs(ctx, queueCompressionLogs(id))
 		completed++
@@ -192,19 +215,44 @@ func measureInMemoryQueueCompression(t *testing.T, compress bool) queueCompressi
 			require.False(t, consumererror.IsPermanent(err), "capacity pressure must remain retryable")
 		}
 	}
+	admissionElapsed := time.Since(admissionStarted)
 	require.Equal(t, 4608, completed, "no caller may remain held at the memory snapshot")
 	require.Equal(t, 4100, len(result.admitted))
 	require.Equal(t, 508, result.rejected)
 	require.Eventually(t, func() bool { return peer.attempts.Load() > 0 }, 5*time.Second, 10*time.Millisecond)
 	require.Equal(t, int64(4100), queueCompressionSize(t, reader))
+	snapshotStarted := time.Now()
 	result.retained = queueCompressionHeap() - baseline
+	snapshotElapsed := time.Since(snapshotStarted)
 	require.Zero(t, peer.canceled.Load(), "fixture transport expired while backend was intentionally held")
-	recoverBackend()
-	require.Eventually(t, func() bool {
+	beforeCanceled, beforeErrors := peer.canceled.Load(), errorLogs.Load()
+	t.Logf("compression=%t setup_ms=%d admission_ms=%d snapshot_ms=%d retained=%d admitted=%d rejected=%d handler_canceled_before=%d error_logs_before=%d",
+		compress, setupElapsed.Milliseconds(), admissionElapsed.Milliseconds(), snapshotElapsed.Milliseconds(),
+		result.retained, len(result.admitted), result.rejected, beforeCanceled, beforeErrors)
+	drainStarted := time.Now()
+	// At most one sample per five seconds, plus the initial and final state.
+	// Columns: elapsed ms, received identities, queued units, backend attempts,
+	// canceled active handlers, error log events (not unique lost records).
+	history := make([][6]int64, 0, 8)
+	observe := func() [6]int64 {
 		peer.mu.Lock()
-		defer peer.mu.Unlock()
-		return len(peer.received) == len(result.admitted)
+		received := len(peer.received)
+		peer.mu.Unlock()
+		return [6]int64{time.Since(drainStarted).Milliseconds(), int64(received), queueCompressionSize(t, reader),
+			peer.attempts.Load(), peer.canceled.Load(), errorLogs.Load()}
+	}
+	history = append(history, observe())
+	recoverBackend()
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		current := observe()
+		if current[0]-history[len(history)-1][0] >= 5000 || current[1] == int64(len(result.admitted)) {
+			history = append(history, current)
+		}
+		assert.Equal(collect, int64(len(result.admitted)), current[1],
+			"compression=%t current(ms,received,queued,attempts,handler_canceled,error_logs)=%v history=%v handler_canceled_before=%d error_logs_before=%d",
+			compress, current, history, beforeCanceled, beforeErrors)
 	}, 30*time.Second, 10*time.Millisecond)
+	t.Logf("compression=%t drain_ms=%d history(ms,received,queued,attempts,handler_canceled,error_logs)=%v", compress, time.Since(drainStarted).Milliseconds(), history)
 	peer.mu.Lock()
 	received := make(map[int64]int, len(peer.received))
 	for id, count := range peer.received {
