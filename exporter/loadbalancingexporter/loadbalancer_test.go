@@ -2365,7 +2365,7 @@ func TestLoadBalancerEndpointStateStableUnderDeltaTemporality(t *testing.T) {
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.WithoutCancel(t.Context()))) })
 	settings := exportertest.NewNopSettings(metadata.Type)
-	settings.TelemetrySettings.MeterProvider = provider
+	settings.MeterProvider = provider
 	tb, err := metadata.NewTelemetryBuilder(settings.TelemetrySettings)
 	require.NoError(t, err)
 	cfg := simpleConfig()
