@@ -191,6 +191,9 @@ func newLoadBalancerForSignal(logger *zap.Logger, cfg component.Config, factory 
 }
 
 func (lb *loadBalancer) Start(ctx context.Context, host component.Host) error {
+	if err := lb.registerEndpointStateCallbacks(); err != nil {
+		return err
+	}
 	lb.res.onChange(lb.onBackendChanges)
 	lb.host = host
 	if err := lb.res.start(ctx); err != nil {
@@ -261,10 +264,6 @@ func (lb *loadBalancer) onBackendChangesWithEndpointHealth(resolved []string) {
 	lb.updateLock.Unlock()
 
 	lb.shutdownCreatedExporters(ctx, duplicates)
-	// Clear removed endpoint state before draining. Draining can wait for
-	// in-flight exporter work, so telemetry must reflect resolver membership
-	// without waiting for that synchronous cleanup.
-	lb.clearEndpointStale(ctx, reconcile.removed)
 	if len(removed) > 0 {
 		lb.runCleanup(func() {
 			lb.drainRemovedExporters(ctx, removed)
@@ -998,11 +997,6 @@ func (lb *loadBalancer) recordEndpointHealthReconcile(ctx context.Context, recon
 	if reconcile.failOpenStarted {
 		lb.recordEndpointFailOpen(ctx)
 	}
-	for _, endpoint := range reconcile.eligible {
-		lb.recordEndpointState(ctx, endpoint, "quarantined", 0)
-		lb.recordEndpointState(ctx, endpoint, "stale", 0)
-		lb.recordEndpointState(ctx, endpoint, "eligible", 1)
-	}
 }
 
 func (lb *loadBalancer) recordEndpointFailureDecision(ctx context.Context, endpoint string, decision endpointHealthFailureDecision) {
@@ -1020,8 +1014,6 @@ func (lb *loadBalancer) recordEndpointQuarantine(ctx context.Context, endpoint s
 	}
 	attrs := metric.WithAttributes(attribute.String("endpoint", endpoint), attribute.String("reason", string(reason)))
 	lb.telemetry.LoadbalancerBackendQuarantineTotal.Add(ctx, 1, attrs)
-	lb.recordEndpointState(ctx, endpoint, "eligible", 0)
-	lb.recordEndpointState(ctx, endpoint, "quarantined", 1)
 }
 
 func (lb *loadBalancer) recordEndpointUnquarantine(ctx context.Context, endpoint string, reason endpointFailureReason) {
@@ -1030,8 +1022,6 @@ func (lb *loadBalancer) recordEndpointUnquarantine(ctx context.Context, endpoint
 	}
 	attrs := metric.WithAttributes(attribute.String("endpoint", endpoint), attribute.String("reason", string(reason)))
 	lb.telemetry.LoadbalancerBackendUnquarantineTotal.Add(ctx, 1, attrs)
-	lb.recordEndpointState(ctx, endpoint, "quarantined", 0)
-	lb.recordEndpointState(ctx, endpoint, "eligible", 1)
 }
 
 func (lb *loadBalancer) recordEndpointStale(ctx context.Context, endpoint string) {
@@ -1039,15 +1029,6 @@ func (lb *loadBalancer) recordEndpointStale(ctx context.Context, endpoint string
 		return
 	}
 	lb.telemetry.LoadbalancerBackendStaleTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("endpoint", endpoint)))
-	lb.recordEndpointState(ctx, endpoint, "eligible", 0)
-	lb.recordEndpointState(ctx, endpoint, "quarantined", 0)
-	lb.recordEndpointState(ctx, endpoint, "stale", 1)
-}
-
-func (lb *loadBalancer) clearEndpointStale(ctx context.Context, endpoints []string) {
-	for _, endpoint := range endpoints {
-		lb.recordEndpointState(ctx, endpoint, "stale", 0)
-	}
 }
 
 func (lb *loadBalancer) recordEndpointFailOpen(ctx context.Context) {
@@ -1057,11 +1038,35 @@ func (lb *loadBalancer) recordEndpointFailOpen(ctx context.Context) {
 	lb.telemetry.LoadbalancerBackendFailOpenTotal.Add(ctx, 1)
 }
 
-func (lb *loadBalancer) recordEndpointState(ctx context.Context, endpoint, state string, value int64) {
-	if lb.telemetry == nil {
-		return
+// registerEndpointStateCallbacks reports endpoint health from the current
+// snapshot on every collection. A synchronous gauge would keep every endpoint
+// ever recorded, so departed backends would be exported forever.
+func (lb *loadBalancer) registerEndpointStateCallbacks() error {
+	if lb.telemetry == nil || !lb.endpointHealth.enabled() {
+		return nil
 	}
-	lb.telemetry.LoadbalancerBackendState.Record(ctx, value, metric.WithAttributes(attribute.String("endpoint", endpoint), attribute.String("state", state)))
+	if err := lb.telemetry.RegisterLoadbalancerBackendStateCallback(lb.observeBackendState); err != nil {
+		return err
+	}
+	return lb.telemetry.RegisterLoadbalancerBackendsCallback(lb.observeBackendCounts)
+}
+
+func (lb *loadBalancer) observeBackendState(_ context.Context, observer metric.Int64Observer) error {
+	eligible, quarantined := lb.endpointHealth.stateSnapshot()
+	for _, endpoint := range eligible {
+		observer.Observe(1, metric.WithAttributes(attribute.String("endpoint", endpoint), attribute.String("state", "eligible")))
+	}
+	for _, endpoint := range quarantined {
+		observer.Observe(1, metric.WithAttributes(attribute.String("endpoint", endpoint), attribute.String("state", "quarantined")))
+	}
+	return nil
+}
+
+func (lb *loadBalancer) observeBackendCounts(_ context.Context, observer metric.Int64Observer) error {
+	eligible, quarantined := lb.endpointHealth.stateSnapshot()
+	observer.Observe(int64(len(eligible)), metric.WithAttributes(attribute.String("state", "eligible")))
+	observer.Observe(int64(len(quarantined)), metric.WithAttributes(attribute.String("state", "quarantined")))
+	return nil
 }
 
 func (lb *loadBalancer) recordBackendReroute(ctx context.Context, signal string, reason endpointFailureReason, err error) {
@@ -1201,6 +1206,9 @@ func (lb *loadBalancer) nextEndpointHealthActiveProbeInterval() time.Duration {
 }
 
 func (lb *loadBalancer) Shutdown(ctx context.Context) error {
+	if lb.telemetry != nil {
+		lb.telemetry.Shutdown()
+	}
 	err := lb.stopEndpointHealthActiveProbeLoop(ctx)
 	err = errors.Join(err, lb.res.shutdown(ctx))
 

@@ -243,7 +243,7 @@ func AssertEqualLoadbalancerBackendStaleTotal(t *testing.T, tt *componenttest.Te
 func AssertEqualLoadbalancerBackendState(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_loadbalancer_backend_state",
-		Description: "Current endpoint health state by backend. [Development]",
+		Description: "Current endpoint health state by backend. Only backends present in the latest resolver result are reported. [Development]",
 		Unit:        "{backends}",
 		Data: metricdata.Gauge[int64]{
 			DataPoints: dps,
@@ -298,6 +298,20 @@ func AssertEqualLoadbalancerBackendUnquarantineTotal(t *testing.T, tt *component
 		},
 	}
 	got, err := tt.GetMetric("otelcol_loadbalancer_backend_unquarantine_total")
+	require.NoError(t, err)
+	metricdatatest.AssertEqual(t, want, got, opts...)
+}
+
+func AssertEqualLoadbalancerBackends(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
+	want := metricdata.Metrics{
+		Name:        "otelcol_loadbalancer_backends",
+		Description: "Current number of resolved backends by endpoint health state. [Development]",
+		Unit:        "{backends}",
+		Data: metricdata.Gauge[int64]{
+			DataPoints: dps,
+		},
+	}
+	got, err := tt.GetMetric("otelcol_loadbalancer_backends")
 	require.NoError(t, err)
 	metricdatatest.AssertEqual(t, want, got, opts...)
 }

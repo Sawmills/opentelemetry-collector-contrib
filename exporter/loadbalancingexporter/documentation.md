@@ -214,7 +214,7 @@ Number of times a backend endpoint disappeared from resolver membership.
 
 ### otelcol_loadbalancer_backend_state
 
-Current endpoint health state by backend.
+Current endpoint health state by backend. Only backends present in the latest resolver result are reported.
 
 | Unit | Metric Type | Value Type | Stability |
 | ---- | ----------- | ---------- | --------- |
@@ -264,6 +264,20 @@ Number of times a backend endpoint was admitted after quarantine.
 | ---- | ----------- | ------ | ------------------- |
 | endpoint | The endpoint of the backend | Any Str | - |
 | reason | Low-cardinality endpoint health or backend outcome reason | Any Str | - |
+
+### otelcol_loadbalancer_backends
+
+Current number of resolved backends by endpoint health state.
+
+| Unit | Metric Type | Value Type | Stability |
+| ---- | ----------- | ---------- | --------- |
+| {backends} | Gauge | Int | Development |
+
+#### Attributes
+
+| Name | Description | Values | Semantic Convention |
+| ---- | ----------- | ------ | ------------------- |
+| state | Endpoint health state | Str: ``eligible``, ``quarantined``, ``stale`` | - |
 
 ### otelcol_loadbalancer_num_backend_updates
 

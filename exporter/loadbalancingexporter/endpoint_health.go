@@ -575,6 +575,26 @@ func (m *endpointHealthManager) eligibleEndpointsLockedWithRefresh(now time.Time
 	return selected, failOpen, failOpenStarted
 }
 
+// stateSnapshot returns the resolver-present endpoints split by health state
+// without refreshing expired quarantines. Telemetry callbacks use it so the
+// reported state always matches current membership.
+func (m *endpointHealthManager) stateSnapshot() (eligible, quarantined []string) {
+	now := m.settings.now()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, state := range m.endpoints {
+		if !state.present {
+			continue
+		}
+		if state.quarantinedUntil.After(now) || state.probeUnhealthy {
+			quarantined = append(quarantined, state.endpoint)
+		} else {
+			eligible = append(eligible, state.endpoint)
+		}
+	}
+	return eligible, quarantined
+}
+
 func (m *endpointHealthManager) storeEligibleSnapshot(endpoints []string) {
 	snapshot := make(endpointHealthEligibleSet, len(endpoints))
 	for _, endpoint := range endpoints {

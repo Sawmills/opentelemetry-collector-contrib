@@ -209,10 +209,11 @@ telemetry:
       attributes: [endpoint, state]
       enabled: true
       stability: development
-      description: Current endpoint health state by backend.
+      description: Current endpoint health state by backend. Only backends present in the latest resolver result are reported.
       unit: "{backends}"
       gauge:
         value_type: int
+        async: true
     loadbalancer_backend_subset_displacement_total:
       enabled: true
       stability: development
@@ -240,6 +241,15 @@ telemetry:
         value_type: int
         monotonic: true
 
+    loadbalancer_backends:
+      attributes: [state]
+      enabled: true
+      stability: development
+      description: Current number of resolved backends by endpoint health state.
+      unit: "{backends}"
+      gauge:
+        value_type: int
+        async: true
     loadbalancer_num_backend_updates:
       attributes: [resolver]
       enabled: true

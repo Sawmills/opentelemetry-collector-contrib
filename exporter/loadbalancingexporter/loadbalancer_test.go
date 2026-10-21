@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/collector/exporter/exportertest"
 	"go.opentelemetry.io/collector/exporter/otlpexporter"
 	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata/metricdatatest"
 	"google.golang.org/grpc/codes"
@@ -1754,6 +1755,7 @@ func TestLoadBalancerEndpointHealthActiveProbeUpdatesExistingHealthMetrics(t *te
 
 	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
 	require.NoError(t, err)
+	require.NoError(t, p.registerEndpointStateCallbacks())
 
 	p.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
 	p.handleBackendProbeFailure(t.Context(), "endpoint-1:4317", errors.New("probe failed"))
@@ -1777,25 +1779,13 @@ func TestLoadBalancerEndpointHealthActiveProbeUpdatesExistingHealthMetrics(t *te
 			Value:      1,
 		},
 		{
-			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "quarantined")),
-			Value:      0,
-		},
-		{
-			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "stale")),
-			Value:      0,
-		},
-		{
 			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "eligible")),
 			Value:      1,
 		},
-		{
-			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "quarantined")),
-			Value:      0,
-		},
-		{
-			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "stale")),
-			Value:      0,
-		},
+	}, metricdatatest.IgnoreTimestamp())
+	metadatatest.AssertEqualLoadbalancerBackends(t, telemetry, []metricdata.DataPoint[int64]{
+		{Attributes: attribute.NewSet(attribute.String("state", "eligible")), Value: 2},
+		{Attributes: attribute.NewSet(attribute.String("state", "quarantined")), Value: 0},
 	}, metricdatatest.IgnoreTimestamp())
 }
 
@@ -1820,6 +1810,7 @@ func TestLoadBalancerEndpointHealthProbeRecoveryKeepsActiveTransportQuarantineMe
 
 	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
 	require.NoError(t, err)
+	require.NoError(t, p.registerEndpointStateCallbacks())
 	p.endpointHealth.settings.now = func() time.Time { return now }
 	p.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
 
@@ -1835,47 +1826,17 @@ func TestLoadBalancerEndpointHealthProbeRecoveryKeepsActiveTransportQuarantineMe
 	require.Error(t, err)
 	metadatatest.AssertEqualLoadbalancerBackendState(t, telemetry, []metricdata.DataPoint[int64]{
 		{
-			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "eligible")),
-			Value:      0,
-		},
-		{
 			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "quarantined")),
 			Value:      1,
-		},
-		{
-			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "stale")),
-			Value:      0,
 		},
 		{
 			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "eligible")),
 			Value:      1,
 		},
-		{
-			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "quarantined")),
-			Value:      0,
-		},
-		{
-			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "stale")),
-			Value:      0,
-		},
-	}, metricdatatest.IgnoreTimestamp(), metricdatatest.IgnoreExemplars())
-
-	p.endpointHealth.mu.RLock()
-	state := p.endpointHealth.endpoints["endpoint-1:4317"]
-	quarantinedUntil := state.quarantinedUntil
-	failureReason := state.failureReason
-	p.endpointHealth.mu.RUnlock()
-	require.Equal(t, endpointFailureUnavailable, failureReason)
-
-	now = quarantinedUntil.Add(time.Nanosecond)
-	require.True(t, p.endpointHealth.quarantineRefreshDue())
-	p.refreshExpiredEndpointHealth(t.Context())
-	require.Contains(t, p.exporters, "endpoint-1:4317")
-	metadatatest.AssertEqualLoadbalancerBackendUnquarantineTotal(t, telemetry, []metricdata.DataPoint[int64]{
-		{
-			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("reason", string(endpointFailureUnavailable))),
-			Value:      1,
-		},
+	}, metricdatatest.IgnoreTimestamp())
+	metadatatest.AssertEqualLoadbalancerBackends(t, telemetry, []metricdata.DataPoint[int64]{
+		{Attributes: attribute.NewSet(attribute.String("state", "eligible")), Value: 1},
+		{Attributes: attribute.NewSet(attribute.String("state", "quarantined")), Value: 1},
 	}, metricdatatest.IgnoreTimestamp())
 }
 
@@ -2093,6 +2054,7 @@ func TestLoadBalancerEndpointHealthRemovesDNSStaleEndpoint(t *testing.T) {
 
 	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
 	require.NoError(t, err)
+	require.NoError(t, p.registerEndpointStateCallbacks())
 
 	p.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
 	drainStarted := make(chan struct{})
@@ -2121,29 +2083,13 @@ func TestLoadBalancerEndpointHealthRemovesDNSStaleEndpoint(t *testing.T) {
 	require.Contains(t, p.exporters, "endpoint-2:4317")
 	metadatatest.AssertEqualLoadbalancerBackendState(t, telemetry, []metricdata.DataPoint[int64]{
 		{
-			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "eligible")),
-			Value:      0,
-		},
-		{
-			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "quarantined")),
-			Value:      0,
-		},
-		{
-			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "stale")),
-			Value:      0,
-		},
-		{
 			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "eligible")),
 			Value:      1,
 		},
-		{
-			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "quarantined")),
-			Value:      0,
-		},
-		{
-			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-2:4317"), attribute.String("state", "stale")),
-			Value:      0,
-		},
+	}, metricdatatest.IgnoreTimestamp())
+	metadatatest.AssertEqualLoadbalancerBackends(t, telemetry, []metricdata.DataPoint[int64]{
+		{Attributes: attribute.NewSet(attribute.String("state", "eligible")), Value: 1},
+		{Attributes: attribute.NewSet(attribute.String("state", "quarantined")), Value: 0},
 	}, metricdatatest.IgnoreTimestamp())
 	releaseDrainOnce.Do(func() { close(releaseDrain) })
 	select {
@@ -2376,31 +2322,82 @@ func TestLoadBalancerEndpointHealthRebuildsRingAfterQuarantineExpires(t *testing
 	require.Contains(t, p.exporters, "endpoint-1:4317")
 }
 
-func TestLoadBalancerEndpointHealthReconcileClearsStaleGaugeOnReadmit(t *testing.T) {
-	_, tb, telemetry := getTelemetryAssetsWithReader(t)
-	lb := &loadBalancer{telemetry: tb}
+func TestLoadBalancerEndpointStateReportsCurrentMembershipOnly(t *testing.T) {
+	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		return mockComponent{}, nil
+	}
 
-	lb.recordEndpointStale(t.Context(), "endpoint-1:4317")
-	lb.recordEndpointHealthReconcile(t.Context(), endpointHealthReconcileResult{
-		eligible: []string{"endpoint-1:4317"},
-	})
+	p, err := newLoadBalancer(ts.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	require.NoError(t, p.registerEndpointStateCallbacks())
 
-	metadatatest.AssertEqualLoadbalancerBackendState(t, telemetry, []metricdata.DataPoint[int64]{
-		{
-			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "eligible")),
-			Value:      1,
-		},
-		{
-			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "quarantined")),
-			Value:      0,
-		},
-		{
-			Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-1:4317"), attribute.String("state", "stale")),
-			Value:      0,
-		},
-	}, metricdatatest.IgnoreTimestamp())
+	p.onBackendChanges([]string{"endpoint-1", "endpoint-2", "endpoint-3"})
+	p.onBackendChanges([]string{"endpoint-3", "endpoint-4"})
+	p.onBackendChanges([]string{"endpoint-4", "endpoint-5"})
+
+	// Departed endpoints must not be reported; steady state must be stable
+	// across collections.
+	for range 3 {
+		metadatatest.AssertEqualLoadbalancerBackendState(t, telemetry, []metricdata.DataPoint[int64]{
+			{
+				Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-4:4317"), attribute.String("state", "eligible")),
+				Value:      1,
+			},
+			{
+				Attributes: attribute.NewSet(attribute.String("endpoint", "endpoint-5:4317"), attribute.String("state", "eligible")),
+				Value:      1,
+			},
+		}, metricdatatest.IgnoreTimestamp())
+		metadatatest.AssertEqualLoadbalancerBackends(t, telemetry, []metricdata.DataPoint[int64]{
+			{Attributes: attribute.NewSet(attribute.String("state", "eligible")), Value: 2},
+			{Attributes: attribute.NewSet(attribute.String("state", "quarantined")), Value: 0},
+		}, metricdatatest.IgnoreTimestamp())
+	}
 }
 
+func TestLoadBalancerEndpointStateStableUnderDeltaTemporality(t *testing.T) {
+	reader := sdkmetric.NewManualReader(sdkmetric.WithTemporalitySelector(func(sdkmetric.InstrumentKind) metricdata.Temporality {
+		return metricdata.DeltaTemporality
+	}))
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.WithoutCancel(t.Context()))) })
+	settings := exportertest.NewNopSettings(metadata.Type)
+	settings.TelemetrySettings.MeterProvider = provider
+	tb, err := metadata.NewTelemetryBuilder(settings.TelemetrySettings)
+	require.NoError(t, err)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	componentFactory := func(_ context.Context, _ string) (component.Component, error) {
+		return mockComponent{}, nil
+	}
+
+	p, err := newLoadBalancer(settings.Logger, cfg, componentFactory, tb)
+	require.NoError(t, err)
+	require.NoError(t, p.registerEndpointStateCallbacks())
+	p.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+
+	for range 3 {
+		var rm metricdata.ResourceMetrics
+		require.NoError(t, reader.Collect(t.Context(), &rm))
+		var eligible int64
+		for _, sm := range rm.ScopeMetrics {
+			for _, m := range sm.Metrics {
+				if m.Name != "otelcol_loadbalancer_backends" {
+					continue
+				}
+				for _, dp := range m.Data.(metricdata.Gauge[int64]).DataPoints {
+					if state, _ := dp.Attributes.Value("state"); state.AsString() == "eligible" {
+						eligible += dp.Value
+					}
+				}
+			}
+		}
+		require.Equal(t, int64(2), eligible)
+	}
+}
 func TestLoadBalancerEndpointHealthAlreadyQuarantinedFailureRefreshesStaleRing(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	cfg := simpleConfig()
