@@ -2398,6 +2398,7 @@ func TestLoadBalancerEndpointStateStableUnderDeltaTemporality(t *testing.T) {
 		require.Equal(t, int64(2), eligible)
 	}
 }
+
 func TestLoadBalancerEndpointHealthAlreadyQuarantinedFailureRefreshesStaleRing(t *testing.T) {
 	ts, tb := getTelemetryAssets(t)
 	cfg := simpleConfig()
