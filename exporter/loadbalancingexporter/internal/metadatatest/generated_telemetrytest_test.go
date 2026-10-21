@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata/metricdatatest"
 
@@ -19,6 +20,14 @@ func TestSetupTelemetry(t *testing.T) {
 	tb, err := metadata.NewTelemetryBuilder(testTel.NewTelemetrySettings())
 	require.NoError(t, err)
 	defer tb.Shutdown()
+	require.NoError(t, tb.RegisterLoadbalancerBackendStateCallback(func(_ context.Context, observer metric.Int64Observer) error {
+		observer.Observe(1)
+		return nil
+	}))
+	require.NoError(t, tb.RegisterLoadbalancerBackendsCallback(func(_ context.Context, observer metric.Int64Observer) error {
+		observer.Observe(1)
+		return nil
+	}))
 	tb.LoadbalancerBackendCount.Record(context.Background(), 1)
 	tb.LoadbalancerBackendFailOpenTotal.Add(context.Background(), 1)
 	tb.LoadbalancerBackendFailed.Add(context.Background(), 1)
@@ -33,7 +42,6 @@ func TestSetupTelemetry(t *testing.T) {
 	tb.LoadbalancerBackendRequestTotal.Add(context.Background(), 1)
 	tb.LoadbalancerBackendRerouteTotal.Add(context.Background(), 1)
 	tb.LoadbalancerBackendStaleTotal.Add(context.Background(), 1)
-	tb.LoadbalancerBackendState.Record(context.Background(), 1)
 	tb.LoadbalancerBackendSubsetDisplacementTotal.Add(context.Background(), 1)
 	tb.LoadbalancerBackendTimeoutTotal.Add(context.Background(), 1)
 	tb.LoadbalancerBackendUnquarantineTotal.Add(context.Background(), 1)
@@ -93,6 +101,9 @@ func TestSetupTelemetry(t *testing.T) {
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
 	AssertEqualLoadbalancerBackendUnquarantineTotal(t, testTel,
+		[]metricdata.DataPoint[int64]{{Value: 1}},
+		metricdatatest.IgnoreTimestamp())
+	AssertEqualLoadbalancerBackends(t, testTel,
 		[]metricdata.DataPoint[int64]{{Value: 1}},
 		metricdatatest.IgnoreTimestamp())
 	AssertEqualLoadbalancerNumBackendUpdates(t, testTel,

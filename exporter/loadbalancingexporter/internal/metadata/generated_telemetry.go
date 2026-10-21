@@ -3,11 +3,13 @@
 package metadata
 
 import (
+	"context"
 	"errors"
 	"sync"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/embedded"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -39,10 +41,11 @@ type TelemetryBuilder struct {
 	LoadbalancerBackendRequestTotal            metric.Int64Counter
 	LoadbalancerBackendRerouteTotal            metric.Int64Counter
 	LoadbalancerBackendStaleTotal              metric.Int64Counter
-	LoadbalancerBackendState                   metric.Int64Gauge
+	LoadbalancerBackendState                   metric.Int64ObservableGauge
 	LoadbalancerBackendSubsetDisplacementTotal metric.Int64Counter
 	LoadbalancerBackendTimeoutTotal            metric.Int64Counter
 	LoadbalancerBackendUnquarantineTotal       metric.Int64Counter
+	LoadbalancerBackends                       metric.Int64ObservableGauge
 	LoadbalancerNumBackendUpdates              metric.Int64Counter
 	LoadbalancerNumBackends                    metric.Int64Gauge
 	LoadbalancerNumResolutions                 metric.Int64Counter
@@ -58,6 +61,46 @@ type telemetryBuilderOptionFunc func(mb *TelemetryBuilder)
 
 func (tbof telemetryBuilderOptionFunc) apply(mb *TelemetryBuilder) {
 	tbof(mb)
+}
+
+// RegisterLoadbalancerBackendStateCallback sets callback for observable LoadbalancerBackendState metric.
+func (builder *TelemetryBuilder) RegisterLoadbalancerBackendStateCallback(cb metric.Int64Callback) error {
+	reg, err := builder.meter.RegisterCallback(func(ctx context.Context, o metric.Observer) error {
+		cb(ctx, &observerInt64{inst: builder.LoadbalancerBackendState, obs: o})
+		return nil
+	}, builder.LoadbalancerBackendState)
+	if err != nil {
+		return err
+	}
+	builder.mu.Lock()
+	defer builder.mu.Unlock()
+	builder.registrations = append(builder.registrations, reg)
+	return nil
+}
+
+// RegisterLoadbalancerBackendsCallback sets callback for observable LoadbalancerBackends metric.
+func (builder *TelemetryBuilder) RegisterLoadbalancerBackendsCallback(cb metric.Int64Callback) error {
+	reg, err := builder.meter.RegisterCallback(func(ctx context.Context, o metric.Observer) error {
+		cb(ctx, &observerInt64{inst: builder.LoadbalancerBackends, obs: o})
+		return nil
+	}, builder.LoadbalancerBackends)
+	if err != nil {
+		return err
+	}
+	builder.mu.Lock()
+	defer builder.mu.Unlock()
+	builder.registrations = append(builder.registrations, reg)
+	return nil
+}
+
+type observerInt64 struct {
+	embedded.Int64Observer
+	inst metric.Int64Observable
+	obs  metric.Observer
+}
+
+func (oi *observerInt64) Observe(value int64, opts ...metric.ObserveOption) {
+	oi.obs.ObserveInt64(oi.inst, value, opts...)
 }
 
 // Shutdown unregister all registered callbacks for async instruments.
@@ -165,9 +208,9 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 		metric.WithUnit("{stale_endpoints}"),
 	)
 	errs = errors.Join(errs, err)
-	builder.LoadbalancerBackendState, err = builder.meter.Int64Gauge(
+	builder.LoadbalancerBackendState, err = builder.meter.Int64ObservableGauge(
 		"otelcol_loadbalancer_backend_state",
-		metric.WithDescription("Current endpoint health state by backend. [Development]"),
+		metric.WithDescription("Current endpoint health state by backend. Only backends present in the latest resolver result are reported. [Development]"),
 		metric.WithUnit("{backends}"),
 	)
 	errs = errors.Join(errs, err)
@@ -187,6 +230,12 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 		"otelcol_loadbalancer_backend_unquarantine_total",
 		metric.WithDescription("Number of times a backend endpoint was admitted after quarantine. [Development]"),
 		metric.WithUnit("{unquarantines}"),
+	)
+	errs = errors.Join(errs, err)
+	builder.LoadbalancerBackends, err = builder.meter.Int64ObservableGauge(
+		"otelcol_loadbalancer_backends",
+		metric.WithDescription("Current number of resolved backends by endpoint health state. [Development]"),
+		metric.WithUnit("{backends}"),
 	)
 	errs = errors.Join(errs, err)
 	builder.LoadbalancerNumBackendUpdates, err = builder.meter.Int64Counter(
