@@ -8,13 +8,16 @@ if not base or set(base) == {"0"}:
     print("false")
 else:
     paths = subprocess.check_output([
-        "git", "diff", "--no-renames", "--name-only", "-z", base, head, "--",
+        "git", "diff", "--no-renames", "--name-only", "-z", f"{base}...{head}", "--",
     ]).split(b"\0")[:-1]
-    docs_only = bool(paths) and all(
+    deleted = subprocess.check_output([
+        "git", "diff", "--no-renames", "--name-only", "-z", "--diff-filter=D",
+        f"{base}...{head}", "--",
+    ])
+    docs_only = not deleted and bool(paths) and all(
         path.rsplit(b"/", 1)[-1] not in (b"AGENTS.md", b"CLAUDE.md")
         and (path in (b"README.md", b"CONTRIBUTING.md", b"LICENSE")
-             or path.startswith(b"docs/") and path.endswith(b".md")
-             or path.endswith((b"/README.md", b"/documentation.md")))
+             or path.startswith(b"docs/") and path.endswith(b".md")))
         for path in paths
     )
     print(str(docs_only).lower())

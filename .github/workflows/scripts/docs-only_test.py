@@ -36,14 +36,23 @@ class DocsOnlyTest(unittest.TestCase):
                 return subprocess.run([sys.executable, str(CLASSIFIER), start, end],
                                       cwd=root, text=True, capture_output=True)
 
+            docs_head = git("rev-parse", "HEAD")
+            git("switch", "--quiet", "--detach", base)
+            (root / "app.go").write_text("main moved\n")
+            git("add", ".")
+            git("commit", "--quiet", "-m", "advance base")
+            advanced_base = git("rev-parse", "HEAD")
+            git("switch", "--quiet", "--detach", docs_head)
+            self.assertEqual(classify(advanced_base).stdout.strip(), "true")
             self.assertEqual(classify("HEAD").stdout.strip(), "false")
             self.assertEqual(classify("").stdout.strip(), "false")
             self.assertNotEqual(classify("invalid-base").returncode, 0)
             for path, expected in (
                 ("docs/guide.md", "true"),
-                ("exporter/example/README.md", "true"),
+                ("exporter/example/README.md", "false"),
                 ("docs/line\nname.md", "true"),
                 ("docs/AGENTS.md", "false"),
+                ("exporter/example/documentation.md", "false"),
                 ("processor/example/prompt.md", "false"),
                 ("app.go", "false"),
                 (".github/workflows/build-and-test.yml", "false"),
@@ -64,7 +73,7 @@ class DocsOnlyTest(unittest.TestCase):
             before = git("rev-parse", "HEAD")
             git("rm", "--quiet", "README.md")
             git("commit", "--quiet", "-m", "delete docs")
-            self.assertEqual(classify(before).stdout.strip(), "true")
+            self.assertEqual(classify(before).stdout.strip(), "false")
             self.assertEqual(classify(base).stdout.strip(), "false")
 
 
