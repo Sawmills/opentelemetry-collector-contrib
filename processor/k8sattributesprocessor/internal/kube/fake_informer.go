@@ -15,6 +15,22 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
+// alreadyDone is a cache.DoneChecker whose Done channel is always closed,
+// matching the fakes' HasSynced() always returning true.
+var alreadyDone = doneChecker{}
+
+type doneChecker struct{}
+
+func (doneChecker) Name() string {
+	return "fakeInformer"
+}
+
+func (doneChecker) Done() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
 type FakeInformer struct {
 	*FakeController
 
@@ -133,6 +149,10 @@ func (*FakeController) HasSynced() bool {
 	return true
 }
 
+func (*FakeController) HasSyncedChecker() cache.DoneChecker {
+	return alreadyDone
+}
+
 func (c *FakeController) Run(stopCh <-chan struct{}) {
 	<-stopCh
 	c.Lock()
@@ -223,6 +243,10 @@ func (c *NoOpController) IsStopped() bool {
 
 func (*NoOpController) HasSynced() bool {
 	return true
+}
+
+func (*NoOpController) HasSyncedChecker() cache.DoneChecker {
+	return alreadyDone
 }
 
 func (*NoOpController) LastSyncResourceVersion() string {
