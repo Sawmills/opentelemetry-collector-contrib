@@ -52,6 +52,8 @@ type exporterTelemetry struct {
 	uploadObjectSize         metric.Int64Histogram
 	flushToUploadDuration    metric.Int64Histogram
 	lastSuccessfulUpload     metric.Int64Gauge
+	routeFolders             metric.Int64Gauge
+	routeOverflowRecords     metric.Int64Counter
 }
 
 const (
@@ -67,6 +69,8 @@ const (
 	uploadObjectSizeMetricName      = "otelcol_exporter_awss3_upload_object_size"
 	flushToUploadDurationMetricName = "otelcol_exporter_awss3_flush_to_upload_duration"
 	lastSuccessfulUploadMetricName  = "otelcol_exporter_awss3_last_successful_upload_timestamp"
+	routeFoldersMetricName          = "otelcol_exporter_awss3_route_folders"
+	routeOverflowRecordsMetricName  = "otelcol_exporter_awss3_route_overflow_records_total"
 )
 
 type s3Exporter struct {
@@ -80,7 +84,8 @@ type s3Exporter struct {
 	shutOnce    sync.Once
 	timerWG     sync.WaitGroup
 	timerCancel context.CancelFunc
-	timerErr    error // Written by the timer worker; read after timerWG.Wait.
+	timerErr    error      // Written by the timer worker; read after timerWG.Wait.
+	routes      *logRoutes // Set when route_by_attribute is configured for logs.
 	recovery    *archiveRecovery
 }
 
@@ -144,6 +149,14 @@ func (e *s3Exporter) start(ctx context.Context, host component.Host) error {
 	}
 
 	e.marshaler = m
+
+	if e.signalType == "logs" && e.config.RouteByAttribute.Attribute != "" {
+		newSink, routeErr := e.newRouteSinkFactory(host)
+		if routeErr != nil {
+			return routeErr
+		}
+		e.routes = newLogRoutes(e.config.RouteByAttribute, newSink)
+	}
 
 	up, err := newUploadManager(ctx, e.config, e.logger, e.signalType, m.Format(), m.Compressed())
 	if err != nil {
@@ -229,6 +242,9 @@ func (e *s3Exporter) flushMarshaler(ctx context.Context, reason string) error {
 }
 
 func (e *s3Exporter) flushMarshalerAdmitted(ctx context.Context, reason string) error {
+	if e.routes != nil {
+		return e.flushRoutes(ctx, reason)
+	}
 	if e.marshaler == nil {
 		return nil
 	}
@@ -301,6 +317,9 @@ func (e *s3Exporter) ConsumeLogs(ctx context.Context, logs plog.Logs) error {
 }
 
 func (e *s3Exporter) consumeLogsAdmitted(ctx context.Context, logs plog.Logs) error {
+	if e.routes != nil {
+		return e.consumeRoutedLogs(ctx, logs)
+	}
 	flushStartedAt := time.Now()
 	e.telemetry.recordFlushStart(ctx, e.signalType)
 
@@ -400,6 +419,8 @@ func newExporterTelemetry(settings component.TelemetrySettings, logger *zap.Logg
 		logger,
 		metric.WithUnit("s"),
 	)
+	tel.routeFolders = mustGauge(meter, routeFoldersMetricName, logger, metric.WithUnit("{folder}"))
+	tel.routeOverflowRecords = mustCounter(meter, routeOverflowRecordsMetricName, logger, metric.WithUnit("{record}"))
 	return tel
 }
 
@@ -576,4 +597,18 @@ func (t *exporterTelemetry) recordRetainedArchive(ctx context.Context, signal st
 	if t.retainedArchiveBytes != nil {
 		t.retainedArchiveBytes.Record(ctx, size, attrs)
 	}
+}
+
+func (t *exporterTelemetry) recordRouteFolders(ctx context.Context, signal string, folders int64) {
+	if t == nil || t.routeFolders == nil {
+		return
+	}
+	t.routeFolders.Record(ctx, folders, metric.WithAttributes(attribute.String("signal", signal), attribute.String("exporter", t.exporterID)))
+}
+
+func (t *exporterTelemetry) recordRouteOverflow(ctx context.Context, signal string, records int64) {
+	if t == nil || t.routeOverflowRecords == nil {
+		return
+	}
+	t.routeOverflowRecords.Add(ctx, records, metric.WithAttributes(attribute.String("signal", signal), attribute.String("exporter", t.exporterID)))
 }

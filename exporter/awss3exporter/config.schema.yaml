@@ -11,6 +11,16 @@ $defs:
       s3_prefix:
         description: S3Prefix indicates the mapping of the key (directory) prefix used for writing into the bucket to a specific resource attribute value.
         type: string
+  route_by_attribute:
+    description: RouteByAttribute routes logs into a folder per value of an attribute.
+    type: object
+    properties:
+      attribute:
+        description: Attribute is looked up on each log record first, then on its resource. Each value becomes a hive-style folder under s3uploader.s3_prefix; records without it go to the __default__ folder. Logs only.
+        type: string
+      max_folders:
+        description: MaxFolders caps the number of distinct values that get their own folder (default 200). Values seen after the cap is reached go to the __default__ folder.
+        type: integer
   s_3_uploader_config:
     description: S3UploaderConfig contains aws s3 uploader related config to controls things like bucket, prefix, batching, connections, retries, etc.
     type: object
@@ -103,6 +113,8 @@ properties:
     type: integer
   resource_attrs_to_s3:
     $ref: resource_attrs_to_s_3
+  route_by_attribute:
+    $ref: route_by_attribute
   s3uploader:
     $ref: s_3_uploader_config
   sending_queue:

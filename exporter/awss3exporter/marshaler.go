@@ -43,11 +43,15 @@ type encodingMarshaler struct {
 }
 
 func newMarshalerFromEncoding(encoding *component.ID, fileFormat string, host component.Host) (marshaler, error) {
-	marshaler := &encodingMarshaler{fileFormat: fileFormat}
 	e, ok := host.GetExtensions()[*encoding]
 	if !ok {
 		return nil, fmt.Errorf("unknown encoding %q", encoding)
 	}
+	return newEncodingMarshaler(e, fileFormat), nil
+}
+
+func newEncodingMarshaler(e any, fileFormat string) *encodingMarshaler {
+	marshaler := &encodingMarshaler{fileFormat: fileFormat}
 	marshaler.logsMarshaler, _ = e.(plog.Marshaler)
 	marshaler.metricsMarshaler, _ = e.(pmetric.Marshaler)
 	marshaler.tracesMarshaler, _ = e.(ptrace.Marshaler)
@@ -60,7 +64,7 @@ func newMarshalerFromEncoding(encoding *component.ID, fileFormat string, host co
 	if flusher, ok := e.(traceFlusher); ok {
 		marshaler.extTraceFlusher = flusher
 	}
-	return marshaler, nil
+	return marshaler
 }
 
 func (marshaler *encodingMarshaler) MarshalTraces(td ptrace.Traces) ([]byte, error) {

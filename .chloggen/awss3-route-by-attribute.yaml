@@ -1,0 +1,7 @@
+change_type: enhancement
+component: exporter/awss3
+note: Route logs into hive-style folders by an attribute value.
+issues: [0]
+subtext: |
+  Set route_by_attribute.attribute to write each value to <s3_prefix>/<attribute>=<value>/.
+  Each folder keeps its own buffer; max_folders (default 200) caps distinct folders.
