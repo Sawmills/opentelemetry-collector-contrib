@@ -57,13 +57,13 @@ func init() {
 }
 
 func getLogExporter(t *testing.T) *s3Exporter {
-	marshaler, err := awss3marshaler.NewMarshaler("otlp_json")
+	m, err := awss3marshaler.NewMarshaler("otlp_json")
 	require.NoError(t, err)
 	exporter := &s3Exporter{
 		config:    createDefaultConfig().(*Config),
 		uploader:  &testWriter{t: t, expectedOpts: &upload.UploadOptions{OverridePrefix: ""}},
 		logger:    zap.NewNop(),
-		marshaler: marshaler,
+		marshaler: m,
 	}
 	return exporter
 }
@@ -75,7 +75,7 @@ func TestLog(t *testing.T) {
 }
 
 func getLogExporterWithResourceAttrs(t *testing.T) *s3Exporter {
-	marshaler, err := awss3marshaler.NewMarshaler("otlp_json")
+	m, err := awss3marshaler.NewMarshaler("otlp_json")
 	require.NoError(t, err)
 	config := createDefaultConfig().(*Config)
 	config.ResourceAttrsToS3.S3Prefix = s3PrefixKey
@@ -83,7 +83,7 @@ func getLogExporterWithResourceAttrs(t *testing.T) *s3Exporter {
 		config:    config,
 		uploader:  &testWriter{t: t, expectedOpts: &upload.UploadOptions{OverridePrefix: overridePrefix}},
 		logger:    zap.NewNop(),
-		marshaler: marshaler,
+		marshaler: m,
 	}
 	return exporter
 }
@@ -95,7 +95,7 @@ func TestLogWithResourceAttrs(t *testing.T) {
 }
 
 func getLogExporterWithBucketAndPrefixAttrs(t *testing.T) *s3Exporter {
-	marshaler, err := awss3marshaler.NewMarshaler("otlp_json")
+	m, err := awss3marshaler.NewMarshaler("otlp_json")
 	require.NoError(t, err)
 	config := createDefaultConfig().(*Config)
 	config.ResourceAttrsToS3.S3Bucket = s3BucketKey
@@ -104,7 +104,7 @@ func getLogExporterWithBucketAndPrefixAttrs(t *testing.T) *s3Exporter {
 		config:    config,
 		uploader:  &testWriter{t: t, expectedOpts: &upload.UploadOptions{OverrideBucket: overrideBucket, OverridePrefix: overridePrefix}},
 		logger:    zap.NewNop(),
-		marshaler: marshaler,
+		marshaler: m,
 	}
 	return exporter
 }
