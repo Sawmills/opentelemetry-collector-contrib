@@ -6,6 +6,7 @@ package loadbalancingexporter_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"net"
 	"slices"
 	"sync"
@@ -93,8 +94,8 @@ func TestCentralQueueRetainsLogsWhenConnectionRebuildStartFails(t *testing.T) {
 	exp, store, reader := newDurableSignalTestExporterWithQueueConfig(t, t.TempDir(), []string{listener.Addr().String()}, "logs",
 		map[component.ID]component.Component{id: middleware}, map[string]any{"reconnect_after_timeouts": 1}, 3*time.Second)
 	t.Cleanup(func() {
-		require.NoError(t, exp.Shutdown(context.Background()))
-		require.NoError(t, store.Shutdown(context.Background()))
+		require.NoError(t, exp.Shutdown(context.WithoutCancel(t.Context())))
+		require.NoError(t, store.Shutdown(context.WithoutCancel(t.Context())))
 	})
 	require.NoError(t, exp.(exporter.Logs).ConsumeLogs(t.Context(), connectionRecoveryInput(71, 72)))
 	require.Eventually(t, func() bool {
@@ -124,8 +125,8 @@ func TestCentralQueueCoalescesConnectionRebuildsWhileStartupWaits(t *testing.T) 
 		map[component.ID]component.Component{id: middleware}, map[string]any{"reconnect_after_timeouts": 1}, 3*time.Second)
 	t.Cleanup(func() {
 		release()
-		require.NoError(t, exp.Shutdown(context.Background()))
-		require.NoError(t, store.Shutdown(context.Background()))
+		require.NoError(t, exp.Shutdown(context.WithoutCancel(t.Context())))
+		require.NoError(t, store.Shutdown(context.WithoutCancel(t.Context())))
 	})
 	require.NoError(t, exp.(exporter.Logs).ConsumeLogs(t.Context(), connectionRecoveryInput(81, 82)))
 	select {
@@ -168,8 +169,8 @@ func TestCentralQueueShutdownCancelsPendingConnectionRebuild(t *testing.T) {
 	t.Cleanup(func() {
 		release()
 		if !closed {
-			_ = exp.Shutdown(context.Background())
-			_ = store.Shutdown(context.Background())
+			_ = exp.Shutdown(context.WithoutCancel(t.Context()))
+			_ = store.Shutdown(context.WithoutCancel(t.Context()))
 		}
 	})
 	require.NoError(t, exp.(exporter.Logs).ConsumeLogs(t.Context(), connectionRecoveryInput(91, 92)))
@@ -190,8 +191,8 @@ func TestCentralQueueShutdownCancelsPendingConnectionRebuild(t *testing.T) {
 	closed = true
 	recovered, recoveredStore, recoveredReader := newDurableSignalTestExporterWithQueueConfig(t, dir, []string{listener.Addr().String()}, "logs", nil, nil, 3*time.Second)
 	t.Cleanup(func() {
-		require.NoError(t, recovered.Shutdown(context.Background()))
-		require.NoError(t, recoveredStore.Shutdown(context.Background()))
+		require.NoError(t, recovered.Shutdown(context.WithoutCancel(t.Context())))
+		require.NoError(t, recoveredStore.Shutdown(context.WithoutCancel(t.Context())))
 	})
 	require.Eventually(t, func() bool {
 		return durableMetricValue(t, recoveredReader, "otelcol_loadbalancer_central_queue_durable_pending_items") == 0
@@ -261,9 +262,7 @@ func newConnectionRecoveryExporter(t *testing.T, endpoint, source string, queueO
 		"target_compressed_bytes": 512, "max_batch_delay": "5ms", "num_consumers": 2, "lane_count": 1,
 	}
 	for _, options := range queueOptions {
-		for key, value := range options {
-			queueConfig[key] = value
-		}
+		maps.Copy(queueConfig, options)
 	}
 	require.NoError(t, confmap.NewFromStringMap(map[string]any{
 		"protocol": map[string]any{"otlp": map[string]any{
@@ -278,7 +277,7 @@ func newConnectionRecoveryExporter(t *testing.T, endpoint, source string, queueO
 	require.NoError(t, cfg.(*loadbalancingexporter.Config).Validate())
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.WithoutCancel(t.Context()))) })
 	settings := exportertest.NewNopSettings(factory.Type())
 	settings.ID = component.NewIDWithName(factory.Type(), source)
 	settings.MeterProvider = provider
@@ -344,7 +343,7 @@ func TestCentralQueueRecoversPerLBConnectionWithoutLosingAcceptedLogs(t *testing
 		destination.mu.Lock()
 		destination.released = true
 		destination.mu.Unlock()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 5*time.Second)
 		defer cancel()
 		require.NoError(t, stuck.Shutdown(ctx))
 		require.NoError(t, healthy.Shutdown(ctx))
@@ -391,7 +390,7 @@ func TestCentralQueueTimeoutStreakResetsOnOtherResults(t *testing.T) {
 				destination.mu.Lock()
 				destination.released = true
 				destination.mu.Unlock()
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 5*time.Second)
 				defer cancel()
 				require.NoError(t, exp.Shutdown(ctx))
 			})
