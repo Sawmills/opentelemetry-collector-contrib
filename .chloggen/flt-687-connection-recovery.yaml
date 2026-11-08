@@ -1,0 +1,9 @@
+change_type: bug_fix
+component: exporter/loadbalancing
+note: Rebuild a logs central queue backend connection after consecutive timeouts without discarding accepted records.
+issues: []
+subtext: |
+  Adds central_queue.reconnect_after_timeouts, defaulting to 3 with an allowed range of 1 through 100.
+  Replaces only the affected LB's child exporter generation and preserves queue ownership and routing membership.
+  Counts rebuild outcomes with bounded labels. Maximum retry age and external fallback remain a separate decision for FLT-687.
+change_logs: [user]

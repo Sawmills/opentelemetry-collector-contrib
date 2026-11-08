@@ -42,15 +42,17 @@ type loadBalancer struct {
 	res  resolver
 	ring *hashRing
 
-	componentFactory  componentFactory
-	exporters         map[string]*wrappedExporter
-	onExporterRemove  func(context.Context, string, *wrappedExporter) error
-	telemetry         *metadata.TelemetryBuilder
-	backendSignal     string
-	endpointHealth    *endpointHealthManager
-	activeProbe       EndpointHealthActiveProbeConfig
-	activeProbeJitter float64
-	activeProbeFunc   func(context.Context, string) error
+	componentFactory       componentFactory
+	exporters              map[string]*wrappedExporter
+	onExporterRemove       func(context.Context, string, *wrappedExporter) error
+	telemetry              *metadata.TelemetryBuilder
+	backendSignal          string
+	reconnectAfterTimeouts int
+	recoveryTelemetry      *centralQueueTelemetry
+	endpointHealth         *endpointHealthManager
+	activeProbe            EndpointHealthActiveProbeConfig
+	activeProbeJitter      float64
+	activeProbeFunc        func(context.Context, string) error
 
 	stopped   bool
 	cleanupMu sync.Mutex
@@ -187,6 +189,9 @@ func newLoadBalancerForSignal(logger *zap.Logger, cfg component.Config, factory 
 		activeProbeJitter: activeProbeJitter,
 	}
 	lb.backendSignal = backendSignal
+	if backendSignal == backendRequestSignalLogs && oCfg.CentralQueue.Enabled {
+		lb.reconnectAfterTimeouts = oCfg.CentralQueue.effectiveReconnectAfterTimeouts()
+	}
 	return lb, nil
 }
 

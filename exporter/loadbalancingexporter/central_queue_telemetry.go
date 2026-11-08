@@ -29,6 +29,7 @@ type centralQueueTelemetry struct {
 	routingKeyFailures                          metric.Int64Counter
 	routingKeySkips                             metric.Int64Counter
 	retries                                     metric.Int64Counter
+	connectionRebuilds                          metric.Int64Counter
 	decodeFailures                              metric.Int64Counter
 	shutdownDroppedItems                        metric.Int64Counter
 	storageFailures                             metric.Int64Counter
@@ -232,6 +233,12 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 		"otelcol_loadbalancer_central_queue_retries",
 		metric.WithDescription("Central load-balancing queue item retries."),
 		metric.WithUnit("{retries}"),
+	)
+	errs = errors.Join(errs, err)
+	t.connectionRebuilds, err = meter.Int64Counter(
+		"otelcol_loadbalancer_backend_connection_rebuilds",
+		metric.WithDescription("Backend connection rebuild attempts by bounded result, excluding normal exporter creation."),
+		metric.WithUnit("{attempts}"),
 	)
 	errs = errors.Join(errs, err)
 	t.decodeFailures, err = meter.Int64Counter(
@@ -552,6 +559,12 @@ func (t *centralQueueTelemetry) recordRetry(ctx context.Context) {
 		return
 	}
 	t.retries.Add(ctx, 1, t.signalAttrs)
+}
+
+func (t *centralQueueTelemetry) recordConnectionRebuild(ctx context.Context, result string) {
+	if t != nil {
+		t.connectionRebuilds.Add(ctx, 1, t.signalAttrs, metric.WithAttributes(attribute.String("result", result)))
+	}
 }
 
 func (t *centralQueueTelemetry) recordDecodeFailure(ctx context.Context, droppedItems int64) {

@@ -270,6 +270,7 @@ const (
 	defaultCentralQueueNumConsumers              = 30
 	defaultCentralQueueActiveLBReplicas          = 1
 	defaultCentralQueueShutdownTimeout           = 5 * time.Minute
+	defaultCentralQueueReconnectAfterTimeouts    = 3
 )
 
 type CentralQueueConfig struct {
@@ -288,7 +289,10 @@ type CentralQueueConfig struct {
 	MaxBatchDelay                 time.Duration `mapstructure:"max_batch_delay"`
 	// ShutdownTimeout bounds graceful drain. Zero uses five minutes; a caller's
 	// earlier deadline still wins. Kubernetes grace must cover the whole drain.
-	ShutdownTimeout            time.Duration        `mapstructure:"shutdown_timeout"`
+	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
+	// ReconnectAfterTimeouts defaults to three when omitted. Only logs central
+	// queue sends use this generation-local connection recovery threshold.
+	ReconnectAfterTimeouts     *int                 `mapstructure:"reconnect_after_timeouts"`
 	LaneCount                  int                  `mapstructure:"lane_count"`
 	MinLanes                   int                  `mapstructure:"min_lanes"`
 	MaxLanes                   int                  `mapstructure:"max_lanes"`
@@ -474,6 +478,9 @@ func (c CentralQueueConfig) Validate() error {
 	if !c.Enabled {
 		return nil
 	}
+	if threshold := c.effectiveReconnectAfterTimeouts(); threshold < 1 || threshold > 100 {
+		return errors.New("central_queue.reconnect_after_timeouts must be between 1 and 100")
+	}
 	if c.LoadBalancerDNS != nil && c.LoadBalancerService != "" {
 		return errors.New("central_queue.load_balancer_dns and load_balancer_service are mutually exclusive")
 	}
@@ -545,6 +552,13 @@ func (c CentralQueueConfig) Validate() error {
 		return errors.New("central_queue.lane_hysteresis_factor must be greater than or equal to 0 when central_queue.enabled=true")
 	}
 	return nil
+}
+
+func (c CentralQueueConfig) effectiveReconnectAfterTimeouts() int {
+	if c.ReconnectAfterTimeouts == nil {
+		return defaultCentralQueueReconnectAfterTimeouts
+	}
+	return *c.ReconnectAfterTimeouts
 }
 
 func (c LogBatcherConfig) Validate() error {

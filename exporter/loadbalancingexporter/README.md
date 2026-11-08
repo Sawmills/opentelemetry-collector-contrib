@@ -181,6 +181,7 @@ Refer to [config.yaml](./testdata/config.yaml) for detailed examples on using th
   * `max_inflight_uncompressed_bytes` limits concurrently decompressed bytes while dispatching queue items. Default: `536870912` (`512 MiB`).
   * `target_compressed_bytes` is the soft compressed-size target for one backend request assembled from queued payloads. Default: `262144` (`256 KiB`).
   * `max_batch_delay` bounds how long a small backend lane can wait for more queued payloads before dispatch. Default: `250ms`.
+  * `reconnect_after_timeouts` replaces one logs central queue backend connection after consecutive timeout results. Default: `3`; allowed values: `1` through `100`. A successful send or a different error clears the streak. The streak belongs to one endpoint and one child exporter generation within one LB. DNS failures and cancellation do not trigger a replacement. Other signals and non-central-queue sends keep their existing behavior.
   * `num_consumers` sets the configured maximum number of parallel central queue drain workers per signal exporter. Runtime drain parallelism is capped by queue demand, routable backend capacity, active load-balancer replica count, and backend pressure. Default: `30`.
   * Backend pressure applies one 50% drain-concurrency reduction per continuous pressure episode. The reduced limit is held until pressure clears, then recovers gradually; a later pressure episode can reduce the recovered limit again.
   * `active_load_balancer_replicas` sets the number of LB replicas used to divide backend-safe drain concurrency per LB pod. Default: `1`.
@@ -203,6 +204,16 @@ Refer to [config.yaml](./testdata/config.yaml) for detailed examples on using th
   * At the shutdown deadline, durable entries remain on disk as deferred recovery work and do not increment `shutdown_dropped_items`. A still-desired StatefulSet ordinal must reopen its original claim. A scaled-in ordinal requires an owned restore-and-drain procedure. Never discard its claim or switch to a binary that ignores the store while entries remain. Drain the durable owner before disabling this option. Volume destruction is outside the restart guarantee.
   * `otelcol_loadbalancer_central_queue_durable_pending_items` and `_durable_pending_bytes` report retained records and compressed payload bytes, including in-flight work. The bytes exclude storage metadata and filesystem headroom. `_durable_oldest_enqueued_time` is the oldest admission's Unix time, or zero when empty. `_durable_deferred_items` reports work retained after this owner stops. `_durable_terminal_rejected_items` is the persisted cumulative rejection count for this store. `_storage_failures{signal,operation,reason}` counts each failed durable operation once; cached refusal after an uncertain commit adds no attempt. These names share the `otelcol_loadbalancer_central_queue` prefix.
   * Central queue mode is incompatible with `sending_queue.enabled=true`, `protocol.otlp.sending_queue`, `log_batcher.enabled=true`, and `metric_batcher.enabled=true`. Child OTLP exporter queues are disabled while central queue mode is active.
+
+### Backend Connection Recovery
+
+The logs exporter keeps connection recovery behind its existing configuration and `Start`, `ConsumeLogs`, and `Shutdown` interface. It tracks timeout streaks, starts replacements, and retires old child exporters internally. The queue retains accepted records and their original admission times. Replacing a connection preserves routing membership and does not change another endpoint or LB.
+
+Only one replacement may start for a child generation at a time. A successful send can cancel a pending replacement by clearing the streak. Results from a retired generation cannot replace the current child. The old child waits for its in-flight calls before shutdown. Failed replacement creation or startup retains the old child and queued records for retry. Shutdown and membership removal prevent a late replacement from restoring an obsolete endpoint.
+
+`otelcol_loadbalancer_backend_connection_rebuilds{signal="logs",result}` counts completed rebuild attempts, in attempts rather than records. The bounded results are `success`, `create_failed`, `start_failed`, and `superseded`. Each attempt adds one result. `superseded` means the original generation or its timeout streak changed, or shutdown began. Endpoint values appear in structured logs, not in this counter. Existing backend timeout and retry counters continue to count the failed sends separately. This counter adds no notification route.
+
+Connection recovery adds no maximum retry age or external fallback delivery. Accepted queued logs do not retain the original ingress request needed by HAProxy fallback. A fallback exporter, explicit expiry policy, or durable dead-letter store requires a separate delivery and ownership decision.
 
 Durable logs and metrics require an enabled storage extension. For example:
 

@@ -29,6 +29,10 @@ type wrappedExporter struct {
 	stopping        atomic.Bool
 	shutdownStarted bool
 	endpoint        string
+	// Connection recovery state belongs to this generation and is protected by
+	// the owning load balancer's updateLock.
+	consecutiveTimeouts int
+	rebuilding          bool
 
 	// we store the attributes here for both cases, to avoid new allocations on the hot path
 	endpointAttr            attribute.Set
