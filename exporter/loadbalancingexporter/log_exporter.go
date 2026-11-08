@@ -118,6 +118,7 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 		if telemetryErr != nil {
 			return nil, telemetryErr
 		}
+		lb.recoveryTelemetry = centralTelemetry
 		logExporter.centralQueue = newCentralQueue(centralQueueSettings{
 			maxCompressedBytes:            centralCfg.MaxCompressedBytes,
 			maxInflightUncompressedBytes:  centralCfg.MaxInflightUncompressedBytes,
@@ -727,12 +728,19 @@ func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrapp
 	if !started {
 		return endpointHealthFailureDecision{}, errLogBatcherExporterStopping
 	}
-	defer le.doneConsume()
+	var backendErr error
+	defer func() {
+		le.doneConsume()
+		if e.centralQueue != nil {
+			e.loadBalancer.recordBackendConnectionResult(ctx, le, backendErr)
+		}
+	}()
 
 	recordLogBackendRequest(ctx, e.telemetry, le.logSignalAttr, le.logRequestAttr, ld)
 	numRecords := ld.LogRecordCount()
 	start := time.Now()
 	err := e.consumeBackendLogs(ctx, le, ld)
+	backendErr = err
 	duration := time.Since(start)
 	if numRecords > 0 || err != nil {
 		recordBackendFailedOutcome(ctx, e.telemetry, le.logFailureSignalAttr, err)

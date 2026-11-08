@@ -56,6 +56,13 @@ $defs:
         type: integer
         minimum: 1
         description: Must be greater than 0 when central_queue.enabled is true.
+      reconnect_after_timeouts:
+        x-pointer: true
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 3
+        description: Consecutive timeout results before replacing one logs central queue backend connection. Omission uses three. Other signals and non-central-queue sends are unchanged.
       max_inflight_uncompressed_bytes:
         type: integer
         minimum: 1
