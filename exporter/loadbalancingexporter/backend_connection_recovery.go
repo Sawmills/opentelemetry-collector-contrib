@@ -52,10 +52,10 @@ func (lb *loadBalancer) recordBackendConnectionResult(ctx context.Context, faile
 }
 
 func (lb *loadBalancer) timeoutGenerationCurrent(failed *wrappedExporter) bool {
-	lb.cleanupMu.Lock()
-	defer lb.cleanupMu.Unlock()
 	lb.updateLock.RLock()
 	defer lb.updateLock.RUnlock()
+	lb.cleanupMu.Lock()
+	defer lb.cleanupMu.Unlock()
 	return !lb.stopped && lb.exporters[failed.endpoint] == failed && !failed.isStopping() &&
 		failed.consecutiveTimeouts >= lb.reconnectAfterTimeouts
 }
@@ -92,16 +92,16 @@ func (lb *loadBalancer) rebuildTimedOutBackend(ctx context.Context, failed *wrap
 		return
 	}
 	installed := false
-	lb.cleanupMu.Lock()
 	lb.updateLock.Lock()
+	lb.cleanupMu.Lock()
 	if !lb.stopped && lb.exporters[failed.endpoint] == failed && !failed.isStopping() &&
 		failed.consecutiveTimeouts >= lb.reconnectAfterTimeouts {
 		failed.markStopping()
 		lb.exporters[failed.endpoint] = replacement
 		installed = true
 	}
-	lb.updateLock.Unlock()
 	lb.cleanupMu.Unlock()
+	lb.updateLock.Unlock()
 	if !installed {
 		lb.shutdownSkippedExporter(ctx, failed.endpoint, replacement)
 		lb.recoveryTelemetry.recordConnectionRebuild(ctx, "superseded")
