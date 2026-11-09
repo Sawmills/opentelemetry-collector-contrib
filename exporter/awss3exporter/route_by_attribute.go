@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.uber.org/zap"
 
@@ -48,6 +49,27 @@ func routePrefix(prefix, folder string) string {
 	return prefix + "/" + folder
 }
 
+// lookupAttribute returns the value of key, either as a flat attribute or as a
+// dotted path into map values (sawmills.service -> sawmills: {service: ...}).
+func lookupAttribute(attrs pcommon.Map, key string) (string, bool) {
+	if v, ok := attrs.Get(key); ok {
+		return v.AsString(), true
+	}
+	for i := strings.IndexByte(key, '.'); i >= 0; {
+		if v, ok := attrs.Get(key[:i]); ok && v.Type() == pcommon.ValueTypeMap {
+			if value, found := lookupAttribute(v.Map(), key[i+1:]); found {
+				return value, true
+			}
+		}
+		next := strings.IndexByte(key[i+1:], '.')
+		if next < 0 {
+			break
+		}
+		i += next + 1
+	}
+	return "", false
+}
+
 // splitLogsByRoute groups records by the attribute's value, looking at the
 // record first and its resource second, keeping resource and scope data.
 func splitLogsByRoute(ld plog.Logs, attribute string) []routedLogs {
@@ -55,19 +77,16 @@ func splitLogsByRoute(ld plog.Logs, attribute string) []routedLogs {
 	index := map[string]int{}
 	for i := 0; i < ld.ResourceLogs().Len(); i++ {
 		rl := ld.ResourceLogs().At(i)
-		resourceValue := ""
-		if v, ok := rl.Resource().Attributes().Get(attribute); ok {
-			resourceValue = v.AsString()
-		}
+		resourceValue, _ := lookupAttribute(rl.Resource().Attributes(), attribute)
 		for j := 0; j < rl.ScopeLogs().Len(); j++ {
 			sl := rl.ScopeLogs().At(j)
 			// One destination ScopeLogs per folder for this source ScopeLogs.
 			scopes := map[string]plog.ScopeLogs{}
 			for k := 0; k < sl.LogRecords().Len(); k++ {
 				lr := sl.LogRecords().At(k)
-				value := resourceValue
-				if v, ok := lr.Attributes().Get(attribute); ok {
-					value = v.AsString()
+				value, ok := lookupAttribute(lr.Attributes(), attribute)
+				if !ok {
+					value = resourceValue
 				}
 				folder, _ := routeFolder(value)
 

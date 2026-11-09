@@ -112,7 +112,8 @@ type ResourceAttrsToS3 struct {
 
 // RouteByAttribute routes logs into a folder per value of an attribute.
 type RouteByAttribute struct {
-	// Attribute is looked up on each log record first, then on its resource.
+	// Attribute is looked up on each log record first, then on its resource,
+	// as a flat key or as a dotted path into map values.
 	// Each value becomes a hive-style folder under s3uploader.s3_prefix; records
 	// without it go to the __default__ folder. Logs only.
 	Attribute string `mapstructure:"attribute"`

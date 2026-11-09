@@ -215,7 +215,7 @@ databucket/metric/YYYY/MM/DD/HH/mm
 
 ## Routing logs into folders by attribute
 When `route_by_attribute/attribute` is set, each log record is written under a hive-style folder `<attribute>=<value>`, nested under `s3uploader/s3_prefix`.
-The attribute is read from the log record first and from its resource second. Dots and `/` in the attribute name become `_` so the folder can be used as a partition column (for example in Athena).
+The attribute is read from the log record first and from its resource second, either as a flat key (`sawmills.service`) or as a dotted path into map values (`sawmills: {service: payments}`). Dots and `/` in the attribute name become `_` so the folder can be used as a partition column (for example in Athena).
 Values are used as-is, except that `/` is replaced by `_`. Records without the attribute (or with an empty, `.` or `..` value) go to `<attribute>=__default__`.
 
 Each folder has its own buffer: with a buffering marshaler (`max_file_size_bytes`, or an encoding extension), a folder is uploaded when its buffer reaches the size limit and on every partition flush, not on every batch.

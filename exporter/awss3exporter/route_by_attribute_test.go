@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/confmap"
 	"go.opentelemetry.io/collector/exporter/exportertest"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/pdata/ptrace"
@@ -466,4 +467,65 @@ func TestRouteByAttributeConfig(t *testing.T) {
 	cfg.ResourceAttrsToS3.S3Prefix = ""
 	cfg.ArchiveRecovery = true
 	assert.ErrorContains(t, cfg.Validate(), "route_by_attribute cannot be combined with archive_recovery")
+}
+
+func TestRouteValueNestedAttribute(t *testing.T) {
+	newMap := func(fill func(pcommon.Map)) pcommon.Map {
+		m := pcommon.NewMap()
+		fill(m)
+		return m
+	}
+	tests := []struct {
+		name  string
+		attrs pcommon.Map
+		want  string
+		found bool
+	}{
+		{"flat key", newMap(func(m pcommon.Map) { m.PutStr("sawmills.service", "flat") }), "flat", true},
+		{"nested map (BHN shape)", newMap(func(m pcommon.Map) {
+			s := m.PutEmptyMap("sawmills")
+			s.PutStr("service", "tango")
+			s.PutEmptySlice("sampled_by").AppendEmpty().SetStr("x")
+		}), "tango", true},
+		{"flat key wins over nested", newMap(func(m pcommon.Map) {
+			m.PutStr("sawmills.service", "flat")
+			m.PutEmptyMap("sawmills").PutStr("service", "nested")
+		}), "flat", true},
+		{"partially dotted nesting", newMap(func(m pcommon.Map) {
+			m.PutEmptyMap("a").PutStr("b.c", "v")
+		}), "", false},
+		{"missing", newMap(func(m pcommon.Map) { m.PutEmptyMap("sawmills").PutStr("other", "x") }), "", false},
+		{"non-map parent", newMap(func(m pcommon.Map) { m.PutStr("sawmills", "x") }), "", false},
+		{"non-string value", newMap(func(m pcommon.Map) { m.PutEmptyMap("sawmills").PutInt("service", 7) }), "7", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, found := lookupAttribute(tt.attrs, routeAttr)
+			assert.Equal(t, tt.found, found)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+
+	ab := pcommon.NewMap()
+	ab.PutEmptyMap("a").PutStr("b.c", "v")
+	got, found := lookupAttribute(ab, "a.b.c")
+	assert.True(t, found, "a key segment may itself contain dots")
+	assert.Equal(t, "v", got)
+}
+
+func TestSplitLogsByRouteNestedAttribute(t *testing.T) {
+	ld := plog.NewLogs()
+	rl := ld.ResourceLogs().AppendEmpty()
+	rl.Resource().Attributes().PutEmptyMap("sawmills").PutStr("service", "from-resource")
+	lrs := rl.ScopeLogs().AppendEmpty().LogRecords()
+	lr := lrs.AppendEmpty()
+	lr.Body().SetStr("r1")
+	lr.Attributes().PutEmptyMap("sawmills").PutStr("service", "tango")
+	lrs.AppendEmpty().Body().SetStr("r2")
+
+	got := map[string][]string{}
+	for _, g := range splitLogsByRoute(ld, routeAttr) {
+		got[g.folder] = bodies(g.logs)
+	}
+	assert.Equal(t, map[string][]string{"tango": {"r1"}, "from-resource": {"r2"}}, got)
 }

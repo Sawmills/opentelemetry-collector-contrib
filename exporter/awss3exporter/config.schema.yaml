@@ -16,7 +16,7 @@ $defs:
     type: object
     properties:
       attribute:
-        description: Attribute is looked up on each log record first, then on its resource. Each value becomes a hive-style folder under s3uploader.s3_prefix; records without it go to the __default__ folder. Logs only.
+        description: Attribute is looked up on each log record first, then on its resource, as a flat key or as a dotted path into map values. Each value becomes a hive-style folder under s3uploader.s3_prefix; records without it go to the __default__ folder. Logs only.
         type: string
       max_folders:
         description: MaxFolders caps the number of distinct values that get their own folder (default 200). Values seen after the cap is reached go to the __default__ folder.
