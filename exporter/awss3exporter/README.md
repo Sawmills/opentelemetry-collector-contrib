@@ -41,6 +41,7 @@ The following exporter configuration parameters are supported.
 | `sending_queue`           | [exporters common queuing](https://github.com/open-telemetry/opentelemetry-collector/blob/main/exporter/exporterhelper/README.md)                                                                                          | disabled                                    |
 | `timeout`                 | [exporters common timeout](https://github.com/open-telemetry/opentelemetry-collector/blob/main/exporter/exporterhelper/README.md)                                                                                          | 5s                                          |
 | `resource_attrs_to_s3`    | determines the mapping of S3 configuration values to resource attribute values for uploading operations.                                                                                                                   |                                             |
+| `route_by_attribute`      | logs only: writes each value of `route_by_attribute/attribute` to its own hive-style folder under `s3_prefix`. See below.                                                                                                  |                                             |
 | `retry_mode`              | The retryer implementation, the supported values are "standard", "adaptive" and "nop". "nop" will set the retryer as `aws.NopRetryer`, which effectively disable the retry.                                                | standard                                    |
 | `retry_max_attempts`      | The max number of attempts for retrying a request if the `retry_mode` is set. Setting max attempts to 0 will allow the SDK to retry all retryable errors until the request succeeds, or a non-retryable error is returned. | 3                                           |
 | `retry_max_backoff`       | the max backoff delay that can occur before retrying a request if `retry_mode` is set                                                                                                                                      | 20s                                         |
@@ -211,6 +212,32 @@ bucket3/prefix-bar/YYYY/MM/DD/HH/mm
 databucket/metric/YYYY/MM/DD/HH/mm
 ...
 ```
+
+## Routing logs into folders by attribute
+When `route_by_attribute/attribute` is set, each log record is written under a hive-style folder `<attribute>=<value>`, nested under `s3uploader/s3_prefix`.
+The attribute is read from the log record first and from its resource second, either as a flat key (`sawmills.service`) or as a dotted path into map values (`sawmills: {service: payments}`). Dots and `/` in the attribute name become `_` so the folder can be used as a partition column (for example in Athena).
+Values are used as-is, except that `/` is replaced by `_`. Records without the attribute (or with an empty, `.` or `..` value) go to `<attribute>=__default__`.
+
+Each folder has its own buffer: with a buffering marshaler (`max_file_size_bytes`, or an encoding extension), a folder is uploaded when its buffer reaches the size limit and on every partition flush, not on every batch.
+An encoding extension must be able to create independent encoders (`NewLogEncoder() (plog.Marshaler, error)`) to be used with routing.
+
+`route_by_attribute/max_folders` (default 200) caps the number of distinct values that get their own folder. Records with new values seen after the cap is reached go to the `__default__` folder and are counted in `otelcol_exporter_awss3_route_overflow_records_total`. `otelcol_exporter_awss3_route_folders` reports the number of value folders.
+```yaml
+exporters:
+  awss3:
+    s3uploader:
+      region: 'eu-central-1'
+      s3_bucket: 'databucket'
+      s3_prefix: 'logs'
+    route_by_attribute:
+      attribute: service.name
+```
+```console
+databucket/logs/service_name=payments/year=YYYY/month=MM/day=DD/hour=HH/minute=mm/logs_*.json
+databucket/logs/service_name=orders/year=YYYY/month=MM/day=DD/hour=HH/minute=mm/logs_*.json
+databucket/logs/service_name=__default__/year=YYYY/month=MM/day=DD/hour=HH/minute=mm/logs_*.json
+```
+`route_by_attribute` cannot be combined with `resource_attrs_to_s3` (`s3_prefix` or `s3_bucket`) or `archive_recovery`.
 
 ## Base Path with Resource Attributes
 

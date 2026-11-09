@@ -27,6 +27,8 @@ const (
 	// jsonBatchingMarshaler flushes its buffer to S3.  256 MiB targets
 	// fewer / larger S3 objects, matching the old sawmills-collector fork default.
 	defaultMaxFileSizeBytes = 256 * 1024 * 1024
+	// defaultRouteMaxFolders is the default route_by_attribute folder cap.
+	defaultRouteMaxFolders = 200
 )
 
 // S3UploaderConfig contains aws s3 uploader related config to controls things
@@ -108,6 +110,21 @@ type ResourceAttrsToS3 struct {
 	_ struct{}
 }
 
+// RouteByAttribute routes logs into a folder per value of an attribute.
+type RouteByAttribute struct {
+	// Attribute is looked up on each log record first, then on its resource,
+	// as a flat key or as a dotted path into map values.
+	// Each value becomes a hive-style folder under s3uploader.s3_prefix; records
+	// without it go to the __default__ folder. Logs only.
+	Attribute string `mapstructure:"attribute"`
+	// MaxFolders caps the number of distinct values that get their own folder
+	// (default 200). Values seen after the cap is reached go to the
+	// __default__ folder.
+	MaxFolders int `mapstructure:"max_folders"`
+	// prevent unkeyed literal initialization
+	_ struct{}
+}
+
 // Config contains the main configuration options for the s3 exporter
 type Config struct {
 	// ArchiveRecovery retains one encoded archive in memory until upload succeeds.
@@ -121,6 +138,7 @@ type Config struct {
 	Encoding              *component.ID     `mapstructure:"encoding"`
 	EncodingFileExtension string            `mapstructure:"encoding_file_extension"`
 	ResourceAttrsToS3     ResourceAttrsToS3 `mapstructure:"resource_attrs_to_s3"`
+	RouteByAttribute      RouteByAttribute  `mapstructure:"route_by_attribute"`
 
 	// MaxFileSizeBytes sets the uncompressed size threshold at which the
 	// jsonBatchingMarshaler flushes its buffer to S3. When > 0 and
@@ -156,6 +174,18 @@ func (c *Config) normalizedS3PartitionFormat() string {
 
 func (c *Config) Validate() error {
 	var errs error
+	if c.RouteByAttribute.Attribute != "" && c.ResourceAttrsToS3.S3Prefix != "" {
+		errs = multierr.Append(errs, errors.New("route_by_attribute cannot be combined with resource_attrs_to_s3.s3_prefix"))
+	}
+	if c.RouteByAttribute.Attribute != "" && c.ResourceAttrsToS3.S3Bucket != "" {
+		errs = multierr.Append(errs, errors.New("route_by_attribute cannot be combined with resource_attrs_to_s3.s3_bucket"))
+	}
+	if c.RouteByAttribute.MaxFolders < 0 {
+		errs = multierr.Append(errs, errors.New("route_by_attribute.max_folders must not be negative"))
+	}
+	if c.RouteByAttribute.Attribute != "" && c.ArchiveRecovery {
+		errs = multierr.Append(errs, errors.New("route_by_attribute cannot be combined with archive_recovery"))
+	}
 	if c.ArchiveRecovery && c.TimeoutSettings.Timeout <= 0 {
 		errs = multierr.Append(errs, errors.New("archive_recovery requires a positive timeout"))
 	}
