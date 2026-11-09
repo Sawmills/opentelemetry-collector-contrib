@@ -177,6 +177,9 @@ func (c *Config) Validate() error {
 	if c.RouteByAttribute.Attribute != "" && c.ResourceAttrsToS3.S3Prefix != "" {
 		errs = multierr.Append(errs, errors.New("route_by_attribute cannot be combined with resource_attrs_to_s3.s3_prefix"))
 	}
+	if c.RouteByAttribute.Attribute != "" && c.ResourceAttrsToS3.S3Bucket != "" {
+		errs = multierr.Append(errs, errors.New("route_by_attribute cannot be combined with resource_attrs_to_s3.s3_bucket"))
+	}
 	if c.RouteByAttribute.MaxFolders < 0 {
 		errs = multierr.Append(errs, errors.New("route_by_attribute.max_folders must not be negative"))
 	}

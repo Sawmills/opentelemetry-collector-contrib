@@ -237,7 +237,7 @@ databucket/logs/service_name=payments/year=YYYY/month=MM/day=DD/hour=HH/minute=m
 databucket/logs/service_name=orders/year=YYYY/month=MM/day=DD/hour=HH/minute=mm/logs_*.json
 databucket/logs/service_name=__default__/year=YYYY/month=MM/day=DD/hour=HH/minute=mm/logs_*.json
 ```
-`route_by_attribute` cannot be combined with `resource_attrs_to_s3/s3_prefix` or `archive_recovery`.
+`route_by_attribute` cannot be combined with `resource_attrs_to_s3` (`s3_prefix` or `s3_bucket`) or `archive_recovery`.
 
 ## Base Path with Resource Attributes
 

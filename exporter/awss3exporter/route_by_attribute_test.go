@@ -462,9 +462,14 @@ func TestRouteByAttributeConfig(t *testing.T) {
 
 	cfg.ResourceAttrsToS3.S3Prefix = "other"
 	assert.ErrorContains(t, cfg.Validate(), "route_by_attribute")
+	cfg.ResourceAttrsToS3.S3Prefix = ""
+
+	// A folder can mix resources selecting different buckets.
+	cfg.ResourceAttrsToS3.S3Bucket = "bucket.attr"
+	assert.ErrorContains(t, cfg.Validate(), "route_by_attribute cannot be combined with resource_attrs_to_s3.s3_bucket")
+	cfg.ResourceAttrsToS3.S3Bucket = ""
 
 	// Archive recovery retains a single archive; a routed batch uploads several.
-	cfg.ResourceAttrsToS3.S3Prefix = ""
 	cfg.ArchiveRecovery = true
 	assert.ErrorContains(t, cfg.Validate(), "route_by_attribute cannot be combined with archive_recovery")
 }
