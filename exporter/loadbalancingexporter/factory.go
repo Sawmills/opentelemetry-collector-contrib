@@ -58,6 +58,7 @@ func createDefaultConfig() component.Config {
 		},
 		CentralQueue: CentralQueueConfig{
 			Enabled:                      false,
+			MaxRetryAge:                  defaultCentralQueueMaxRetryAge,
 			PayloadCompression:           QueuePayloadCompressionZstd,
 			MaxUncompressedBatchBytes:    defaultCentralQueueMaxUncompressedBatchBytes,
 			MaxInflightUncompressedBytes: defaultCentralQueueMaxInflightBytes,

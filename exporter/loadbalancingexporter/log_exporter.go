@@ -40,6 +40,9 @@ type logExporterImp struct {
 	centralExporterID      component.ID
 	centralStorage         *centralQueueStorage
 	centralCompression     QueuePayloadCompression
+	maxRetryAge            time.Duration
+	fallbackExporterID     *component.ID
+	fallback               consumer.Logs
 
 	logger                       *zap.Logger
 	started                      atomic.Bool
@@ -93,6 +96,8 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 		centralStorageID:             cfg.(*Config).CentralQueue.StorageID,
 		centralExporterID:            params.ID,
 		centralCompression:           cfg.(*Config).CentralQueue.PayloadCompression,
+		maxRetryAge:                  cfg.(*Config).CentralQueue.MaxRetryAge,
+		fallbackExporterID:           cfg.(*Config).CentralQueue.FallbackExporter,
 		loadBalancer:                 lb,
 		telemetry:                    telemetry,
 		logger:                       params.Logger,
@@ -106,6 +111,9 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 		centralQueueBackendLimiter:   newCentralQueueBackendLimiter(),
 		centralQueueNumConsumers:     cfg.(*Config).CentralQueue.NumConsumers,
 		centralQueueActiveLBReplicas: cfg.(*Config).CentralQueue.ActiveLoadBalancerReplicas,
+	}
+	if logExporter.maxRetryAge == 0 {
+		logExporter.maxRetryAge = defaultCentralQueueMaxRetryAge
 	}
 	if cfg.(*Config).CentralQueue.Enabled {
 		centralCfg := cfg.(*Config).CentralQueue
@@ -165,6 +173,12 @@ func (*logExporterImp) Capabilities() consumer.Capabilities {
 }
 
 func (e *logExporterImp) Start(ctx context.Context, host component.Host) error {
+	if err := e.startFallback(host); err != nil {
+		if e.centralCodec != nil {
+			err = errors.Join(err, e.centralCodec.Close())
+		}
+		return err
+	}
 	if e.centralStorageID != nil {
 		var err error
 		e.centralStorage, err = openCentralQueueStorage(ctx, host, *e.centralStorageID, e.centralExporterID, signalKindLogs, e.centralQueue.settings.telemetry, e.logger)
@@ -375,8 +389,15 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 			default:
 			}
 		}
-		lease, err := e.centralQueue.leaseWithAcquire(ctx, func(queueCompressedBytes int64, _ centralQueueWindow) (func(), bool) {
-			if !tryAcquireCentralQueueConsumer(ctx, &e.centralActiveConsumers, e.centralQueueConsumers, e.centralQueue, e.loadBalancer, queueCompressedBytes) {
+		lease, err := e.centralQueue.leaseWithAcquire(ctx, func(queueCompressedBytes int64, window centralQueueWindow) (func(), bool) {
+			acquired := false
+			if e.fallback != nil && e.hasAgedLogs(window, time.Now()) {
+				// A worker outage must not block the independent fallback path.
+				acquired = e.acquireFallbackConsumer(ctx)
+			} else {
+				acquired = tryAcquireCentralQueueConsumer(ctx, &e.centralActiveConsumers, e.centralQueueConsumers, e.centralQueue, e.loadBalancer, queueCompressedBytes)
+			}
+			if !acquired {
 				return nil, false
 			}
 			return func() {
@@ -409,6 +430,31 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 				<-ctx.Done()
 				return
 			default:
+			}
+		}
+
+		if e.hasAgedLogs(lease.window, time.Now()) {
+			if e.fallback == nil {
+				e.recordFallback(ctx, e.agedLogCount(lease.window, time.Now()), "fallback_not_configured")
+			} else {
+				aged, fresh := e.splitAgedLease(lease, time.Now())
+				if aged != nil {
+					e.sendFallback(ctx, aged)
+				}
+				if fresh == nil {
+					lease.releaseConsumer()
+					continue
+				}
+				lease = fresh
+				if e.centralStorage != nil {
+					select {
+					case <-e.centralStorage.failedWrites:
+						_ = lease.requeue(time.Now())
+						lease.releaseConsumer()
+						continue
+					default:
+					}
+				}
 			}
 		}
 

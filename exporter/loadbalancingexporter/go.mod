@@ -38,6 +38,7 @@ require (
 	go.opentelemetry.io/collector/featuregate v1.55.1-0.20260402195938-76ede073ee8e
 	go.opentelemetry.io/collector/otelcol/otelcoltest v0.149.1-0.20260402195938-76ede073ee8e
 	go.opentelemetry.io/collector/pdata v1.55.1-0.20260402195938-76ede073ee8e
+	go.opentelemetry.io/collector/pipeline v1.55.1-0.20260402195938-76ede073ee8e
 	go.opentelemetry.io/otel v1.45.0
 	go.opentelemetry.io/otel/metric v1.45.0
 	go.opentelemetry.io/otel/sdk/metric v1.45.0
@@ -152,7 +153,6 @@ require (
 	go.opentelemetry.io/collector/pdata/pprofile v0.149.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/pdata/testdata v0.149.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/pdata/xpdata v0.149.1-0.20260402195938-76ede073ee8e // indirect
-	go.opentelemetry.io/collector/pipeline v1.55.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/pipeline/xpipeline v0.149.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/processor v1.55.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/processor/processortest v0.149.1-0.20260402195938-76ede073ee8e // indirect

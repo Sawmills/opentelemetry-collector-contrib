@@ -46,6 +46,9 @@ type traceExporterImp struct {
 
 // Create new traces exporter
 func newTracesExporter(params exporter.Settings, cfg component.Config) (*traceExporterImp, error) {
+	if cfg.(*Config).CentralQueue.FallbackExporter != nil {
+		return nil, errors.New("central_queue.fallback_exporter is only supported for logs")
+	}
 	if cfg.(*Config).BackendSubset.Enabled {
 		return nil, errors.New("backend_subset is only supported for logs")
 	}

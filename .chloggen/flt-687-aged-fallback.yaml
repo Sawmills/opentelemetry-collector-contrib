@@ -1,0 +1,9 @@
+change_type: enhancement
+component: exporter/loadbalancing
+note: Route aged central queue logs to a configured destination exporter while retaining refused batches.
+issues: [687]
+subtext: |
+  The maximum retry age defaults to 15 minutes and survives durable replay.
+  Without a fallback exporter, worker delivery continues and is counted.
+  Fallback outcomes use bounded reason labels and one log per batch.
+change_logs: [user]

@@ -30,6 +30,7 @@ type centralQueueTelemetry struct {
 	routingKeySkips                             metric.Int64Counter
 	retries                                     metric.Int64Counter
 	connectionRebuilds                          metric.Int64Counter
+	fallbackRecords                             metric.Int64Counter
 	decodeFailures                              metric.Int64Counter
 	shutdownDroppedItems                        metric.Int64Counter
 	storageFailures                             metric.Int64Counter
@@ -239,6 +240,12 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 		"otelcol_loadbalancer_backend_connection_rebuilds",
 		metric.WithDescription("Backend connection rebuild attempts by bounded result, excluding normal exporter creation."),
 		metric.WithUnit("{attempts}"),
+	)
+	errs = errors.Join(errs, err)
+	t.fallbackRecords, err = meter.Int64Counter(
+		"otelcol_loadbalancer_central_queue_fallback_records",
+		metric.WithDescription("Aged log records by fallback outcome. Failed and unconfigured outcomes count attempts; max_retry_age counts accepted handoffs."),
+		metric.WithUnit("{records}"),
 	)
 	errs = errors.Join(errs, err)
 	t.decodeFailures, err = meter.Int64Counter(
