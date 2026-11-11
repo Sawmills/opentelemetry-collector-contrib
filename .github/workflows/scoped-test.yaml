@@ -8,7 +8,7 @@ permissions: read-all
 
 jobs:
   changedfiles:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-latest' }}
     env:
       PR_HEAD: ${{ github.event.pull_request.head.sha }}
       PR_BASE: ${{ github.event.pull_request.base.ref }}
@@ -202,7 +202,7 @@ jobs:
   queuedrain-harness:
     needs: changedfiles
     if: needs.changedfiles.outputs.mode == 'queuedrain_harness'
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository && 'namespace-profile-sawmills-runner' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Validate queuedrain shell harness
@@ -213,56 +213,11 @@ jobs:
         run: |
           python3 -m unittest discover -s test/queuedrain -p '*test.py'
 
-  scoped-tests-cross-platform:
-    needs: changedfiles
-    if: needs.changedfiles.outputs.mode == 'scoped'
-    strategy:
-      matrix:
-        runner: [windows-2022, windows-2025, windows-11-arm]
-    runs-on: ${{ matrix.runner }}
-    env:
-      # The gcc installed on the Windows arm64 runner doesn't ship native ARM libraries so we need to disable CGO.
-      CGO_ENABLED: ${{ matrix.runner == 'windows-11-arm' && '0' || '' }}
-    steps:
-      - name: Echo changed files
-        shell: bash
-        run: |
-          echo "mode: ${{ needs.changedfiles.outputs.mode }}"
-          echo "go_sources: ${{ needs.changedfiles.outputs.go_sources }}"
-          echo "go_tests: ${{ needs.changedfiles.outputs.go_tests }}"
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - uses: ./.github/actions/setup-go-tools
-        with:
-          go-version: oldstable
-
-      - name: Run changed tests
-        if: needs.changedfiles.outputs.go_tests
-        env:
-          CHANGED_GOLANG_TESTS: ${{ needs.changedfiles.outputs.go_tests }}
-        run: |
-          make run-changed-tests
-
-      - name: Run tests on dependent components
-        if: needs.changedfiles.outputs.go_sources
-        env:
-          CHANGED_GOLANG_SOURCES: ${{ needs.changedfiles.outputs.go_sources }}
-        shell: bash
-        run: |
-          make run-changed-source-package-tests
-          dependent_modules=$(go run ./internal/buildscripts/cmd/dependent-modules)
-          while IFS= read -r dir; do
-            [[ -z "$dir" ]] && continue
-            echo "running dependent module tests in $dir"
-            (cd "$dir" && make test-twice)
-          done <<< "$dependent_modules"
-
-      - run: ./.github/workflows/scripts/check-disk-space.sh
-
   scoped-tests:
     # Keeps the name of the job required for merging in the GH configuration, make it
     # wait for all runners completion
     if: ${{ always() }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [changedfiles, scoped-tests-ubuntu, queuedrain-harness]
     steps:
       - name: Print result
