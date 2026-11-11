@@ -132,7 +132,7 @@ require (
 	go.opentelemetry.io/collector v0.149.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/config/configcompression v1.55.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/config/configgrpc v0.149.1-0.20260402195938-76ede073ee8e // indirect
-	go.opentelemetry.io/collector/config/confighttp v0.149.0 // indirect
+	go.opentelemetry.io/collector/config/confighttp v0.149.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/config/confignet v1.55.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/config/configopaque v1.55.1-0.20260402195938-76ede073ee8e // indirect
 	go.opentelemetry.io/collector/config/configtelemetry v0.149.1-0.20260402195938-76ede073ee8e // indirect
