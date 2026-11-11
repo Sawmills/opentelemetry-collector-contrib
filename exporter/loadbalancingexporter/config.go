@@ -298,6 +298,7 @@ type CentralQueueConfig struct {
 	// receives expired logs; without one, worker delivery remains unchanged.
 	MaxRetryAge                time.Duration        `mapstructure:"max_retry_age"`
 	FallbackExporter           *component.ID        `mapstructure:"fallback_exporter"`
+	FallbackConfig             map[string]any       `mapstructure:"fallback_config"`
 	LaneCount                  int                  `mapstructure:"lane_count"`
 	MinLanes                   int                  `mapstructure:"min_lanes"`
 	MaxLanes                   int                  `mapstructure:"max_lanes"`
@@ -477,6 +478,9 @@ func (c ZstdPayloadCodecConfig) Validate() error {
 }
 
 func (c CentralQueueConfig) Validate() error {
+	if len(c.FallbackConfig) > 0 && c.FallbackExporter == nil {
+		return errors.New("central_queue.fallback_config requires fallback_exporter")
+	}
 	if c.MaxRetryAge < 0 {
 		return errors.New("central_queue.max_retry_age must be greater than or equal to 0")
 	}

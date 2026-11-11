@@ -23,7 +23,6 @@ import (
 	"go.opentelemetry.io/collector/extension/xextension/storage"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog/plogotlp"
-	"go.opentelemetry.io/collector/pipeline"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -40,18 +39,14 @@ import (
 
 type agedFallbackHost struct {
 	component.Host
-	target component.Component
+	factory component.Factory
 }
 
-type agedFallbackNonLogs struct{}
-
-func (agedFallbackNonLogs) Start(context.Context, component.Host) error { return nil }
-func (agedFallbackNonLogs) Shutdown(context.Context) error              { return nil }
-
-func (h agedFallbackHost) GetExporters() map[pipeline.Signal]map[component.ID]component.Component {
-	return map[pipeline.Signal]map[component.ID]component.Component{
-		pipeline.SignalLogs: {component.MustNewIDWithName("otlp", "customer"): h.target},
+func (h agedFallbackHost) GetFactory(kind component.Kind, typ component.Type) component.Factory {
+	if kind == component.KindExporter && h.factory != nil && h.factory.Type() == typ {
+		return h.factory
 	}
+	return nil
 }
 
 type agedFallbackWorker struct {
@@ -83,17 +78,6 @@ type agedFallbackSettings struct {
 
 func newAgedFallbackExporter(t *testing.T, worker, destination string, age time.Duration, configured bool, options ...agedFallbackSettings) (exporter.Logs, *sdkmetric.ManualReader) {
 	t.Helper()
-	fallbackFactory := otlpexporter.NewFactory()
-	fallbackConfig := fallbackFactory.CreateDefaultConfig()
-	require.NoError(t, confmap.NewFromStringMap(map[string]any{
-		"endpoint": destination, "tls": map[string]any{"insecure": true},
-		"sending_queue":    map[string]any{"enabled": false},
-		"retry_on_failure": map[string]any{"enabled": false}, "timeout": "100ms",
-	}).Unmarshal(fallbackConfig))
-	fallback, err := fallbackFactory.CreateLogs(t.Context(), exportertest.NewNopSettings(fallbackFactory.Type()), fallbackConfig)
-	require.NoError(t, err)
-	require.NoError(t, fallback.Start(t.Context(), componenttest.NewNopHost()))
-	t.Cleanup(func() { require.NoError(t, fallback.Shutdown(context.WithoutCancel(t.Context()))) })
 
 	factory := loadbalancingexporter.NewFactory()
 	cfg := factory.CreateDefaultConfig()
@@ -104,9 +88,12 @@ func newAgedFallbackExporter(t *testing.T, worker, destination string, age time.
 		"max_batch_delay": "1ms", "num_consumers": 1, "lane_count": 1,
 	}
 	if configured {
-		queue["fallback_exporter"] = "otlp/customer"
+		queue["fallback_exporter"] = "otlp_grpc/customer"
+		queue["fallback_config"] = map[string]any{
+			"endpoint": destination, "tls": map[string]any{"insecure": true}, "timeout": "100ms",
+		}
 	}
-	host := agedFallbackHost{Host: componenttest.NewNopHost(), target: fallback}
+	host := agedFallbackHost{Host: componenttest.NewNopHost(), factory: otlpexporter.NewFactory()}
 	if len(options) > 0 {
 		maps.Copy(queue, options[0].queue)
 		if options[0].storage != nil {
@@ -304,6 +291,21 @@ func TestCentralQueueAgedFallbackCommitFailurePauses(t *testing.T) {
 	require.Error(t, exp.Shutdown(t.Context()))
 }
 
+func TestCentralQueueAgedFallbackPartialResponseRetainsOwnership(t *testing.T) {
+	worker := &agedFallbackWorker{}
+	destination := &durableTestDestination{}
+	destination.partial.Store(1)
+	store := newAgedFallbackStorage(t, t.TempDir())
+	exp, reader := newAgedFallbackExporter(t, startAgedFallbackServer(t, worker), startAgedFallbackServer(t, destination), 30*time.Millisecond, true, agedFallbackSettings{storage: store})
+	require.NoError(t, exp.ConsumeLogs(t.Context(), connectionRecoveryInput(871, 872)))
+	require.Eventually(t, func() bool { return agedFallbackRecords(t, reader, "fallback_failed") >= 2 }, 2*time.Second, time.Millisecond)
+	require.Equal(t, int64(2), durableMetricValue(t, reader, "otelcol_loadbalancer_central_queue_durable_pending_items"))
+	require.Zero(t, agedFallbackRecords(t, reader, "max_retry_age"))
+	destination.partial.Store(0)
+	require.Eventually(t, func() bool { return agedFallbackRecords(t, reader, "max_retry_age") == 2 }, 2*time.Second, time.Millisecond)
+	require.NoError(t, exp.Shutdown(t.Context()))
+}
+
 func TestCentralQueueAgedFallbackConfiguration(t *testing.T) {
 	factory := loadbalancingexporter.NewFactory()
 	t.Run("default age", func(t *testing.T) {
@@ -317,7 +319,7 @@ func TestCentralQueueAgedFallbackConfiguration(t *testing.T) {
 		target  string
 	}{
 		{name: "negative age", age: -time.Second, enabled: true},
-		{name: "fallback without queue", target: "otlp/customer"},
+		{name: "fallback without queue", target: "otlp_grpc/customer"},
 		{name: "fallback loop", enabled: true, target: "loadbalancing/other"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -342,7 +344,7 @@ func TestCentralQueueAgedFallbackRejectsUnavailableTarget(t *testing.T) {
 	}{
 		{name: "host without exporter capability", host: componenttest.NewNopHost()},
 		{name: "missing target", host: agedFallbackHost{Host: componenttest.NewNopHost()}},
-		{name: "wrong signal", host: agedFallbackHost{Host: componenttest.NewNopHost(), target: agedFallbackNonLogs{}}},
+		{name: "wrong signal", host: agedFallbackHost{Host: componenttest.NewNopHost(), factory: filestorage.NewFactory()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			factory := loadbalancingexporter.NewFactory()
@@ -350,7 +352,7 @@ func TestCentralQueueAgedFallbackRejectsUnavailableTarget(t *testing.T) {
 			require.NoError(t, confmap.NewFromStringMap(map[string]any{
 				"protocol":      map[string]any{"otlp": map[string]any{"tls": map[string]any{"insecure": true}}},
 				"resolver":      map[string]any{"static": map[string]any{"hostnames": []string{"localhost:4317"}}},
-				"central_queue": map[string]any{"enabled": true, "max_compressed_bytes": 1 << 20, "fallback_exporter": "otlp/customer"},
+				"central_queue": map[string]any{"enabled": true, "max_compressed_bytes": 1 << 20, "fallback_exporter": "otlp_grpc/customer"},
 			}).Unmarshal(cfg))
 			exp, err := factory.CreateLogs(t.Context(), exportertest.NewNopSettings(factory.Type()), cfg)
 			require.NoError(t, err)
@@ -366,7 +368,7 @@ func TestCentralQueueAgedFallbackRejectsOtherSignals(t *testing.T) {
 	require.NoError(t, confmap.NewFromStringMap(map[string]any{
 		"protocol":      map[string]any{"otlp": map[string]any{"tls": map[string]any{"insecure": true}}},
 		"resolver":      map[string]any{"static": map[string]any{"hostnames": []string{"localhost:4317"}}},
-		"central_queue": map[string]any{"enabled": true, "max_compressed_bytes": 1 << 20, "fallback_exporter": "otlp/customer"},
+		"central_queue": map[string]any{"enabled": true, "max_compressed_bytes": 1 << 20, "fallback_exporter": "otlp_grpc/customer"},
 	}).Unmarshal(cfg))
 	settings := exportertest.NewNopSettings(factory.Type())
 	_, err := factory.CreateMetrics(t.Context(), settings, cfg)

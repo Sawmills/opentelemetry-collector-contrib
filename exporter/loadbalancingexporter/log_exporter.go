@@ -42,7 +42,10 @@ type logExporterImp struct {
 	centralCompression     QueuePayloadCompression
 	maxRetryAge            time.Duration
 	fallbackExporterID     *component.ID
-	fallback               consumer.Logs
+	fallbackConfig         map[string]any
+	fallbackSettings       exporter.Settings
+	fallback               exporter.Logs
+	fallbackOTLPAck        bool
 
 	logger                       *zap.Logger
 	started                      atomic.Bool
@@ -98,6 +101,8 @@ func newLogsExporter(params exporter.Settings, cfg component.Config) (*logExport
 		centralCompression:           cfg.(*Config).CentralQueue.PayloadCompression,
 		maxRetryAge:                  cfg.(*Config).CentralQueue.MaxRetryAge,
 		fallbackExporterID:           cfg.(*Config).CentralQueue.FallbackExporter,
+		fallbackConfig:               cfg.(*Config).CentralQueue.FallbackConfig,
+		fallbackSettings:             params,
 		loadBalancer:                 lb,
 		telemetry:                    telemetry,
 		logger:                       params.Logger,
@@ -172,8 +177,14 @@ func (*logExporterImp) Capabilities() consumer.Capabilities {
 	return consumer.Capabilities{MutatesData: false}
 }
 
-func (e *logExporterImp) Start(ctx context.Context, host component.Host) error {
-	if err := e.startFallback(host); err != nil {
+func (e *logExporterImp) Start(ctx context.Context, host component.Host) (resultErr error) {
+	defer func() {
+		if resultErr != nil && e.fallback != nil {
+			resultErr = errors.Join(resultErr, e.fallback.Shutdown(ctx))
+			e.fallback = nil
+		}
+	}()
+	if err := e.startFallback(ctx, host); err != nil {
 		if e.centralCodec != nil {
 			err = errors.Join(err, e.centralCodec.Close())
 		}
@@ -275,6 +286,9 @@ func (e *logExporterImp) Shutdown(ctx context.Context) error {
 		cancel()
 		err = errors.Join(err, waitErr)
 		if waitErr == nil {
+			if e.fallback != nil {
+				err = errors.Join(err, e.fallback.Shutdown(ctx))
+			}
 			err = errors.Join(err, e.centralCodec.Close())
 			if e.centralStorage != nil {
 				err = errors.Join(err, e.centralStorage.client.Close(context.WithoutCancel(ctx)))
@@ -283,6 +297,11 @@ func (e *logExporterImp) Shutdown(ctx context.Context) error {
 			go func() {
 				e.centralWG.Wait()
 				e.centralQueue.admissions.Wait()
+				if e.fallback != nil {
+					if closeErr := e.fallback.Shutdown(context.Background()); closeErr != nil {
+						e.logger.Warn("failed to shut down central queue fallback", zap.Error(closeErr))
+					}
+				}
 				if closeErr := e.centralCodec.Close(); closeErr != nil {
 					e.logger.Warn("failed to close central queue codec", zap.Error(closeErr))
 				}
@@ -389,9 +408,11 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 			default:
 			}
 		}
+		fallbackAdmission := false
 		lease, err := e.centralQueue.leaseWithAcquire(ctx, func(queueCompressedBytes int64, window centralQueueWindow) (func(), bool) {
 			acquired := false
-			if e.fallback != nil && e.hasAgedLogs(window, time.Now()) {
+			useFallback := e.fallback != nil && e.hasAgedLogs(window, time.Now())
+			if useFallback {
 				// A worker outage must not block the independent fallback path.
 				acquired = e.acquireFallbackConsumer(ctx)
 			} else {
@@ -400,6 +421,7 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 			if !acquired {
 				return nil, false
 			}
+			fallbackAdmission = useFallback
 			return func() {
 				releaseCentralQueueConsumer(ctx, &e.centralActiveConsumers, e.centralQueue)
 			}, true
@@ -419,6 +441,16 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 			e.logger.Warn("failed to lease central log queue item", zap.Error(err))
 			continue
 		}
+		// Admission runs outside the queue lock. Another consumer can replace
+		// the selected window with fresh work on the same routing key. A raw
+		// fallback permit must never authorize that replacement's worker send.
+		if fallbackAdmission && !e.hasAgedLogs(lease.window, time.Now()) {
+			if deferErr := lease.deferReady(time.Now()); deferErr != nil {
+				e.logger.Warn("failed to reschedule fresh central queue logs", zap.Error(deferErr))
+			}
+			lease.releaseConsumer()
+			continue
+		}
 
 		if e.centralStorage != nil {
 			select {
@@ -435,7 +467,7 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 
 		if e.hasAgedLogs(lease.window, time.Now()) {
 			if e.fallback == nil {
-				e.recordFallback(ctx, e.agedLogCount(lease.window, time.Now()), "fallback_not_configured")
+				e.recordFallback(ctx, e.agedLogCount(lease.window, time.Now()), "fallback_not_configured", nil)
 			} else {
 				aged, fresh := e.splitAgedLease(lease, time.Now())
 				if aged != nil {
@@ -445,16 +477,13 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 					lease.releaseConsumer()
 					continue
 				}
-				lease = fresh
-				if e.centralStorage != nil {
-					select {
-					case <-e.centralStorage.failedWrites:
-						_ = lease.requeue(time.Now())
-						lease.releaseConsumer()
-						continue
-					default:
-					}
+				// Fresh ownership must reacquire normal worker admission. It
+				// cannot inherit the raw fallback concurrency allowance.
+				if deferErr := fresh.deferReady(time.Now()); deferErr != nil {
+					e.logger.Warn("failed to reschedule fresh central queue logs", zap.Error(deferErr))
 				}
+				fresh.releaseConsumer()
+				continue
 			}
 		}
 
