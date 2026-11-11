@@ -102,6 +102,87 @@ func TestCentralQueueAgedFallbackHTTPPartialResponseRetainsOwnership(t *testing.
 	}
 }
 
+func TestCentralQueueAgedFallbackHTTPEmptySuccessAcknowledgesOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		encoding    string
+		contentType string
+		status      int
+		chunked     bool
+	}{
+		{name: "protobuf", encoding: "proto", contentType: "application/x-protobuf", status: http.StatusOK},
+		{name: "JSON", encoding: "json", contentType: "application/json", status: http.StatusOK},
+		{name: "unknown format", encoding: "proto", contentType: "application/octet-stream", status: http.StatusOK},
+		{name: "missing content type", encoding: "proto", status: http.StatusOK},
+		{name: "chunked JSON", encoding: "json", contentType: "application/json", status: http.StatusOK, chunked: true},
+		{name: "accepted JSON", encoding: "json", contentType: "application/json", status: http.StatusAccepted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var accepted []int64
+			var requests atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body io.Reader = r.Body
+				if r.Header.Get("Content-Encoding") == "gzip" {
+					reader, err := gzip.NewReader(r.Body)
+					if err != nil {
+						http.Error(w, "invalid compressed fixture request", http.StatusBadRequest)
+						return
+					}
+					defer reader.Close()
+					body = reader
+				}
+				data, err := io.ReadAll(body)
+				request := plogotlp.NewExportRequest()
+				if err == nil {
+					if tc.encoding == "json" {
+						err = request.UnmarshalJSON(data)
+					} else {
+						err = request.UnmarshalProto(data)
+					}
+				}
+				if err != nil {
+					http.Error(w, "invalid fixture request", http.StatusBadRequest)
+					return
+				}
+				mu.Lock()
+				for _, resource := range request.Logs().ResourceLogs().All() {
+					for _, scope := range resource.ScopeLogs().All() {
+						for _, record := range scope.LogRecords().All() {
+							id, _ := record.Attributes().Get("test.id")
+							accepted = append(accepted, id.Int())
+						}
+					}
+				}
+				mu.Unlock()
+				requests.Add(1)
+				w.Header().Set("Content-Type", tc.contentType)
+				w.WriteHeader(tc.status)
+				if tc.chunked {
+					w.(http.Flusher).Flush()
+				}
+			}))
+			t.Cleanup(server.Close)
+			factory := otlphttpexporter.NewFactory()
+			store := newAgedFallbackStorage(t, t.TempDir())
+			exp, reader := newAgedFallbackExporter(t, startAgedFallbackServer(t, &agedFallbackWorker{}), server.URL, 30*time.Millisecond, true,
+				agedFallbackSettings{storage: store, factory: factory, queue: map[string]any{
+					"fallback_exporter": factory.Type().String() + "/customer",
+					"fallback_config":   map[string]any{"endpoint": server.URL, "encoding": tc.encoding, "timeout": "100ms"},
+				}})
+			require.NoError(t, exp.ConsumeLogs(t.Context(), connectionRecoveryInput(901)))
+			require.Eventually(t, func() bool { return agedFallbackRecords(t, reader, "max_retry_age") == 1 }, 3*time.Second, time.Millisecond)
+			require.NoError(t, exp.Shutdown(t.Context()))
+			require.Equal(t, int64(1), requests.Load())
+			require.Zero(t, agedFallbackRecords(t, reader, "fallback_failed"))
+			require.Zero(t, durableMetricValue(t, reader, "otelcol_loadbalancer_central_queue_durable_pending_items"))
+			mu.Lock()
+			defer mu.Unlock()
+			require.Equal(t, []int64{901}, accepted)
+		})
+	}
+}
+
 func TestCentralQueueAgedFallbackHTTPUncertainAcknowledgementRetainsOwnership(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -111,9 +192,6 @@ func TestCentralQueueAgedFallbackHTTPUncertainAcknowledgementRetainsOwnership(t 
 		truncated   bool
 	}{
 		{name: "unavailable", status: http.StatusServiceUnavailable},
-		{name: "empty JSON", status: http.StatusOK, contentType: "application/json"},
-		{name: "empty unknown format", status: http.StatusOK, contentType: "application/octet-stream"},
-		{name: "empty missing content type", status: http.StatusOK},
 		{name: "trailing JSON data", status: http.StatusOK, contentType: "application/json", body: "{}garbage"},
 		{name: "multiple JSON values", status: http.StatusOK, contentType: "application/json", body: "{}{}"},
 		{name: "null JSON", status: http.StatusOK, contentType: "application/json", body: "null"},
@@ -121,6 +199,7 @@ func TestCentralQueueAgedFallbackHTTPUncertainAcknowledgementRetainsOwnership(t 
 		{name: "unknown format", status: http.StatusOK, contentType: "application/octet-stream", body: "unrecognized acknowledgement"},
 		{name: "oversized response", status: http.StatusOK, contentType: "application/json", body: strings.Repeat("x", 64*1024+1)},
 		{name: "truncated response", status: http.StatusOK, contentType: "application/json", body: "{}", truncated: true},
+		{name: "truncated empty response", status: http.StatusOK, contentType: "application/json", truncated: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var invalid atomic.Bool

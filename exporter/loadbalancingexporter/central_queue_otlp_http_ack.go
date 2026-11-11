@@ -58,6 +58,12 @@ func (t centralQueueHTTPAckTransport) RoundTrip(req *http.Request) (*http.Respon
 		acknowledgement.localErr = errors.New("central queue HTTP acknowledgement exceeds response limit")
 		return response, nil
 	}
+	if len(body) == 0 {
+		// The pinned exporter accepts a clean empty 2xx response as success.
+		acknowledgement.rejected = 0
+		acknowledgement.observed = true
+		return response, nil
+	}
 	contentType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil {
 		acknowledgement.localErr = err
