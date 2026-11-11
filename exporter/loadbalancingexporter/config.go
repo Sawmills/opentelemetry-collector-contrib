@@ -271,6 +271,7 @@ const (
 	defaultCentralQueueActiveLBReplicas          = 1
 	defaultCentralQueueShutdownTimeout           = 5 * time.Minute
 	defaultCentralQueueReconnectAfterTimeouts    = 3
+	defaultCentralQueueMaxRetryAge               = 15 * time.Minute
 )
 
 type CentralQueueConfig struct {
@@ -292,7 +293,12 @@ type CentralQueueConfig struct {
 	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
 	// ReconnectAfterTimeouts defaults to three when omitted. Only logs central
 	// queue sends use this generation-local connection recovery threshold.
-	ReconnectAfterTimeouts     *int                 `mapstructure:"reconnect_after_timeouts"`
+	ReconnectAfterTimeouts *int `mapstructure:"reconnect_after_timeouts"`
+	// MaxRetryAge defaults to fifteen minutes. A configured fallback exporter
+	// receives expired logs; without one, worker delivery remains unchanged.
+	MaxRetryAge                time.Duration        `mapstructure:"max_retry_age"`
+	FallbackExporter           *component.ID        `mapstructure:"fallback_exporter"`
+	FallbackConfig             map[string]any       `mapstructure:"fallback_config"`
 	LaneCount                  int                  `mapstructure:"lane_count"`
 	MinLanes                   int                  `mapstructure:"min_lanes"`
 	MaxLanes                   int                  `mapstructure:"max_lanes"`
@@ -472,6 +478,20 @@ func (c ZstdPayloadCodecConfig) Validate() error {
 }
 
 func (c CentralQueueConfig) Validate() error {
+	if len(c.FallbackConfig) > 0 && c.FallbackExporter == nil {
+		return errors.New("central_queue.fallback_config requires fallback_exporter")
+	}
+	if c.MaxRetryAge < 0 {
+		return errors.New("central_queue.max_retry_age must be greater than or equal to 0")
+	}
+	if c.FallbackExporter != nil {
+		if !c.Enabled {
+			return errors.New("central_queue.fallback_exporter requires central_queue.enabled=true")
+		}
+		if c.FallbackExporter.Type().String() == "loadbalancing" {
+			return errors.New("central_queue.fallback_exporter must be a destination exporter, not another loadbalancing exporter")
+		}
+	}
 	if c.StorageID != nil && !c.Enabled {
 		return errors.New("central_queue.storage requires central_queue.enabled=true")
 	}
