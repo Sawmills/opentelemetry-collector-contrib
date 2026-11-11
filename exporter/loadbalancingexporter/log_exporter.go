@@ -410,7 +410,7 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 		}
 		fallbackAdmission := false
 		lease, err := e.centralQueue.leaseWithAcquire(ctx, func(queueCompressedBytes int64, window centralQueueWindow) (func(), bool) {
-			acquired := false
+			var acquired bool
 			useFallback := e.fallback != nil && e.hasAgedLogs(window, time.Now())
 			if useFallback {
 				// A worker outage must not block the independent fallback path.
@@ -466,9 +466,7 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 		}
 
 		if e.hasAgedLogs(lease.window, time.Now()) {
-			if e.fallback == nil {
-				e.recordFallback(ctx, e.agedLogCount(lease.window, time.Now()), "fallback_not_configured", nil)
-			} else {
+			if e.fallback != nil {
 				aged, fresh := e.splitAgedLease(lease, time.Now())
 				if aged != nil {
 					e.sendFallback(ctx, aged)
@@ -485,6 +483,7 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 				fresh.releaseConsumer()
 				continue
 			}
+			e.recordFallback(ctx, e.agedLogCount(lease.window, time.Now()), "fallback_not_configured", nil)
 		}
 
 		acquiredBackend, backendAvailable := tryAcquireCentralQueueBackendForWindow(e.loadBalancer, e.centralQueueBackendLimiter, lease.window)

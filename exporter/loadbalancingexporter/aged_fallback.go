@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 	"go.opentelemetry.io/collector/exporter/otlpexporter"
+	"go.opentelemetry.io/collector/exporter/otlphttpexporter"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -44,8 +45,14 @@ func (e *logExporterImp) startFallback(ctx context.Context, host component.Host)
 	if err := xconfmap.Validate(cfg); err != nil {
 		return fmt.Errorf("central_queue.fallback_config: %w", err)
 	}
-	if otlp, ok := cfg.(*otlpexporter.Config); ok {
+	switch otlp := cfg.(type) {
+	case *otlpexporter.Config:
 		// The source queue owns retries and needs the wire acknowledgement.
+		otlp.QueueConfig = configoptional.None[exporterhelper.QueueBatchConfig]()
+		otlp.RetryConfig.Enabled = false
+		otlp.ClientConfig.Middlewares = append(otlp.ClientConfig.Middlewares, configmiddleware.Config{ID: centralQueueAckMiddlewareID})
+		e.fallbackOTLPAck = true
+	case *otlphttpexporter.Config:
 		otlp.QueueConfig = configoptional.None[exporterhelper.QueueBatchConfig]()
 		otlp.RetryConfig.Enabled = false
 		otlp.ClientConfig.Middlewares = append(otlp.ClientConfig.Middlewares, configmiddleware.Config{ID: centralQueueAckMiddlewareID})

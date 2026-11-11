@@ -74,6 +74,7 @@ type agedFallbackSettings struct {
 	storage component.Component
 	queue   map[string]any
 	logger  *zap.Logger
+	factory component.Factory
 }
 
 func newAgedFallbackExporter(t *testing.T, worker, destination string, age time.Duration, configured bool, options ...agedFallbackSettings) (exporter.Logs, *sdkmetric.ManualReader) {
@@ -96,6 +97,9 @@ func newAgedFallbackExporter(t *testing.T, worker, destination string, age time.
 	host := agedFallbackHost{Host: componenttest.NewNopHost(), factory: otlpexporter.NewFactory()}
 	if len(options) > 0 {
 		maps.Copy(queue, options[0].queue)
+		if options[0].factory != nil {
+			host.factory = options[0].factory
+		}
 		if options[0].storage != nil {
 			queue["storage"] = "file_storage/queue"
 			host.Host = durableTestHost{extensions: map[component.ID]component.Component{
