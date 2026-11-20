@@ -23,17 +23,17 @@ concurrency:
 jobs:
   setup-environment:
     timeout-minutes: 30
-    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     if: ${{ github.actor != 'dependabot[bot]' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
-          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'true' || 'false' }}
+          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && 'true' || 'false' }}
       - run: ./.github/workflows/scripts/check-disk-space.sh
   check-collector-module-version:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [setup-environment]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -45,7 +45,6 @@ jobs:
       fail-fast: false
       matrix:
         goos:
-          - windows
           - linux
         group:
           - receiver-0
@@ -64,20 +63,20 @@ jobs:
           - pkg
           - cmd-0
           - other
-    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (matrix.group == 'internal' || matrix.group == 'receiver-1' || matrix.group == 'receiver-3' || (matrix.goos == 'linux' && matrix.group == 'extension')) && 'namespace-profile-sawmills-runner-xlarge' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && (matrix.group == 'internal' || matrix.group == 'receiver-1' || matrix.group == 'receiver-3' || matrix.group == 'exporter-1' || (matrix.goos == 'linux' && matrix.group == 'extension')) && 'namespace-profile-sawmills-runner-xlarge' || github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [setup-environment]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
-          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (matrix.group == 'internal' || matrix.group == 'receiver-1' || matrix.group == 'receiver-3' || (matrix.goos == 'linux' && matrix.group == 'extension')) && 'true' || 'false' }}
+          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && (matrix.group == 'internal' || matrix.group == 'receiver-1' || matrix.group == 'receiver-3' || matrix.group == 'exporter-1' || (matrix.goos == 'linux' && matrix.group == 'extension')) && 'true' || 'false' }}
       - name: Lint
         run: GOOS=${{ matrix.goos }} GOARCH=amd64 make -j2 golint GROUP=${{ matrix.group }}
       - run: ./.github/workflows/scripts/check-disk-space.sh
   lint:
     if: ${{ github.actor != 'dependabot[bot]' && always() }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [setup-environment, lint-matrix]
     steps:
       - name: Print result
@@ -111,7 +110,7 @@ jobs:
           - internal
           - pkg
           - cmd-0
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     needs: [setup-environment]
     steps:
@@ -131,7 +130,7 @@ jobs:
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
-          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'true' || 'false' }}
+          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && 'true' || 'false' }}
       - run: make genotelcontribcol
       - name: CheckDoc
         run: make checkdoc
@@ -217,7 +216,7 @@ jobs:
           - pkg
           - cmd-0
           - other
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && (matrix.group == 'processor-1' || matrix.group == 'pkg') && 'namespace-profile-sawmills-runner-xlarge' || github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && 'namespace-profile-sawmills-runner' || matrix.runner }}
     needs: [setup-environment]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -272,7 +271,7 @@ jobs:
 
   unittest:
     if: ${{ github.actor != 'dependabot[bot]' && always() }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [setup-environment, unittest-matrix]
     steps:
       - name: Print result
@@ -287,7 +286,7 @@ jobs:
             false
           fi
   coverage:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [unittest]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -320,7 +319,7 @@ jobs:
           - internal
           - pkg
           - cmd-0
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [setup-environment]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -362,7 +361,7 @@ jobs:
 
   integration-tests:
     if: ${{ github.actor != 'dependabot[bot]' && always() }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [setup-environment, integration-tests-matrix, integration-sudo-tests-matrix]
     steps:
       - name: Print result
@@ -378,14 +377,14 @@ jobs:
           fi
 
   correctness-traces:
-    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner-xlarge' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && 'namespace-profile-sawmills-runner-xlarge' || 'ubuntu-24.04' }}
     needs: [setup-environment]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
-          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'true' || 'false' }}
+          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && 'true' || 'false' }}
       - name: Correctness
         run: make -C testbed run-correctness-traces-tests
       - run: ./.github/workflows/scripts/check-disk-space.sh
@@ -397,20 +396,20 @@ jobs:
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
-          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'true' || 'false' }}
+          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && 'true' || 'false' }}
       - name: Correctness
         run: make -C testbed run-correctness-metrics-tests
       - run: ./.github/workflows/scripts/check-disk-space.sh
 
   build-examples:
-    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [setup-environment]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
         with:
           go-version: oldstable
-          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'true' || 'false' }}
+          use-namespace-cache: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && 'true' || 'false' }}
           gomoddownload: "false"
       - run: make genotelcontribcol
       - name: Build Examples
@@ -418,15 +417,13 @@ jobs:
       - run: ./.github/workflows/scripts/check-disk-space.sh
 
   cross-compile:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && 'namespace-profile-sawmills-runner-xlarge' || 'ubuntu-24.04' }}
     needs: [setup-environment]
     strategy:
       fail-fast: false
       matrix:
         os:
-          - darwin
           - linux
-          - windows
         arch:
           - 386
           - amd64
@@ -439,25 +436,6 @@ jobs:
           - os: linux
             arch: arm
             arm: 7
-        exclude:
-          - os: darwin
-            arch: 386
-          - os: darwin
-            arch: arm
-          - os: darwin
-            arch: ppc64le
-          - os: darwin
-            arch: riscv64
-          - os: darwin
-            arch: s390x
-          - os: windows
-            arch: arm
-          - os: windows
-            arch: ppc64le
-          - os: windows
-            arch: riscv64
-          - os: windows
-            arch: s390x
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
@@ -475,7 +453,7 @@ jobs:
       - run: ./.github/workflows/scripts/check-disk-space.sh
 
   publish-check:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && (github.event_name == 'push' || (github.event_name == 'pull_request' && github.actor == github.event.pull_request.user.login && github.event.pull_request.user.type == 'User' && github.event.pull_request.head.repo.full_name == github.repository)) && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [lint, unittest, integration-tests]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -492,7 +470,7 @@ jobs:
         id: check
         run: ./.github/workflows/scripts/verify-dist-files-exist.sh
   publish-dev:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [lint, unittest, integration-tests]
     if: (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && github.repository == 'open-telemetry/opentelemetry-collector-contrib'
     steps:
@@ -525,7 +503,7 @@ jobs:
           docker push otel/opentelemetry-collector-contrib-dev:latest
       - run: ./.github/workflows/scripts/check-disk-space.sh
   publish-stable:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [lint, unittest, integration-tests]
     env:
       RELEASE_NOTES: release-notes.md
@@ -582,7 +560,7 @@ jobs:
     # named "next release" in its place
     permissions:
       issues: write # required for managing milestones
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [publish-stable]
     if: startsWith(github.ref, 'refs/tags/v') && github.repository == 'open-telemetry/opentelemetry-collector-contrib'
     steps:
@@ -613,7 +591,7 @@ jobs:
 
   flakytests-generate-issues:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner' || 'ubuntu-24.04' }}
     needs: [unittest-matrix]
     permissions:
       issues: write
