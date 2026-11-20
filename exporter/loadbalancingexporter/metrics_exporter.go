@@ -422,7 +422,7 @@ func (e *metricExporterImp) runCentralQueue(ctx context.Context) {
 			}
 		}
 
-		acquiredBackend, backendAvailable := tryAcquireCentralQueueBackendForWindow(e.loadBalancer, e.centralQueueBackendLimiter, lease.window)
+		acquiredBackend, backendAvailable := tryAcquireCentralQueueBackendForWindow(e.loadBalancer, e.centralQueueBackendLimiter, lease.window, false)
 		if !backendAvailable {
 			lease.releaseConsumer()
 			if deferErr := lease.deferReady(time.Now()); deferErr != nil {
@@ -498,7 +498,7 @@ func (e *metricExporterImp) consumeCentralQueueMetricWindowAttempt(ctx context.C
 	} else {
 		var err error
 		var endpoint string
-		exp, endpoint, err = e.loadBalancer.exporterAndEndpoint(window.routingKey)
+		exp, endpoint, err = e.loadBalancer.exporterAndEndpointForQueueAttempt(window.routingKey, window.maxAttempt)
 		if err != nil {
 			return err
 		}

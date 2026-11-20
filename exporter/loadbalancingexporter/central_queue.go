@@ -1060,7 +1060,8 @@ func (q *centralQueue) leaseReadyWindowLocked() *centralQueueLease {
 	copy(q.ready, q.ready[1:])
 	q.ready[len(q.ready)-1] = centralQueueWindow{}
 	q.ready = q.ready[:len(q.ready)-1]
-	q.untrackWindowEnqueuedAtLocked(window.items)
+	// A lease still owns accepted data. Keep its timestamps until completion
+	// so blocked backend sends remain visible in the oldest-item age.
 	snapshot := q.snapshotLocked()
 	q.settings.telemetry.record(context.Background(), snapshot)
 	q.settings.telemetry.recordWindow(context.Background(), window, q.settings.targetCompressedBytes)
@@ -1122,6 +1123,7 @@ func (l *centralQueueLease) finish(discarded bool) {
 		l.queue.mu.Lock()
 		l.queue.currentInflightBytes -= int64(l.window.uncompressedBytes)
 		l.queue.currentCompressedBytes -= int64(l.window.compressedBytes)
+		l.queue.untrackWindowEnqueuedAtLocked(l.window.items)
 		l.queue.releaseWindowItemsLocked(l)
 		snapshot := l.queue.snapshotLocked()
 		l.queue.mu.Unlock()
@@ -1150,6 +1152,7 @@ func (l *centralQueueLease) requeue(now time.Time) error {
 		l.queue.currentInflightBytes -= int64(l.window.uncompressedBytes)
 		if l.queue.stopped {
 			l.queue.currentCompressedBytes -= int64(l.window.compressedBytes)
+			l.queue.untrackWindowEnqueuedAtLocked(l.window.items)
 			if l.queue.discardOnStop {
 				discarded = int64(l.window.count)
 			}
@@ -1171,7 +1174,6 @@ func (l *centralQueueLease) requeue(now time.Time) error {
 				}
 				bucket.append(item)
 				l.queue.itemCount++
-				l.queue.trackOldestEnqueuedAtLocked(item)
 			}
 			if bucket != nil {
 				l.queue.updateReadyBucketLocked(bucket, now.UnixNano())
@@ -1195,6 +1197,7 @@ func (l *centralQueueLease) deferReady(now time.Time) error {
 		l.queue.currentInflightBytes -= int64(l.window.uncompressedBytes)
 		if l.queue.stopped {
 			l.queue.currentCompressedBytes -= int64(l.window.compressedBytes)
+			l.queue.untrackWindowEnqueuedAtLocked(l.window.items)
 			if l.queue.discardOnStop {
 				discarded = int64(l.window.count)
 			}
@@ -1215,7 +1218,6 @@ func (l *centralQueueLease) deferReady(now time.Time) error {
 				}
 				bucket.append(item)
 				l.queue.itemCount++
-				l.queue.trackOldestEnqueuedAtLocked(item)
 			}
 			if bucket != nil {
 				l.queue.updateReadyBucketLocked(bucket, now.UnixNano())

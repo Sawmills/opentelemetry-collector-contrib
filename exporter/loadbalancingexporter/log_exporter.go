@@ -486,7 +486,7 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 			e.recordFallback(ctx, e.agedLogCount(lease.window, time.Now()), "fallback_not_configured", nil)
 		}
 
-		acquiredBackend, backendAvailable := tryAcquireCentralQueueBackendForWindow(e.loadBalancer, e.centralQueueBackendLimiter, lease.window)
+		acquiredBackend, backendAvailable := tryAcquireCentralQueueBackendForWindow(e.loadBalancer, e.centralQueueBackendLimiter, lease.window, e.ignoreTraceID)
 		if !backendAvailable {
 			lease.releaseConsumer()
 			if deferErr := lease.deferReady(time.Now()); deferErr != nil {
@@ -562,7 +562,7 @@ func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context
 	} else {
 		var err error
 		var endpoint string
-		le, endpoint, err = e.loadBalancer.exporterAndEndpoint(window.routingKey)
+		le, endpoint, err = e.loadBalancer.exporterAndEndpointForQueueAttempt(window.routingKey, window.maxAttempt)
 		if err != nil {
 			return err
 		}

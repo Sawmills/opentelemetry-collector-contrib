@@ -1238,12 +1238,31 @@ func (lb *loadBalancer) Shutdown(ctx context.Context) error {
 
 // exporterAndEndpoint returns the exporter and the endpoint for the given identifier.
 func (lb *loadBalancer) exporterAndEndpoint(identifier []byte) (*wrappedExporter, string, error) {
+	return lb.exporterAndEndpointForQueueAttempt(identifier, 0)
+}
+
+const centralQueueRerouteAfterFailures = 3
+
+func (lb *loadBalancer) exporterAndEndpointForQueueAttempt(identifier []byte, attempt int) (*wrappedExporter, string, error) {
 	lb.refreshExpiredEndpointHealth(context.Background())
+	reroute := attempt >= centralQueueRerouteAfterFailures && lb.endpointHealth != nil &&
+		lb.endpointHealth.rerouteOnFailure() && lb.endpointHealth.failOpen()
 
 	lb.updateLock.RLock()
 	defer lb.updateLock.RUnlock()
 
 	endpoint := lb.ring.endpointFor(identifier)
+	if reroute && len(lb.ring.endpoints) > 1 {
+		// Retry groups walk the eligible endpoints even when quarantine fails
+		// open. Preserve the stored key and its original admission timestamp.
+		offset := (attempt / centralQueueRerouteAfterFailures) % len(lb.ring.endpoints)
+		for i, candidate := range lb.ring.endpoints {
+			if endpointWithPort(candidate) == endpointWithPort(endpoint) {
+				endpoint = lb.ring.endpoints[(i+offset)%len(lb.ring.endpoints)]
+				break
+			}
+		}
+	}
 	exp, found := lb.exporters[endpointWithPort(endpoint)]
 	if !found {
 		// something is really wrong... how come we couldn't find the exporter??

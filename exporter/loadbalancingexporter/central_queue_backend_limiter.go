@@ -34,11 +34,11 @@ type centralQueueAcquiredBackend struct {
 	lease    *centralQueueBackendLease
 }
 
-func tryAcquireCentralQueueBackendForWindow(lb *loadBalancer, limiter *centralQueueBackendLimiter, window centralQueueWindow) (*centralQueueAcquiredBackend, bool) {
+func tryAcquireCentralQueueBackendForWindow(lb *loadBalancer, limiter *centralQueueBackendLimiter, window centralQueueWindow, allowSpill bool) (*centralQueueAcquiredBackend, bool) {
 	if lb == nil {
 		return nil, true
 	}
-	exp, endpoint, err := lb.exporterAndEndpoint(window.routingKey)
+	exp, endpoint, err := lb.exporterAndEndpointForQueueAttempt(window.routingKey, window.maxAttempt)
 	if err != nil {
 		return nil, true
 	}
@@ -49,7 +49,25 @@ func tryAcquireCentralQueueBackendForWindow(lb *loadBalancer, limiter *centralQu
 			lease:    &centralQueueBackendLease{},
 		}, true
 	}
-	if !limiter.tryAcquire(endpoint, window.oldestEnqueuedAt) {
+	available := limiter.tryAcquire(endpoint, window.oldestEnqueuedAt)
+	if !available && allowSpill {
+		// Logs without trace affinity can use an idle eligible worker while
+		// their home worker is busy. Keep the same per-backend and byte limits.
+		lb.updateLock.RLock()
+		for _, candidate := range lb.ring.endpoints {
+			candidateEndpoint := endpointWithPort(candidate)
+			candidateExporter := lb.exporters[candidateEndpoint]
+			if candidateEndpoint == endpoint || candidateExporter == nil || candidateExporter.isStopping() {
+				continue
+			}
+			if limiter.tryAcquire(candidateEndpoint, window.oldestEnqueuedAt) {
+				exp, endpoint, available = candidateExporter, candidateEndpoint, true
+				break
+			}
+		}
+		lb.updateLock.RUnlock()
+	}
+	if !available {
 		return nil, false
 	}
 	return &centralQueueAcquiredBackend{
