@@ -98,6 +98,13 @@ func TestCentralQueueHeldOldestLeaseBoundsAgeMetadata(t *testing.T) {
 	gauge := m.Data.(metricdata.Gauge[int64])
 	require.Len(t, gauge.DataPoints, 1)
 	require.GreaterOrEqual(t, gauge.DataPoints[0].Value, int64(1000))
+	require.NoError(t, q.enqueueAt(item, base.Add(time.Second)))
+	require.EqualValues(t, 1, q.stopAndDiscard())
+	require.Equal(t, 1, q.oldestEnqueuedAt.Len(), "discarding unleased work must preserve the active lease timestamp")
+	m, err = reader.GetMetric("otelcol_loadbalancer_central_queue_oldest_item_age")
+	require.NoError(t, err)
+	gauge = m.Data.(metricdata.Gauge[int64])
+	require.GreaterOrEqual(t, gauge.DataPoints[0].Value, int64(1000))
 	held.done()
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_oldest_item_age", "ms",
 		attribute.NewSet(attribute.String("signal", "logs")), 0)
