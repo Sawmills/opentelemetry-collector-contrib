@@ -49,7 +49,7 @@ bounded endpoint failure vocabulary plus `success` and `other`.
 
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
-| signal | Telemetry signal for backend failure outcome metrics | Str: ``logs``, ``metrics``, ``traces`` | - |
+| signal | Telemetry signal for backend outcome metrics | Str: ``logs``, ``metrics``, ``traces`` | - |
 | reason | Low-cardinality endpoint health or backend outcome reason | Any Str | - |
 
 ### otelcol_loadbalancer_backend_latency
@@ -82,7 +82,7 @@ Active log export calls to each backend exporter, excluding central queue wait a
 
 ### otelcol_loadbalancer_backend_outcome
 
-Number of successes and failures for each endpoint.
+Number of successes and failures for each endpoint and telemetry signal.
 
 | Unit | Metric Type | Value Type | Monotonic | Stability |
 | ---- | ----------- | ---------- | --------- | --------- |
@@ -92,7 +92,9 @@ Number of successes and failures for each endpoint.
 
 | Name | Description | Values | Semantic Convention |
 | ---- | ----------- | ------ | ------------------- |
+| endpoint | The endpoint of the backend | Any Str | - |
 | success | Whether an outcome was successful | Any Bool | - |
+| signal | Telemetry signal for backend outcome metrics | Str: ``logs``, ``metrics``, ``traces`` | - |
 
 ### otelcol_loadbalancer_backend_quarantine_total
 

@@ -822,9 +822,9 @@ func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrapp
 	recordBackendTimeout(ctx, e.telemetry, le.logRequestAttr, err)
 	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(le.endpointAttr))
 	if err == nil {
-		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.successAttr))
+		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.logSuccessAttr))
 		if numRecords > 0 {
-			e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 0, metric.WithAttributeSet(le.failureAttr))
+			e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 0, metric.WithAttributeSet(le.logFailureAttr))
 		}
 		if updateEndpointHealth {
 			e.loadBalancer.handleBackendSuccess(le.endpoint)
@@ -832,7 +832,7 @@ func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrapp
 		return endpointHealthFailureDecision{}, nil
 	}
 
-	e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.failureAttr))
+	e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.logFailureAttr))
 	e.logger.Debug("failed to export log", zap.Error(err))
 	if !updateEndpointHealth {
 		return endpointHealthFailureDecision{}, err

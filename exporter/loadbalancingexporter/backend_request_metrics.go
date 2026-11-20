@@ -28,6 +28,10 @@ func backendRequestSignalAttributeSet(signal string) attribute.Set {
 	return attribute.NewSet(attribute.String("signal", signal))
 }
 
+func backendOutcomeAttributeSet(signal, endpoint string, success bool) attribute.Set {
+	return attribute.NewSet(attribute.String("endpoint", endpoint), attribute.String("signal", signal), attribute.Bool("success", success))
+}
+
 func backendFailureSignalAttributeSet(signal string) attribute.Set {
 	return attribute.NewSet(attribute.String("signal", signal))
 }

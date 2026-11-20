@@ -107,7 +107,7 @@ func TestLogsCentralQueueSpillSkipsRecentlyFailedWorker(t *testing.T) {
 				}
 				return status.Error(codes.Unavailable, "fast failure")
 			}
-			if endpoint == "endpoint-2:4317" {
+			if endpoint == "endpoint-2:4317" && id.Int() == 2 {
 				enteredOnce.Do(func() { close(entered) })
 				select {
 				case <-release:

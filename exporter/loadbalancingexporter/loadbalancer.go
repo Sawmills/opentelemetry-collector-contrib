@@ -1245,17 +1245,17 @@ const centralQueueRerouteAfterFailures = 3
 
 func (lb *loadBalancer) exporterAndEndpointForQueueAttempt(identifier []byte, attempt int) (*wrappedExporter, string, error) {
 	lb.refreshExpiredEndpointHealth(context.Background())
-	reroute := attempt >= centralQueueRerouteAfterFailures && lb.endpointHealth != nil &&
-		lb.endpointHealth.rerouteOnFailure() && lb.endpointHealth.failOpen()
+	reroute := attempt >= centralQueueRerouteAfterFailures && directRerouteAttemptAllowed(lb, 0) && lb.endpointHealth.failOpen()
 
 	lb.updateLock.RLock()
 	defer lb.updateLock.RUnlock()
 
 	endpoint := lb.ring.endpointFor(identifier)
 	if reroute && len(lb.ring.endpoints) > 1 {
-		// Retry groups walk the eligible endpoints even when quarantine fails
-		// open. Preserve the stored key and its original admission timestamp.
-		offset := (attempt / centralQueueRerouteAfterFailures) % len(lb.ring.endpoints)
+		// Retry groups walk the eligible endpoints within the configured
+		// reroute cap, then keep the final alternate. Preserve the stored key
+		// and its original admission timestamp.
+		offset := min(attempt/centralQueueRerouteAfterFailures, lb.endpointHealth.settings.maxRerouteAttempts, len(lb.ring.endpoints)-1)
 		for i, candidate := range lb.ring.endpoints {
 			if endpointWithPort(candidate) == endpointWithPort(endpoint) {
 				endpoint = lb.ring.endpoints[(i+offset)%len(lb.ring.endpoints)]

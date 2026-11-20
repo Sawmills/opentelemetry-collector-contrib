@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
+	"go.opentelemetry.io/collector/config/configoptional"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -63,5 +64,56 @@ func TestLogsCentralQueueRetryEscapesFailedHomeUnderFailOpen(t *testing.T) {
 		require.EqualValues(t, 3, homeAttempts.Load(), "home retries must have a fixed bound before rerouting")
 	case <-time.After(2 * time.Second):
 		t.Fatal("accepted logs stayed pinned to the failed home endpoint under fail-open")
+	}
+}
+
+func TestLogsCentralQueueFailOpenHonorsRerouteCap(t *testing.T) {
+	for _, limit := range []int{0, 1} {
+		name := "disabled"
+		if limit == 1 {
+			name = "one_alternate"
+		}
+		t.Run(name, func(t *testing.T) {
+			settings, tb := getTelemetryAssets(t)
+			cfg := twoEndpointLogConfig()
+			cfg.Resolver.Static = configoptional.Some(StaticResolver{Hostnames: []string{"endpoint-1:4317", "endpoint-2:4317", "endpoint-3:4317"}})
+			cfg.EndpointHealth = EndpointHealthConfig{
+				Enabled: true, RerouteOnFailure: true, MaxRerouteAttempts: limit,
+				MinEligibleBackends: 3, MaxQuarantinedPercent: 100, QuarantineDuration: time.Minute,
+			}
+			cfg.CentralQueue = CentralQueueConfig{
+				Enabled: true, PayloadCompression: QueuePayloadCompressionZstd,
+				MaxCompressedBytes: 1 << 20, MaxUncompressedBatchBytes: 1 << 20,
+				MaxInflightUncompressedBytes: 1 << 20, TargetCompressedBytes: 1, NumConsumers: 3,
+			}
+			attempts := make(chan string, 32)
+			exp, _ := newTestLogsExporter(t, settings, tb, cfg, func(_ context.Context, endpoint string) (component.Component, error) {
+				return newMockLogsExporter(func(context.Context, plog.Logs) error {
+					select {
+					case attempts <- endpoint:
+					default:
+					}
+					return status.Error(codes.Unavailable, "backend unavailable")
+				}), nil
+			})
+			require.NoError(t, exp.Start(t.Context(), componenttest.NewNopHost()))
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+				defer cancel()
+				_ = exp.Shutdown(ctx)
+			})
+			require.NoError(t, exp.ConsumeLogs(t.Context(), simpleLogs()))
+			seen := make(map[string]bool)
+			deadline := time.After(12 * time.Second)
+			for i := 0; i < 4+limit*3; i++ {
+				select {
+				case endpoint := <-attempts:
+					seen[endpoint] = true
+					require.LessOrEqual(t, len(seen), limit+1, "fail-open queue retries must preserve the configured destination cap")
+				case <-deadline:
+					t.Fatal("did not observe retries beyond the configured reroute cap")
+				}
+			}
+		})
 	}
 }
