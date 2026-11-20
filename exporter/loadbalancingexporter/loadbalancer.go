@@ -1258,7 +1258,16 @@ func (lb *loadBalancer) exporterAndEndpointForQueueAttempt(identifier []byte, at
 		offset := min(attempt/centralQueueRerouteAfterFailures, lb.endpointHealth.settings.maxRerouteAttempts, len(lb.ring.endpoints)-1)
 		for i, candidate := range lb.ring.endpoints {
 			if endpointWithPort(candidate) == endpointWithPort(endpoint) {
-				endpoint = lb.ring.endpoints[(i+offset)%len(lb.ring.endpoints)]
+				for step := offset; step > 0; step-- {
+					alternate := lb.ring.endpoints[(i+step)%len(lb.ring.endpoints)]
+					alternateEndpoint := endpointWithPort(alternate)
+					exp := lb.exporters[alternateEndpoint]
+					if exp == nil || exp.isStopping() || !lb.endpointHealth.canAcceptSpill(alternateEndpoint) {
+						continue
+					}
+					endpoint = alternate
+					break
+				}
 				break
 			}
 		}
