@@ -17,12 +17,34 @@ permissions: read-all
 # Do not cancel this workflow on main. See https://github.com/open-telemetry/opentelemetry-collector-contrib/pull/16616
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  docs-scope:
+    runs-on: ubuntu-24.04
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only || 'false' }}
+    steps:
+      - name: Preserve full coverage outside Sawmills documentation PRs
+        run: echo "Full CI is the default."
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        if: github.repository == 'Sawmills/opentelemetry-collector-contrib' && github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+      - id: scope
+        if: github.repository == 'Sawmills/opentelemetry-collector-contrib' && github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 .github/workflows/scripts/docs-only_test.py
+          docs_only="$(python3 .github/workflows/scripts/docs-only.py "$BASE" "$HEAD")"
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+
   setup-environment:
+    needs: docs-scope
     runs-on: ${{ github.repository == 'Sawmills/opentelemetry-collector-contrib' && 'namespace-profile-sawmills-runner-arm64' || 'ubuntu-22.04-arm' }}
-    if: ${{ github.actor != 'dependabot[bot]' && (!contains(github.event.pull_request.labels.*.name, 'Skip ARM') || github.event_name == 'push' || github.event_name == 'merge_group') }}
+    if: ${{ needs.docs-scope.outputs.docs_only != 'true' && github.actor != 'dependabot[bot]' && (!contains(github.event.pull_request.labels.*.name, 'Skip ARM') || github.event_name == 'push' || github.event_name == 'merge_group') }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: ./.github/actions/setup-go-tools
