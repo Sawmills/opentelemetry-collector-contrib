@@ -101,7 +101,7 @@ func AssertEqualLoadbalancerBackendLogRequestsInFlight(t *testing.T, tt *compone
 func AssertEqualLoadbalancerBackendOutcome(t *testing.T, tt *componenttest.Telemetry, dps []metricdata.DataPoint[int64], opts ...metricdatatest.Option) {
 	want := metricdata.Metrics{
 		Name:        "otelcol_loadbalancer_backend_outcome",
-		Description: "Number of successes and failures for each endpoint. [Development]",
+		Description: "Number of successes and failures for each endpoint and telemetry signal. [Development]",
 		Unit:        "{outcomes}",
 		Data: metricdata.Sum[int64]{
 			Temporality: metricdata.CumulativeTemporality,

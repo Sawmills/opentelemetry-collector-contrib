@@ -486,7 +486,7 @@ func (e *logExporterImp) runCentralQueue(ctx context.Context) {
 			e.recordFallback(ctx, e.agedLogCount(lease.window, time.Now()), "fallback_not_configured", nil)
 		}
 
-		acquiredBackend, backendAvailable := tryAcquireCentralQueueBackendForWindow(e.loadBalancer, e.centralQueueBackendLimiter, lease.window)
+		acquiredBackend, backendAvailable := tryAcquireCentralQueueBackendForWindow(e.loadBalancer, e.centralQueueBackendLimiter, lease.window, e.ignoreTraceID)
 		if !backendAvailable {
 			lease.releaseConsumer()
 			if deferErr := lease.deferReady(time.Now()); deferErr != nil {
@@ -550,10 +550,11 @@ func (e *logExporterImp) consumeCentralQueueLogWindow(ctx context.Context, windo
 }
 
 func (e *logExporterImp) consumeCentralQueueLogWindowWithBackend(ctx context.Context, window centralQueueWindow, acquiredBackend *centralQueueAcquiredBackend) error {
-	return e.consumeCentralQueueLogWindowAttempt(ctx, window, 0, acquiredBackend)
+	spilled := acquiredBackend != nil && acquiredBackend.spilled
+	return e.consumeCentralQueueLogWindowAttempt(ctx, window, 0, acquiredBackend, spilled)
 }
 
-func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context, window centralQueueWindow, rerouteAttempt int, acquiredBackend *centralQueueAcquiredBackend) error {
+func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context, window centralQueueWindow, rerouteAttempt int, acquiredBackend *centralQueueAcquiredBackend, spilled bool) error {
 	var le *wrappedExporter
 	var backendLease *centralQueueBackendLease
 	if acquiredBackend != nil {
@@ -562,13 +563,22 @@ func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context
 	} else {
 		var err error
 		var endpoint string
-		le, endpoint, err = e.loadBalancer.exporterAndEndpoint(window.routingKey)
+		le, endpoint, err = e.loadBalancer.exporterAndEndpointForQueueAttempt(window.routingKey, window.maxAttempt)
 		if err != nil {
 			return err
 		}
-		backendLease, err = e.centralQueueBackendLimiter.acquire(ctx, endpoint, window.oldestEnqueuedAt)
-		if err != nil {
-			return err
+		if spilled && rerouteAttempt > 0 && e.centralQueueBackendLimiter != nil {
+			// Return a failed spill to the scheduler rather than occupying a
+			// consumer while its original home backend is still busy.
+			if !e.centralQueueBackendLimiter.tryAcquire(endpoint, window.oldestEnqueuedAt) {
+				return errors.New("central queue reroute backend is busy")
+			}
+			backendLease = &centralQueueBackendLease{limiter: e.centralQueueBackendLimiter, endpoint: endpoint, oldestEnqueuedAt: window.oldestEnqueuedAt}
+		} else {
+			backendLease, err = e.centralQueueBackendLimiter.acquire(ctx, endpoint, window.oldestEnqueuedAt)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -615,12 +625,12 @@ func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context
 	decision, err := e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect, true, false, false)
 	backendLease.release()
 	if errors.Is(err, errLogBatcherExporterStopping) && directRerouteAttemptAllowed(e.loadBalancer, rerouteAttempt) {
-		rerouteErr := e.consumeCentralQueueLogWindowAttempt(ctx, window, rerouteAttempt+1, nil)
+		rerouteErr := e.consumeCentralQueueLogWindowAttempt(ctx, window, rerouteAttempt+1, nil, spilled)
 		e.loadBalancer.recordBackendReroute(ctx, "logs", endpointFailureExporterStopping, rerouteErr)
 		return rerouteErr
 	}
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, le.endpoint, decision, rerouteAttempt) {
-		rerouteErr := e.consumeCentralQueueLogWindowAttempt(ctx, window, rerouteAttempt+1, nil)
+		rerouteErr := e.consumeCentralQueueLogWindowAttempt(ctx, window, rerouteAttempt+1, nil, spilled)
 		e.loadBalancer.recordBackendReroute(ctx, "logs", decision.reason, rerouteErr)
 		return rerouteErr
 	}
@@ -822,9 +832,9 @@ func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrapp
 	recordBackendTimeout(ctx, e.telemetry, le.logRequestAttr, err)
 	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(le.endpointAttr))
 	if err == nil {
-		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.successAttr))
+		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.logSuccessAttr))
 		if numRecords > 0 {
-			e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 0, metric.WithAttributeSet(le.failureAttr))
+			e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 0, metric.WithAttributeSet(le.logFailureAttr))
 		}
 		if updateEndpointHealth {
 			e.loadBalancer.handleBackendSuccess(le.endpoint)
@@ -832,7 +842,7 @@ func (e *logExporterImp) consumeBatchWithDecision(ctx context.Context, le *wrapp
 		return endpointHealthFailureDecision{}, nil
 	}
 
-	e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.failureAttr))
+	e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(le.logFailureAttr))
 	e.logger.Debug("failed to export log", zap.Error(err))
 	if !updateEndpointHealth {
 		return endpointHealthFailureDecision{}, err

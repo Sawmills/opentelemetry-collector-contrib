@@ -1,0 +1,10 @@
+change_type: bug_fix
+component: exporter/loadbalancing
+note: Drain backlogged log lanes through idle healthy workers and retain oldest-item age through in-flight sends.
+issues: [177]
+subtext: |-
+  Fresh windows without trace affinity can spill within the existing send and byte limits.
+  Fail-open retries rotate eligible destinations after three failed attempts within the configured reroute cap.
+  Retained age metadata stays bounded by live queue ownership.
+  Backend outcomes include the telemetry signal so readiness can observe log delivery independently.
+change_logs: [user]

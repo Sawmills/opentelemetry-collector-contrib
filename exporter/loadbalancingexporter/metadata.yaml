@@ -15,7 +15,7 @@ status:
 attributes:
   backend_failure_signal:
     name_override: signal
-    description: Telemetry signal for backend failure outcome metrics
+    description: Telemetry signal for backend outcome metrics
     type: string
     enum:
       - logs
@@ -125,10 +125,10 @@ telemetry:
         value_type: int
         monotonic: false
     loadbalancer_backend_outcome:
-      attributes: [success]
+      attributes: [endpoint, success, backend_failure_signal]
       enabled: true
       stability: development
-      description: Number of successes and failures for each endpoint.
+      description: Number of successes and failures for each endpoint and telemetry signal.
       unit: "{outcomes}"
       sum:
         value_type: int

@@ -184,12 +184,12 @@ func (e *traceExporterImp) consumeTraces(ctx context.Context, td ptrace.Traces, 
 func (e *traceExporterImp) recordBackendResult(ctx context.Context, exp *wrappedExporter, duration time.Duration, err error) endpointHealthFailureDecision {
 	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(exp.endpointAttr))
 	if err == nil {
-		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(exp.successAttr))
+		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(exp.traceSuccessAttr))
 		e.loadBalancer.handleBackendSuccess(exp.endpoint)
 		return endpointHealthFailureDecision{}
 	}
 
-	e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(exp.failureAttr))
+	e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(exp.traceFailureAttr))
 	e.logger.Debug("failed to export traces", zap.Error(err))
 	return e.loadBalancer.handleBackendFailure(ctx, exp.endpoint, err)
 }

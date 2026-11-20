@@ -1238,12 +1238,40 @@ func (lb *loadBalancer) Shutdown(ctx context.Context) error {
 
 // exporterAndEndpoint returns the exporter and the endpoint for the given identifier.
 func (lb *loadBalancer) exporterAndEndpoint(identifier []byte) (*wrappedExporter, string, error) {
+	return lb.exporterAndEndpointForQueueAttempt(identifier, 0)
+}
+
+const centralQueueRerouteAfterFailures = 3
+
+func (lb *loadBalancer) exporterAndEndpointForQueueAttempt(identifier []byte, attempt int) (*wrappedExporter, string, error) {
 	lb.refreshExpiredEndpointHealth(context.Background())
+	reroute := attempt >= centralQueueRerouteAfterFailures && directRerouteAttemptAllowed(lb, 0) && lb.endpointHealth.failOpenNoRefresh()
 
 	lb.updateLock.RLock()
 	defer lb.updateLock.RUnlock()
 
 	endpoint := lb.ring.endpointFor(identifier)
+	if reroute && len(lb.ring.endpoints) > 1 {
+		// Retry groups walk the eligible endpoints within the configured
+		// reroute cap, then keep the final alternate. Preserve the stored key
+		// and its original admission timestamp.
+		offset := min(attempt/centralQueueRerouteAfterFailures, lb.endpointHealth.settings.maxRerouteAttempts, len(lb.ring.endpoints)-1)
+		for i, candidate := range lb.ring.endpoints {
+			if endpointWithPort(candidate) == endpointWithPort(endpoint) {
+				for step := offset; step > 0; step-- {
+					alternate := lb.ring.endpoints[(i+step)%len(lb.ring.endpoints)]
+					alternateEndpoint := endpointWithPort(alternate)
+					exp := lb.exporters[alternateEndpoint]
+					if exp == nil || exp.isStopping() || !lb.endpointHealth.canAcceptSpill(alternateEndpoint) {
+						continue
+					}
+					endpoint = alternate
+					break
+				}
+				break
+			}
+		}
+	}
 	exp, found := lb.exporters[endpointWithPort(endpoint)]
 	if !found {
 		// something is really wrong... how come we couldn't find the exporter??

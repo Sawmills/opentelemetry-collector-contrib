@@ -254,17 +254,17 @@ func TestWrappedExporterHasEndpointAttribute(t *testing.T) {
 	require.True(t, found, "endpoint attribute should exist")
 	assert.Equal(t, testEndpoint, endpointValue.AsString(), "endpoint attribute should have correct value")
 
-	endpointValue, found = wrappedExp.successAttr.Value("endpoint")
+	endpointValue, found = wrappedExp.logSuccessAttr.Value("endpoint")
 	require.True(t, found, "success attr should have endpoint")
 	assert.Equal(t, testEndpoint, endpointValue.AsString())
-	successValue, found := wrappedExp.successAttr.Value("success")
+	successValue, found := wrappedExp.logSuccessAttr.Value("success")
 	require.True(t, found, "success attr should have success field")
 	assert.True(t, successValue.AsBool())
 
-	endpointValue, found = wrappedExp.failureAttr.Value("endpoint")
+	endpointValue, found = wrappedExp.logFailureAttr.Value("endpoint")
 	require.True(t, found, "failure attr should have endpoint")
 	assert.Equal(t, testEndpoint, endpointValue.AsString())
-	successValue, found = wrappedExp.failureAttr.Value("success")
+	successValue, found = wrappedExp.logFailureAttr.Value("success")
 	require.True(t, found, "failure attr should have success field")
 	assert.False(t, successValue.AsBool())
 

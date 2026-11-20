@@ -422,7 +422,7 @@ func (e *metricExporterImp) runCentralQueue(ctx context.Context) {
 			}
 		}
 
-		acquiredBackend, backendAvailable := tryAcquireCentralQueueBackendForWindow(e.loadBalancer, e.centralQueueBackendLimiter, lease.window)
+		acquiredBackend, backendAvailable := tryAcquireCentralQueueBackendForWindow(e.loadBalancer, e.centralQueueBackendLimiter, lease.window, false)
 		if !backendAvailable {
 			lease.releaseConsumer()
 			if deferErr := lease.deferReady(time.Now()); deferErr != nil {
@@ -498,7 +498,7 @@ func (e *metricExporterImp) consumeCentralQueueMetricWindowAttempt(ctx context.C
 	} else {
 		var err error
 		var endpoint string
-		exp, endpoint, err = e.loadBalancer.exporterAndEndpoint(window.routingKey)
+		exp, endpoint, err = e.loadBalancer.exporterAndEndpointForQueueAttempt(window.routingKey, window.maxAttempt)
 		if err != nil {
 			return err
 		}
@@ -1019,14 +1019,14 @@ func (e *metricExporterImp) recordBackendResultWithDrain(ctx context.Context, we
 	recordBackendTimeout(ctx, e.telemetry, we.metricRequestAttr, err)
 	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(we.endpointAttr))
 	if err == nil {
-		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(we.successAttr))
+		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(we.metricSuccessAttr))
 		if updateEndpointHealth {
 			e.loadBalancer.handleBackendSuccess(we.endpoint)
 		}
 		return endpointHealthFailureDecision{}
 	}
 
-	e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(we.failureAttr))
+	e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(we.metricFailureAttr))
 	e.logger.Debug("failed to export metrics", zap.Error(err))
 	if !updateEndpointHealth {
 		return endpointHealthFailureDecision{}
@@ -1041,14 +1041,14 @@ func (e *metricExporterImp) recordBackendResultHealthOnly(ctx context.Context, w
 	recordBackendTimeout(ctx, e.telemetry, we.metricRequestAttr, err)
 	e.telemetry.LoadbalancerBackendLatency.Record(ctx, duration.Milliseconds(), metric.WithAttributeSet(we.endpointAttr))
 	if err == nil {
-		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(we.successAttr))
+		e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(we.metricSuccessAttr))
 		if updateEndpointHealth {
 			e.loadBalancer.handleBackendSuccess(we.endpoint)
 		}
 		return endpointHealthFailureDecision{}
 	}
 
-	e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(we.failureAttr))
+	e.telemetry.LoadbalancerBackendOutcome.Add(ctx, 1, metric.WithAttributeSet(we.metricFailureAttr))
 	e.logger.Debug("failed to export metrics", zap.Error(err))
 	if !updateEndpointHealth {
 		return endpointHealthFailureDecision{}

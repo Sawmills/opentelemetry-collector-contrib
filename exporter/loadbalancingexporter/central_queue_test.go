@@ -1230,7 +1230,7 @@ func TestCentralQueueLeaseKeepsTimestampSharedWithQueuedItems(t *testing.T) {
 	require.Equal(t, time.Second.Milliseconds(), q.oldestItemAgeMillisLocked(base.Add(time.Second)))
 }
 
-func TestCentralQueueLeaseClearsRepeatedAndMixedTimestamps(t *testing.T) {
+func TestCentralQueueCompletionClearsRepeatedAndMixedTimestamps(t *testing.T) {
 	q := newCentralQueue(centralQueueSettings{maxCompressedBytes: 100, maxInflightUncompressedBytes: 100, maxUncompressedBatchBytes: 100, targetCompressedBytes: 100})
 	base := time.Unix(10, 0)
 	items := []centralQueueItem{
@@ -1247,10 +1247,12 @@ func TestCentralQueueLeaseClearsRepeatedAndMixedTimestamps(t *testing.T) {
 	require.NoError(t, leaseErr)
 	require.NotNil(t, lease)
 	require.Len(t, lease.window.items, len(items))
+	require.Equal(t, time.Second.Milliseconds(), q.oldestItemAgeMillisLocked(base.Add(time.Second)))
+	lease.done()
 	require.Zero(t, q.oldestItemAgeMillisLocked(base.Add(time.Second)))
 }
 
-func TestCentralQueueSnapshotReportsOldestQueuedItemAge(t *testing.T) {
+func TestCentralQueueSnapshotReportsOldestRetainedItemAge(t *testing.T) {
 	q := newCentralQueue(centralQueueSettings{
 		maxCompressedBytes:           100,
 		maxInflightUncompressedBytes: 100,
@@ -1273,7 +1275,7 @@ func TestCentralQueueSnapshotReportsOldestQueuedItemAge(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, lease)
 
-	require.EqualValues(t, 150, snapshotAt(base.Add(250*time.Millisecond)).oldestItemAgeMillis)
+	require.EqualValues(t, 250, snapshotAt(base.Add(250*time.Millisecond)).oldestItemAgeMillis)
 
 	require.NoError(t, lease.requeue(base.Add(time.Second)))
 	require.EqualValues(t, 300, snapshotAt(base.Add(300*time.Millisecond)).oldestItemAgeMillis)
@@ -1428,7 +1430,7 @@ func TestCentralQueueRetriesDoNotGrowOldestEnqueuedHeap(t *testing.T) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	require.Len(t, q.enqueuedAtCounts, 2)
-	require.Len(t, q.oldestEnqueuedAt, 2)
+	require.Equal(t, 2, q.oldestEnqueuedAt.Len())
 }
 
 func TestCentralQueueRejectsOversizedUncompressedItem(t *testing.T) {

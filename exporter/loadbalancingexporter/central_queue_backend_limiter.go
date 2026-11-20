@@ -32,13 +32,14 @@ type centralQueueAcquiredBackend struct {
 	exporter *wrappedExporter
 	endpoint string
 	lease    *centralQueueBackendLease
+	spilled  bool
 }
 
-func tryAcquireCentralQueueBackendForWindow(lb *loadBalancer, limiter *centralQueueBackendLimiter, window centralQueueWindow) (*centralQueueAcquiredBackend, bool) {
+func tryAcquireCentralQueueBackendForWindow(lb *loadBalancer, limiter *centralQueueBackendLimiter, window centralQueueWindow, allowSpill bool) (*centralQueueAcquiredBackend, bool) {
 	if lb == nil {
 		return nil, true
 	}
-	exp, endpoint, err := lb.exporterAndEndpoint(window.routingKey)
+	exp, endpoint, err := lb.exporterAndEndpointForQueueAttempt(window.routingKey, window.maxAttempt)
 	if err != nil {
 		return nil, true
 	}
@@ -49,12 +50,44 @@ func tryAcquireCentralQueueBackendForWindow(lb *loadBalancer, limiter *centralQu
 			lease:    &centralQueueBackendLease{},
 		}, true
 	}
-	if !limiter.tryAcquire(endpoint, window.oldestEnqueuedAt) {
+	available := limiter.tryAcquire(endpoint, window.oldestEnqueuedAt)
+	spilled := false
+	if !available && allowSpill && window.maxAttempt == 0 {
+		// Logs without trace affinity can use an idle eligible worker while
+		// their home worker is busy. Keep the same per-backend and byte limits.
+		lb.updateLock.RLock()
+		start := 0
+		for i, candidate := range lb.ring.endpoints {
+			if endpointWithPort(candidate) == endpoint {
+				start = i + 1
+				break
+			}
+		}
+		for offset := range len(lb.ring.endpoints) {
+			candidate := lb.ring.endpoints[(start+offset)%len(lb.ring.endpoints)]
+			candidateEndpoint := endpointWithPort(candidate)
+			candidateExporter := lb.exporters[candidateEndpoint]
+			if candidateEndpoint == endpoint || candidateExporter == nil || candidateExporter.isStopping() {
+				continue
+			}
+			if !lb.endpointHealth.canAcceptSpill(candidateEndpoint) {
+				continue
+			}
+			if limiter.tryAcquire(candidateEndpoint, window.oldestEnqueuedAt) {
+				exp, endpoint, available = candidateExporter, candidateEndpoint, true
+				spilled = true
+				break
+			}
+		}
+		lb.updateLock.RUnlock()
+	}
+	if !available {
 		return nil, false
 	}
 	return &centralQueueAcquiredBackend{
 		exporter: exp,
 		endpoint: endpoint,
+		spilled:  spilled,
 		lease: &centralQueueBackendLease{
 			limiter:          limiter,
 			endpoint:         endpoint,

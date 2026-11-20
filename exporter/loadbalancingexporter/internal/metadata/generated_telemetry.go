@@ -154,7 +154,7 @@ func NewTelemetryBuilder(settings component.TelemetrySettings, options ...Teleme
 	errs = errors.Join(errs, err)
 	builder.LoadbalancerBackendOutcome, err = builder.meter.Int64Counter(
 		"otelcol_loadbalancer_backend_outcome",
-		metric.WithDescription("Number of successes and failures for each endpoint. [Development]"),
+		metric.WithDescription("Number of successes and failures for each endpoint and telemetry signal. [Development]"),
 		metric.WithUnit("{outcomes}"),
 	)
 	errs = errors.Join(errs, err)

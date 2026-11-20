@@ -36,8 +36,12 @@ type wrappedExporter struct {
 
 	// we store the attributes here for both cases, to avoid new allocations on the hot path
 	endpointAttr            attribute.Set
-	successAttr             attribute.Set
-	failureAttr             attribute.Set
+	logSuccessAttr          attribute.Set
+	logFailureAttr          attribute.Set
+	metricSuccessAttr       attribute.Set
+	metricFailureAttr       attribute.Set
+	traceSuccessAttr        attribute.Set
+	traceFailureAttr        attribute.Set
 	logRequestAttr          attribute.Set
 	metricRequestAttr       attribute.Set
 	logSignalAttr           attribute.Set
@@ -55,8 +59,12 @@ func newWrappedExporter(exp component.Component, identifier string) *wrappedExpo
 		Component:               exp,
 		endpoint:                endpoint,
 		endpointAttr:            attribute.NewSet(ea),
-		successAttr:             attribute.NewSet(ea, attribute.Bool("success", true)),
-		failureAttr:             attribute.NewSet(ea, attribute.Bool("success", false)),
+		logSuccessAttr:          backendOutcomeAttributeSet(backendRequestSignalLogs, endpoint, true),
+		logFailureAttr:          backendOutcomeAttributeSet(backendRequestSignalLogs, endpoint, false),
+		metricSuccessAttr:       backendOutcomeAttributeSet(backendRequestSignalMetrics, endpoint, true),
+		metricFailureAttr:       backendOutcomeAttributeSet(backendRequestSignalMetrics, endpoint, false),
+		traceSuccessAttr:        backendOutcomeAttributeSet(backendRequestSignalTraces, endpoint, true),
+		traceFailureAttr:        backendOutcomeAttributeSet(backendRequestSignalTraces, endpoint, false),
 		logRequestAttr:          backendRequestAttributeSet(backendRequestSignalLogs, endpoint),
 		metricRequestAttr:       backendRequestAttributeSet(backendRequestSignalMetrics, endpoint),
 		logSignalAttr:           backendRequestSignalAttributeSet(backendRequestSignalLogs),
