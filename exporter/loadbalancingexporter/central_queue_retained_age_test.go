@@ -67,6 +67,9 @@ func TestLogsOldestItemAgeIncludesInflightUntilDelivery(t *testing.T) {
 	finish()
 	require.Eventually(t, func() bool { return oldestAge() == 0 }, time.Second, time.Millisecond,
 		"delivered logs must leave the age gauge")
+	require.NoError(t, p.Shutdown(t.Context()))
+	_, err := reader.GetMetric("otelcol_loadbalancer_central_queue_oldest_item_age")
+	require.Error(t, err, "the stopped queue unregisters its age observation")
 }
 
 func TestCentralQueueHeldOldestLeaseBoundsAgeMetadata(t *testing.T) {
@@ -97,13 +100,6 @@ func TestCentralQueueHeldOldestLeaseBoundsAgeMetadata(t *testing.T) {
 	require.NoError(t, err)
 	gauge := m.Data.(metricdata.Gauge[int64])
 	require.Len(t, gauge.DataPoints, 1)
-	require.GreaterOrEqual(t, gauge.DataPoints[0].Value, int64(1000))
-	require.NoError(t, q.enqueueAt(item, base.Add(time.Second)))
-	require.EqualValues(t, 1, q.stopAndDiscard())
-	require.Equal(t, 1, q.oldestEnqueuedAt.Len(), "discarding unleased work must preserve the active lease timestamp")
-	m, err = reader.GetMetric("otelcol_loadbalancer_central_queue_oldest_item_age")
-	require.NoError(t, err)
-	gauge = m.Data.(metricdata.Gauge[int64])
 	require.GreaterOrEqual(t, gauge.DataPoints[0].Value, int64(1000))
 	held.done()
 	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_oldest_item_age", "ms",

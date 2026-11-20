@@ -69,19 +69,19 @@ func (q *centralQueue) stopAndDiscard() int64 {
 			records += int64(item.count)
 			q.currentCompressedBytes -= int64(item.compressedBytes)
 		}
-		q.untrackWindowEnqueuedAtLocked(bucket.items)
 	}
 	for _, window := range q.ready {
 		records += int64(window.count)
 		q.currentCompressedBytes -= int64(window.compressedBytes)
 		q.currentInflightBytes -= int64(window.uncompressedBytes)
-		q.untrackWindowEnqueuedAtLocked(window.items)
 	}
 	q.buckets = nil
 	clear(q.bucketsByKey)
 	q.readyBuckets = nil
 	q.ready = nil
 	q.itemCount = 0
+	q.oldestEnqueuedAt = centralQueueEnqueuedAtHeap{}
+	clear(q.enqueuedAtCounts)
 	snapshot := q.snapshotLocked()
 	q.mu.Unlock()
 	q.settings.telemetry.record(context.Background(), snapshot)
