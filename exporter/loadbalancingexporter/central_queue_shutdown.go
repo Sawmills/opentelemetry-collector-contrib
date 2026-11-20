@@ -80,9 +80,8 @@ func (q *centralQueue) stopAndDiscard() int64 {
 	q.readyBuckets = nil
 	q.ready = nil
 	q.itemCount = 0
-	q.oldestEnqueuedAt = nil
+	q.oldestEnqueuedAt = centralQueueEnqueuedAtHeap{}
 	clear(q.enqueuedAtCounts)
-	clear(q.enqueuedAtHeapEntries)
 	snapshot := q.snapshotLocked()
 	q.mu.Unlock()
 	q.settings.telemetry.record(context.Background(), snapshot)

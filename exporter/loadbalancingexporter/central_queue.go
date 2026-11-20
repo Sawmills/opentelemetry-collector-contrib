@@ -97,7 +97,6 @@ type centralQueue struct {
 	currentCompressedBytes int64
 	currentInflightBytes   int64
 	enqueuedAtCounts       map[int64]int
-	enqueuedAtHeapEntries  map[int64]struct{}
 	oldestEnqueuedAt       centralQueueEnqueuedAtHeap
 }
 
@@ -1383,11 +1382,10 @@ func (q *centralQueue) oldestItemAgeMillis() int64 {
 }
 
 func (q *centralQueue) oldestItemAgeMillisLocked(now time.Time) int64 {
-	q.pruneOldestEnqueuedAtLocked()
-	if len(q.oldestEnqueuedAt) == 0 {
+	if q.oldestEnqueuedAt.Len() == 0 {
 		return 0
 	}
-	age := now.Sub(time.Unix(0, q.oldestEnqueuedAt[0]))
+	age := now.Sub(time.Unix(0, q.oldestEnqueuedAt.values[0]))
 	if age <= 0 {
 		return 0
 	}
@@ -1401,12 +1399,8 @@ func (q *centralQueue) trackOldestEnqueuedAtLocked(item centralQueueItem) {
 	if q.enqueuedAtCounts == nil {
 		q.enqueuedAtCounts = map[int64]int{}
 	}
-	if q.enqueuedAtHeapEntries == nil {
-		q.enqueuedAtHeapEntries = map[int64]struct{}{}
-	}
-	if _, ok := q.enqueuedAtHeapEntries[item.enqueuedAtUnixNano]; !ok {
+	if q.enqueuedAtCounts[item.enqueuedAtUnixNano] == 0 {
 		heap.Push(&q.oldestEnqueuedAt, item.enqueuedAtUnixNano)
-		q.enqueuedAtHeapEntries[item.enqueuedAtUnixNano] = struct{}{}
 	}
 	q.enqueuedAtCounts[item.enqueuedAtUnixNano]++
 }
@@ -1416,7 +1410,6 @@ func (q *centralQueue) untrackOldestEnqueuedAtLocked(item centralQueueItem) {
 		return
 	}
 	q.untrackEnqueuedAtCountLocked(item.enqueuedAtUnixNano, 1)
-	q.pruneOldestEnqueuedAtLocked()
 }
 
 func (q *centralQueue) untrackWindowEnqueuedAtLocked(items []centralQueueItem) {
@@ -1429,7 +1422,6 @@ func (q *centralQueue) untrackWindowEnqueuedAtLocked(items []centralQueueItem) {
 		q.untrackEnqueuedAtCountLocked(enqueuedAt, end)
 		items = items[end:]
 	}
-	q.pruneOldestEnqueuedAtLocked()
 }
 
 func (q *centralQueue) untrackEnqueuedAtCountLocked(enqueuedAt int64, removed int) {
@@ -1439,41 +1431,47 @@ func (q *centralQueue) untrackEnqueuedAtCountLocked(enqueuedAt int64, removed in
 	count := q.enqueuedAtCounts[enqueuedAt]
 	if count <= removed {
 		delete(q.enqueuedAtCounts, enqueuedAt)
+		if index, ok := q.oldestEnqueuedAt.indexes[enqueuedAt]; ok {
+			heap.Remove(&q.oldestEnqueuedAt, index)
+		}
 	} else {
 		q.enqueuedAtCounts[enqueuedAt] = count - removed
 	}
 }
 
-func (q *centralQueue) pruneOldestEnqueuedAtLocked() {
-	for len(q.oldestEnqueuedAt) > 0 && q.enqueuedAtCounts[q.oldestEnqueuedAt[0]] == 0 {
-		enqueuedAt := heap.Pop(&q.oldestEnqueuedAt).(int64)
-		delete(q.enqueuedAtHeapEntries, enqueuedAt)
-	}
+type centralQueueEnqueuedAtHeap struct {
+	values  []int64
+	indexes map[int64]int
 }
 
-type centralQueueEnqueuedAtHeap []int64
-
 func (h centralQueueEnqueuedAtHeap) Len() int {
-	return len(h)
+	return len(h.values)
 }
 
 func (h centralQueueEnqueuedAtHeap) Less(i, j int) bool {
-	return h[i] < h[j]
+	return h.values[i] < h.values[j]
 }
 
 func (h centralQueueEnqueuedAtHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
+	h.values[i], h.values[j] = h.values[j], h.values[i]
+	h.indexes[h.values[i]], h.indexes[h.values[j]] = i, j
 }
 
 func (h *centralQueueEnqueuedAtHeap) Push(x any) {
-	*h = append(*h, x.(int64))
+	if h.indexes == nil {
+		h.indexes = make(map[int64]int)
+	}
+	value := x.(int64)
+	h.indexes[value] = len(h.values)
+	h.values = append(h.values, value)
 }
 
 func (h *centralQueueEnqueuedAtHeap) Pop() any {
-	old := *h
+	old := h.values
 	n := len(old)
 	x := old[n-1]
-	*h = old[:n-1]
+	h.values = old[:n-1]
+	delete(h.indexes, x)
 	return x
 }
 

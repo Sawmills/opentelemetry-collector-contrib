@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
@@ -66,4 +67,38 @@ func TestLogsOldestItemAgeIncludesInflightUntilDelivery(t *testing.T) {
 	finish()
 	require.Eventually(t, func() bool { return oldestAge() == 0 }, time.Second, time.Millisecond,
 		"delivered logs must leave the age gauge")
+}
+
+func TestCentralQueueHeldOldestLeaseBoundsAgeMetadata(t *testing.T) {
+	reader := componenttest.NewTelemetry()
+	t.Cleanup(func() { require.NoError(t, reader.Shutdown(context.Background())) })
+	telemetry, err := newCentralQueueTelemetry(reader.NewTelemetrySettings(), signalKindLogs)
+	require.NoError(t, err)
+	q := newCentralQueue(centralQueueSettings{
+		maxCompressedBytes: 16, maxInflightUncompressedBytes: 16,
+		maxUncompressedBatchBytes: 1, targetCompressedBytes: 1, telemetry: telemetry,
+	})
+	t.Cleanup(q.stop)
+	base := time.Now().Add(-time.Second)
+	item := centralQueueItem{signal: signalKindLogs, compressedBytes: 1, uncompressedBytes: 1, count: 1}
+	require.NoError(t, q.enqueueAt(item, base))
+	held, err := q.tryLease(time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, held)
+	for i := 1; i <= 1000; i++ {
+		require.NoError(t, q.enqueueAt(item, base.Add(time.Duration(i)*time.Nanosecond)))
+		lease, leaseErr := q.tryLease(time.Now())
+		require.NoError(t, leaseErr)
+		require.NotNil(t, lease)
+		lease.done()
+	}
+	require.Equal(t, 1, q.oldestEnqueuedAt.Len(), "completed timestamps must not remain behind a held oldest lease")
+	m, err := reader.GetMetric("otelcol_loadbalancer_central_queue_oldest_item_age")
+	require.NoError(t, err)
+	gauge := m.Data.(metricdata.Gauge[int64])
+	require.Len(t, gauge.DataPoints, 1)
+	require.GreaterOrEqual(t, gauge.DataPoints[0].Value, int64(1000))
+	held.done()
+	requireCentralQueueIntGauge(t, reader, "otelcol_loadbalancer_central_queue_oldest_item_age", "ms",
+		attribute.NewSet(attribute.String("signal", "logs")), 0)
 }

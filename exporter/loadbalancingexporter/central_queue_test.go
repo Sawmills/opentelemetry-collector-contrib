@@ -1430,7 +1430,7 @@ func TestCentralQueueRetriesDoNotGrowOldestEnqueuedHeap(t *testing.T) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	require.Len(t, q.enqueuedAtCounts, 2)
-	require.Len(t, q.oldestEnqueuedAt, 2)
+	require.Equal(t, 2, q.oldestEnqueuedAt.Len())
 }
 
 func TestCentralQueueRejectsOversizedUncompressedItem(t *testing.T) {
