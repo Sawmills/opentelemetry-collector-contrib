@@ -44,8 +44,8 @@ func newQueueRoutingTransportExporter(t *testing.T, endpoints []string) exporter
 	factory := loadbalancingexporter.NewFactory()
 	cfg := factory.CreateDefaultConfig()
 	require.NoError(t, confmap.NewFromStringMap(map[string]any{
-		"protocol": map[string]any{"otlp": map[string]any{"tls": map[string]any{"insecure": true}, "timeout": "5s"}},
-		"resolver": map[string]any{"static": map[string]any{"hostnames": endpoints}},
+		"protocol":    map[string]any{"otlp": map[string]any{"tls": map[string]any{"insecure": true}, "timeout": "5s"}},
+		"resolver":    map[string]any{"static": map[string]any{"hostnames": endpoints}},
 		"log_routing": map[string]any{"ignore_trace_id": true, "record_striping_enabled": true},
 		"endpoint_health": map[string]any{
 			"enabled": true, "reroute_on_failure": true, "min_eligible_backends": 2,
