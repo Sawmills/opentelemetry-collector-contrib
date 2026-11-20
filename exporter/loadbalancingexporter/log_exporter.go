@@ -559,17 +559,6 @@ func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context
 	if acquiredBackend != nil {
 		le = acquiredBackend.exporter
 		backendLease = acquiredBackend.lease
-	} else if rerouteAttempt > 0 {
-		// A failed spill must return the window to the scheduler instead of
-		// tying up a consumer waiting for its still-busy home backend.
-		acquired, available := tryAcquireCentralQueueBackendForWindow(e.loadBalancer, e.centralQueueBackendLimiter, window, false)
-		if !available {
-			return errors.New("central queue reroute backend is busy")
-		}
-		if acquired == nil {
-			return errExporterIsStopping
-		}
-		le, backendLease = acquired.exporter, acquired.lease
 	} else {
 		var err error
 		var endpoint string
@@ -577,9 +566,18 @@ func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context
 		if err != nil {
 			return err
 		}
-		backendLease, err = e.centralQueueBackendLimiter.acquire(ctx, endpoint, window.oldestEnqueuedAt)
-		if err != nil {
-			return err
+		if rerouteAttempt > 0 && e.centralQueueBackendLimiter != nil {
+			// Return a failed spill to the scheduler rather than occupying a
+			// consumer while its original home backend is still busy.
+			if !e.centralQueueBackendLimiter.tryAcquire(endpoint, window.oldestEnqueuedAt) {
+				return errors.New("central queue reroute backend is busy")
+			}
+			backendLease = &centralQueueBackendLease{limiter: e.centralQueueBackendLimiter, endpoint: endpoint, oldestEnqueuedAt: window.oldestEnqueuedAt}
+		} else {
+			backendLease, err = e.centralQueueBackendLimiter.acquire(ctx, endpoint, window.oldestEnqueuedAt)
+			if err != nil {
+				return err
+			}
 		}
 	}
 

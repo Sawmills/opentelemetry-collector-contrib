@@ -54,7 +54,15 @@ func tryAcquireCentralQueueBackendForWindow(lb *loadBalancer, limiter *centralQu
 		// Logs without trace affinity can use an idle eligible worker while
 		// their home worker is busy. Keep the same per-backend and byte limits.
 		lb.updateLock.RLock()
-		for _, candidate := range lb.ring.endpoints {
+		start := 0
+		for i, candidate := range lb.ring.endpoints {
+			if endpointWithPort(candidate) == endpoint {
+				start = i + 1
+				break
+			}
+		}
+		for offset := range len(lb.ring.endpoints) {
+			candidate := lb.ring.endpoints[(start+offset)%len(lb.ring.endpoints)]
 			candidateEndpoint := endpointWithPort(candidate)
 			candidateExporter := lb.exporters[candidateEndpoint]
 			if candidateEndpoint == endpoint || candidateExporter == nil || candidateExporter.isStopping() {
