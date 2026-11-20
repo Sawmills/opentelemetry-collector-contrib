@@ -383,6 +383,16 @@ func (m *endpointHealthManager) failOpen() bool {
 	return m.failOpenActive
 }
 
+func (m *endpointHealthManager) canAcceptSpill(endpoint string) bool {
+	if !m.enabled() {
+		return true
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	state, ok := m.endpoints[endpoint]
+	return ok && state.present && !state.probeUnhealthy && !state.quarantinedUntil.After(m.settings.now())
+}
+
 func (m *endpointHealthManager) underPressure() bool {
 	if !m.enabled() {
 		return false

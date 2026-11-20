@@ -50,7 +50,7 @@ func tryAcquireCentralQueueBackendForWindow(lb *loadBalancer, limiter *centralQu
 		}, true
 	}
 	available := limiter.tryAcquire(endpoint, window.oldestEnqueuedAt)
-	if !available && allowSpill {
+	if !available && allowSpill && window.maxAttempt == 0 {
 		// Logs without trace affinity can use an idle eligible worker while
 		// their home worker is busy. Keep the same per-backend and byte limits.
 		lb.updateLock.RLock()
@@ -58,6 +58,9 @@ func tryAcquireCentralQueueBackendForWindow(lb *loadBalancer, limiter *centralQu
 			candidateEndpoint := endpointWithPort(candidate)
 			candidateExporter := lb.exporters[candidateEndpoint]
 			if candidateEndpoint == endpoint || candidateExporter == nil || candidateExporter.isStopping() {
+				continue
+			}
+			if !lb.endpointHealth.canAcceptSpill(candidateEndpoint) {
 				continue
 			}
 			if limiter.tryAcquire(candidateEndpoint, window.oldestEnqueuedAt) {
