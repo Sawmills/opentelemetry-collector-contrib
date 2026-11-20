@@ -32,6 +32,7 @@ type centralQueueAcquiredBackend struct {
 	exporter *wrappedExporter
 	endpoint string
 	lease    *centralQueueBackendLease
+	spilled  bool
 }
 
 func tryAcquireCentralQueueBackendForWindow(lb *loadBalancer, limiter *centralQueueBackendLimiter, window centralQueueWindow, allowSpill bool) (*centralQueueAcquiredBackend, bool) {
@@ -50,6 +51,7 @@ func tryAcquireCentralQueueBackendForWindow(lb *loadBalancer, limiter *centralQu
 		}, true
 	}
 	available := limiter.tryAcquire(endpoint, window.oldestEnqueuedAt)
+	spilled := false
 	if !available && allowSpill && window.maxAttempt == 0 {
 		// Logs without trace affinity can use an idle eligible worker while
 		// their home worker is busy. Keep the same per-backend and byte limits.
@@ -73,6 +75,7 @@ func tryAcquireCentralQueueBackendForWindow(lb *loadBalancer, limiter *centralQu
 			}
 			if limiter.tryAcquire(candidateEndpoint, window.oldestEnqueuedAt) {
 				exp, endpoint, available = candidateExporter, candidateEndpoint, true
+				spilled = true
 				break
 			}
 		}
@@ -84,6 +87,7 @@ func tryAcquireCentralQueueBackendForWindow(lb *loadBalancer, limiter *centralQu
 	return &centralQueueAcquiredBackend{
 		exporter: exp,
 		endpoint: endpoint,
+		spilled:  spilled,
 		lease: &centralQueueBackendLease{
 			limiter:          limiter,
 			endpoint:         endpoint,

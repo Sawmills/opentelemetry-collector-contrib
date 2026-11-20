@@ -550,10 +550,11 @@ func (e *logExporterImp) consumeCentralQueueLogWindow(ctx context.Context, windo
 }
 
 func (e *logExporterImp) consumeCentralQueueLogWindowWithBackend(ctx context.Context, window centralQueueWindow, acquiredBackend *centralQueueAcquiredBackend) error {
-	return e.consumeCentralQueueLogWindowAttempt(ctx, window, 0, acquiredBackend)
+	spilled := acquiredBackend != nil && acquiredBackend.spilled
+	return e.consumeCentralQueueLogWindowAttempt(ctx, window, 0, acquiredBackend, spilled)
 }
 
-func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context, window centralQueueWindow, rerouteAttempt int, acquiredBackend *centralQueueAcquiredBackend) error {
+func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context, window centralQueueWindow, rerouteAttempt int, acquiredBackend *centralQueueAcquiredBackend, spilled bool) error {
 	var le *wrappedExporter
 	var backendLease *centralQueueBackendLease
 	if acquiredBackend != nil {
@@ -566,7 +567,7 @@ func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context
 		if err != nil {
 			return err
 		}
-		if rerouteAttempt > 0 && e.centralQueueBackendLimiter != nil {
+		if spilled && rerouteAttempt > 0 && e.centralQueueBackendLimiter != nil {
 			// Return a failed spill to the scheduler rather than occupying a
 			// consumer while its original home backend is still busy.
 			if !e.centralQueueBackendLimiter.tryAcquire(endpoint, window.oldestEnqueuedAt) {
@@ -624,12 +625,12 @@ func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context
 	decision, err := e.consumeBatchWithDecision(ctx, le, ld, logFlushReasonDirect, true, false, false)
 	backendLease.release()
 	if errors.Is(err, errLogBatcherExporterStopping) && directRerouteAttemptAllowed(e.loadBalancer, rerouteAttempt) {
-		rerouteErr := e.consumeCentralQueueLogWindowAttempt(ctx, window, rerouteAttempt+1, nil)
+		rerouteErr := e.consumeCentralQueueLogWindowAttempt(ctx, window, rerouteAttempt+1, nil, spilled)
 		e.loadBalancer.recordBackendReroute(ctx, "logs", endpointFailureExporterStopping, rerouteErr)
 		return rerouteErr
 	}
 	if err != nil && shouldRerouteDirectFailure(e.loadBalancer, le.endpoint, decision, rerouteAttempt) {
-		rerouteErr := e.consumeCentralQueueLogWindowAttempt(ctx, window, rerouteAttempt+1, nil)
+		rerouteErr := e.consumeCentralQueueLogWindowAttempt(ctx, window, rerouteAttempt+1, nil, spilled)
 		e.loadBalancer.recordBackendReroute(ctx, "logs", decision.reason, rerouteErr)
 		return rerouteErr
 	}
