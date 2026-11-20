@@ -559,6 +559,17 @@ func (e *logExporterImp) consumeCentralQueueLogWindowAttempt(ctx context.Context
 	if acquiredBackend != nil {
 		le = acquiredBackend.exporter
 		backendLease = acquiredBackend.lease
+	} else if rerouteAttempt > 0 {
+		// A failed spill must return the window to the scheduler instead of
+		// tying up a consumer waiting for its still-busy home backend.
+		acquired, available := tryAcquireCentralQueueBackendForWindow(e.loadBalancer, e.centralQueueBackendLimiter, window, false)
+		if !available {
+			return errors.New("central queue reroute backend is busy")
+		}
+		if acquired == nil {
+			return errExporterIsStopping
+		}
+		le, backendLease = acquired.exporter, acquired.lease
 	} else {
 		var err error
 		var endpoint string

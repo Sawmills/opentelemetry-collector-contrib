@@ -404,7 +404,7 @@ func newCentralQueueTelemetry(settings component.TelemetrySettings, signal signa
 	errs = errors.Join(errs, err)
 	t.oldestItemAge, err = meter.Int64ObservableGauge(
 		"otelcol_loadbalancer_central_queue_oldest_item_age",
-		metric.WithDescription("Age in ms of the oldest queued central load-balancing item."),
+		metric.WithDescription("Age in ms of the oldest retained central load-balancing item, including leased and in-flight windows."),
 		metric.WithUnit("ms"),
 	)
 	errs = errors.Join(errs, err)

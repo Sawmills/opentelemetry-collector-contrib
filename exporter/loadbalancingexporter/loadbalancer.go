@@ -1245,7 +1245,7 @@ const centralQueueRerouteAfterFailures = 3
 
 func (lb *loadBalancer) exporterAndEndpointForQueueAttempt(identifier []byte, attempt int) (*wrappedExporter, string, error) {
 	lb.refreshExpiredEndpointHealth(context.Background())
-	reroute := attempt >= centralQueueRerouteAfterFailures && directRerouteAttemptAllowed(lb, 0) && lb.endpointHealth.failOpen()
+	reroute := attempt >= centralQueueRerouteAfterFailures && directRerouteAttemptAllowed(lb, 0) && lb.endpointHealth.failOpenNoRefresh()
 
 	lb.updateLock.RLock()
 	defer lb.updateLock.RUnlock()

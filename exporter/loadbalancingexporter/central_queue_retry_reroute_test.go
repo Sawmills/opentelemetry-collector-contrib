@@ -13,7 +13,6 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/component/componenttest"
 	"go.opentelemetry.io/collector/config/configoptional"
-	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -52,7 +51,7 @@ func TestLogsCentralQueueRetryEscapesFailedHomeUnderFailOpen(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
-		_ = p.Shutdown(ctx)
+		require.NoError(t, p.Shutdown(ctx))
 	})
 	require.NoError(t, p.Start(t.Context(), componenttest.NewNopHost()))
 	input := simpleLogs()
@@ -101,7 +100,7 @@ func TestLogsCentralQueueFailOpenHonorsRerouteCap(t *testing.T) {
 			t.Cleanup(func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 				defer cancel()
-				_ = exp.Shutdown(ctx)
+				require.Error(t, exp.Shutdown(ctx), "undeliverable accepted work must report its forced shutdown")
 			})
 			require.NoError(t, exp.ConsumeLogs(t.Context(), simpleLogs()))
 			seen := make(map[string]bool)
@@ -165,30 +164,16 @@ func TestLogsCentralQueueRetrySkipsKnownFailedAlternateWithinCap(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
-		_ = exp.Shutdown(ctx)
+		require.NoError(t, exp.Shutdown(ctx))
 	})
-	consume := func(id int64, lane uint32) {
-		for seed := 1; seed < 256; seed++ {
-			key := pcommon.TraceID{byte(seed)}
-			if centralQueueLaneIndex(signalKindLogs, key[:], 3) != lane {
-				continue
-			}
-			exp.randomTraceID = func() pcommon.TraceID { return key }
-			logs := plog.NewLogs()
-			logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty().Attributes().PutInt("test.id", id)
-			require.NoError(t, exp.ConsumeLogs(t.Context(), logs))
-			return
-		}
-		t.Fatal("no key for test lane")
-	}
-	consume(1, 1)
+	consumeCentralQueueTestLogAtLane(t, exp, 1, 1, 3)
 	select {
 	case <-failedAlternate:
 	case <-time.After(time.Second):
 		t.Fatal("alternate failure was not observed")
 	}
 	require.Eventually(t, func() bool { return !lb.endpointHealth.canAcceptSpill("endpoint-2:4317") }, time.Second, time.Millisecond)
-	consume(2, 0)
+	consumeCentralQueueTestLogAtLane(t, exp, 2, 0, 3)
 	select {
 	case <-delivered:
 	case <-time.After(12 * time.Second):

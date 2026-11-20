@@ -2322,6 +2322,37 @@ func TestLoadBalancerEndpointHealthRebuildsRingAfterQuarantineExpires(t *testing
 	require.Contains(t, p.exporters, "endpoint-1:4317")
 }
 
+func TestQueueRetryLookupPreservesQuarantineExpiryForRingRecovery(t *testing.T) {
+	settings, tb := getTelemetryAssets(t)
+	cfg := simpleConfig()
+	enableEndpointHealth(cfg)
+	cfg.EndpointHealth.RerouteOnFailure = true
+	cfg.EndpointHealth.MaxRerouteAttempts = 1
+	cfg.EndpointHealth.QuarantineDuration = 30 * time.Second
+	lb, err := newLoadBalancer(settings.Logger, cfg, func(context.Context, string) (component.Component, error) {
+		return mockComponent{}, nil
+	}, tb)
+	require.NoError(t, err)
+	lb.endpointHealth.settings.now = func() time.Time { return time.Unix(100, 0) }
+	lb.onBackendChanges([]string{"endpoint-1", "endpoint-2"})
+	key := findRoutingIDForEndpoint(t, lb.ring, "endpoint-1:4317")
+	decision := lb.handleBackendFailure(t.Context(), "endpoint-1:4317", status.Error(codes.Unavailable, "unavailable"))
+	require.True(t, decision.quarantined)
+	reads := 0
+	lb.endpointHealth.settings.now = func() time.Time {
+		reads++
+		if reads == 1 {
+			return time.Unix(129, 0)
+		}
+		return time.Unix(131, 0)
+	}
+	_, _, err = lb.exporterAndEndpointForQueueAttempt([]byte(key), 3)
+	require.NoError(t, err)
+	_, endpoint, err := lb.exporterAndEndpoint([]byte(key))
+	require.NoError(t, err)
+	require.Equal(t, "endpoint-1:4317", endpoint, "the next lookup must commit expiry recovery to the ring")
+}
+
 func TestLoadBalancerEndpointStateReportsCurrentMembershipOnly(t *testing.T) {
 	ts, tb, telemetry := getTelemetryAssetsWithReader(t)
 	cfg := simpleConfig()

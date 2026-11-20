@@ -5,6 +5,7 @@ package loadbalancingexporter
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -129,33 +130,111 @@ func TestLogsCentralQueueSpillSkipsRecentlyFailedWorker(t *testing.T) {
 		require.NoError(t, p.Shutdown(ctx))
 	})
 	require.NoError(t, p.Start(t.Context(), componenttest.NewNopHost()))
-	consume := func(id int64, lane uint32) {
-		for seed := 1; seed < 256; seed++ {
-			key := pcommon.TraceID{byte(seed)}
-			if centralQueueLaneIndex(signalKindLogs, key[:], 4) != lane {
-				continue
-			}
-			p.randomTraceID = func() pcommon.TraceID { return key }
-			logs := plog.NewLogs()
-			logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty().Attributes().PutInt("test.id", id)
-			require.NoError(t, p.ConsumeLogs(t.Context(), logs))
-			return
-		}
-		t.Fatal("no synthetic key for the selected test lane")
-	}
-	consume(1, 0)
+	consumeCentralQueueTestLogAtLane(t, p, 1, 0, 4)
 	require.Eventually(t, lb.endpointHealth.failOpen, time.Second, time.Millisecond)
-	consume(2, 1)
+	consumeCentralQueueTestLogAtLane(t, p, 2, 1, 4)
 	select {
 	case <-entered:
 	case <-time.After(time.Second):
 		t.Fatal("slow healthy worker did not receive its home window")
 	}
-	consume(3, 1)
+	consumeCentralQueueTestLogAtLane(t, p, 3, 1, 4)
 	select {
 	case <-delivered:
 	case <-time.After(2 * time.Second):
 		t.Fatal("fresh backlog did not reach an idle healthy worker")
 	}
 	require.Zero(t, freshFailures.Load(), "recently failed workers must not attract fresh spill traffic")
+}
+
+func TestLogsCentralQueueFailedSpillDoesNotBlockOtherLanes(t *testing.T) {
+	settings, tb := getTelemetryAssets(t)
+	cfg := twoEndpointLogConfig()
+	hosts := make([]string, 11)
+	for i := range hosts {
+		hosts[i] = fmt.Sprintf("endpoint-%02d:4317", i+1)
+	}
+	cfg.Resolver.Static = configoptional.Some(StaticResolver{Hostnames: hosts})
+	cfg.LogRouting.IgnoreTraceID = true
+	cfg.LogRouting.RecordStripingEnabled = true
+	cfg.EndpointHealth = EndpointHealthConfig{
+		Enabled: true, RerouteOnFailure: true, MaxRerouteAttempts: 1,
+		MinEligibleBackends: 1, MaxQuarantinedPercent: 100, QuarantineDuration: time.Minute,
+	}
+	cfg.CentralQueue = CentralQueueConfig{
+		Enabled: true, PayloadCompression: QueuePayloadCompressionZstd,
+		MaxCompressedBytes: 1 << 20, MaxUncompressedBatchBytes: 1 << 20,
+		MaxInflightUncompressedBytes: 1 << 20, TargetCompressedBytes: 1, NumConsumers: 2,
+	}
+	homeEntered, failedSpill, delivered, release := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
+	finish := sync.OnceFunc(func() { close(release) })
+	var enteredOnce, failedOnce, deliveredOnce sync.Once
+	exp, lb := newTestLogsExporter(t, settings, tb, cfg, func(_ context.Context, endpoint string) (component.Component, error) {
+		return newMockLogsExporter(func(ctx context.Context, logs plog.Logs) error {
+			id, _ := logs.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(0).Attributes().Get("test.id")
+			if endpoint == "endpoint-01:4317" {
+				enteredOnce.Do(func() { close(homeEntered) })
+				select {
+				case <-release:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			if endpoint == "endpoint-02:4317" {
+				failedOnce.Do(func() { close(failedSpill) })
+				return status.Error(codes.Unavailable, "spill failed")
+			}
+			if id.Int() == 3 {
+				deliveredOnce.Do(func() { close(delivered) })
+			}
+			return nil
+		}), nil
+	})
+	require.NoError(t, exp.Start(t.Context(), componenttest.NewNopHost()))
+	t.Cleanup(func() {
+		finish()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		require.NoError(t, exp.Shutdown(ctx))
+	})
+	consumeCentralQueueTestLogAtLane(t, exp, 1, 0, 11)
+	select {
+	case <-homeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("slow home did not start")
+	}
+	consumeCentralQueueTestLogAtLane(t, exp, 2, 0, 11)
+	select {
+	case <-failedSpill:
+	case <-time.After(time.Second):
+		t.Fatal("spill failure was not observed")
+	}
+	require.Eventually(t, func() bool {
+		lb.updateLock.RLock()
+		defer lb.updateLock.RUnlock()
+		return len(lb.ring.endpoints) == 10
+	}, time.Second, time.Millisecond)
+	consumeCentralQueueTestLogAtLane(t, exp, 3, 1, 10)
+	select {
+	case <-delivered:
+	case <-time.After(time.Second):
+		t.Fatal("a failed spill tied up a consumer waiting for the busy home")
+	}
+}
+
+func consumeCentralQueueTestLogAtLane(t *testing.T, exp *logExporterImp, id int64, lane uint32, lanes int) {
+	t.Helper()
+	for seed := 1; seed < 256; seed++ {
+		key := pcommon.TraceID{byte(seed)}
+		if centralQueueLaneIndex(signalKindLogs, key[:], lanes) != lane {
+			continue
+		}
+		exp.randomTraceID = func() pcommon.TraceID { return key }
+		logs := plog.NewLogs()
+		logs.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty().Attributes().PutInt("test.id", id)
+		require.NoError(t, exp.ConsumeLogs(t.Context(), logs))
+		return
+	}
+	t.Fatal("no synthetic key for the selected test lane")
 }

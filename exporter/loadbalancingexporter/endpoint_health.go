@@ -383,6 +383,15 @@ func (m *endpointHealthManager) failOpen() bool {
 	return m.failOpenActive
 }
 
+func (m *endpointHealthManager) failOpenNoRefresh() bool {
+	if !m.enabled() {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.failOpenActive
+}
+
 func (m *endpointHealthManager) canAcceptSpill(endpoint string) bool {
 	if !m.enabled() {
 		return true
